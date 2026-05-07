@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: gacc
+      POSTGRES_PASSWORD: gacc
+      POSTGRES_DB: gacc
+    ports:
+      - "5432:5432"
+    volumes:
+      - gacc_pg:/var/lib/postgresql/data
+
+volumes:
+  gacc_pg:

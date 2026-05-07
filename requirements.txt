@@ -1,0 +1,11 @@
+httpx
+beautifulsoup4
+lxml
+pdfplumber
+psycopg2-binary
+python-dotenv
+pandas
+gspread
+google-auth
+ollama
+google-generativeai
