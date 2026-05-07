@@ -20,7 +20,7 @@ def test_persist_and_idempotent_rerun(clean_db, test_db_url):
     result = _parse_fixture()
 
     run_id = db.start_run(URL)
-    release_id = db.find_or_create_release(result.metadata, release_kind="preliminary")
+    release_id = db.find_or_create_gacc_release(result.metadata, release_kind="preliminary")
     counts = db.upsert_observations(run_id, release_id, result.observations)
     db.finish_run(run_id, status="success", http_status=200)
 
@@ -28,7 +28,7 @@ def test_persist_and_idempotent_rerun(clean_db, test_db_url):
 
     # Second pass — same data, should all be unchanged and not duplicated.
     run_id2 = db.start_run(URL)
-    release_id2 = db.find_or_create_release(result.metadata, release_kind="preliminary")
+    release_id2 = db.find_or_create_gacc_release(result.metadata, release_kind="preliminary")
     counts2 = db.upsert_observations(run_id2, release_id2, result.observations)
     db.finish_run(run_id2, status="success", http_status=200)
 
@@ -48,7 +48,7 @@ def test_version_bumps_when_value_changes(clean_db, test_db_url):
     result = _parse_fixture()
 
     run_id = db.start_run(URL)
-    release_id = db.find_or_create_release(result.metadata, release_kind="preliminary")
+    release_id = db.find_or_create_gacc_release(result.metadata, release_kind="preliminary")
     db.upsert_observations(run_id, release_id, result.observations)
     db.finish_run(run_id, status="success")
 
@@ -89,7 +89,7 @@ def test_release_metadata_refresh(clean_db, test_db_url):
     result = _parse_fixture()
 
     run_id = db.start_run(URL)
-    release_id = db.find_or_create_release(result.metadata, release_kind="preliminary")
+    release_id = db.find_or_create_gacc_release(result.metadata, release_kind="preliminary")
     db.finish_run(run_id, status="success")
 
     # Stale publication_date: pretend our first observation had no pub date set.
@@ -97,7 +97,7 @@ def test_release_metadata_refresh(clean_db, test_db_url):
 
     stripped = replace(result.metadata, publication_date=None, excel_url=None)
     run_id2 = db.start_run(URL)
-    release_id2 = db.find_or_create_release(stripped, release_kind="preliminary")
+    release_id2 = db.find_or_create_gacc_release(stripped, release_kind="preliminary")
     db.finish_run(run_id2, status="success")
     assert release_id2 == release_id
 

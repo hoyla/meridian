@@ -62,7 +62,7 @@ def scrape_release(url: str, release_kind: str = "preliminary", dry_run: bool = 
             len(result.observations), meta.section_number, meta.currency, meta.period.isoformat(),
         )
         if not dry_run:
-            release_id = db.find_or_create_release(meta, release_kind=release_kind)
+            release_id = db.find_or_create_gacc_release(meta, release_kind=release_kind)
             counts = db.upsert_observations(run_id, release_id, result.observations)
             log.info("Persisted: %s", counts)
             db.finish_run(run_id, status="success", http_status=response.status_code)

@@ -83,18 +83,19 @@ def save_snapshot(run_id: int, response: FetchResult) -> int:
         return cur.fetchone()[0]
 
 
-def find_or_create_release(meta: "ReleaseMetadata", release_kind: str) -> int:
-    """Resolve the natural key (section_number, currency, period, release_kind) to a
-    release id, creating the row if it doesn't exist and refreshing display fields
-    that may have changed since we last saw the page (e.g. revised excel_url)."""
+def find_or_create_gacc_release(meta: "ReleaseMetadata", release_kind: str) -> int:
+    """Resolve the GACC natural key (section_number, currency, period, release_kind) to
+    a release id, creating the row if needed and refreshing display fields that may
+    have changed since we last saw the page (e.g. revised excel_url)."""
     with transaction() as conn, conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO releases (
-                section_number, currency, period, release_kind,
+                source, section_number, currency, period, release_kind,
                 description, title, source_url, publication_date, unit, excel_url
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (section_number, currency, period, release_kind) DO UPDATE SET
+            ) VALUES ('gacc', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (section_number, currency, period, release_kind) WHERE source = 'gacc'
+            DO UPDATE SET
                 last_seen_at     = now(),
                 source_url       = EXCLUDED.source_url,
                 publication_date = COALESCE(EXCLUDED.publication_date, releases.publication_date),
@@ -131,6 +132,7 @@ def upsert_observations(
                  WHERE release_id        = %s
                    AND period_kind       = %s
                    AND flow              IS NOT DISTINCT FROM %s
+                   AND reporter_country  IS NOT DISTINCT FROM %s
                    AND partner_country   IS NOT DISTINCT FROM %s
                    AND hs_code           IS NOT DISTINCT FROM %s
                    AND commodity_label   IS NOT DISTINCT FROM %s
@@ -141,6 +143,7 @@ def upsert_observations(
                     release_id,
                     obs.get("period_kind"),
                     obs.get("flow"),
+                    obs.get("reporter_country"),
                     obs.get("partner_country"),
                     obs.get("hs_code"),
                     obs.get("commodity_label"),
@@ -167,13 +170,13 @@ def upsert_observations(
                 """
                 INSERT INTO observations (
                     release_id, scrape_run_id, period_kind,
-                    flow, partner_country, partner_label_raw, partner_indent, partner_is_subset,
+                    flow, reporter_country, partner_country, partner_label_raw, partner_indent, partner_is_subset,
                     hs_code, commodity_label,
                     value_amount, value_currency, quantity, quantity_unit,
                     source_row, version_seen
                 ) VALUES (
                     %s, %s, %s,
-                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s,
                     %s, %s,
                     %s, %s, %s, %s,
                     %s, %s
@@ -181,7 +184,7 @@ def upsert_observations(
                 """,
                 (
                     release_id, run_id, obs.get("period_kind"),
-                    obs.get("flow"), obs.get("partner_country"),
+                    obs.get("flow"), obs.get("reporter_country"), obs.get("partner_country"),
                     obs.get("partner_label_raw"), obs.get("partner_indent"), obs.get("partner_is_subset"),
                     obs.get("hs_code"), obs.get("commodity_label"),
                     obs.get("value"), obs.get("currency"),
