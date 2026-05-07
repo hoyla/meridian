@@ -126,6 +126,72 @@ CREATE TABLE hs_groups (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- =============================================================================
+-- Lookup tables for cross-source work.
+-- These exist to keep normalisation logic transparent (principle: don't bury
+-- mappings in code). Each derived/linked record FKs back to rows here.
+-- =============================================================================
+
+-- Country-name → ISO-2 mapping per source. Aggregate labels (e.g. "European Union")
+-- have iso2 = NULL and aggregate_kind populated. Confidence allows journalists to
+-- weigh how sure we are about a mapping when interpreting findings.
+CREATE TABLE country_aliases (
+    id              BIGSERIAL PRIMARY KEY,
+    source          TEXT        NOT NULL,        -- 'gacc' | 'eurostat' | etc.
+    raw_label       TEXT        NOT NULL,
+    iso2            TEXT,                        -- NULL for aggregate labels
+    aggregate_kind  TEXT,                        -- 'eu_bloc' | 'asean' | 'rcep' | 'belt_road' | 'region' | 'world' | NULL
+    confidence      TEXT        NOT NULL CHECK (confidence IN ('high', 'probable', 'tentative')),
+    method          TEXT        NOT NULL,        -- e.g. 'name match', 'iso2 native', 'aggregate'
+    notes           TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (source, raw_label)
+);
+CREATE INDEX idx_country_aliases_lookup ON country_aliases (source, raw_label);
+
+-- Known caveats journalists should be aware of when interpreting cross-source comparisons.
+-- Findings reference caveats by code so we don't duplicate the explanation each time.
+CREATE TABLE caveats (
+    code            TEXT        PRIMARY KEY,
+    summary         TEXT        NOT NULL,
+    detail          TEXT,
+    applies_to      TEXT[],                      -- finding subkinds this caveat applies to, e.g. {mirror_gap}
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- FX rates with explicit provenance. We never mutate observation values; conversions
+-- to a common currency (e.g. EUR) are derived at query time using these rates.
+CREATE TABLE fx_rates (
+    id              BIGSERIAL PRIMARY KEY,
+    currency_from   TEXT        NOT NULL,        -- ISO-4217 e.g. 'CNY', 'USD'
+    currency_to     TEXT        NOT NULL,        -- usually 'EUR'
+    rate_date       DATE        NOT NULL,
+    rate            NUMERIC     NOT NULL,        -- amount_in_to = amount_in_from * rate
+    rate_source     TEXT        NOT NULL,        -- e.g. 'ECB monthly average'
+    rate_source_url TEXT,
+    notes           TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (currency_from, currency_to, rate_date, rate_source)
+);
+CREATE INDEX idx_fx_lookup ON fx_rates (currency_from, currency_to, rate_date DESC);
+
+-- Cross-source links between observations. Confidence is editorial: never assert
+-- universal identity — surface that this PAIR is a candidate / probable /
+-- corroborated linkage, with the method spelled out.
+CREATE TABLE cross_source_links (
+    id              BIGSERIAL PRIMARY KEY,
+    obs_a_id        BIGINT      NOT NULL REFERENCES observations(id),
+    obs_b_id        BIGINT      NOT NULL REFERENCES observations(id),
+    link_kind       TEXT        NOT NULL,        -- 'mirror_trade' | 'aggregate_member' | 'hs_group' | etc.
+    confidence      TEXT        NOT NULL CHECK (confidence IN ('candidate', 'probable', 'corroborated')),
+    method_notes    JSONB       NOT NULL,        -- the comparison method, normalisation steps used, etc.
+    caveat_codes    TEXT[],                      -- FK into caveats.code
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_csl_obs_a ON cross_source_links (obs_a_id);
+CREATE INDEX idx_csl_obs_b ON cross_source_links (obs_b_id);
+CREATE INDEX idx_csl_kind ON cross_source_links (link_kind, confidence);
+
 CREATE TABLE findings (
     id                  BIGSERIAL PRIMARY KEY,
     scrape_run_id       BIGINT      NOT NULL REFERENCES scrape_runs(id),
@@ -146,3 +212,78 @@ CREATE TABLE findings (
 CREATE INDEX idx_findings_run ON findings (scrape_run_id);
 CREATE INDEX idx_findings_kind ON findings (kind, subkind);
 CREATE INDEX idx_findings_status ON findings (editorial_status, created_at DESC);
+
+-- =============================================================================
+-- Seed data
+-- =============================================================================
+
+-- GACC partner labels observed in section-4 release pages, mapped to ISO-2.
+-- Aggregate labels (EU, ASEAN, regions) have iso2 = NULL; their aggregate_kind
+-- tells the comparator how to handle them.
+INSERT INTO country_aliases (source, raw_label, iso2, aggregate_kind, confidence, method, notes) VALUES
+  ('gacc', 'Germany',                                                  'DE',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'France',                                                   'FR',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'Italy',                                                    'IT',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'Netherlands',                                              'NL',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'United States (US)',                                       'US',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'United Kingdom (UK)',                                      'GB',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'Japan',                                                    'JP',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'R. O. Korea',                                              'KR',  NULL,         'high', 'name match', 'Republic of Korea (South Korea)'),
+  ('gacc', 'Russian Federation',                                       'RU',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'Australia',                                                'AU',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'Canada',                                                   'CA',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'New Zealand',                                              'NZ',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'India',                                                    'IN',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'Brazil',                                                   'BR',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'South Africa',                                             'ZA',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'Vietnam',                                                  'VN',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'Malaysia',                                                 'MY',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'Thailand',                                                 'TH',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'Singapore',                                                'SG',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'Indonesia',                                                'ID',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'Philippines',                                              'PH',  NULL,         'high', 'name match', NULL),
+  ('gacc', 'Hong Kong, China',                                         'HK',  NULL,         'high', 'name match', 'SAR of China — Eurostat may not match composition'),
+  ('gacc', 'Taiwan, China',                                            'TW',  NULL,         'high', 'name match', 'Eurostat reporter convention may differ'),
+  ('gacc', 'European Union',                                           NULL,  'eu_bloc',    'high', 'aggregate',  'Composition per release footnote (27 countries as of 2026)'),
+  ('gacc', 'ASEAN',                                                    NULL,  'asean',      'high', 'aggregate',  'Brunei, Myanmar, Cambodia, Indonesia, Laos, Malaysia, Philippines, Singapore, Thailand, Vietnam'),
+  ('gacc', 'Latin America',                                            NULL,  'region',     'high', 'aggregate',  'Region; GACC does not enumerate composition'),
+  ('gacc', 'Africa',                                                   NULL,  'region',     'high', 'aggregate',  'Region'),
+  ('gacc', 'Regional Comprehensive Economic Partnership',              NULL,  'rcep',       'high', 'aggregate',  'RCEP — Brunei, Myanmar, Cambodia, Indonesia, Laos, Malaysia, Philippines, Singapore, Thailand, Vietnam, Japan, South Korea, Australia, New Zealand'),
+  ('gacc', 'Jointly build the countries along Belt and Road Routes',   NULL,  'belt_road',  'high', 'aggregate',  'Per https://www.yidaiyilu.gov.cn — composition varies'),
+  ('gacc', 'Total',                                                    NULL,  'world',      'high', 'aggregate',  'World total — China''s reported total trade');
+
+-- Caveats journalists should weigh when reading cross-source findings.
+INSERT INTO caveats (code, summary, detail, applies_to) VALUES
+  ('cif_fob',
+   'CIF (imports) vs FOB (exports) pricing',
+   'Eurostat imports are reported CIF (cost+insurance+freight included); GACC exports are reported FOB (free-on-board). The expected baseline gap is therefore EU-import value > GACC-export value by ~5-10% (the freight & insurance component). Only deviations from that baseline should be treated as anomalous.',
+   ARRAY['mirror_gap']),
+  ('reporting_lag',
+   'Different publication lags across sources',
+   'GACC preliminary releases come out ~10 days after period close; Eurostat data lags 6-8 weeks. When comparing the same period, ensure both sources have published. Also: GACC may revise figures between preliminary and monthly bulletin before Eurostat ever sees them.',
+   ARRAY['mirror_gap']),
+  ('general_vs_special_trade',
+   'Trade-definition differences',
+   'GACC and Eurostat may differ on what counts as "trade" (general vs special trade) — bonded zones, transit goods, processing trade are treated differently. Effects vary by HS chapter.',
+   ARRAY['mirror_gap']),
+  ('transshipment',
+   'Transshipment via third countries',
+   'Goods exported from China may be reported by Eurostat under a non-China origin if they pass through (and are partially transformed in) a third country. Mirror gaps may reflect routing rather than direct trade. Watch country-of-origin shifts in particular.',
+   ARRAY['mirror_gap']),
+  ('classification_drift',
+   'HS classification at 8-digit can diverge',
+   'GACC uses CHS8 (Chinese 8-digit harmonised classification); Eurostat uses CN8. The two systems agree at HS-2/4/6 by international standard but diverge at HS-8. Comparisons at HS-8 may compare different commodity definitions; aggregate to HS-6 to minimise.',
+   ARRAY['mirror_gap', 'mix_substitution']),
+  ('currency_timing',
+   'FX conversion is sensitive to which day''s rate is used',
+   'When converting CNY/USD to EUR (or vice versa), the choice of day''s rate matters. We use the ECB monthly-average reference rate per period; differences from end-of-period or trade-weighted rates can be 1-3%.',
+   ARRAY['mirror_gap']),
+  ('aggregate_composition',
+   'Aggregate-region composition may differ between sources',
+   'Regional aggregates ("EU", "ASEAN", "Latin America") may have slightly different country lists or as-of dates between GACC and Eurostat (e.g. Brexit timing for EU). Always check composition before comparing aggregates directly.',
+   ARRAY['mirror_gap']),
+  ('eurostat_stat_procedure_mix',
+   'Eurostat trade splits across tariff regimes (STAT_PROCEDURE)',
+   'Eurostat reports trade by STAT_PROCEDURE — preferential, MFN, special-regime imports etc. Our `observations` row is the sum across regimes; the breakdown is in `eurostat_raw_rows`. Some stories live in the regime mix itself (e.g. surge in inward-processing imports may indicate a re-export pattern).',
+   ARRAY['mirror_gap', 'mix_substitution']);
+
