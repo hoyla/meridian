@@ -54,6 +54,36 @@ CREATE UNIQUE INDEX uq_releases_eurostat
 CREATE INDEX idx_releases_period ON releases (period DESC);
 CREATE INDEX idx_releases_source ON releases (source, period DESC);
 
+-- Eurostat raw rows — one row per CSV line in the bulk file, preserved exactly.
+-- The aggregated `observations` rows derived from these reference back via
+-- observations.eurostat_raw_row_ids (BIGINT[]). The aggregation method is therefore
+-- inspectable: for any observation, you can SELECT the raw rows and re-derive.
+CREATE TABLE eurostat_raw_rows (
+    id                    BIGSERIAL PRIMARY KEY,
+    scrape_run_id         BIGINT      NOT NULL REFERENCES scrape_runs(id),
+    period                DATE        NOT NULL,
+    reporter              TEXT        NOT NULL,
+    partner               TEXT        NOT NULL,
+    trade_type            TEXT,
+    product_nc            TEXT        NOT NULL,    -- HS-CN8, zero-padded 8 chars
+    product_sitc          TEXT,
+    product_cpa21         TEXT,
+    product_cpa22         TEXT,
+    product_bec           TEXT,
+    product_bec5          TEXT,
+    product_section       TEXT,
+    flow                  INT         NOT NULL,    -- 1 = import, 2 = export (Eurostat native code)
+    stat_procedure        TEXT,
+    suppl_unit            TEXT,
+    value_eur             NUMERIC,
+    value_nac             NUMERIC,
+    quantity_kg           NUMERIC,
+    quantity_suppl_unit   NUMERIC,
+    inserted_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_eu_raw_period_partner ON eurostat_raw_rows (period, partner, reporter, product_nc);
+CREATE INDEX idx_eu_raw_run ON eurostat_raw_rows (scrape_run_id);
+
 CREATE TABLE observations (
     id                  BIGSERIAL PRIMARY KEY,
     release_id          BIGINT      NOT NULL REFERENCES releases(id),
@@ -75,7 +105,8 @@ CREATE TABLE observations (
     quantity            NUMERIC,
     quantity_unit       TEXT,
     -- Provenance + versioning (within a single release)
-    source_row          JSONB       NOT NULL,
+    source_row          JSONB       NOT NULL,      -- aggregation metadata for Eurostat; raw parsed row for GACC
+    eurostat_raw_row_ids BIGINT[],                 -- FK array into eurostat_raw_rows for Eurostat-derived observations
     version_seen        INT         NOT NULL DEFAULT 1,
     inserted_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );

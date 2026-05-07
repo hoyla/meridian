@@ -68,54 +68,85 @@ def archive_two_partners_two_hs() -> bytes:
     ])
 
 
-def test_aggregates_within_dim_key(archive_two_partners_two_hs):
-    obs = list(eurostat.iter_observations(
+def test_iter_raw_rows_preserves_each_csv_row(archive_two_partners_two_hs):
+    """No aggregation in iter_raw_rows — every CSV row that passes the filter yields."""
+    raws = list(eurostat.iter_raw_rows(
         archive_two_partners_two_hs, date(2026, 1, 1), partners={"CN"},
+    ))
+    # 4 CN rows in fixture: DE/CN/87038010/import × 2, DE/CN/87038010/export, FR/CN/8703210/import.
+    assert len(raws) == 4
+    de_imports = [r for r in raws if r["reporter"] == "DE" and r["flow"] == 1]
+    assert len(de_imports) == 2  # both STAT_PROCEDURE rows preserved
+    # Numeric coercion + zero-padding applied at this layer too.
+    assert de_imports[0]["value_eur"] in (1000.0, 500.0)
+    assert raws[0]["product_nc"].isdigit() and len(raws[0]["product_nc"]) == 8
+
+
+def test_aggregate_collapses_within_dim_key(archive_two_partners_two_hs):
+    raws = list(eurostat.iter_raw_rows(
+        archive_two_partners_two_hs, date(2026, 1, 1), partners={"CN"},
+    ))
+    obs = list(eurostat.aggregate_to_observations(
+        date(2026, 1, 1), [(idx, r) for idx, r in enumerate(raws, start=1)],
     ))
     de_imports = [o for o in obs
                   if o["reporter_country"] == "DE"
                   and o["flow"] == "import"
                   and o["hs_code"] == "87038010"]
-    assert len(de_imports) == 1, "two source rows should collapse into one observation"
+    assert len(de_imports) == 1, "two raw rows should collapse into one observation"
     assert de_imports[0]["value"] == 1500
     assert de_imports[0]["quantity"] == 8  # 5 + 3 supplementary units
     assert de_imports[0]["currency"] == "EUR"
     assert de_imports[0]["period"] == "2026-01-01"
     assert de_imports[0]["period_kind"] == "monthly"
+    # Provenance: the aggregated cell knows which raw rows it came from.
+    assert len(de_imports[0]["eurostat_raw_row_ids"]) == 2
+    assert de_imports[0]["source_row"]["_n_raw_rows"] == 2
 
 
 def test_partner_filter_excludes_others(archive_two_partners_two_hs):
-    obs = list(eurostat.iter_observations(
+    raws = list(eurostat.iter_raw_rows(
         archive_two_partners_two_hs, date(2026, 1, 1), partners={"CN"},
     ))
-    assert all(o["partner_country"] == "CN" for o in obs)
+    assert all(r["partner"] == "CN" for r in raws)
     # The US row should not appear.
-    assert not any(o["reporter_country"] == "DE" and o["partner_country"] == "US" for o in obs)
+    assert not any(r["reporter"] == "DE" and r["partner"] == "US" for r in raws)
 
 
 def test_hs_prefix_filter(archive_two_partners_two_hs):
-    obs = list(eurostat.iter_observations(
+    raws = list(eurostat.iter_raw_rows(
         archive_two_partners_two_hs, date(2026, 1, 1), partners={"CN"},
         hs_prefixes=("87038",),
     ))
-    assert all(o["hs_code"].startswith("87038") for o in obs)
+    assert all(r["product_nc"].startswith("87038") for r in raws)
 
 
 def test_zero_pads_hs_code(archive_two_partners_two_hs):
-    obs = list(eurostat.iter_observations(
+    raws = list(eurostat.iter_raw_rows(
         archive_two_partners_two_hs, date(2026, 1, 1), partners={"CN"},
     ))
-    fr = next(o for o in obs if o["reporter_country"] == "FR")
+    fr = next(r for r in raws if r["reporter"] == "FR")
     # Source value was '8703210' (7 chars); should be padded to 8 chars.
-    assert fr["hs_code"] == "08703210"
+    assert fr["product_nc"] == "08703210"
 
 
-def test_flow_label_translates_numeric(archive_two_partners_two_hs):
-    obs = list(eurostat.iter_observations(
+def test_aggregate_translates_flow_to_label(archive_two_partners_two_hs):
+    raws = list(eurostat.iter_raw_rows(
         archive_two_partners_two_hs, date(2026, 1, 1), partners={"CN"},
     ))
+    obs = list(eurostat.aggregate_to_observations(date(2026, 1, 1), [(None, r) for r in raws]))
     flows = {o["flow"] for o in obs}
     assert flows == {"import", "export"}
+
+
+def test_aggregate_without_db_ids_yields_none(archive_two_partners_two_hs):
+    """When raw rows haven't been persisted yet (e.g. dry-run), the eurostat_raw_row_ids
+    field should still be present but None, not an empty list of garbage ids."""
+    raws = list(eurostat.iter_raw_rows(
+        archive_two_partners_two_hs, date(2026, 1, 1), partners={"CN"},
+    ))
+    obs = list(eurostat.aggregate_to_observations(date(2026, 1, 1), [(None, r) for r in raws]))
+    assert all(o["eurostat_raw_row_ids"] is None for o in obs)
 
 
 def test_empty_archive_filter_returns_nothing():
@@ -123,5 +154,7 @@ def test_empty_archive_filter_returns_nothing():
         _row(REPORTER="DE", PARTNER="US", PRODUCT_NC="87038010", FLOW="1",
              VALUE_EUR="100", QUANTITY_KG="10"),
     ])
+    raws = list(eurostat.iter_raw_rows(archive, date(2026, 1, 1), partners={"CN"}))
+    assert raws == []
     obs = list(eurostat.iter_observations(archive, date(2026, 1, 1), partners={"CN"}))
     assert obs == []

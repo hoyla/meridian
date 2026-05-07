@@ -84,6 +84,33 @@ def save_snapshot(run_id: int, response: FetchResult) -> int:
         return cur.fetchone()[0]
 
 
+_EUROSTAT_RAW_COLS = (
+    "scrape_run_id", "period", "reporter", "partner", "trade_type", "product_nc",
+    "product_sitc", "product_cpa21", "product_cpa22", "product_bec", "product_bec5",
+    "product_section", "flow", "stat_procedure", "suppl_unit",
+    "value_eur", "value_nac", "quantity_kg", "quantity_suppl_unit",
+)
+
+
+def bulk_insert_eurostat_raw_rows(scrape_run_id: int, raw_rows: list[dict]) -> list[int]:
+    """Insert raw Eurostat rows verbatim. Returns the inserted ids in input order
+    so the caller can pair them with their dicts for downstream aggregation."""
+    if not raw_rows:
+        return []
+    cols_sql = ", ".join(_EUROSTAT_RAW_COLS)
+    placeholders = "(" + ", ".join(["%s"] * len(_EUROSTAT_RAW_COLS)) + ")"
+    rows_values = []
+    for r in raw_rows:
+        rows_values.append(tuple([scrape_run_id if c == "scrape_run_id" else r.get(c) for c in _EUROSTAT_RAW_COLS]))
+    with transaction() as conn, conn.cursor() as cur:
+        # execute_values would be ideal but psycopg2.extras adds dependency; manual mogrify is fine.
+        args_str = b",".join(cur.mogrify(placeholders, v) for v in rows_values)
+        cur.execute(
+            f"INSERT INTO eurostat_raw_rows ({cols_sql}) VALUES " + args_str.decode("utf-8") + " RETURNING id"
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
 def find_or_create_eurostat_release(period: "date", source_url: str) -> int:
     """Resolve the Eurostat natural key (period) to a release id under source='eurostat'.
     GACC-only fields (section_number, currency, release_kind) stay NULL."""
@@ -193,13 +220,13 @@ def upsert_observations(
                     flow, reporter_country, partner_country, partner_label_raw, partner_indent, partner_is_subset,
                     hs_code, commodity_label,
                     value_amount, value_currency, quantity, quantity_unit,
-                    source_row, version_seen
+                    source_row, eurostat_raw_row_ids, version_seen
                 ) VALUES (
                     %s, %s, %s,
                     %s, %s, %s, %s, %s, %s,
                     %s, %s,
                     %s, %s, %s, %s,
-                    %s, %s
+                    %s, %s, %s
                 )
                 """,
                 (
@@ -209,7 +236,9 @@ def upsert_observations(
                     obs.get("hs_code"), obs.get("commodity_label"),
                     obs.get("value"), obs.get("currency"),
                     obs.get("quantity"), obs.get("quantity_unit"),
-                    json.dumps(obs.get("source_row") or {}), version,
+                    json.dumps(obs.get("source_row") or {}),
+                    obs.get("eurostat_raw_row_ids"),
+                    version,
                 ),
             )
             counts[action] += 1

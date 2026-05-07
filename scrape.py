@@ -88,7 +88,11 @@ def scrape_eurostat(
     hs_prefixes: tuple[str, ...] | None = None,
     dry_run: bool = False,
 ) -> None:
-    """Fetch one Eurostat monthly bulk file, filter to the configured slice, persist.
+    """Fetch one Eurostat monthly bulk file, persist raw rows, aggregate, persist observations.
+
+    The raw CSV rows are stored verbatim in `eurostat_raw_rows`; the aggregated
+    per-cell observations in `observations` carry an FK array back to the raw
+    rows so any aggregation can be audited or re-derived.
 
     NB: we don't write the 44 MB raw 7z to source_snapshots — Eurostat bulk files
     are immutable per period (re-fetchable by URL) and storing them would inflate
@@ -99,22 +103,31 @@ def scrape_eurostat(
     run_id = db.start_run(url) if not dry_run else None
     try:
         response = eurostat.fetch_bulk_file(period)
-        observations = list(
-            eurostat.iter_observations(
+        raw_rows = list(
+            eurostat.iter_raw_rows(
                 response.content, period, partners=partners, hs_prefixes=hs_prefixes
             )
         )
         log.info(
-            "Aggregated %d Eurostat observations for %s (partners=%s, hs_prefixes=%s)",
-            len(observations), period.strftime("%Y-%m"),
+            "Fetched %d raw rows for %s (partners=%s, hs_prefixes=%s)",
+            len(raw_rows), period.strftime("%Y-%m"),
             sorted(partners) if partners else "ANY",
             hs_prefixes or "ANY",
         )
-        if not dry_run:
-            release_id = db.find_or_create_eurostat_release(period, url)
-            counts = db.upsert_observations(run_id, release_id, observations)
-            log.info("Persisted: %s", counts)
-            db.finish_run(run_id, status="success", http_status=response.status_code)
+
+        if dry_run:
+            obs = list(eurostat.aggregate_to_observations(period, [(None, r) for r in raw_rows]))
+            log.info("Dry run: would aggregate to %d observations", len(obs))
+            return
+
+        raw_ids = db.bulk_insert_eurostat_raw_rows(run_id, raw_rows)
+        log.info("Inserted %d eurostat_raw_rows", len(raw_ids))
+        observations = list(eurostat.aggregate_to_observations(period, list(zip(raw_ids, raw_rows))))
+        log.info("Aggregated to %d observations", len(observations))
+        release_id = db.find_or_create_eurostat_release(period, url)
+        counts = db.upsert_observations(run_id, release_id, observations)
+        log.info("Persisted: %s", counts)
+        db.finish_run(run_id, status="success", http_status=response.status_code)
     except Exception as e:
         log.exception("Eurostat scrape failed for %s", period)
         if run_id is not None:

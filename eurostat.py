@@ -1,8 +1,22 @@
 """Eurostat Comext bulk-file fetcher.
 
-Downloads the monthly bulk 7z, stream-decompresses the CSV, filters to the
-configured partner/reporter/HS prefixes, and yields ParsedObservation-shaped
-dicts that scrape.py can hand to db.upsert_observations.
+Pipeline (raw → comparable):
+
+    fetch_bulk_file(period)
+        ↓ httpx.get -> 7z bytes
+    iter_raw_rows(archive_bytes, period, ...filters)
+        ↓ stream-decompress + filter, no aggregation
+        yields one dict per CSV row (keys lower-cased to match DB columns)
+    db.bulk_insert_eurostat_raw_rows(run_id, raws) -> list[int] of inserted ids
+    aggregate_to_observations(period, [(raw_id, raw_dict), ...])
+        ↓ group by (reporter, partner, product_nc, flow), sum value/quantity
+        yields aggregated observation dicts carrying eurostat_raw_row_ids
+    db.upsert_observations(run_id, release_id, observations)
+
+Two-stage layering keeps the source data immutable: the raw CSV rows are
+queryable in `eurostat_raw_rows`, the comparable per-cell view in
+`observations`, and the aggregation method is a single named function rather
+than implicit in every cross-source query.
 
 Notes from the recon (see project memory `project_gacc_datasources.md`):
 - The 'main' file `full_v2_YYYYMM.7z` is hidden from the directory listing —
@@ -13,11 +27,12 @@ Notes from the recon (see project memory `project_gacc_datasources.md`):
 """
 
 import csv
+import hashlib
 import io
 import logging
 import os
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from datetime import date
 
 import httpx
@@ -33,6 +48,28 @@ BULK_BASE = (
 )
 DEFAULT_TIMEOUT = 300.0  # bulk files are 40-60 MB; allow time on slow links
 
+# CSV column → DB column name mapping for the raw row.
+_CSV_TO_DB_COLS = {
+    "REPORTER": "reporter",
+    "PARTNER": "partner",
+    "TRADE_TYPE": "trade_type",
+    "PRODUCT_NC": "product_nc",
+    "PRODUCT_SITC": "product_sitc",
+    "PRODUCT_CPA21": "product_cpa21",
+    "PRODUCT_CPA22": "product_cpa22",
+    "PRODUCT_BEC": "product_bec",
+    "PRODUCT_BEC5": "product_bec5",
+    "PRODUCT_SECTION": "product_section",
+    "FLOW": "flow",
+    "STAT_PROCEDURE": "stat_procedure",
+    "SUPPL_UNIT": "suppl_unit",
+    "VALUE_EUR": "value_eur",
+    "VALUE_NAC": "value_nac",
+    "QUANTITY_KG": "quantity_kg",
+    "QUANTITY_SUPPL_UNIT": "quantity_suppl_unit",
+}
+_NUMERIC_DB_COLS = {"value_eur", "value_nac", "quantity_kg", "quantity_suppl_unit"}
+
 
 def bulk_file_url(period: date) -> str:
     """The Eurostat URL for the monthly bulk file at the given period anchor."""
@@ -46,7 +83,6 @@ def fetch_bulk_file(period: date, timeout: float = DEFAULT_TIMEOUT) -> FetchResu
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
         r = client.get(url)
     r.raise_for_status()
-    import hashlib
     return FetchResult(
         url=url,
         status_code=r.status_code,
@@ -56,29 +92,21 @@ def fetch_bulk_file(period: date, timeout: float = DEFAULT_TIMEOUT) -> FetchResu
     )
 
 
-def _flow_label(raw: str | int) -> str:
-    """Eurostat FLOW: 1 = import, 2 = export."""
-    return {1: "import", 2: "export", "1": "import", "2": "export"}.get(raw, str(raw))
-
-
-def iter_observations(
+def iter_raw_rows(
     archive_bytes: bytes,
     period: date,
     partners: set[str] | None = None,
     reporters: set[str] | None = None,
     hs_prefixes: tuple[str, ...] | None = None,
 ) -> Iterator[dict]:
-    """Stream rows from a Eurostat bulk archive, yield filtered observations.
+    """Yield one dict per raw CSV row passing the filters. No aggregation.
 
-    A row passes the filter if (partners is None or PARTNER in partners) AND
-    (reporters is None or REPORTER in reporters) AND (hs_prefixes is None or
-    PRODUCT_NC starts with one of them). PRODUCT_NC is zero-padded to 8 chars
-    before matching.
+    Keys are lower-cased to match the eurostat_raw_rows DB column names.
+    PRODUCT_NC is zero-padded to 8 chars. FLOW is converted to int.
+    Numeric columns are converted to float (or None for empty).
     """
-    period_iso = period.replace(day=1).isoformat()
+    period = period.replace(day=1)
 
-    # py7zr.extract() writes to disk; extracted CSV is ~500 MB. Use a temp dir
-    # so we don't hold the decompressed text in memory all at once.
     with tempfile.TemporaryDirectory(prefix="gacc-eurostat-") as tmpdir:
         with py7zr.SevenZipFile(io.BytesIO(archive_bytes), "r") as archive:
             archive.extractall(path=tmpdir)
@@ -89,67 +117,109 @@ def iter_observations(
             path = os.path.join(tmpdir, filename)
             with open(path, "r", encoding="utf-8", newline="") as fh:
                 reader = csv.DictReader(fh)
-                yield from _iter_filtered(reader, period_iso, partners, reporters, hs_prefixes)
+                yield from _iter_filtered_raw(reader, period, partners, reporters, hs_prefixes)
 
 
-def _iter_filtered(reader, period_iso, partners, reporters, hs_prefixes) -> Iterator[dict]:
-    """Aggregate rows sharing the same (reporter, partner, hs, flow) key.
-
-    Eurostat splits monthly trade by STAT_PROCEDURE (tariff regime) and SUPPL_UNIT,
-    so a single (reporter, partner, hs, flow) cell can appear across several rows.
-    For mirror-trade analysis we want one row per logical observation, so we sum
-    VALUE_EUR/QUANTITY_KG within the dim key and emit once per group.
-    """
-    agg: dict[tuple, dict] = {}
+def _iter_filtered_raw(reader, period: date, partners, reporters, hs_prefixes) -> Iterator[dict]:
     for row in reader:
         partner = row.get("PARTNER", "")
         reporter = row.get("REPORTER", "")
-        hs = (row.get("PRODUCT_NC") or "").zfill(8)
+        product_nc = (row.get("PRODUCT_NC") or "").zfill(8)
 
         if partners is not None and partner not in partners:
             continue
         if reporters is not None and reporter not in reporters:
             continue
-        if hs_prefixes is not None and not hs.startswith(hs_prefixes):
+        if hs_prefixes is not None and not product_nc.startswith(hs_prefixes):
             continue
 
-        flow = _flow_label(row.get("FLOW", ""))
-        key = (reporter, partner, hs, flow)
+        out = {db_col: row.get(csv_col) or None for csv_col, db_col in _CSV_TO_DB_COLS.items()}
+        out["product_nc"] = product_nc
+        out["period"] = period
+        # Native types
+        try:
+            out["flow"] = int(out["flow"]) if out["flow"] is not None else None
+        except (TypeError, ValueError):
+            log.warning("Unparseable FLOW=%r in row %s/%s/%s", out["flow"], reporter, partner, product_nc)
+            continue
+        for col in _NUMERIC_DB_COLS:
+            out[col] = _to_float(out[col])
+        yield out
 
-        value_eur = _to_float(row.get("VALUE_EUR")) or 0.0
-        qty_kg = _to_float(row.get("QUANTITY_KG")) or 0.0
-        qty_supp = _to_float(row.get("QUANTITY_SUPPL_UNIT")) or 0.0
 
+def aggregate_to_observations(
+    period: date,
+    indexed_rows: Iterable[tuple[int | None, dict]],
+) -> Iterator[dict]:
+    """Aggregate raw rows by (reporter, partner, product_nc, flow), sum measures.
+
+    `indexed_rows` is `(raw_row_id, raw_row_dict)` pairs. The id may be None for
+    pre-DB usage (e.g. tests). Output observation dicts carry
+    `eurostat_raw_row_ids`: the list of raw row ids that aggregated into the cell.
+    """
+    period_iso = period.replace(day=1).isoformat()
+
+    agg: dict[tuple, dict] = {}
+    for raw_id, raw in indexed_rows:
+        key = (raw["reporter"], raw["partner"], raw["product_nc"], raw["flow"])
         bucket = agg.setdefault(key, {
             "period": period_iso,
             "period_kind": "monthly",
-            "flow": flow,
-            "reporter_country": reporter,
-            "partner_country": partner,
-            "hs_code": hs,
+            "flow": _flow_label(raw["flow"]),
+            "reporter_country": raw["reporter"],
+            "partner_country": raw["partner"],
+            "hs_code": raw["product_nc"],
             "value": 0.0,
             "currency": "EUR",
-            "quantity_kg": 0.0,
-            "quantity_supp": 0.0,
-            "quantity_unit": row.get("SUPPL_UNIT") or "kg",
-            "source_row": {"_aggregated_rows": []},
+            "_quantity_kg": 0.0,
+            "_quantity_supp": 0.0,
+            "quantity_unit": raw.get("suppl_unit") or "kg",
+            "eurostat_raw_row_ids": [],
+            "source_row": {
+                "_method": "aggregated by (reporter, partner, product_nc, flow); summed VALUE_EUR / QUANTITY_KG / QUANTITY_SUPPL_UNIT across STAT_PROCEDURE",
+                "_n_raw_rows": 0,
+            },
         })
-        bucket["value"] += value_eur
-        bucket["quantity_kg"] += qty_kg
-        bucket["quantity_supp"] += qty_supp
-        bucket["source_row"]["_aggregated_rows"].append(dict(row))
+        bucket["value"] += raw.get("value_eur") or 0.0
+        bucket["_quantity_kg"] += raw.get("quantity_kg") or 0.0
+        bucket["_quantity_supp"] += raw.get("quantity_suppl_unit") or 0.0
+        bucket["source_row"]["_n_raw_rows"] += 1
+        if raw_id is not None:
+            bucket["eurostat_raw_row_ids"].append(raw_id)
 
     for bucket in agg.values():
-        bucket["quantity"] = bucket["quantity_supp"] if bucket["quantity_supp"] else bucket["quantity_kg"]
-        # Clean up the intermediate accumulators before yielding.
-        del bucket["quantity_kg"], bucket["quantity_supp"]
+        # Use supplementary unit when present, else fall back to kg.
+        bucket["quantity"] = bucket["_quantity_supp"] if bucket["_quantity_supp"] else bucket["_quantity_kg"]
+        del bucket["_quantity_kg"], bucket["_quantity_supp"]
+        if not bucket["eurostat_raw_row_ids"]:
+            # In test/no-DB mode, leave the array empty so the downstream still inserts cleanly.
+            bucket["eurostat_raw_row_ids"] = None
         yield bucket
 
 
-def _to_float(s: str | None) -> float | None:
+def iter_observations(
+    archive_bytes: bytes,
+    period: date,
+    partners: set[str] | None = None,
+    reporters: set[str] | None = None,
+    hs_prefixes: tuple[str, ...] | None = None,
+) -> Iterator[dict]:
+    """Convenience: raw → aggregated, no DB ids attached. Useful for tests and
+    one-off inspections; the DB pipeline goes through iter_raw_rows + insert +
+    aggregate_to_observations so it can capture raw-row ids on the observations."""
+    raws = list(iter_raw_rows(archive_bytes, period, partners, reporters, hs_prefixes))
+    yield from aggregate_to_observations(period, [(None, r) for r in raws])
+
+
+def _flow_label(raw: int | str | None) -> str:
+    """Eurostat FLOW: 1 = import, 2 = export."""
+    return {1: "import", 2: "export"}.get(raw, f"flow_{raw}")
+
+
+def _to_float(s) -> float | None:
     if s is None or s == "":
         return None
     try:
         return float(s)
-    except ValueError:
+    except (TypeError, ValueError):
         return None
