@@ -2,6 +2,8 @@ httpx
 beautifulsoup4
 lxml
 pdfplumber
+xlrd<2.1
+py7zr
 psycopg2-binary
 python-dotenv
 pandas

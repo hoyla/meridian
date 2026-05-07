@@ -15,6 +15,7 @@ import psycopg2
 from api_client import FetchResult
 
 if TYPE_CHECKING:
+    from datetime import date
     from parse import ReleaseMetadata
 
 log = logging.getLogger(__name__)
@@ -79,6 +80,25 @@ def save_snapshot(run_id: int, response: FetchResult) -> int:
                 response.sha256,
                 psycopg2.Binary(response.content),
             ),
+        )
+        return cur.fetchone()[0]
+
+
+def find_or_create_eurostat_release(period: "date", source_url: str) -> int:
+    """Resolve the Eurostat natural key (period) to a release id under source='eurostat'.
+    GACC-only fields (section_number, currency, release_kind) stay NULL."""
+    with transaction() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO releases (source, period, source_url)
+            VALUES ('eurostat', %s, %s)
+            ON CONFLICT (period) WHERE source = 'eurostat'
+            DO UPDATE SET
+                last_seen_at = now(),
+                source_url   = EXCLUDED.source_url
+            RETURNING id
+            """,
+            (period, source_url),
         )
         return cur.fetchone()[0]
 
