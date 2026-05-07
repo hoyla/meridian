@@ -18,9 +18,28 @@ def test_db_url() -> str:
     return url
 
 
-@pytest.fixture(scope="function")
+def _truncate_all(conn) -> None:
+    with conn, conn.cursor() as cur:
+        cur.execute(
+            "TRUNCATE TABLE findings, observations, source_snapshots, scrape_runs, releases "
+            "RESTART IDENTITY CASCADE"
+        )
+
+
+@pytest.fixture
 def db_conn(test_db_url):
+    """A fresh connection to the test DB, truncated before yielding."""
     conn = psycopg2.connect(test_db_url)
+    _truncate_all(conn)
     yield conn
-    conn.rollback()
     conn.close()
+
+
+@pytest.fixture
+def clean_db(test_db_url, monkeypatch):
+    """For tests that call db.py functions (which read DATABASE_URL at runtime)."""
+    monkeypatch.setenv("DATABASE_URL", test_db_url)
+    conn = psycopg2.connect(test_db_url)
+    _truncate_all(conn)
+    conn.close()
+    yield

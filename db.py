@@ -4,14 +4,18 @@ Thin functional wrapper around psycopg2. No ORM — keeps the SQL legible and
 matches the fuel-finder pattern.
 """
 
+import json
 import logging
 import os
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import psycopg2
 
 from api_client import FetchResult
+
+if TYPE_CHECKING:
+    from parse import ReleaseMetadata
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +83,111 @@ def save_snapshot(run_id: int, response: FetchResult) -> int:
         return cur.fetchone()[0]
 
 
-def upsert_observations(run_id: int, observations: list[dict[str, Any]]) -> None:
-    """Insert observations, bumping version_seen if the same (release, dims) reappears."""
-    raise NotImplementedError("Implement after we settle the dimension key for GACC tables")
+def find_or_create_release(meta: "ReleaseMetadata", release_kind: str) -> int:
+    """Resolve the natural key (section_number, currency, period, release_kind) to a
+    release id, creating the row if it doesn't exist and refreshing display fields
+    that may have changed since we last saw the page (e.g. revised excel_url)."""
+    with transaction() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO releases (
+                section_number, currency, period, release_kind,
+                description, title, source_url, publication_date, unit, excel_url
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (section_number, currency, period, release_kind) DO UPDATE SET
+                last_seen_at     = now(),
+                source_url       = EXCLUDED.source_url,
+                publication_date = COALESCE(EXCLUDED.publication_date, releases.publication_date),
+                title            = COALESCE(EXCLUDED.title,            releases.title),
+                description      = COALESCE(EXCLUDED.description,      releases.description),
+                unit             = COALESCE(EXCLUDED.unit,             releases.unit),
+                excel_url        = COALESCE(EXCLUDED.excel_url,        releases.excel_url)
+            RETURNING id
+            """,
+            (
+                meta.section_number, meta.currency, meta.period, release_kind,
+                meta.description, meta.title, meta.source_url,
+                meta.publication_date, meta.unit, meta.excel_url,
+            ),
+        )
+        return cur.fetchone()[0]
+
+
+def upsert_observations(
+    run_id: int,
+    release_id: int,
+    observations: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Insert each observation. If an existing row with the same dimensional key
+    has the same value, skip; if the value differs, insert a new row with
+    version_seen bumped. Returns counts {'inserted', 'versioned', 'unchanged'}."""
+    counts = {"inserted": 0, "versioned": 0, "unchanged": 0}
+    with transaction() as conn, conn.cursor() as cur:
+        for obs in observations:
+            cur.execute(
+                """
+                SELECT value_amount, version_seen
+                  FROM observations
+                 WHERE release_id        = %s
+                   AND period_kind       = %s
+                   AND flow              IS NOT DISTINCT FROM %s
+                   AND partner_country   IS NOT DISTINCT FROM %s
+                   AND hs_code           IS NOT DISTINCT FROM %s
+                   AND commodity_label   IS NOT DISTINCT FROM %s
+              ORDER BY version_seen DESC
+                 LIMIT 1
+                """,
+                (
+                    release_id,
+                    obs.get("period_kind"),
+                    obs.get("flow"),
+                    obs.get("partner_country"),
+                    obs.get("hs_code"),
+                    obs.get("commodity_label"),
+                ),
+            )
+            existing = cur.fetchone()
+            new_value = obs.get("value")
+
+            if existing is None:
+                version, action = 1, "inserted"
+            else:
+                existing_value, existing_version = existing
+                same = (
+                    (existing_value is None and new_value is None)
+                    or (existing_value is not None and new_value is not None
+                        and float(existing_value) == float(new_value))
+                )
+                if same:
+                    counts["unchanged"] += 1
+                    continue
+                version, action = existing_version + 1, "versioned"
+
+            cur.execute(
+                """
+                INSERT INTO observations (
+                    release_id, scrape_run_id, period_kind,
+                    flow, partner_country, partner_label_raw, partner_indent, partner_is_subset,
+                    hs_code, commodity_label,
+                    value_amount, value_currency, quantity, quantity_unit,
+                    source_row, version_seen
+                ) VALUES (
+                    %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s
+                )
+                """,
+                (
+                    release_id, run_id, obs.get("period_kind"),
+                    obs.get("flow"), obs.get("partner_country"),
+                    obs.get("partner_label_raw"), obs.get("partner_indent"), obs.get("partner_is_subset"),
+                    obs.get("hs_code"), obs.get("commodity_label"),
+                    obs.get("value"), obs.get("currency"),
+                    obs.get("quantity"), obs.get("quantity_unit"),
+                    json.dumps(obs.get("source_row") or {}), version,
+                ),
+            )
+            counts[action] += 1
+    return counts

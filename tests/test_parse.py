@@ -32,7 +32,7 @@ def test_metadata_extraction():
 
 
 def test_parses_total_row():
-    obs = parse_html(_load_section4(), SECTION4_URL)
+    obs = parse_html(_load_section4(), SECTION4_URL).observations
     totals = [o for o in obs if o["partner_country"] == "Total"]
     # Expect 6 observations: 3 flows × (monthly + ytd).
     assert len(totals) == 6
@@ -48,7 +48,7 @@ def test_parses_total_row():
 
 
 def test_parses_united_states_row():
-    obs = parse_html(_load_section4(), SECTION4_URL)
+    obs = parse_html(_load_section4(), SECTION4_URL).observations
     us_rows = [o for o in obs if o["partner_country"] == "United States (US)"]
     assert len(us_rows) == 6
 
@@ -57,7 +57,7 @@ def test_parses_united_states_row():
 
 
 def test_subset_marker_is_extracted():
-    obs = parse_html(_load_section4(), SECTION4_URL)
+    obs = parse_html(_load_section4(), SECTION4_URL).observations
     germany = [o for o in obs if o["partner_country"] == "Germany"]
     assert germany, "Germany row should be parsed"
     assert all(o["partner_is_subset"] is True for o in germany)
@@ -68,7 +68,7 @@ def test_subset_marker_is_extracted():
 
 
 def test_observation_count_is_consistent():
-    obs = parse_html(_load_section4(), SECTION4_URL)
+    obs = parse_html(_load_section4(), SECTION4_URL).observations
     # Each data row produces 6 observations. The fixture has 25 partner rows
     # (Total + EU + Germany + Netherlands + France + Italy + US + ASEAN +
     #  Vietnam + Malaysia + Thailand + Singapore + Indonesia + Philippines +

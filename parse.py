@@ -64,24 +64,30 @@ class ReleaseMetadata:
     title: str
 
 
-def parse_response(response: FetchResult) -> list[ParsedObservation]:
+@dataclass
+class ParseResult:
+    metadata: ReleaseMetadata
+    observations: list[ParsedObservation]
+
+
+def parse_response(response: FetchResult) -> ParseResult:
     ct = (response.content_type or "").lower()
     if "pdf" in ct or response.url.lower().endswith(".pdf"):
         return parse_pdf(response.content)
     return parse_html(response.content, response.url)
 
 
-def parse_html(html: bytes, url: str) -> list[ParsedObservation]:
+def parse_html(html: bytes, url: str) -> ParseResult:
     soup = BeautifulSoup(html, "lxml")
     meta = extract_metadata(soup, url)
     if meta.section_number == 4:
-        return _parse_section_4_by_country(soup, meta)
+        return ParseResult(metadata=meta, observations=_parse_section_4_by_country(soup, meta))
     raise NotImplementedError(
         f"HTML parser for section {meta.section_number} ({meta.description!r}) not implemented yet"
     )
 
 
-def parse_pdf(pdf_bytes: bytes) -> list[ParsedObservation]:
+def parse_pdf(pdf_bytes: bytes) -> ParseResult:
     raise NotImplementedError("Implement once we've inspected a real GACC PDF")
 
 
