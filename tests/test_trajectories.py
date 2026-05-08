@@ -185,6 +185,69 @@ def test_trajectory_skips_when_no_findings(empty_op):
     assert counts["skipped_no_findings"] >= 1
 
 
+def test_trajectory_export_side_isolated_from_import(empty_op, test_db_url):
+    """flow=2 trajectory reads only hs_group_yoy_export findings; the resulting
+    trajectory finding has subkind 'hs_group_trajectory_export' and detail.flow=2.
+    Import and export trajectories don't mix even when both exist for the same group."""
+    cur_conn = psycopg2.connect(test_db_url)
+    cur = cur_conn.cursor()
+    cur.execute("INSERT INTO scrape_runs (source_url, status) VALUES ('seed', 'success') RETURNING id")
+    run = cur.fetchone()[0]
+
+    # Seed import-side findings (rising) and export-side findings (falling)
+    # for the same group_id (1 = EV batteries) over 8 windows.
+    for period, imp_yoy, exp_yoy in [
+        (date(2025, 7, 1),  0.10, -0.10),
+        (date(2025, 8, 1),  0.12, -0.12),
+        (date(2025, 9, 1),  0.13, -0.14),
+        (date(2025, 10, 1), 0.15, -0.16),
+        (date(2025, 11, 1), 0.16, -0.18),
+        (date(2025, 12, 1), 0.18, -0.20),
+        (date(2026, 1, 1),  0.20, -0.22),
+        (date(2026, 2, 1),  0.22, -0.24),
+    ]:
+        for subkind, yoy in [("hs_group_yoy", imp_yoy), ("hs_group_yoy_export", exp_yoy)]:
+            detail = {
+                "windows": {"current_end": period.isoformat(), "current_start": period.isoformat()},
+                "totals": {"yoy_pct": yoy, "current_12mo_eur": 1_000_000_000.0, "yoy_pct_kg": yoy * 0.8},
+            }
+            cur.execute(
+                """
+                INSERT INTO findings (scrape_run_id, kind, subkind, observation_ids,
+                                      hs_group_ids, score, title, body, detail)
+                VALUES (%s, 'anomaly', %s, '{}', %s, %s, 't', 'b', %s::jsonb)
+                """,
+                (run, subkind, [1], abs(yoy), json.dumps(detail)),
+            )
+    cur_conn.commit()
+    cur_conn.close()
+
+    # Import side: rising trajectory
+    counts_imp = anomalies.detect_hs_group_trajectories(group_names=["EV batteries (Li-ion)"], flow=1)
+    assert counts_imp["emitted"] == 1
+
+    # Export side: falling trajectory
+    counts_exp = anomalies.detect_hs_group_trajectories(group_names=["EV batteries (Li-ion)"], flow=2)
+    assert counts_exp["emitted"] == 1
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur2:
+        cur2.execute(
+            "SELECT subkind, detail->>'shape', detail->>'flow' FROM findings "
+            "WHERE subkind LIKE 'hs_group_trajectory%' ORDER BY subkind"
+        )
+        rows = cur2.fetchall()
+
+    by_sub = {r[0]: (r[1], r[2]) for r in rows}
+    assert "hs_group_trajectory" in by_sub
+    assert "hs_group_trajectory_export" in by_sub
+    imp_shape, imp_flow = by_sub["hs_group_trajectory"]
+    exp_shape, exp_flow = by_sub["hs_group_trajectory_export"]
+    assert imp_shape in ("rising", "rising_accelerating")
+    assert exp_shape in ("falling", "falling_accelerating")
+    assert imp_flow == "1"
+    assert exp_flow == "2"
+
+
 def test_trajectory_u_recovery_integration(empty_op, test_db_url):
     """Wind-turbine-style series: declining then recovering."""
     series = [

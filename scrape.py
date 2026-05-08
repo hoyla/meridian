@@ -214,8 +214,10 @@ def main() -> None:
         return
 
     if args.analyse == "hs-group-trajectory":
-        counts = anomalies.detect_hs_group_trajectories(group_names=args.hs_group)
-        log.info("HS-group trajectory analysis: %s", counts)
+        counts = anomalies.detect_hs_group_trajectories(
+            group_names=args.hs_group, flow=args.flow,
+        )
+        log.info("HS-group trajectory analysis (flow=%d): %s", args.flow, counts)
         return
 
     if args.fetch_fx:

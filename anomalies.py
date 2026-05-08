@@ -1240,15 +1240,24 @@ def _classify_trajectory(yoys: list[float]) -> tuple[str, dict]:
     return "falling", features
 
 
-def detect_hs_group_trajectories(group_names: list[str] | None = None) -> dict[str, int]:
+def detect_hs_group_trajectories(
+    group_names: list[str] | None = None,
+    flow: int = 1,
+) -> dict[str, int]:
     """For each hs_group, classify the rolling-12mo-EUR YoY series across all
-    available windows into a trajectory shape. Reads existing hs_group_yoy
-    findings (latest per period), emits one 'hs_group_trajectory' finding per
-    group capturing the shape + supporting feature stats + supporting yoy
-    finding ids for trace-back.
+    available windows into a trajectory shape. Reads the matching hs_group_yoy
+    findings (subkind 'hs_group_yoy' for flow=1, 'hs_group_yoy_export' for
+    flow=2), one per period, emits one trajectory finding per group capturing
+    the shape + supporting feature stats + underlying yoy finding ids.
+
+    `flow`: 1 = imports (CN→EU); 2 = exports (EU→CN). The two are analysed
+    separately and emit different subkinds ('hs_group_trajectory' vs
+    'hs_group_trajectory_export') so their series can't accidentally mix.
 
     Returns counts: {'emitted', 'skipped_insufficient_data', 'skipped_no_findings'}.
     """
+    if flow not in (1, 2):
+        raise ValueError(f"flow must be 1 (import) or 2 (export); got {flow}")
     counts = {"emitted": 0, "skipped_insufficient_data": 0, "skipped_no_findings": 0}
 
     groups = _list_hs_groups(group_names)
@@ -1264,7 +1273,7 @@ def detect_hs_group_trajectories(group_names: list[str] | None = None) -> dict[s
 
     try:
         for group in groups:
-            series = _fetch_group_yoy_series(group.id)
+            series = _fetch_group_yoy_series(group.id, flow=flow)
             if not series:
                 counts["skipped_no_findings"] += 1
                 continue
@@ -1277,7 +1286,7 @@ def detect_hs_group_trajectories(group_names: list[str] | None = None) -> dict[s
             features["n_low_base_windows"] = n_low_base
             features["low_base_threshold_eur"] = LOW_BASE_THRESHOLD_EUR
             features["low_base_majority"] = (n_low_base / len(series)) >= TRAJECTORY_LOW_BASE_FRACTION
-            _insert_trajectory_finding(analysis_run_id, group, series, shape, features)
+            _insert_trajectory_finding(analysis_run_id, group, series, shape, features, flow=flow)
             counts["emitted"] += 1
 
         with _conn() as conn, conn.cursor() as cur:
@@ -1296,9 +1305,11 @@ def detect_hs_group_trajectories(group_names: list[str] | None = None) -> dict[s
     return counts
 
 
-def _fetch_group_yoy_series(group_id: int) -> list[dict]:
+def _fetch_group_yoy_series(group_id: int, flow: int = 1) -> list[dict]:
     """Return [{period, yoy_pct, finding_id, current_eur}] for the given group,
-    one row per period (latest finding per period if there are duplicates)."""
+    one row per period (latest finding per period if there are duplicates).
+    flow=1 reads subkind 'hs_group_yoy', flow=2 reads 'hs_group_yoy_export'."""
+    subkind = "hs_group_yoy" if flow == 1 else "hs_group_yoy_export"
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         cur.execute(
             """
@@ -1309,11 +1320,11 @@ def _fetch_group_yoy_series(group_id: int) -> list[dict]:
                 (detail->'totals'->>'current_12mo_eur')::numeric AS current_eur,
                 (detail->'totals'->>'yoy_pct_kg')::numeric AS yoy_pct_kg
               FROM findings
-             WHERE subkind = 'hs_group_yoy'
+             WHERE subkind = %s
                AND %s = ANY(hs_group_ids)
           ORDER BY (detail->'windows'->>'current_end')::date, created_at DESC
             """,
-            (group_id,),
+            (subkind, group_id),
         )
         return [
             {
@@ -1333,15 +1344,18 @@ def _insert_trajectory_finding(
     series: list[dict],
     shape: str,
     features: dict,
+    flow: int = 1,
 ) -> None:
     first = series[0]
     last  = series[-1]
     peak  = max(series, key=lambda s: s["yoy_pct"])
     trough = min(series, key=lambda s: s["yoy_pct"])
 
+    flow_label = "EU imports from CN" if flow == 1 else "EU exports to CN"
+    flow_subkind_suffix = "" if flow == 1 else "_export"
     low_base_marker = " ⚠ low-base" if features.get("low_base_majority") else ""
     title = (
-        f"Trajectory: {group.name} — {SHAPE_LABELS.get(shape, shape)} "
+        f"Trajectory ({flow_label}): {group.name} — {SHAPE_LABELS.get(shape, shape)} "
         f"(latest {last['yoy_pct']*100:+.1f}% YoY, "
         f"peak {peak['yoy_pct']*100:+.1f}% in {peak['period'].strftime('%Y-%m')}, "
         f"trough {trough['yoy_pct']*100:+.1f}% in {trough['period'].strftime('%Y-%m')}){low_base_marker}"
@@ -1428,7 +1442,9 @@ def _insert_trajectory_finding(
         )
 
     detail = {
-        "method": "hs_group_trajectory_v1",
+        "method": "hs_group_trajectory_v2_flow_aware",
+        "flow": flow,
+        "flow_label": flow_label,
         "group": {"id": group.id, "name": group.name, "hs_patterns": group.hs_patterns},
         "shape": shape,
         "shape_label": SHAPE_LABELS.get(shape, shape),
@@ -1454,6 +1470,7 @@ def _insert_trajectory_finding(
     score = abs(last["yoy_pct"])
 
     import json
+    subkind = f"hs_group_trajectory{flow_subkind_suffix}"
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -1461,9 +1478,9 @@ def _insert_trajectory_finding(
                 scrape_run_id, kind, subkind, observation_ids, hs_group_ids,
                 score, title, body, detail
             ) VALUES (
-                %s, 'anomaly', 'hs_group_trajectory', %s, %s, %s, %s, %s, %s
+                %s, 'anomaly', %s, %s, %s, %s, %s, %s, %s
             )
             """,
-            (analysis_run_id, [], [group.id], score, title,
+            (analysis_run_id, subkind, [], [group.id], score, title,
              "\n".join(body_lines), json.dumps(detail)),
         )
