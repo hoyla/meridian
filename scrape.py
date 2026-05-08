@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 import api_client
 import db
 import eurostat
+import fx
 import parse
 
 load_dotenv()
@@ -165,8 +166,19 @@ def main() -> None:
     p.add_argument("--hs-prefix", action="append", metavar="HS",
                    help="HS-CN8 prefix(es) to filter Eurostat to (e.g. 87038). "
                         "Default: no HS filter. Repeat for multiple.")
+    p.add_argument("--fetch-fx", metavar="CCY", action="append",
+                   help="Fetch ECB monthly average rates for CCY/EUR and populate fx_rates. "
+                        "Repeatable, e.g. --fetch-fx CNY --fetch-fx USD")
+    p.add_argument("--fx-since", type=_parse_period, metavar="YYYY-MM",
+                   help="Only fetch FX rates from this period onwards (default: full history)")
     p.add_argument("--dry-run", action="store_true", help="Fetch + parse but don't write to DB")
     args = p.parse_args()
+
+    if args.fetch_fx:
+        for ccy in args.fetch_fx:
+            counts = fx.populate_fx_rates_from_ecb(ccy.upper(), since=args.fx_since)
+            log.info("FX %s/EUR: %s", ccy.upper(), counts)
+        return
 
     if args.eurostat_period:
         partners = set(args.partner) if args.partner else {"CN"}
