@@ -54,6 +54,18 @@ DEFAULT_MIRROR_GAP_CAVEATS = [
 # the gap is unremarkable; above is a candidate for editorial attention.
 CIF_FOB_BASELINE_PCT = 0.075
 
+# A 12-month total below this threshold is "low base": a percentage change on
+# such a small denominator can look dramatic but doesn't carry the editorial
+# weight of a comparable percentage on a larger base. €50M is a defensible
+# floor for an EU-wide HS-group total; below it the absolute change might be
+# under €10M which is niche-story territory, not "China shock" headline.
+# Configurable per-call via the analyser's threshold parameter.
+LOW_BASE_THRESHOLD_EUR = 50_000_000
+
+# When the trajectory analyser sees this fraction or more of the windows
+# tagged as low-base, the trajectory finding itself flags low_base_effect.
+TRAJECTORY_LOW_BASE_FRACTION = 0.5
+
 
 def _conn():
     return psycopg2.connect(os.environ["DATABASE_URL"])
@@ -738,6 +750,7 @@ def detect_hs_group_yoy(
     group_names: list[str] | None = None,
     yoy_threshold_pct: float = 0.0,
     flow: int = 1,
+    low_base_threshold_eur: float = LOW_BASE_THRESHOLD_EUR,
 ) -> dict[str, int]:
     """For each (hs_group, period_t) where 24 months of history exist, compute:
         current_12mo  = sum(value_eur) for periods [t-11 .. t]
@@ -818,13 +831,18 @@ def detect_hs_group_yoy(
 
                 top_cn8s = _hs_group_top_cn8s(group.hs_patterns, start_curr, end_curr, flow=flow)
                 top_reporters = _hs_group_top_reporters(group.hs_patterns, start_curr, end_curr, flow=flow)
+                low_base = (
+                    current_eur < low_base_threshold_eur
+                    or prior_eur < low_base_threshold_eur
+                )
                 _insert_hs_group_yoy_finding(
                     analysis_run_id, group, t, start_curr, end_curr,
                     start_prior, end_prior,
                     current_eur, prior_eur, yoy_pct_eur,
                     current_kg,  prior_kg,  yoy_pct_kg,
                     series, top_cn8s, top_reporters, n_by_period,
-                    flow=flow,
+                    flow=flow, low_base=low_base,
+                    low_base_threshold_eur=low_base_threshold_eur,
                 )
                 counts["emitted"] += 1
 
@@ -864,11 +882,14 @@ def _insert_hs_group_yoy_finding(
     top_reporters: list[dict],
     n_obs_by_period: dict[date, int],
     flow: int = 1,
+    low_base: bool = False,
+    low_base_threshold_eur: float = LOW_BASE_THRESHOLD_EUR,
 ) -> None:
     direction = "up" if yoy_pct_eur > 0 else "down"
     kg_yoy_str = f"{yoy_pct_kg*100:+.1f}%" if yoy_pct_kg is not None else "n/a"
     flow_label = "EU imports from CN" if flow == 1 else "EU exports to CN"
     flow_subkind_suffix = "" if flow == 1 else "_export"
+    low_base_marker = " ⚠ low-base" if low_base else ""
     unit_price_curr = (current_eur / current_kg) if current_kg else None
     unit_price_prior = (prior_eur / prior_kg) if prior_kg else None
     unit_price_pct = (
@@ -880,7 +901,7 @@ def _insert_hs_group_yoy_finding(
     title = (
         f"Component trend ({flow_label}): {group.name}, rolling 12mo to {end_curr.strftime('%Y-%m')}: "
         f"€{current_eur/1e9:,.2f}B ({yoy_pct_eur*100:+.1f}% {direction} value, "
-        f"{kg_yoy_str} kg)"
+        f"{kg_yoy_str} kg){low_base_marker}"
     )
 
     # Decompose value change into volume × price effects so the "is it shipping
@@ -925,9 +946,25 @@ def _insert_hs_group_yoy_finding(
         "tariff regimes; see eurostat_raw_rows for the breakdown). Unit prices computed as "
         "value/kg from raw rows."
     )
+    if low_base:
+        body_lines.append("")
+        body_lines.append(
+            f"⚠ LOW-BASE FLAG: prior 12mo €{prior_eur:,.0f} (or current €{current_eur:,.0f}) "
+            f"is below the €{low_base_threshold_eur:,.0f} threshold. The {yoy_pct_eur*100:+.1f}% "
+            f"figure rests on a small denominator — interpret alongside the absolute figures "
+            f"and consider whether a single shipment or a niche reclassification could have "
+            f"driven the apparent change. See caveat 'low_base_effect'."
+        )
+
+    caveat_codes = [
+        "cif_fob", "currency_timing", "classification_drift",
+        "eurostat_stat_procedure_mix",
+    ]
+    if low_base:
+        caveat_codes.append("low_base_effect")
 
     detail = {
-        "method": "hs_group_yoy_v3_with_kg_and_flow",
+        "method": "hs_group_yoy_v4_with_low_base_flag",
         "method_query": {
             "source": "eurostat_raw_rows", "flow": flow, "partner": "CN",
             "flow_label": flow_label,
@@ -954,6 +991,8 @@ def _insert_hs_group_yoy_finding(
             "current_unit_price_eur_per_kg": unit_price_curr,
             "prior_unit_price_eur_per_kg": unit_price_prior,
             "unit_price_pct_change": unit_price_pct,
+            "low_base": low_base,
+            "low_base_threshold_eur": low_base_threshold_eur,
         },
         "monthly_series": [
             {"period": p.isoformat(), "value_eur": e, "quantity_kg": k,
@@ -964,10 +1003,7 @@ def _insert_hs_group_yoy_finding(
         ],
         "top_cn8_codes_in_current_12mo": top_cn8s,
         "top_reporters_in_current_12mo": top_reporters,
-        "caveat_codes": [
-            "cif_fob", "currency_timing", "classification_drift",
-            "eurostat_stat_procedure_mix",
-        ],
+        "caveat_codes": caveat_codes,
     }
     # Score reflects EUR YoY (the editorial-comparable signal across groups).
     score = abs(yoy_pct_eur)
@@ -1237,6 +1273,10 @@ def detect_hs_group_trajectories(group_names: list[str] | None = None) -> dict[s
             if shape == "insufficient_data":
                 counts["skipped_insufficient_data"] += 1
                 continue
+            n_low_base = sum(1 for s in series if s["current_eur"] < LOW_BASE_THRESHOLD_EUR)
+            features["n_low_base_windows"] = n_low_base
+            features["low_base_threshold_eur"] = LOW_BASE_THRESHOLD_EUR
+            features["low_base_majority"] = (n_low_base / len(series)) >= TRAJECTORY_LOW_BASE_FRACTION
             _insert_trajectory_finding(analysis_run_id, group, series, shape, features)
             counts["emitted"] += 1
 
@@ -1299,11 +1339,12 @@ def _insert_trajectory_finding(
     peak  = max(series, key=lambda s: s["yoy_pct"])
     trough = min(series, key=lambda s: s["yoy_pct"])
 
+    low_base_marker = " ⚠ low-base" if features.get("low_base_majority") else ""
     title = (
         f"Trajectory: {group.name} — {SHAPE_LABELS.get(shape, shape)} "
         f"(latest {last['yoy_pct']*100:+.1f}% YoY, "
         f"peak {peak['yoy_pct']*100:+.1f}% in {peak['period'].strftime('%Y-%m')}, "
-        f"trough {trough['yoy_pct']*100:+.1f}% in {trough['period'].strftime('%Y-%m')})"
+        f"trough {trough['yoy_pct']*100:+.1f}% in {trough['period'].strftime('%Y-%m')}){low_base_marker}"
     )
 
     body_lines = [
@@ -1371,6 +1412,20 @@ def _insert_trajectory_finding(
         "detail.underlying_yoy_finding_ids. Each of those carries kg + €/kg figures, top "
         "contributing CN8 codes, and top importing EU members."
     )
+    if features.get("n_low_base_windows", 0) > 0:
+        n_lb = features["n_low_base_windows"]
+        body_lines.append("")
+        body_lines.append(
+            f"⚠ Low-base context: {n_lb} of {features['n']} 12-month windows have a current "
+            f"total below the €{features['low_base_threshold_eur']:,.0f} low-base threshold. "
+            + ("Most windows are low-base — the trajectory shape is dominated by small "
+               "denominators and any percentage figures should be interpreted alongside "
+               "absolute totals."
+               if features.get("low_base_majority") else
+               "Some windows are low-base; spot-check the underlying findings before "
+               "quoting any single percentage."
+            )
+        )
 
     detail = {
         "method": "hs_group_trajectory_v1",
@@ -1390,10 +1445,10 @@ def _insert_trajectory_finding(
             for s in series
         ],
         "underlying_yoy_finding_ids": [s["finding_id"] for s in series],
-        "caveat_codes": [
-            "cif_fob", "currency_timing", "classification_drift",
-            "eurostat_stat_procedure_mix",
-        ],
+        "caveat_codes": (
+            ["cif_fob", "currency_timing", "classification_drift", "eurostat_stat_procedure_mix"]
+            + (["low_base_effect"] if features.get("low_base_majority") else [])
+        ),
     }
     # Score = absolute latest YoY; lets journalists rank by "how much movement is happening now".
     score = abs(last["yoy_pct"])

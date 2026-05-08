@@ -237,6 +237,51 @@ def test_yoy_export_flow_isolated_from_import(empty_op, test_db_url):
     assert abs(by_subkind["hs_group_yoy_export"] + 0.2) < 1e-9   # -20% on exports
 
 
+def test_yoy_low_base_flag_set_when_below_threshold(empty_op, test_db_url):
+    """A group with very small absolute totals should fire the low_base flag,
+    add the low_base_effect caveat, and mark the title with ⚠."""
+    with psycopg2.connect(test_db_url) as conn:
+        # 24 months at €100 each = €1.2k current/prior totals — way below the €50M default
+        _seed_eurostat_imports(
+            conn, "85076010",
+            _make_24_months(date(2024, 1, 1), [100.0] * 24),
+        )
+
+    anomalies.detect_hs_group_yoy(group_names=["EV batteries (Li-ion)"], yoy_threshold_pct=0.0)
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT title, detail FROM findings WHERE subkind='hs_group_yoy' "
+            "AND detail->'group'->>'name'='EV batteries (Li-ion)' ORDER BY score DESC LIMIT 1"
+        )
+        title, detail = cur.fetchone()
+
+    assert detail["totals"]["low_base"] is True
+    assert "low_base_effect" in detail["caveat_codes"]
+    assert "low-base" in title
+
+
+def test_yoy_low_base_flag_not_set_when_above_threshold(empty_op, test_db_url):
+    """A group with €100M+ rolling totals shouldn't be flagged as low-base."""
+    with psycopg2.connect(test_db_url) as conn:
+        # €10M each month × 24 → both windows ~€120M, comfortably above €50M
+        _seed_eurostat_imports(
+            conn, "85076010",
+            _make_24_months(date(2024, 1, 1), [10_000_000.0] * 24),
+        )
+
+    anomalies.detect_hs_group_yoy(group_names=["EV batteries (Li-ion)"], yoy_threshold_pct=0.0)
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT title, detail FROM findings WHERE subkind='hs_group_yoy' "
+            "AND detail->'group'->>'name'='EV batteries (Li-ion)' ORDER BY score DESC LIMIT 1"
+        )
+        title, detail = cur.fetchone()
+
+    assert detail["totals"]["low_base"] is False
+    assert "low_base_effect" not in detail["caveat_codes"]
+    assert "low-base" not in title
+
+
 def test_yoy_decomposition_volume_vs_price(empty_op, test_db_url):
     """Value YoY +50% with kg flat → price-driven. Value YoY +50% with kg +50% → volume-driven.
     The decomposition is what answers Lisa's permanent-magnets puzzle:

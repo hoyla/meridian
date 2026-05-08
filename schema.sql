@@ -376,5 +376,9 @@ INSERT INTO caveats (code, summary, detail, applies_to) VALUES
   ('eurostat_stat_procedure_mix',
    'Eurostat trade splits across tariff regimes (STAT_PROCEDURE)',
    'Eurostat reports trade by STAT_PROCEDURE — preferential, MFN, special-regime imports etc. Our `observations` row is the sum across regimes; the breakdown is in `eurostat_raw_rows`. Some stories live in the regime mix itself (e.g. surge in inward-processing imports may indicate a re-export pattern).',
-   ARRAY['mirror_gap', 'mix_substitution']);
+   ARRAY['mirror_gap', 'mix_substitution']),
+  ('low_base_effect',
+   'Percentage change rests on a tiny denominator',
+   'YoY percentages for HS groups whose prior or current 12-month total is small in absolute terms can look dramatic without being journalistically significant. A "+750%" rise on a €5M base is a €40M absolute move — meaningful for a niche subgroup but not "China shock" headline material. Always interpret a flagged finding alongside its absolute EUR totals before quoting the percentage.',
+   ARRAY['hs_group_yoy', 'hs_group_trajectory']);
 
