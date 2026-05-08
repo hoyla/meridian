@@ -25,9 +25,14 @@ _MONTH_ABBREVS = {
 
 # Release page <title> / .atcl-ttl format:
 #   "(4) China's Total Export & Import Values by Country/Region, Mar 2026 (in CNY)"
+# GACC inconsistently uses either the 3-letter abbreviation ('Mar') or the full
+# name ('March') in the title — both forms must parse. We capture the first 3
+# letters and look them up in _MONTH_ABBREVS.
 _RELEASE_TITLE_RE = re.compile(
     r"^\((?P<section>\d+)\)\s*(?P<description>.+?),\s*"
-    r"(?P<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s*"
+    r"(?P<month>Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
+    r"Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
+    r"Nov(?:ember)?|Dec(?:ember)?)\s*"
     r"(?P<year>\d{4})\s*\(in\s*(?P<currency>CNY|USD)\)\s*$"
 )
 

@@ -16,6 +16,22 @@ def _load_section4() -> bytes:
     return SECTION4_FIXTURE.read_bytes()
 
 
+def test_metadata_handles_full_month_name():
+    """GACC inconsistently writes 'Mar' or 'March' in release titles. Verify
+    extract_metadata accepts both — Mar 2025 and Apr 2025 use full names while
+    Feb/Mar 2026 use abbreviations."""
+    from parse import _RELEASE_TITLE_RE
+    for title in [
+        "(4) China's Total Export & Import Values by Country/Region, Mar 2026 (in CNY)",
+        "(4) China's Total Export & Import Values by Country/Region, March 2025 (in CNY)",
+        "(4) China's Total Export & Import Values by Country/Region, April 2025 (in CNY)",
+        "(4) China's Total Export & Import Values by Country/Region, May 2025 (in USD)",
+        "(4) China's Total Export & Import Values by Country/Region, September 2024 (in CNY)",
+    ]:
+        m = _RELEASE_TITLE_RE.match(title)
+        assert m, f"failed to match: {title!r}"
+
+
 def test_metadata_extraction():
     soup = BeautifulSoup(_load_section4(), "lxml")
     meta = extract_metadata(soup, SECTION4_URL)
