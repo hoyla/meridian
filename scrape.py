@@ -172,7 +172,8 @@ def main() -> None:
                         "Repeatable, e.g. --fetch-fx CNY --fetch-fx USD")
     p.add_argument("--fx-since", type=_parse_period, metavar="YYYY-MM",
                    help="Only fetch FX rates from this period onwards (default: full history)")
-    p.add_argument("--analyse", choices=["mirror-trade", "mirror-gap-trends", "hs-group-yoy"],
+    p.add_argument("--analyse",
+                   choices=["mirror-trade", "mirror-gap-trends", "hs-group-yoy", "hs-group-trajectory"],
                    help="Run a deterministic anomaly pass over already-ingested data")
     p.add_argument("--hs-group", action="append", metavar="NAME",
                    help="Restrict --analyse hs-group-yoy to specific group name(s); repeat for multiple")
@@ -207,6 +208,11 @@ def main() -> None:
             yoy_threshold_pct=args.yoy_threshold,
         )
         log.info("HS-group YoY analysis: %s", counts)
+        return
+
+    if args.analyse == "hs-group-trajectory":
+        counts = anomalies.detect_hs_group_trajectories(group_names=args.hs_group)
+        log.info("HS-group trajectory analysis: %s", counts)
         return
 
     if args.fetch_fx:

@@ -37,6 +37,7 @@ log = logging.getLogger(__name__)
 ANALYSIS_SOURCE_URL = "analysis://mirror_trade/v1"
 TREND_ANALYSIS_SOURCE_URL = "analysis://mirror_gap_trends/v1"
 HS_GROUP_TREND_SOURCE_URL = "analysis://hs_group_trends/v1"
+HS_GROUP_TRAJECTORY_SOURCE_URL = "analysis://hs_group_trajectory/v1"
 
 # Caveats every mirror_gap finding should cite by default. Specific findings can
 # add more (e.g. 'reporting_lag' if periods don't align).
@@ -967,6 +968,385 @@ def _insert_hs_group_yoy_finding(
                 score, title, body, detail
             ) VALUES (
                 %s, 'anomaly', 'hs_group_yoy', %s, %s, %s, %s, %s, %s
+            )
+            """,
+            (analysis_run_id, [], [group.id], score, title,
+             "\n".join(body_lines), json.dumps(detail)),
+        )
+
+
+# =============================================================================
+# Trajectory-shape classification of the HS-group YoY series.
+# =============================================================================
+# A single per-window YoY says "+16.9%". A trajectory says "U-shape recovery,
+# decelerating from +48% peak in Jul 2025." The latter is the framing a
+# journalist actually writes; this analyser reads existing hs_group_yoy
+# findings, classifies the shape, and emits one 'hs_group_trajectory' finding
+# per group with the supporting feature stats.
+
+# Shape vocabulary. Each is human-readable and journalist-citable.
+SHAPE_LABELS = {
+    "flat":                  "flat",
+    "rising":                "sustained rising",
+    "rising_accelerating":   "rising, accelerating",
+    "rising_decelerating":   "rising, decelerating",
+    "falling":               "sustained falling",
+    "falling_accelerating":  "falling, accelerating",
+    "falling_decelerating":  "falling, decelerating",
+    "u_recovery":            "U-shape recovery (was falling, now rising)",
+    "inverse_u_peak":        "peak-and-fall (was rising, now falling)",
+    "volatile":              "volatile (multiple direction changes)",
+    "insufficient_data":     "insufficient data to classify",
+}
+
+# Thresholds — tuned for our scale of YoY values (typically -0.5..+1.0).
+# These are conservative defaults; explained explicitly in the finding body
+# so a journalist can see why a series was/wasn't classified a given way.
+TRAJECTORY_FLAT_MEAN_ABS_YOY = 0.02   # mean |YoY| < 2% → flat
+TRAJECTORY_FLAT_STDEV = 0.05          #   AND stdev < 5%
+TRAJECTORY_SLOPE_SIGNIFICANT = 0.005  # |slope| > 0.5pp/window → meaningful direction in YoY
+TRAJECTORY_MIN_WINDOWS = 6            # fewer than this can't classify reliably
+TRAJECTORY_SMOOTH_WINDOW = 3          # centered moving-average window for shape detection
+                                      # — suppresses 1-period zero-crossing flickers that
+                                      # would otherwise trigger spurious 'volatile' labels.
+
+
+def _linear_slope(xs: list[float], ys: list[float]) -> float:
+    """Ordinary least-squares slope. Returns 0 if N < 2 or no variance in x."""
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    x_mean = sum(xs) / n
+    y_mean = sum(ys) / n
+    num = sum((xs[i] - x_mean) * (ys[i] - y_mean) for i in range(n))
+    den = sum((xs[i] - x_mean) ** 2 for i in range(n))
+    return num / den if den else 0.0
+
+
+def _smooth_centered(ys: list[float], window: int) -> list[float]:
+    """Centered moving average. End points use the largest centered window that
+    fits — so a 3-window smooth on [a,b,c,d] yields [(a+b)/2, (a+b+c)/3, (b+c+d)/3, (c+d)/2]."""
+    n = len(ys)
+    if n == 0 or window <= 1:
+        return list(ys)
+    half = window // 2
+    out = []
+    for i in range(n):
+        lo, hi = max(0, i - half), min(n, i + half + 1)
+        out.append(sum(ys[lo:hi]) / (hi - lo))
+    return out
+
+
+def _count_sign_changes(signs: list[int]) -> int:
+    """Sign changes ignoring zeroes (zero is ambiguous, doesn't count as a change)."""
+    changes = 0
+    last_nonzero = next((s for s in signs if s != 0), 0)
+    for s in signs:
+        if s != 0 and last_nonzero != 0 and s != last_nonzero:
+            changes += 1
+            last_nonzero = s
+        elif s != 0:
+            last_nonzero = s
+    return changes
+
+
+def _classify_trajectory(yoys: list[float]) -> tuple[str, dict]:
+    """Returns (shape_key, features_dict). The features carry the numeric
+    evidence so a finding's body can spell out *why* it got the shape it did.
+
+    Shape detection uses a smoothed copy of the YoY series so 1-period
+    zero-crossings (typical of noisy real-world trade data) don't get labelled
+    as 'volatile'. Raw stats are still reported in features for transparency.
+    """
+    n = len(yoys)
+    if n < TRAJECTORY_MIN_WINDOWS:
+        return "insufficient_data", {"n": n, "min_required": TRAJECTORY_MIN_WINDOWS}
+
+    smoothed = _smooth_centered(yoys, TRAJECTORY_SMOOTH_WINDOW)
+
+    # Raw stats (for transparency in the finding body)
+    raw_signs = [1 if y > 0 else (-1 if y < 0 else 0) for y in yoys]
+    raw_sign_changes = _count_sign_changes(raw_signs)
+    mean_y = sum(yoys) / n
+    mean_abs = sum(abs(y) for y in yoys) / n
+    var = sum((y - mean_y) ** 2 for y in yoys) / n
+    stdev = var ** 0.5
+
+    # Smoothed signs (used for shape decision)
+    smoothed_signs = [1 if y > 0 else (-1 if y < 0 else 0) for y in smoothed]
+    smoothed_sign_changes = _count_sign_changes(smoothed_signs)
+
+    # Slope of the smoothed YoY series. Positive slope = YoY values rising over
+    # time (growth accelerating if positive, decline easing if negative).
+    overall_slope = _linear_slope(list(range(n)), smoothed)
+    # Two-half slopes kept in features as additional evidence (not used in primary
+    # classification — overall_slope handles the core distinction more robustly).
+    half = n // 2
+    earlier_slope = _linear_slope(list(range(half)), smoothed[:half])
+    recent_slope = _linear_slope(list(range(n - half)), smoothed[half:])
+
+    max_y = max(yoys); max_idx = yoys.index(max_y)
+    min_y = min(yoys); min_idx = yoys.index(min_y)
+
+    features = {
+        "n": n,
+        "first_yoy": yoys[0], "last_yoy": yoys[-1],
+        "max_yoy": max_y, "max_idx": max_idx,
+        "min_yoy": min_y, "min_idx": min_idx,
+        "mean_yoy": mean_y, "stdev_yoy": stdev, "mean_abs_yoy": mean_abs,
+        "sign_changes": raw_sign_changes,
+        "smoothed_sign_changes": smoothed_sign_changes,
+        "smoothed_first": smoothed[0], "smoothed_last": smoothed[-1],
+        "earlier_slope": earlier_slope, "recent_slope": recent_slope,
+        "overall_slope": overall_slope,
+        "smoothing_window": TRAJECTORY_SMOOTH_WINDOW,
+        "thresholds": {
+            "flat_mean_abs_yoy": TRAJECTORY_FLAT_MEAN_ABS_YOY,
+            "flat_stdev": TRAJECTORY_FLAT_STDEV,
+            "slope_significant": TRAJECTORY_SLOPE_SIGNIFICANT,
+        },
+    }
+
+    # Order matters: most specific first.
+    if mean_abs < TRAJECTORY_FLAT_MEAN_ABS_YOY and stdev < TRAJECTORY_FLAT_STDEV:
+        return "flat", features
+
+    if smoothed_sign_changes >= 2:
+        return "volatile", features
+
+    if smoothed_sign_changes == 1:
+        # Find the cross-zero index in the smoothed series for context.
+        for i in range(1, n):
+            if smoothed_signs[i] != 0 and smoothed_signs[i - 1] != 0 and smoothed_signs[i] != smoothed_signs[i - 1]:
+                features["cross_zero_idx"] = i
+                break
+        if smoothed[-1] > 0:
+            return "u_recovery", features
+        return "inverse_u_peak", features
+
+    # No sign changes (smoothed) — sustained direction. Use the overall slope
+    # of the smoothed YoY series itself to distinguish accel/decel:
+    #   YoY values rising over time + already positive  → growth accelerating
+    #   YoY values falling over time + still positive   → growth decelerating
+    #   YoY values falling over time + already negative → decline accelerating
+    #   YoY values rising over time + still negative    → decline easing
+    last_positive = smoothed[-1] > 0
+    if last_positive:
+        if overall_slope > TRAJECTORY_SLOPE_SIGNIFICANT:
+            return "rising_accelerating", features
+        if overall_slope < -TRAJECTORY_SLOPE_SIGNIFICANT:
+            return "rising_decelerating", features
+        return "rising", features
+    if overall_slope < -TRAJECTORY_SLOPE_SIGNIFICANT:
+        return "falling_accelerating", features
+    if overall_slope > TRAJECTORY_SLOPE_SIGNIFICANT:
+        return "falling_decelerating", features
+    return "falling", features
+
+
+def detect_hs_group_trajectories(group_names: list[str] | None = None) -> dict[str, int]:
+    """For each hs_group, classify the rolling-12mo-EUR YoY series across all
+    available windows into a trajectory shape. Reads existing hs_group_yoy
+    findings (latest per period), emits one 'hs_group_trajectory' finding per
+    group capturing the shape + supporting feature stats + supporting yoy
+    finding ids for trace-back.
+
+    Returns counts: {'emitted', 'skipped_insufficient_data', 'skipped_no_findings'}.
+    """
+    counts = {"emitted": 0, "skipped_insufficient_data": 0, "skipped_no_findings": 0}
+
+    groups = _list_hs_groups(group_names)
+    if not groups:
+        return counts
+
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'running') RETURNING id",
+            (HS_GROUP_TRAJECTORY_SOURCE_URL,),
+        )
+        analysis_run_id = cur.fetchone()[0]
+
+    try:
+        for group in groups:
+            series = _fetch_group_yoy_series(group.id)
+            if not series:
+                counts["skipped_no_findings"] += 1
+                continue
+            yoys = [s["yoy_pct"] for s in series]
+            shape, features = _classify_trajectory(yoys)
+            if shape == "insufficient_data":
+                counts["skipped_insufficient_data"] += 1
+                continue
+            _insert_trajectory_finding(analysis_run_id, group, series, shape, features)
+            counts["emitted"] += 1
+
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='success', ended_at=now() WHERE id=%s",
+                (analysis_run_id,),
+            )
+    except Exception as e:
+        log.exception("HS-group trajectory classification failed")
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='failed', error_message=%s, ended_at=now() WHERE id=%s",
+                (str(e), analysis_run_id),
+            )
+        raise
+    return counts
+
+
+def _fetch_group_yoy_series(group_id: int) -> list[dict]:
+    """Return [{period, yoy_pct, finding_id, current_eur}] for the given group,
+    one row per period (latest finding per period if there are duplicates)."""
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT ON ((detail->'windows'->>'current_end')::date)
+                id AS finding_id,
+                (detail->'windows'->>'current_end')::date AS period,
+                (detail->'totals'->>'yoy_pct')::numeric AS yoy_pct,
+                (detail->'totals'->>'current_12mo_eur')::numeric AS current_eur,
+                (detail->'totals'->>'yoy_pct_kg')::numeric AS yoy_pct_kg
+              FROM findings
+             WHERE subkind = 'hs_group_yoy'
+               AND %s = ANY(hs_group_ids)
+          ORDER BY (detail->'windows'->>'current_end')::date, created_at DESC
+            """,
+            (group_id,),
+        )
+        return [
+            {
+                "finding_id": r["finding_id"],
+                "period": r["period"],
+                "yoy_pct": float(r["yoy_pct"]),
+                "current_eur": float(r["current_eur"] or 0),
+                "yoy_pct_kg": float(r["yoy_pct_kg"]) if r["yoy_pct_kg"] is not None else None,
+            }
+            for r in cur.fetchall()
+        ]
+
+
+def _insert_trajectory_finding(
+    analysis_run_id: int,
+    group: _HsGroup,
+    series: list[dict],
+    shape: str,
+    features: dict,
+) -> None:
+    first = series[0]
+    last  = series[-1]
+    peak  = max(series, key=lambda s: s["yoy_pct"])
+    trough = min(series, key=lambda s: s["yoy_pct"])
+
+    title = (
+        f"Trajectory: {group.name} — {SHAPE_LABELS.get(shape, shape)} "
+        f"(latest {last['yoy_pct']*100:+.1f}% YoY, "
+        f"peak {peak['yoy_pct']*100:+.1f}% in {peak['period'].strftime('%Y-%m')}, "
+        f"trough {trough['yoy_pct']*100:+.1f}% in {trough['period'].strftime('%Y-%m')})"
+    )
+
+    body_lines = [
+        f"Group: {group.name}",
+        f"Definition: HS-CN8 codes matching {group.hs_patterns}",
+        "",
+        f"Trajectory shape: {shape} ({SHAPE_LABELS.get(shape, '')})",
+        "",
+        f"Series length: {features['n']} rolling-12mo YoY windows from "
+        f"{first['period'].strftime('%Y-%m')} to {last['period'].strftime('%Y-%m')}.",
+        f"  First YoY: {first['yoy_pct']*100:+.2f}%",
+        f"  Last YoY:  {last['yoy_pct']*100:+.2f}%",
+        f"  Peak:      {peak['yoy_pct']*100:+.2f}% in {peak['period'].strftime('%Y-%m')}",
+        f"  Trough:    {trough['yoy_pct']*100:+.2f}% in {trough['period'].strftime('%Y-%m')}",
+        f"  Sign changes: {features['sign_changes']}",
+        f"  Mean YoY: {features['mean_yoy']*100:+.2f}%, stdev: {features['stdev_yoy']*100:.2f}%",
+        f"  Earlier-half slope: {features['earlier_slope']:+.5f} per window; "
+        f"recent-half slope: {features['recent_slope']:+.5f} per window.",
+        "",
+    ]
+
+    # Classifier reasoning — explicit so the journalist can see WHY the shape was assigned.
+    if shape == "flat":
+        body_lines.append(
+            f"Reasoning: mean |YoY| {features['mean_abs_yoy']*100:.2f}% < threshold "
+            f"{TRAJECTORY_FLAT_MEAN_ABS_YOY*100:.0f}% AND stdev {features['stdev_yoy']*100:.2f}% < "
+            f"{TRAJECTORY_FLAT_STDEV*100:.0f}%."
+        )
+    elif shape == "volatile":
+        body_lines.append(f"Reasoning: {features['sign_changes']} sign changes across the series.")
+    elif shape == "u_recovery":
+        cross = series[features.get("cross_zero_idx", 0)]
+        body_lines.append(
+            f"Reasoning: 1 sign change. Series went from negative ({first['yoy_pct']*100:+.1f}%) "
+            f"to positive ({last['yoy_pct']*100:+.1f}%), crossing zero around "
+            f"{cross['period'].strftime('%Y-%m')}."
+        )
+    elif shape == "inverse_u_peak":
+        cross = series[features.get("cross_zero_idx", 0)]
+        body_lines.append(
+            f"Reasoning: 1 sign change. Series went from positive ({first['yoy_pct']*100:+.1f}%) "
+            f"to negative ({last['yoy_pct']*100:+.1f}%), crossing zero around "
+            f"{cross['period'].strftime('%Y-%m')}."
+        )
+    elif shape.endswith("_accelerating"):
+        direction_word = "rising" if shape.startswith("rising") else "falling"
+        body_lines.append(
+            f"Reasoning: no sign changes. The smoothed YoY series itself is "
+            f"{direction_word} (overall slope {features['overall_slope']:+.5f} per window, "
+            f"|slope| > significance threshold {TRAJECTORY_SLOPE_SIGNIFICANT})."
+        )
+    elif shape.endswith("_decelerating"):
+        direction_word = "rising but slowing" if shape.startswith("rising") else "still falling but easing"
+        body_lines.append(
+            f"Reasoning: no sign changes; latest YoY is {'positive' if shape.startswith('rising') else 'negative'} "
+            f"but the smoothed YoY series is moving against the direction "
+            f"({direction_word}; overall slope {features['overall_slope']:+.5f} per window)."
+        )
+    else:
+        body_lines.append("Reasoning: sustained direction with no notable acceleration/deceleration.")
+
+    body_lines.append("")
+    body_lines.append(
+        "This finding rests on the underlying hs_group_yoy findings whose ids are listed in "
+        "detail.underlying_yoy_finding_ids. Each of those carries kg + €/kg figures, top "
+        "contributing CN8 codes, and top importing EU members."
+    )
+
+    detail = {
+        "method": "hs_group_trajectory_v1",
+        "group": {"id": group.id, "name": group.name, "hs_patterns": group.hs_patterns},
+        "shape": shape,
+        "shape_label": SHAPE_LABELS.get(shape, shape),
+        "features": {
+            **features,
+            "first_period": first["period"].isoformat(),
+            "last_period": last["period"].isoformat(),
+            "peak_period": peak["period"].isoformat(),
+            "trough_period": trough["period"].isoformat(),
+        },
+        "series": [
+            {"period": s["period"].isoformat(), "yoy_pct": s["yoy_pct"],
+             "current_eur": s["current_eur"], "yoy_pct_kg": s["yoy_pct_kg"]}
+            for s in series
+        ],
+        "underlying_yoy_finding_ids": [s["finding_id"] for s in series],
+        "caveat_codes": [
+            "cif_fob", "currency_timing", "classification_drift",
+            "eurostat_stat_procedure_mix",
+        ],
+    }
+    # Score = absolute latest YoY; lets journalists rank by "how much movement is happening now".
+    score = abs(last["yoy_pct"])
+
+    import json
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO findings (
+                scrape_run_id, kind, subkind, observation_ids, hs_group_ids,
+                score, title, body, detail
+            ) VALUES (
+                %s, 'anomaly', 'hs_group_trajectory', %s, %s, %s, %s, %s, %s
             )
             """,
             (analysis_run_id, [], [group.id], score, title,
