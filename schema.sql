@@ -149,6 +149,23 @@ CREATE TABLE country_aliases (
 );
 CREATE INDEX idx_country_aliases_lookup ON country_aliases (source, raw_label);
 
+-- Composition of aggregate labels (EU bloc, ASEAN, etc.). Every member is recorded
+-- as a row with provenance + optional valid_from/valid_to so historical bloc
+-- changes (e.g. Brexit) are queryable rather than implicit.
+CREATE TABLE country_aggregate_members (
+    id                  BIGSERIAL PRIMARY KEY,
+    aggregate_alias_id  BIGINT      NOT NULL REFERENCES country_aliases(id) ON DELETE CASCADE,
+    member_iso2         TEXT        NOT NULL,
+    valid_from          DATE,                        -- NULL = no lower bound
+    valid_to            DATE,                        -- NULL = current
+    source              TEXT        NOT NULL,        -- citation for the membership claim
+    notes               TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (aggregate_alias_id, member_iso2, valid_from)
+);
+CREATE INDEX idx_agg_members_alias ON country_aggregate_members (aggregate_alias_id);
+CREATE INDEX idx_agg_members_iso2  ON country_aggregate_members (member_iso2);
+
 -- Known caveats journalists should be aware of when interpreting cross-source comparisons.
 -- Findings reference caveats by code so we don't duplicate the explanation each time.
 CREATE TABLE caveats (
@@ -251,6 +268,18 @@ INSERT INTO country_aliases (source, raw_label, iso2, aggregate_kind, confidence
   ('gacc', 'Regional Comprehensive Economic Partnership',              NULL,  'rcep',       'high', 'aggregate',  'RCEP — Brunei, Myanmar, Cambodia, Indonesia, Laos, Malaysia, Philippines, Singapore, Thailand, Vietnam, Japan, South Korea, Australia, New Zealand'),
   ('gacc', 'Jointly build the countries along Belt and Road Routes',   NULL,  'belt_road',  'high', 'aggregate',  'Per https://www.yidaiyilu.gov.cn — composition varies'),
   ('gacc', 'Total',                                                    NULL,  'world',      'high', 'aggregate',  'World total — China''s reported total trade');
+
+-- EU 27 membership for the 'European Union' aggregate (per the GACC release
+-- footnote, which lists 27 countries as of 2026). Note Eurostat uses GR (not EL)
+-- for Greece so the iso2 codes here align with our `eurostat_raw_rows.reporter`.
+INSERT INTO country_aggregate_members (aggregate_alias_id, member_iso2, source, notes)
+SELECT ca.id, m, 'GACC release footnote, Mar 2026', 'EU 27 as of 2026; Brexit reflected (UK absent)'
+  FROM country_aliases ca,
+       unnest(ARRAY[
+           'AT','BE','BG','CY','CZ','DE','DK','EE','ES','FI','FR','GR','HR','HU',
+           'IE','IT','LT','LU','LV','MT','NL','PL','PT','RO','SE','SI','SK'
+       ]) m
+ WHERE ca.source = 'gacc' AND ca.raw_label = 'European Union';
 
 -- Caveats journalists should weigh when reading cross-source findings.
 INSERT INTO caveats (code, summary, detail, applies_to) VALUES

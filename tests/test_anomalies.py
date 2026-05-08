@@ -118,8 +118,8 @@ def test_mirror_gap_emits_finding_with_provenance(empty_op_tables, test_db_url):
         gacc_obs_id, eu_obs_ids = _seed_one_pair(conn, period)
 
     counts = anomalies.detect_mirror_trade_gaps(period=period)
-    assert counts == {"emitted": 1, "skipped_no_eurostat": 0, "skipped_no_fx": 0,
-                      "skipped_aggregate": 0, "skipped_unmapped": 0, "skipped_no_value": 0}
+    assert counts["emitted"] == 1
+    assert all(v == 0 for k, v in counts.items() if k != "emitted")
 
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
         cur.execute(
@@ -151,10 +151,15 @@ def test_mirror_gap_emits_finding_with_provenance(empty_op_tables, test_db_url):
     assert detail["country_alias_id"] is not None
 
 
-def test_mirror_gap_skips_aggregates(empty_op_tables, test_db_url):
+def test_aggregate_eu_skips_when_no_members_seeded(empty_op_tables, test_db_url):
+    """A bloc that has no member rows in country_aggregate_members can't be
+    expanded, so the comparator skips with the dedicated counter rather than
+    guessing a definition."""
     period = date(2025, 12, 1)
     with psycopg2.connect(test_db_url) as conn:
         cur = conn.cursor()
+        # Drop EU member seed for this test only
+        cur.execute("TRUNCATE country_aggregate_members RESTART IDENTITY")
         cur.execute(
             """
             INSERT INTO releases (source, section_number, currency, period, release_kind,
@@ -183,8 +188,87 @@ def test_mirror_gap_skips_aggregates(empty_op_tables, test_db_url):
         conn.commit()
 
     counts = anomalies.detect_mirror_trade_gaps(period=period)
-    assert counts["skipped_aggregate"] == 2
+    assert counts["skipped_aggregate_no_members"] == 2
     assert counts["emitted"] == 0
+
+
+def test_aggregate_eu_emits_finding_with_member_provenance(empty_op_tables, test_db_url, monkeypatch):
+    """With EU members seeded (default state) and Eurostat data for those members,
+    an EU-aggregate GACC observation produces a finding with the member list and
+    the aggregate_composition caveat in detail."""
+    period = date(2025, 12, 1)
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        # Re-seed EU 27 in case a prior test cleared it (tests aren't strictly ordered)
+        cur.execute(
+            """
+            INSERT INTO country_aggregate_members (aggregate_alias_id, member_iso2, source)
+            SELECT ca.id, m, 'test seed'
+              FROM country_aliases ca,
+                   unnest(ARRAY['DE','FR','IT','NL']) m
+             WHERE ca.source='gacc' AND ca.raw_label='European Union'
+            ON CONFLICT DO NOTHING
+            """
+        )
+        # GACC: China exported 5000 (CNY 100M) = 500B CNY to EU
+        cur.execute(
+            """
+            INSERT INTO releases (source, section_number, currency, period, release_kind, source_url, unit)
+            VALUES ('gacc', 4, 'CNY', %s, 'preliminary', 'g', 'CNY 100 Million') RETURNING id
+            """,
+            (period,),
+        )
+        gacc_rel = cur.fetchone()[0]
+        cur.execute("INSERT INTO scrape_runs (source_url, status) VALUES ('g', 'success') RETURNING id")
+        run = cur.fetchone()[0]
+        cur.execute(
+            """
+            INSERT INTO observations (release_id, scrape_run_id, period_kind, flow,
+                                      partner_country, value_amount, value_currency, source_row)
+            VALUES (%s, %s, 'monthly', 'export', 'European Union', 5000, 'CNY', '{}')
+            """,
+            (gacc_rel, run),
+        )
+
+        # Eurostat: imports from CN by DE/FR/IT/NL — totals to €70B
+        cur.execute(
+            "INSERT INTO releases (source, period, source_url) VALUES ('eurostat', %s, 'e') RETURNING id",
+            (period,),
+        )
+        eu_rel = cur.fetchone()[0]
+        for reporter, val in [("DE", 20e9), ("FR", 15e9), ("IT", 13e9), ("NL", 22e9)]:
+            cur.execute(
+                """
+                INSERT INTO observations (release_id, scrape_run_id, period_kind, flow,
+                                          reporter_country, partner_country, hs_code,
+                                          value_amount, value_currency, source_row)
+                VALUES (%s, %s, 'monthly', 'import', %s, 'CN', '99999999', %s, 'EUR', '{}')
+                """,
+                (eu_rel, run, reporter, val),
+            )
+
+        cur.execute(
+            "INSERT INTO fx_rates (currency_from, currency_to, rate_date, rate, rate_source) "
+            "VALUES ('CNY', 'EUR', %s, 0.125, 'ECB monthly average')",
+            (period,),
+        )
+        conn.commit()
+
+    counts = anomalies.detect_mirror_trade_gaps(period=period)
+    # With only the EU obs in this test, we should get 1 emitted finding
+    assert counts["emitted"] == 1, f"counts={counts}"
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT title, body, detail FROM findings ORDER BY id DESC LIMIT 1")
+        title, body, detail = cur.fetchone()
+
+    assert "eu_bloc" in title or "EU" in title or "BLOC" in title
+    assert detail["is_aggregate"] is True
+    assert detail["aggregate"]["kind"] == "eu_bloc"
+    assert "DE" in detail["aggregate"]["members_iso2"]
+    assert "aggregate_composition" in detail["caveat_codes"]
+    # GACC: 5000 × 1e8 × 0.125 = €62.5B; Eurostat: 70B; gap = +7.5B / 70B = +10.71%
+    assert abs(detail["gap_pct"] - 0.10714) < 1e-3
 
 
 def test_mirror_gap_skips_when_no_fx(empty_op_tables, test_db_url):

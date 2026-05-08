@@ -61,7 +61,7 @@ def _conn():
 class _MirrorGapResult:
     period: date
     gacc_partner_label: str
-    iso2: str
+    iso2: str                      # ISO-2 for single-country, 'BLOC:{kind}' for aggregates
     gacc_obs_id: int
     gacc_value_raw: float          # in unit-currency (e.g. CNY 100 Million)
     gacc_value_currency: str
@@ -77,6 +77,10 @@ class _MirrorGapResult:
     gap_eur: float                 # eurostat - gacc_eur (positive = EU reports more)
     gap_pct: float                 # gap_eur / max(both)
     excess_over_cif_fob_baseline_pct: float
+    # Aggregate-specific (None for single-country comparisons)
+    aggregate_kind: str | None = None
+    aggregate_members: list[str] | None = None
+    aggregate_sources: list[str] | None = None
 
 
 _UNIT_RE = re.compile(r"^([A-Z]{3})(?:\s+(\d+(?:[.,]\d+)?))?(?:\s+(Thousand|Million|Billion))?\s*$")
@@ -117,8 +121,13 @@ def detect_mirror_trade_gaps(period: date | None = None) -> dict[str, int]:
                      'skipped_aggregate', 'skipped_unmapped', 'skipped_no_value'}.
     """
     counts = {
-        "emitted": 0, "skipped_no_eurostat": 0, "skipped_no_fx": 0,
-        "skipped_aggregate": 0, "skipped_unmapped": 0, "skipped_no_value": 0,
+        "emitted": 0,
+        "skipped_no_eurostat": 0,
+        "skipped_no_fx": 0,
+        "skipped_aggregate_no_members": 0,
+        "skipped_aggregate_no_eurostat_counterpart": 0,
+        "skipped_unmapped": 0,
+        "skipped_no_value": 0,
     }
 
     # One scrape_run per analysis call — gives the resulting findings a consistent
@@ -195,12 +204,34 @@ def _compute_one_gap(gr: dict) -> _MirrorGapResult | str:
     if resolved is None:
         log.info("Unmapped GACC partner label: %r", gr["partner_country"])
         return "skipped_unmapped"
-    if resolved.iso2 is None:
-        # Aggregate (EU bloc, ASEAN, Latin America, etc.) — handle separately later.
-        return "skipped_aggregate"
 
     period = gr["period"]
-    eurostat_total, eurostat_ids, n_hs = _eurostat_aggregate_for(period, resolved.iso2)
+
+    # Branch: single country vs aggregate.
+    aggregate_members: list[str] | None = None
+    aggregate_kind: str | None = None
+    aggregate_sources: list[str] | None = None
+
+    if resolved.iso2 is None:
+        # Aggregate label. We can only compare against Eurostat if the bloc has
+        # an EU-side equivalent — i.e. its members are EU reporter codes. For
+        # ASEAN, RCEP, Latin America, Africa, Belt&Road etc. we'd need a different
+        # source (UN Comtrade or similar) and skip for now.
+        membership = lookups.lookup_aggregate_members(resolved.alias_id, period=period)
+        if membership is None:
+            return "skipped_aggregate_no_members"
+        # Only the eu_bloc has Eurostat counterparts under our current source set.
+        if membership.aggregate_kind != "eu_bloc":
+            return "skipped_aggregate_no_eurostat_counterpart"
+        aggregate_members = membership.members_iso2
+        aggregate_kind = membership.aggregate_kind
+        aggregate_sources = membership.sources
+        eurostat_total, eurostat_ids, n_hs = _eurostat_aggregate_for_members(period, aggregate_members)
+        result_iso2 = f"BLOC:{membership.aggregate_kind}"
+    else:
+        eurostat_total, eurostat_ids, n_hs = _eurostat_aggregate_for(period, resolved.iso2)
+        result_iso2 = resolved.iso2
+
     if eurostat_total is None:
         return "skipped_no_eurostat"
 
@@ -220,7 +251,7 @@ def _compute_one_gap(gr: dict) -> _MirrorGapResult | str:
     return _MirrorGapResult(
         period=period,
         gacc_partner_label=gr["partner_country"],
-        iso2=resolved.iso2,
+        iso2=result_iso2,
         gacc_obs_id=gr["obs_id"],
         gacc_value_raw=float(gr["value_amount"]),
         gacc_value_currency=currency_for_fx,
@@ -236,10 +267,23 @@ def _compute_one_gap(gr: dict) -> _MirrorGapResult | str:
         gap_eur=gap_eur,
         gap_pct=gap_pct,
         excess_over_cif_fob_baseline_pct=excess,
+        aggregate_kind=aggregate_kind,
+        aggregate_members=aggregate_members,
+        aggregate_sources=aggregate_sources,
     )
 
 
 def _eurostat_aggregate_for(period: date, iso2: str) -> tuple[float | None, list[int], int]:
+    return _eurostat_aggregate_for_members(period, [iso2])
+
+
+def _eurostat_aggregate_for_members(
+    period: date, member_iso2s: list[str]
+) -> tuple[float | None, list[int], int]:
+    """Sum Eurostat imports from CN across the given list of EU member ISO-2 codes
+    for the given period. Returns (total_eur, obs_ids, n_obs)."""
+    if not member_iso2s:
+        return None, [], 0
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -252,10 +296,10 @@ def _eurostat_aggregate_for(period: date, iso2: str) -> tuple[float | None, list
              WHERE r.source = 'eurostat'
                AND r.period = %s
                AND o.flow = 'import'
-               AND o.reporter_country = %s
+               AND o.reporter_country = ANY(%s)
                AND o.partner_country = 'CN'
             """,
-            (period, iso2),
+            (period, member_iso2s),
         )
         total, ids, n = cur.fetchone()
     if n == 0:
@@ -265,8 +309,15 @@ def _eurostat_aggregate_for(period: date, iso2: str) -> tuple[float | None, list
 
 def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> None:
     direction = "Eurostat > GACC" if r.gap_eur > 0 else "GACC > Eurostat"
+    is_aggregate = r.aggregate_kind is not None
+    label = f"{r.aggregate_kind} ({len(r.aggregate_members or [])} members)" if is_aggregate else r.iso2
+    eurostat_descriptor = (
+        f"the {len(r.aggregate_members)} EU members ({', '.join(r.aggregate_members)})"
+        if is_aggregate else r.iso2
+    )
+
     title = (
-        f"Mirror-trade gap, China ↔ {r.iso2}, {r.period.strftime('%Y-%m')}: "
+        f"Mirror-trade gap, China ↔ {label}, {r.period.strftime('%Y-%m')}: "
         f"GACC reports €{r.gacc_value_eur:,.0f}, Eurostat reports €{r.eurostat_total_eur:,.0f} "
         f"({r.gap_pct*100:+.1f}%, {direction})"
     )
@@ -275,18 +326,38 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> None:
         f"export to '{r.gacc_partner_label}', converted at the ECB "
         f"{r.gacc_value_currency}/EUR rate of {r.fx_rate:.6f} for {r.fx_rate_date.strftime('%Y-%m')}, "
         f"= €{r.gacc_value_eur:,.0f}.\n\n"
-        f"Eurostat: {r.iso2}'s reported import from CN summed across {r.eurostat_n_hs_codes:,} HS-CN8 "
-        f"codes = €{r.eurostat_total_eur:,.0f}.\n\n"
+        f"Eurostat: imports from CN summed across {r.eurostat_n_hs_codes:,} HS-CN8 "
+        f"observations from {eurostat_descriptor} = €{r.eurostat_total_eur:,.0f}.\n\n"
         f"Gap: €{r.gap_eur:,.0f} ({r.gap_pct*100:+.1f}% of larger value). "
         f"CIF/FOB baseline expects ~{CIF_FOB_BASELINE_PCT*100:.0f}% Eurostat-higher; "
         f"excess over baseline is {r.excess_over_cif_fob_baseline_pct*100:+.1f} percentage points."
     )
+    if is_aggregate:
+        body += (
+            f"\n\nThis is an aggregate-to-aggregate comparison. GACC's '{r.gacc_partner_label}' "
+            f"label is matched to Eurostat by summing the {len(r.aggregate_members)} member-state "
+            f"reporters. The 'aggregate_composition' caveat applies: the GACC-side bloc "
+            f"definition (per release footnote) and the Eurostat-side reporter set may differ in "
+            f"composition or as-of date. Sources cited: {', '.join(r.aggregate_sources or [])}."
+        )
+
+    caveat_codes = list(DEFAULT_MIRROR_GAP_CAVEATS)
+    if is_aggregate:
+        caveat_codes.append("aggregate_composition")
+
     detail = {
         "method": "mirror_trade_v1",
         # Caveat codes — journalists should weigh these when interpreting the gap.
         # Promote to a dedicated findings.caveat_codes column when the schema
         # gets its first migration after the lookups went in.
-        "caveat_codes": DEFAULT_MIRROR_GAP_CAVEATS,
+        "caveat_codes": caveat_codes,
+        "is_aggregate": is_aggregate,
+        "aggregate": {
+            "kind": r.aggregate_kind,
+            "members_iso2": r.aggregate_members,
+            "n_members": len(r.aggregate_members) if r.aggregate_members else 0,
+            "sources": r.aggregate_sources,
+        } if is_aggregate else None,
         "gacc": {
             "obs_id": r.gacc_obs_id,
             "partner_label_raw": r.gacc_partner_label,

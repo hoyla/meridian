@@ -95,6 +95,50 @@ def get_caveats(codes: list[str]) -> list[Caveat]:
 
 
 @dataclass
+class AggregateMembership:
+    """Members of an aggregate label (e.g. 'European Union' → 27 ISO-2 codes), with
+    the alias row that owns them and the citation source so any cross-source
+    comparison built on this lookup can be audited back to its origin."""
+    alias_id: int
+    aggregate_kind: str
+    members_iso2: list[str]
+    sources: list[str]
+
+
+def lookup_aggregate_members(alias_id: int, period: date | None = None) -> AggregateMembership | None:
+    """Return ISO-2 codes of countries that are members of this aggregate at the
+    given period. Members with valid_from > period or valid_to < period are
+    excluded. Returns None if the alias has no member rows."""
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        cur.execute("SELECT aggregate_kind FROM country_aliases WHERE id = %s", (alias_id,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        agg_kind = row["aggregate_kind"]
+
+        cur.execute(
+            """
+            SELECT member_iso2, source
+              FROM country_aggregate_members
+             WHERE aggregate_alias_id = %s
+               AND (valid_from IS NULL OR %s IS NULL OR valid_from <= %s)
+               AND (valid_to   IS NULL OR %s IS NULL OR valid_to   >= %s)
+          ORDER BY member_iso2
+            """,
+            (alias_id, period, period, period, period),
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return None
+    return AggregateMembership(
+        alias_id=alias_id,
+        aggregate_kind=agg_kind,
+        members_iso2=[r["member_iso2"] for r in rows],
+        sources=sorted({r["source"] for r in rows}),
+    )
+
+
+@dataclass
 class FxRate:
     rate: float
     rate_date: date
