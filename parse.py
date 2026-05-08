@@ -116,9 +116,11 @@ def extract_metadata(soup: BeautifulSoup, url: str) -> ReleaseMetadata:
         except ValueError:
             log.warning("Unparseable publication date: %r", raw)
 
+    # Unit annotation appears in either a <span> wrapper (most pages) or directly
+    # inside a <td> (Aug + Sep 2025 in our backfill, possibly others). Search both.
     unit: str | None = None
-    for span in soup.find_all("span"):
-        text = span.get_text(strip=True)
+    for el in soup.find_all(["span", "td"]):
+        text = el.get_text(strip=True)
         if text.startswith("Unit:"):
             unit = text[len("Unit:"):].strip()
             break
@@ -147,10 +149,13 @@ def extract_metadata(soup: BeautifulSoup, url: str) -> ReleaseMetadata:
 def _normalise_partner_label(raw: str) -> tuple[str, int, bool]:
     """Returns (label, indent_level, is_subset). The hierarchy in the source HTML
     is encoded with non-breaking spaces, so we strip only ASCII whitespace before
-    counting the indent — Python's default str.strip() would eat nbsps too."""
+    counting the indent — Python's default str.strip() would eat nbsps too.
+    Interior whitespace (including embedded newlines from multi-line cells) is
+    collapsed to a single space so labels join the country_aliases lookup cleanly."""
     stripped = raw.strip(" \t\n\r\f\v")
     indent = len(stripped) - len(stripped.lstrip("\xa0"))
-    label = stripped.replace("\xa0", " ").strip()
+    label = stripped.replace("\xa0", " ")
+    label = re.sub(r"\s+", " ", label).strip()
     is_subset = label.startswith("of which:")
     if is_subset:
         label = label[len("of which:"):].strip()

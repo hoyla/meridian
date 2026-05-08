@@ -22,6 +22,7 @@ from datetime import date
 
 from dotenv import load_dotenv
 
+import anomalies
 import api_client
 import db
 import eurostat
@@ -171,8 +172,17 @@ def main() -> None:
                         "Repeatable, e.g. --fetch-fx CNY --fetch-fx USD")
     p.add_argument("--fx-since", type=_parse_period, metavar="YYYY-MM",
                    help="Only fetch FX rates from this period onwards (default: full history)")
+    p.add_argument("--analyse", choices=["mirror-trade"],
+                   help="Run a deterministic anomaly pass over already-ingested data")
+    p.add_argument("--analyse-period", type=_parse_period, metavar="YYYY-MM",
+                   help="Restrict --analyse to a single period (default: all)")
     p.add_argument("--dry-run", action="store_true", help="Fetch + parse but don't write to DB")
     args = p.parse_args()
+
+    if args.analyse == "mirror-trade":
+        counts = anomalies.detect_mirror_trade_gaps(period=args.analyse_period)
+        log.info("Mirror-trade analysis: %s", counts)
+        return
 
     if args.fetch_fx:
         for ccy in args.fetch_fx:

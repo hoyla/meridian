@@ -16,6 +16,45 @@ def _load_section4() -> bytes:
     return SECTION4_FIXTURE.read_bytes()
 
 
+def test_partner_label_collapses_embedded_newlines():
+    """Some GACC release pages wrap aggregate names across lines (e.g. 'Regional\\n
+    Comprehensive Economic Partnership'). The normaliser must collapse the
+    embedded whitespace so the label joins the country_aliases seed cleanly."""
+    from parse import _normalise_partner_label
+
+    # Embedded newline + extra spaces between words
+    raw = "\xa0\xa0\xa0Regional\n  Comprehensive Economic Partnership"
+    label, indent, is_subset = _normalise_partner_label(raw)
+    assert label == "Regional Comprehensive Economic Partnership"
+    assert indent == 3
+    assert is_subset is False
+
+
+def test_metadata_extracts_unit_from_td_or_span():
+    """The Unit annotation lives in either a <span> wrapper or directly in a <td>
+    (Aug + Sep 2025 release pages use the latter format)."""
+    from bs4 import BeautifulSoup
+    from parse import extract_metadata
+
+    span_html = """
+    <html><body>
+      <div class="atcl-ttl">(4) China's Total Export & Import Values by Country/Region, Mar 2026 (in CNY)</div>
+      <div class="atcl-date">2026/04/08</div>
+      <table><tr><td><span><b>Unit: CNY 100 Million</b></span></td></tr></table>
+    </body></html>
+    """
+    td_html = """
+    <html><body>
+      <div class="atcl-ttl">(4) China's Total Export & Import Values by Country/Region, Aug 2025 (in CNY)</div>
+      <div class="atcl-date">2025/09/08</div>
+      <table><tr><td>Unit: CNY 100 Million</td></tr></table>
+    </body></html>
+    """
+    for html in (span_html, td_html):
+        meta = extract_metadata(BeautifulSoup(html, "lxml"), "http://example/x.html")
+        assert meta.unit == "CNY 100 Million"
+
+
 def test_metadata_handles_full_month_name():
     """GACC inconsistently writes 'Mar' or 'March' in release titles. Verify
     extract_metadata accepts both — Mar 2025 and Apr 2025 use full names while
