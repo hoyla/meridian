@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 import psycopg2
+import psycopg2.extras
 
 from api_client import FetchResult
 
@@ -161,6 +162,30 @@ def find_or_create_gacc_release(meta: "ReleaseMetadata", release_kind: str) -> i
         return cur.fetchone()[0]
 
 
+_OBS_INSERT_COLS = (
+    "release_id", "scrape_run_id", "period_kind",
+    "flow", "reporter_country", "partner_country",
+    "partner_label_raw", "partner_indent", "partner_is_subset",
+    "hs_code", "commodity_label",
+    "value_amount", "value_currency", "quantity", "quantity_unit",
+    "source_row", "eurostat_raw_row_ids", "version_seen",
+)
+
+
+def _obs_to_insert_tuple(release_id: int, run_id: int, obs: dict, version: int) -> tuple:
+    return (
+        release_id, run_id, obs.get("period_kind"),
+        obs.get("flow"), obs.get("reporter_country"), obs.get("partner_country"),
+        obs.get("partner_label_raw"), obs.get("partner_indent"), obs.get("partner_is_subset"),
+        obs.get("hs_code"), obs.get("commodity_label"),
+        obs.get("value"), obs.get("currency"),
+        obs.get("quantity"), obs.get("quantity_unit"),
+        json.dumps(obs.get("source_row") or {}),
+        obs.get("eurostat_raw_row_ids"),
+        version,
+    )
+
+
 def upsert_observations(
     run_id: int,
     release_id: int,
@@ -168,9 +193,32 @@ def upsert_observations(
 ) -> dict[str, int]:
     """Insert each observation. If an existing row with the same dimensional key
     has the same value, skip; if the value differs, insert a new row with
-    version_seen bumped. Returns counts {'inserted', 'versioned', 'unchanged'}."""
+    version_seen bumped. Returns counts {'inserted', 'versioned', 'unchanged'}.
+
+    Fast path: when no observations exist for this release_id (first ingest),
+    skip the per-row SELECT and bulk-INSERT via execute_values. This is the
+    dominant case for backfill and is ~1000x faster than the per-row path.
+    """
     counts = {"inserted": 0, "versioned": 0, "unchanged": 0}
+    if not observations:
+        return counts
+
     with transaction() as conn, conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM observations WHERE release_id = %s LIMIT 1", (release_id,))
+        is_fresh_release = cur.fetchone() is None
+
+        if is_fresh_release:
+            cols_sql = ", ".join(_OBS_INSERT_COLS)
+            psycopg2.extras.execute_values(
+                cur,
+                f"INSERT INTO observations ({cols_sql}) VALUES %s",
+                [_obs_to_insert_tuple(release_id, run_id, obs, 1) for obs in observations],
+                page_size=1000,
+            )
+            counts["inserted"] = len(observations)
+            return counts
+
+        # Slow path: re-scrape of an existing release. Per-row SELECT + version logic.
         for obs in observations:
             cur.execute(
                 """
@@ -213,33 +261,11 @@ def upsert_observations(
                     continue
                 version, action = existing_version + 1, "versioned"
 
+            placeholders = "(" + ", ".join(["%s"] * len(_OBS_INSERT_COLS)) + ")"
+            cols_sql = ", ".join(_OBS_INSERT_COLS)
             cur.execute(
-                """
-                INSERT INTO observations (
-                    release_id, scrape_run_id, period_kind,
-                    flow, reporter_country, partner_country, partner_label_raw, partner_indent, partner_is_subset,
-                    hs_code, commodity_label,
-                    value_amount, value_currency, quantity, quantity_unit,
-                    source_row, eurostat_raw_row_ids, version_seen
-                ) VALUES (
-                    %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s,
-                    %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s, %s
-                )
-                """,
-                (
-                    release_id, run_id, obs.get("period_kind"),
-                    obs.get("flow"), obs.get("reporter_country"), obs.get("partner_country"),
-                    obs.get("partner_label_raw"), obs.get("partner_indent"), obs.get("partner_is_subset"),
-                    obs.get("hs_code"), obs.get("commodity_label"),
-                    obs.get("value"), obs.get("currency"),
-                    obs.get("quantity"), obs.get("quantity_unit"),
-                    json.dumps(obs.get("source_row") or {}),
-                    obs.get("eurostat_raw_row_ids"),
-                    version,
-                ),
+                f"INSERT INTO observations ({cols_sql}) VALUES {placeholders}",
+                _obs_to_insert_tuple(release_id, run_id, obs, version),
             )
             counts[action] += 1
     return counts
