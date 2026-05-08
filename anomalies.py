@@ -36,6 +36,7 @@ log = logging.getLogger(__name__)
 
 ANALYSIS_SOURCE_URL = "analysis://mirror_trade/v1"
 TREND_ANALYSIS_SOURCE_URL = "analysis://mirror_gap_trends/v1"
+HS_GROUP_TREND_SOURCE_URL = "analysis://hs_group_trends/v1"
 
 # Caveats every mirror_gap finding should cite by default. Specific findings can
 # add more (e.g. 'reporting_lag' if periods don't align).
@@ -602,4 +603,308 @@ def _insert_zscore_finding(
             )
             """,
             (analysis_run_id, point.observation_ids, score, title, body, json.dumps(detail)),
+        )
+
+
+# =============================================================================
+# HS-group component-trend analysis.
+# =============================================================================
+# For each (hs_group, period) we compute the rolling 12-month total of EU
+# imports from CN matching the group's hs_patterns, compare to the prior
+# 12-month rolling total, and emit a 'hs_group_yoy' finding when |YoY| >=
+# threshold. detail.* carries the full method (which patterns, which months,
+# which CN8 codes contributed most, which EU reporters imported most) so the
+# finding is auditable end-to-end.
+#
+# This module DOES NOT bake the observation_ids[] for every contributing
+# Eurostat row into each finding — chapter-wide groups (84+85, etc.) match
+# millions of rows. Instead the finding records the SQL query definition
+# (patterns, period window, partner, flow) that produced the totals, so a
+# journalist or downstream tool can re-derive evidence on demand.
+
+
+@dataclass
+class _HsGroup:
+    id: int
+    name: str
+    description: str | None
+    hs_patterns: list[str]
+
+
+def _list_hs_groups(group_names: list[str] | None = None) -> list[_HsGroup]:
+    sql = "SELECT id, name, description, hs_patterns FROM hs_groups"
+    params: tuple = ()
+    if group_names:
+        sql += " WHERE name = ANY(%s)"
+        params = (group_names,)
+    sql += " ORDER BY id"
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        cur.execute(sql, params)
+        return [_HsGroup(id=r["id"], name=r["name"], description=r["description"],
+                         hs_patterns=list(r["hs_patterns"] or [])) for r in cur.fetchall()]
+
+
+def _hs_group_per_period_totals(
+    patterns: list[str],
+) -> list[tuple[date, float, int]]:
+    """Returns (period, total_eur, n_obs) per period for Eurostat imports from
+    CN matching any of the given hs_patterns. Periods with no matching obs
+    are absent from the result (no zero-fill); the caller handles gaps."""
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT r.period,
+                   SUM(o.value_amount) AS total_eur,
+                   COUNT(*) AS n_obs
+              FROM observations o
+              JOIN releases r ON r.id = o.release_id
+             WHERE r.source = 'eurostat'
+               AND o.flow = 'import'
+               AND o.partner_country = 'CN'
+               AND o.hs_code LIKE ANY(%s)
+          GROUP BY r.period
+          ORDER BY r.period
+            """,
+            (patterns,),
+        )
+        return [(row[0], float(row[1] or 0), int(row[2])) for row in cur.fetchall()]
+
+
+def _hs_group_top_cn8s(patterns: list[str], start: date, end: date, limit: int = 10) -> list[dict]:
+    """Top contributing HS-CN8 codes within a group across [start, end]."""
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT o.hs_code, SUM(o.value_amount) AS total_eur, COUNT(*) AS n_obs
+              FROM observations o
+              JOIN releases r ON r.id = o.release_id
+             WHERE r.source = 'eurostat'
+               AND r.period >= %s AND r.period <= %s
+               AND o.flow = 'import' AND o.partner_country = 'CN'
+               AND o.hs_code LIKE ANY(%s)
+          GROUP BY o.hs_code
+          ORDER BY SUM(o.value_amount) DESC NULLS LAST
+             LIMIT %s
+            """,
+            (start, end, patterns, limit),
+        )
+        return [{"hs_code": r[0], "total_eur": float(r[1] or 0), "n_obs": int(r[2])}
+                for r in cur.fetchall()]
+
+
+def _hs_group_top_reporters(patterns: list[str], start: date, end: date, limit: int = 10) -> list[dict]:
+    """Top contributing EU reporters within a group across [start, end]."""
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT o.reporter_country, SUM(o.value_amount) AS total_eur, COUNT(*) AS n_obs
+              FROM observations o
+              JOIN releases r ON r.id = o.release_id
+             WHERE r.source = 'eurostat'
+               AND r.period >= %s AND r.period <= %s
+               AND o.flow = 'import' AND o.partner_country = 'CN'
+               AND o.hs_code LIKE ANY(%s)
+          GROUP BY o.reporter_country
+          ORDER BY SUM(o.value_amount) DESC NULLS LAST
+             LIMIT %s
+            """,
+            (start, end, patterns, limit),
+        )
+        return [{"reporter": r[0], "total_eur": float(r[1] or 0), "n_obs": int(r[2])}
+                for r in cur.fetchall()]
+
+
+def _months_back(period: date, n: int) -> date:
+    """Subtract n months from a first-of-month date."""
+    total = period.year * 12 + (period.month - 1) - n
+    return date(total // 12, total % 12 + 1, 1)
+
+
+def detect_hs_group_yoy(
+    group_names: list[str] | None = None,
+    yoy_threshold_pct: float = 0.0,
+) -> dict[str, int]:
+    """For each (hs_group, period_t) where 24 months of history exist, compute:
+        current_12mo  = sum(value_amount) for periods [t-11 .. t]
+        prior_12mo    = sum(value_amount) for periods [t-23 .. t-12]
+        yoy_pct       = (current_12mo - prior_12mo) / abs(prior_12mo)
+    Emit a finding when |yoy_pct| >= yoy_threshold_pct. Default 0.0 means emit
+    one finding per (group, period) — useful for a 'current state' snapshot.
+
+    Returns counts: {'emitted', 'skipped_insufficient_history', 'skipped_below_threshold', 'skipped_zero_prior'}.
+    """
+    counts = {
+        "emitted": 0, "skipped_insufficient_history": 0,
+        "skipped_below_threshold": 0, "skipped_zero_prior": 0,
+    }
+
+    groups = _list_hs_groups(group_names)
+    if not groups:
+        return counts
+
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'running') RETURNING id",
+            (HS_GROUP_TREND_SOURCE_URL,),
+        )
+        analysis_run_id = cur.fetchone()[0]
+
+    try:
+        for group in groups:
+            series = _hs_group_per_period_totals(group.hs_patterns)
+            by_period: dict[date, float] = {p: t for p, t, _ in series}
+            n_obs_by_period: dict[date, int] = {p: n for p, _, n in series}
+            if not series:
+                counts["skipped_insufficient_history"] += 1
+                continue
+
+            periods_sorted = sorted(by_period.keys())
+
+            # Walk possible 'current month' anchors. Need 24 months ending at t.
+            for t in periods_sorted:
+                start_curr = _months_back(t, 11)
+                end_curr   = t
+                start_prior = _months_back(t, 23)
+                end_prior   = _months_back(t, 12)
+
+                # All 24 months must be present in the data for a clean window.
+                want = []
+                p = start_prior
+                while p <= end_curr:
+                    want.append(p)
+                    p = _months_back(p, -1)
+                if not all(p in by_period for p in want):
+                    counts["skipped_insufficient_history"] += 1
+                    continue
+
+                current_12 = sum(by_period[p] for p in want if start_curr <= p <= end_curr)
+                prior_12 = sum(by_period[p] for p in want if start_prior <= p <= end_prior)
+                if prior_12 == 0:
+                    counts["skipped_zero_prior"] += 1
+                    continue
+                yoy_pct = (current_12 - prior_12) / abs(prior_12)
+                if abs(yoy_pct) < yoy_threshold_pct:
+                    counts["skipped_below_threshold"] += 1
+                    continue
+
+                top_cn8s = _hs_group_top_cn8s(group.hs_patterns, start_curr, end_curr)
+                top_reporters = _hs_group_top_reporters(group.hs_patterns, start_curr, end_curr)
+                _insert_hs_group_yoy_finding(
+                    analysis_run_id, group, t, start_curr, end_curr,
+                    start_prior, end_prior, current_12, prior_12, yoy_pct,
+                    series, top_cn8s, top_reporters, n_obs_by_period,
+                )
+                counts["emitted"] += 1
+
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='success', ended_at=now() WHERE id=%s",
+                (analysis_run_id,),
+            )
+    except Exception as e:
+        log.exception("HS-group trend analysis failed")
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='failed', error_message=%s, ended_at=now() WHERE id=%s",
+                (str(e), analysis_run_id),
+            )
+        raise
+
+    return counts
+
+
+def _insert_hs_group_yoy_finding(
+    analysis_run_id: int,
+    group: _HsGroup,
+    anchor_period: date,
+    start_curr: date,
+    end_curr: date,
+    start_prior: date,
+    end_prior: date,
+    current_12: float,
+    prior_12: float,
+    yoy_pct: float,
+    series: list[tuple[date, float, int]],
+    top_cn8s: list[dict],
+    top_reporters: list[dict],
+    n_obs_by_period: dict[date, int],
+) -> None:
+    direction = "up" if yoy_pct > 0 else "down"
+    title = (
+        f"Component trend: {group.name}, rolling 12mo to {end_curr.strftime('%Y-%m')}: "
+        f"€{current_12/1e9:,.2f}B from CN ({yoy_pct*100:+.1f}% {direction} vs prior 12mo €{prior_12/1e9:,.2f}B)"
+    )
+    body_lines = [
+        f"Group: {group.name}",
+        f"Definition: HS-CN8 codes matching {group.hs_patterns}",
+        "",
+        f"Rolling 12 months ending {end_curr.strftime('%Y-%m')}: €{current_12:,.0f} "
+        f"({end_curr.strftime('%Y-%m')}: €{series[-1][1] if series else 0:,.0f}; "
+        f"period range {start_curr.strftime('%Y-%m')} → {end_curr.strftime('%Y-%m')}).",
+        f"Prior 12 months ({start_prior.strftime('%Y-%m')} → {end_prior.strftime('%Y-%m')}): €{prior_12:,.0f}.",
+        f"YoY change: {yoy_pct*100:+.2f}% (€{current_12 - prior_12:+,.0f}).",
+        "",
+        "Top 5 contributing HS-CN8 codes in the rolling 12mo window (€):",
+    ]
+    for c in top_cn8s[:5]:
+        body_lines.append(f"  {c['hs_code']}: €{c['total_eur']:,.0f} ({c['n_obs']} obs)")
+    body_lines.append("")
+    body_lines.append("Top 5 importing EU members in the rolling 12mo window (€):")
+    for r in top_reporters[:5]:
+        body_lines.append(f"  {r['reporter']}: €{r['total_eur']:,.0f}")
+    body_lines.append("")
+    body_lines.append(
+        "All values in EUR. Caveats applicable: 'cif_fob' (Eurostat reports imports CIF), "
+        "'classification_drift' (CN8 sub-headings can be ambiguous), 'eurostat_stat_procedure_mix' "
+        "(rolling totals sum across tariff regimes — see eurostat_raw_rows for the breakdown)."
+    )
+
+    detail = {
+        "method": "hs_group_yoy_v1",
+        "method_query": {
+            "source": "eurostat", "flow": "import", "partner_country": "CN",
+            "hs_patterns": group.hs_patterns,
+            "rolling_window_months": 12,
+        },
+        "group": {
+            "id": group.id, "name": group.name, "description": group.description,
+            "hs_patterns": group.hs_patterns,
+        },
+        "windows": {
+            "current_start": start_curr.isoformat(), "current_end": end_curr.isoformat(),
+            "prior_start": start_prior.isoformat(), "prior_end": end_prior.isoformat(),
+        },
+        "totals": {
+            "current_12mo_eur": current_12,
+            "prior_12mo_eur": prior_12,
+            "delta_eur": current_12 - prior_12,
+            "yoy_pct": yoy_pct,
+        },
+        "monthly_series": [
+            {"period": p.isoformat(), "value_eur": v, "n_obs": n_obs_by_period.get(p, 0)}
+            for (p, v, _) in series
+            if start_prior <= p <= end_curr
+        ],
+        "top_cn8_codes_in_current_12mo": top_cn8s,
+        "top_reporters_in_current_12mo": top_reporters,
+        "caveat_codes": [
+            "cif_fob", "currency_timing", "classification_drift",
+            "eurostat_stat_procedure_mix",
+        ],
+    }
+    score = abs(yoy_pct)
+
+    import json
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO findings (
+                scrape_run_id, kind, subkind, observation_ids, hs_group_ids,
+                score, title, body, detail
+            ) VALUES (
+                %s, 'anomaly', 'hs_group_yoy', %s, %s, %s, %s, %s, %s
+            )
+            """,
+            (analysis_run_id, [], [group.id], score, title,
+             "\n".join(body_lines), json.dumps(detail)),
         )

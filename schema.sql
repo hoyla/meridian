@@ -281,6 +281,61 @@ SELECT ca.id, m, 'GACC release footnote, Mar 2026', 'EU 27 as of 2026; Brexit re
        ]) m
  WHERE ca.source = 'gacc' AND ca.raw_label = 'European Union';
 
+-- HS-CN8 patterns for component-trend analysis. Patterns use SQL LIKE
+-- semantics; '850760%' matches every 8-digit code starting 850760.
+-- This list is journalist-editable: refine via SQL UPDATE (the patterns are
+-- a TEXT[] column) or add new groups via INSERT. New findings will be
+-- generated against the new definitions on the next analysis run.
+INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
+  ('EV batteries (Li-ion)',
+   'Lithium-ion accumulators (HS 850760) — the dominant battery type for electric vehicles and stationary storage.',
+   ARRAY['850760%'], 'seed'),
+  ('Solar PV cells & modules',
+   'Photovoltaic cells assembled (HS 854142) and PV cells in modules/panels (HS 854143). Captures Chinese-manufactured solar panels imported into the EU.',
+   ARRAY['854142%', '854143%'], 'seed'),
+  ('Solar/grid inverters (broad)',
+   'Static converters HS 850440 — includes solar inverters but also non-solar grid inverters and other DC-DC converters. Broad bucket; refine to specific CN8 codes (e.g. 85044020) if a tighter solar-only signal is needed.',
+   ARRAY['850440%'], 'seed'),
+  ('Wind turbine components',
+   'Wind-powered generating sets (850231), parts for generators/motors (850300), iron/steel towers and lattice masts (730820). Wind-component coverage is necessarily approximate — components spread across many HS chapters.',
+   ARRAY['850231%', '850300%', '730820%'], 'seed'),
+  ('Rare-earth materials',
+   'Rare-earth metals (280530), cerium compounds (284610), other rare-earth compounds (284690).',
+   ARRAY['280530%', '284610%', '284690%'], 'seed'),
+  ('Steel (broad)',
+   'HS chapter 72 — iron and steel. Broad chapter; finer subgroups can be added (e.g. just flat-rolled finished steel) for specific stories.',
+   ARRAY['72%'], 'seed'),
+  ('Aluminium (broad)',
+   'HS chapter 76 — aluminium and articles thereof.',
+   ARRAY['76%'], 'seed'),
+  ('Motor-vehicle parts',
+   'HS 8708 — parts and accessories of motor vehicles. Includes the components flagged in editorial brief (axles, brakes, clutches, etc.) but not engines or batteries.',
+   ARRAY['8708%'], 'seed'),
+  ('Machine tools',
+   'HS 8456-8463 — metalworking machine tools (numerically-controlled, conventional, presses, lathes, etc.).',
+   ARRAY['8456%', '8457%', '8458%', '8459%', '8460%', '8461%', '8462%', '8463%'], 'seed'),
+  ('Industrial fasteners',
+   'Threaded fasteners — screws and bolts (731815), nuts (731816), other threaded articles (731819).',
+   ARRAY['731815%', '731816%', '731819%'], 'seed'),
+  ('Electrical equipment & machinery (chapters 84-85, broad)',
+   'HS chapters 84 (machinery and mechanical appliances) + 85 (electrical machinery and equipment). Broad — useful for the headline component-trade total often cited in trade press. Refine to specific HS-4 sub-headings for narrower investigations.',
+   ARRAY['84%', '85%'], 'seed'),
+  -- Added after Lisa O'Carroll's Apr 2026 piece — these groups produce findings
+  -- that map directly onto sentences in her article ("Chinese EV sales doubled",
+  -- "China still accounts for 93% of permanent magnets", etc.).
+  ('Permanent magnets',
+   'HS 8505 — electromagnets and permanent magnets. Lisa O''Carroll (Apr 2026): China supplies 93% of EU permanent magnet imports, volumes up 18% YoY.',
+   ARRAY['8505%'], 'seed:lisa_article'),
+  ('Finished cars (broad)',
+   'HS 8703 — motor cars and other motor vehicles principally designed for the transport of persons. Headline "China shock" category.',
+   ARRAY['8703%'], 'seed:lisa_article'),
+  ('EV + hybrid passenger cars',
+   'HS 870380 (electric only), 870370 (PHEV), 870360 (HEV non-plug-in) — the new-energy-vehicle (NEV) export category whose surge from $11bn to $20.6bn Q1 YoY drove the Apr 2026 Guardian story.',
+   ARRAY['870380%', '870370%', '870360%'], 'seed:lisa_article'),
+  ('Pork (HS 0203)',
+   'HS 0203 — meat of swine, fresh, chilled or frozen. EU exports to China declined notably in Feb 2026 (Soapbox/Lisa).',
+   ARRAY['0203%'], 'seed:lisa_article');
+
 -- Caveats journalists should weigh when reading cross-source findings.
 INSERT INTO caveats (code, summary, detail, applies_to) VALUES
   ('cif_fob',
