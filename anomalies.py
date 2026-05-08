@@ -646,28 +646,36 @@ def _list_hs_groups(group_names: list[str] | None = None) -> list[_HsGroup]:
 
 def _hs_group_per_period_totals(
     patterns: list[str],
-) -> list[tuple[date, float, int]]:
-    """Returns (period, total_eur, n_obs) per period for Eurostat imports from
-    CN matching any of the given hs_patterns. Periods with no matching obs
-    are absent from the result (no zero-fill); the caller handles gaps."""
+) -> list[tuple[date, float, float, int]]:
+    """Returns (period, total_eur, total_kg, n_raw_rows) per period for Eurostat
+    imports from CN matching any of the given hs_patterns.
+
+    Queries eurostat_raw_rows rather than observations because raw_rows preserves
+    quantity_kg as a native column. The aggregated `observations.quantity` field
+    holds either the supplementary unit (PST, kg, etc.) or kg as fallback, which
+    means cross-HS kg totals from observations would silently drop the kg of
+    rows whose primary unit is something else (pieces, litres, etc.).
+
+    Periods with no matching obs are absent from the result — caller handles gaps.
+    """
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT r.period,
-                   SUM(o.value_amount) AS total_eur,
-                   COUNT(*) AS n_obs
-              FROM observations o
-              JOIN releases r ON r.id = o.release_id
-             WHERE r.source = 'eurostat'
-               AND o.flow = 'import'
-               AND o.partner_country = 'CN'
-               AND o.hs_code LIKE ANY(%s)
-          GROUP BY r.period
-          ORDER BY r.period
+            SELECT period,
+                   SUM(value_eur) AS total_eur,
+                   SUM(quantity_kg) AS total_kg,
+                   COUNT(*) AS n_raw
+              FROM eurostat_raw_rows
+             WHERE flow = 1
+               AND partner = 'CN'
+               AND product_nc LIKE ANY(%s)
+          GROUP BY period
+          ORDER BY period
             """,
             (patterns,),
         )
-        return [(row[0], float(row[1] or 0), int(row[2])) for row in cur.fetchall()]
+        return [(row[0], float(row[1] or 0), float(row[2] or 0), int(row[3]))
+                for row in cur.fetchall()]
 
 
 def _hs_group_top_cn8s(patterns: list[str], start: date, end: date, limit: int = 10) -> list[dict]:
@@ -675,20 +683,22 @@ def _hs_group_top_cn8s(patterns: list[str], start: date, end: date, limit: int =
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT o.hs_code, SUM(o.value_amount) AS total_eur, COUNT(*) AS n_obs
-              FROM observations o
-              JOIN releases r ON r.id = o.release_id
-             WHERE r.source = 'eurostat'
-               AND r.period >= %s AND r.period <= %s
-               AND o.flow = 'import' AND o.partner_country = 'CN'
-               AND o.hs_code LIKE ANY(%s)
-          GROUP BY o.hs_code
-          ORDER BY SUM(o.value_amount) DESC NULLS LAST
+            SELECT product_nc,
+                   SUM(value_eur) AS total_eur,
+                   SUM(quantity_kg) AS total_kg,
+                   COUNT(*) AS n_raw
+              FROM eurostat_raw_rows
+             WHERE period >= %s AND period <= %s
+               AND flow = 1 AND partner = 'CN'
+               AND product_nc LIKE ANY(%s)
+          GROUP BY product_nc
+          ORDER BY SUM(value_eur) DESC NULLS LAST
              LIMIT %s
             """,
             (start, end, patterns, limit),
         )
-        return [{"hs_code": r[0], "total_eur": float(r[1] or 0), "n_obs": int(r[2])}
+        return [{"hs_code": r[0], "total_eur": float(r[1] or 0),
+                 "total_kg": float(r[2] or 0), "n_raw": int(r[3])}
                 for r in cur.fetchall()]
 
 
@@ -697,20 +707,22 @@ def _hs_group_top_reporters(patterns: list[str], start: date, end: date, limit: 
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT o.reporter_country, SUM(o.value_amount) AS total_eur, COUNT(*) AS n_obs
-              FROM observations o
-              JOIN releases r ON r.id = o.release_id
-             WHERE r.source = 'eurostat'
-               AND r.period >= %s AND r.period <= %s
-               AND o.flow = 'import' AND o.partner_country = 'CN'
-               AND o.hs_code LIKE ANY(%s)
-          GROUP BY o.reporter_country
-          ORDER BY SUM(o.value_amount) DESC NULLS LAST
+            SELECT reporter,
+                   SUM(value_eur) AS total_eur,
+                   SUM(quantity_kg) AS total_kg,
+                   COUNT(*) AS n_raw
+              FROM eurostat_raw_rows
+             WHERE period >= %s AND period <= %s
+               AND flow = 1 AND partner = 'CN'
+               AND product_nc LIKE ANY(%s)
+          GROUP BY reporter
+          ORDER BY SUM(value_eur) DESC NULLS LAST
              LIMIT %s
             """,
             (start, end, patterns, limit),
         )
-        return [{"reporter": r[0], "total_eur": float(r[1] or 0), "n_obs": int(r[2])}
+        return [{"reporter": r[0], "total_eur": float(r[1] or 0),
+                 "total_kg": float(r[2] or 0), "n_raw": int(r[3])}
                 for r in cur.fetchall()]
 
 
@@ -752,13 +764,14 @@ def detect_hs_group_yoy(
     try:
         for group in groups:
             series = _hs_group_per_period_totals(group.hs_patterns)
-            by_period: dict[date, float] = {p: t for p, t, _ in series}
-            n_obs_by_period: dict[date, int] = {p: n for p, _, n in series}
+            eur_by_period: dict[date, float] = {p: e for p, e, _, _ in series}
+            kg_by_period:  dict[date, float] = {p: k for p, _, k, _ in series}
+            n_by_period:   dict[date, int]   = {p: n for p, _, _, n in series}
             if not series:
                 counts["skipped_insufficient_history"] += 1
                 continue
 
-            periods_sorted = sorted(by_period.keys())
+            periods_sorted = sorted(eur_by_period.keys())
 
             # Walk possible 'current month' anchors. Need 24 months ending at t.
             for t in periods_sorted:
@@ -773,17 +786,24 @@ def detect_hs_group_yoy(
                 while p <= end_curr:
                     want.append(p)
                     p = _months_back(p, -1)
-                if not all(p in by_period for p in want):
+                if not all(p in eur_by_period for p in want):
                     counts["skipped_insufficient_history"] += 1
                     continue
 
-                current_12 = sum(by_period[p] for p in want if start_curr <= p <= end_curr)
-                prior_12 = sum(by_period[p] for p in want if start_prior <= p <= end_prior)
-                if prior_12 == 0:
+                current_eur = sum(eur_by_period[p] for p in want if start_curr <= p <= end_curr)
+                prior_eur   = sum(eur_by_period[p] for p in want if start_prior <= p <= end_prior)
+                current_kg  = sum(kg_by_period[p]  for p in want if start_curr <= p <= end_curr)
+                prior_kg    = sum(kg_by_period[p]  for p in want if start_prior <= p <= end_prior)
+
+                if prior_eur == 0:
                     counts["skipped_zero_prior"] += 1
                     continue
-                yoy_pct = (current_12 - prior_12) / abs(prior_12)
-                if abs(yoy_pct) < yoy_threshold_pct:
+                yoy_pct_eur = (current_eur - prior_eur) / abs(prior_eur)
+                yoy_pct_kg  = ((current_kg - prior_kg) / abs(prior_kg)) if prior_kg else None
+
+                # Keep the threshold gating on the EUR YoY (the editorial-relevance
+                # signal). Even if kg YoY is small, big EUR moves matter.
+                if abs(yoy_pct_eur) < yoy_threshold_pct:
                     counts["skipped_below_threshold"] += 1
                     continue
 
@@ -791,8 +811,10 @@ def detect_hs_group_yoy(
                 top_reporters = _hs_group_top_reporters(group.hs_patterns, start_curr, end_curr)
                 _insert_hs_group_yoy_finding(
                     analysis_run_id, group, t, start_curr, end_curr,
-                    start_prior, end_prior, current_12, prior_12, yoy_pct,
-                    series, top_cn8s, top_reporters, n_obs_by_period,
+                    start_prior, end_prior,
+                    current_eur, prior_eur, yoy_pct_eur,
+                    current_kg,  prior_kg,  yoy_pct_kg,
+                    series, top_cn8s, top_reporters, n_by_period,
                 )
                 counts["emitted"] += 1
 
@@ -821,48 +843,80 @@ def _insert_hs_group_yoy_finding(
     end_curr: date,
     start_prior: date,
     end_prior: date,
-    current_12: float,
-    prior_12: float,
-    yoy_pct: float,
-    series: list[tuple[date, float, int]],
+    current_eur: float,
+    prior_eur: float,
+    yoy_pct_eur: float,
+    current_kg: float,
+    prior_kg: float,
+    yoy_pct_kg: float | None,
+    series: list[tuple[date, float, float, int]],
     top_cn8s: list[dict],
     top_reporters: list[dict],
     n_obs_by_period: dict[date, int],
 ) -> None:
-    direction = "up" if yoy_pct > 0 else "down"
+    direction = "up" if yoy_pct_eur > 0 else "down"
+    kg_yoy_str = f"{yoy_pct_kg*100:+.1f}%" if yoy_pct_kg is not None else "n/a"
+    unit_price_curr = (current_eur / current_kg) if current_kg else None
+    unit_price_prior = (prior_eur / prior_kg) if prior_kg else None
+    unit_price_pct = (
+        ((unit_price_curr - unit_price_prior) / abs(unit_price_prior))
+        if unit_price_curr is not None and unit_price_prior is not None and unit_price_prior != 0
+        else None
+    )
+
     title = (
         f"Component trend: {group.name}, rolling 12mo to {end_curr.strftime('%Y-%m')}: "
-        f"€{current_12/1e9:,.2f}B from CN ({yoy_pct*100:+.1f}% {direction} vs prior 12mo €{prior_12/1e9:,.2f}B)"
+        f"€{current_eur/1e9:,.2f}B from CN ({yoy_pct_eur*100:+.1f}% {direction} value, "
+        f"{kg_yoy_str} kg)"
     )
+
+    # Decompose value change into volume × price effects so the "is it shipping
+    # more or just charging more" question is answerable inline.
     body_lines = [
         f"Group: {group.name}",
         f"Definition: HS-CN8 codes matching {group.hs_patterns}",
         "",
-        f"Rolling 12 months ending {end_curr.strftime('%Y-%m')}: €{current_12:,.0f} "
-        f"({end_curr.strftime('%Y-%m')}: €{series[-1][1] if series else 0:,.0f}; "
-        f"period range {start_curr.strftime('%Y-%m')} → {end_curr.strftime('%Y-%m')}).",
-        f"Prior 12 months ({start_prior.strftime('%Y-%m')} → {end_prior.strftime('%Y-%m')}): €{prior_12:,.0f}.",
-        f"YoY change: {yoy_pct*100:+.2f}% (€{current_12 - prior_12:+,.0f}).",
-        "",
-        "Top 5 contributing HS-CN8 codes in the rolling 12mo window (€):",
+        f"Rolling 12 months ending {end_curr.strftime('%Y-%m')}:",
+        f"  Value:    €{current_eur:,.0f} ({yoy_pct_eur*100:+.2f}% YoY vs €{prior_eur:,.0f})",
+        f"  Quantity: {current_kg:,.0f} kg ({kg_yoy_str} YoY vs {prior_kg:,.0f} kg)",
     ]
-    for c in top_cn8s[:5]:
-        body_lines.append(f"  {c['hs_code']}: €{c['total_eur']:,.0f} ({c['n_obs']} obs)")
+    if unit_price_curr is not None and unit_price_prior is not None:
+        body_lines.append(
+            f"  Unit price: €{unit_price_curr:,.4f}/kg current vs €{unit_price_prior:,.4f}/kg prior"
+            f" ({unit_price_pct*100:+.2f}% change)"
+        )
+        if abs(yoy_pct_eur) > 0.01 and unit_price_pct is not None:
+            # Decomposition note — this is what tells the journalist
+            # whether a value rise is volume-driven or price-driven.
+            volume_share = (yoy_pct_kg / yoy_pct_eur) if yoy_pct_kg is not None and yoy_pct_eur else None
+            if volume_share is not None:
+                body_lines.append(
+                    f"  Decomposition: {'volume' if abs(volume_share) > 0.5 else 'price'}-driven "
+                    f"(kg YoY contributes ~{volume_share*100:.0f}% of value YoY)."
+                )
     body_lines.append("")
-    body_lines.append("Top 5 importing EU members in the rolling 12mo window (€):")
+    body_lines.append("Top 5 contributing HS-CN8 codes in the rolling 12mo window:")
+    for c in top_cn8s[:5]:
+        unit_str = (
+            f" (€{c['total_eur']/c['total_kg']:,.2f}/kg)" if c.get("total_kg") else ""
+        )
+        body_lines.append(f"  {c['hs_code']}: €{c['total_eur']:,.0f}, {c['total_kg']:,.0f} kg{unit_str}")
+    body_lines.append("")
+    body_lines.append("Top 5 importing EU members in the rolling 12mo window:")
     for r in top_reporters[:5]:
-        body_lines.append(f"  {r['reporter']}: €{r['total_eur']:,.0f}")
+        body_lines.append(f"  {r['reporter']}: €{r['total_eur']:,.0f}, {r['total_kg']:,.0f} kg")
     body_lines.append("")
     body_lines.append(
-        "All values in EUR. Caveats applicable: 'cif_fob' (Eurostat reports imports CIF), "
-        "'classification_drift' (CN8 sub-headings can be ambiguous), 'eurostat_stat_procedure_mix' "
-        "(rolling totals sum across tariff regimes — see eurostat_raw_rows for the breakdown)."
+        "Caveats applicable: 'cif_fob' (Eurostat reports imports CIF), 'classification_drift' "
+        "(CN8 sub-headings can be ambiguous), 'eurostat_stat_procedure_mix' (totals sum across "
+        "tariff regimes; see eurostat_raw_rows for the breakdown). Unit prices computed as "
+        "value/kg from raw rows."
     )
 
     detail = {
-        "method": "hs_group_yoy_v1",
+        "method": "hs_group_yoy_v2_with_kg",
         "method_query": {
-            "source": "eurostat", "flow": "import", "partner_country": "CN",
+            "source": "eurostat_raw_rows", "flow": 1, "partner": "CN",
             "hs_patterns": group.hs_patterns,
             "rolling_window_months": 12,
         },
@@ -875,14 +929,23 @@ def _insert_hs_group_yoy_finding(
             "prior_start": start_prior.isoformat(), "prior_end": end_prior.isoformat(),
         },
         "totals": {
-            "current_12mo_eur": current_12,
-            "prior_12mo_eur": prior_12,
-            "delta_eur": current_12 - prior_12,
-            "yoy_pct": yoy_pct,
+            "current_12mo_eur": current_eur,
+            "prior_12mo_eur": prior_eur,
+            "delta_eur": current_eur - prior_eur,
+            "yoy_pct": yoy_pct_eur,
+            "current_12mo_kg": current_kg,
+            "prior_12mo_kg": prior_kg,
+            "delta_kg": current_kg - prior_kg,
+            "yoy_pct_kg": yoy_pct_kg,
+            "current_unit_price_eur_per_kg": unit_price_curr,
+            "prior_unit_price_eur_per_kg": unit_price_prior,
+            "unit_price_pct_change": unit_price_pct,
         },
         "monthly_series": [
-            {"period": p.isoformat(), "value_eur": v, "n_obs": n_obs_by_period.get(p, 0)}
-            for (p, v, _) in series
+            {"period": p.isoformat(), "value_eur": e, "quantity_kg": k,
+             "unit_price_eur_per_kg": (e / k) if k else None,
+             "n_raw_rows": n_obs_by_period.get(p, 0)}
+            for (p, e, k, _) in series
             if start_prior <= p <= end_curr
         ],
         "top_cn8_codes_in_current_12mo": top_cn8s,
@@ -892,7 +955,8 @@ def _insert_hs_group_yoy_finding(
             "eurostat_stat_procedure_mix",
         ],
     }
-    score = abs(yoy_pct)
+    # Score reflects EUR YoY (the editorial-comparable signal across groups).
+    score = abs(yoy_pct_eur)
 
     import json
     with _conn() as conn, conn.cursor() as cur:

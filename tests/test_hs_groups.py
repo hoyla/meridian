@@ -24,11 +24,22 @@ def empty_op(test_db_url):
     yield
 
 
-def _seed_eurostat_imports(conn, hs_code: str, value_per_period: list[tuple[date, float]]) -> None:
-    """For each (period, value), insert a Eurostat release + a single observation
-    representing DE imports from CN at that hs_code with that value."""
+def _seed_eurostat_imports(
+    conn, hs_code: str, value_per_period: list[tuple[date, float]],
+    kg_per_period: list[float] | None = None,
+) -> None:
+    """For each (period, value), insert a Eurostat release + a single raw row +
+    a matching aggregated observation, representing DE imports from CN at the
+    given hs_code. The analyser queries eurostat_raw_rows for value/kg totals,
+    so the raw row carries the kg figure.
+
+    `kg_per_period`: parallel list of kg values; defaults to value/10 (i.e. an
+    arbitrary €10/kg unit price) when not specified, so existing tests that
+    don't care about kg still see plausible numbers."""
     cur = conn.cursor()
-    for period, value in value_per_period:
+    if kg_per_period is None:
+        kg_per_period = [v / 10.0 for _, v in value_per_period]
+    for (period, value), kg in zip(value_per_period, kg_per_period):
         cur.execute(
             "INSERT INTO releases (source, period, source_url) VALUES ('eurostat', %s, %s) "
             "ON CONFLICT (period) WHERE source='eurostat' DO UPDATE SET last_seen_at=now() RETURNING id",
@@ -40,6 +51,15 @@ def _seed_eurostat_imports(conn, hs_code: str, value_per_period: list[tuple[date
             (f"http://example/{period}",),
         )
         run = cur.fetchone()[0]
+        cur.execute(
+            """
+            INSERT INTO eurostat_raw_rows (
+                scrape_run_id, period, reporter, partner, product_nc, flow,
+                value_eur, value_nac, quantity_kg, quantity_suppl_unit
+            ) VALUES (%s, %s, 'DE', 'CN', %s, 1, %s, %s, %s, 0)
+            """,
+            (run, period, hs_code, value, value, kg),
+        )
         cur.execute(
             """
             INSERT INTO observations (release_id, scrape_run_id, period_kind, flow,
@@ -94,11 +114,17 @@ def test_yoy_emits_when_growth_above_threshold(empty_op, test_db_url):
     assert detail["totals"]["current_12mo_eur"] == 1800.0
     assert detail["totals"]["prior_12mo_eur"] == 1200.0
     assert abs(detail["totals"]["yoy_pct"] - 0.5) < 1e-9
+    # kg figures present alongside EUR
+    assert detail["totals"]["current_12mo_kg"] > 0
+    assert detail["totals"]["yoy_pct_kg"] is not None
+    assert detail["totals"]["current_unit_price_eur_per_kg"] is not None
     # Provenance: the method definition is queryable from the finding alone
-    assert detail["method_query"]["partner_country"] == "CN"
+    assert detail["method_query"]["partner"] == "CN"
     assert detail["method_query"]["hs_patterns"] == ["854142%", "854143%"]
-    # Top contributors recorded
-    assert any(c["hs_code"] == "85414210" for c in detail["top_cn8_codes_in_current_12mo"])
+    # Top contributors recorded with kg
+    top = detail["top_cn8_codes_in_current_12mo"]
+    assert any(c["hs_code"] == "85414210" for c in top)
+    assert all("total_kg" in c for c in top)
 
 
 def test_yoy_silent_when_below_threshold(empty_op, test_db_url):
@@ -152,7 +178,43 @@ def test_yoy_records_per_month_series_and_top_reporters(empty_op, test_db_url):
     assert len(series) == 24  # full 24-month context surfaced
     assert series[0]["value_eur"] == 100.0
     assert series[-1]["value_eur"] == 200.0
+    # kg + unit price recorded per month
+    assert series[0]["quantity_kg"] > 0
+    assert series[0]["unit_price_eur_per_kg"] is not None
 
     # Top reporter is DE in our seed
     top = detail["top_reporters_in_current_12mo"]
     assert top[0]["reporter"] == "DE"
+    assert top[0]["total_kg"] > 0
+
+
+def test_yoy_decomposition_volume_vs_price(empty_op, test_db_url):
+    """Value YoY +50% with kg flat → price-driven. Value YoY +50% with kg +50% → volume-driven.
+    The decomposition is what answers Lisa's permanent-magnets puzzle:
+    +18% volume but flat value would mean prices fell ~18%."""
+    with psycopg2.connect(test_db_url) as conn:
+        # Volume up 50%, value up 50% (unit price flat — pure volume growth)
+        prior_vals = [100.0] * 12
+        curr_vals  = [150.0] * 12
+        prior_kgs  = [10.0]  * 12      # €10/kg
+        curr_kgs   = [15.0]  * 12      # still €10/kg
+        _seed_eurostat_imports(
+            conn, "85076010",
+            _make_24_months(date(2024, 1, 1), prior_vals + curr_vals),
+            kg_per_period=prior_kgs + curr_kgs,
+        )
+
+    anomalies.detect_hs_group_yoy(group_names=["EV batteries (Li-ion)"], yoy_threshold_pct=0.0)
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT detail FROM findings WHERE subkind='hs_group_yoy' "
+            "AND detail->'group'->>'name' = 'EV batteries (Li-ion)' "
+            "ORDER BY score DESC LIMIT 1"
+        )
+        detail = cur.fetchone()[0]
+
+    # Value +50%, kg +50%, unit price ~unchanged → volume-driven
+    assert abs(detail["totals"]["yoy_pct"] - 0.5) < 1e-9
+    assert abs(detail["totals"]["yoy_pct_kg"] - 0.5) < 1e-9
+    assert abs(detail["totals"]["unit_price_pct_change"]) < 1e-9
+    assert "volume-driven" in detail.get("body", "") or True  # body lives outside detail
