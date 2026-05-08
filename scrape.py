@@ -172,16 +172,29 @@ def main() -> None:
                         "Repeatable, e.g. --fetch-fx CNY --fetch-fx USD")
     p.add_argument("--fx-since", type=_parse_period, metavar="YYYY-MM",
                    help="Only fetch FX rates from this period onwards (default: full history)")
-    p.add_argument("--analyse", choices=["mirror-trade"],
+    p.add_argument("--analyse", choices=["mirror-trade", "mirror-gap-trends"],
                    help="Run a deterministic anomaly pass over already-ingested data")
     p.add_argument("--analyse-period", type=_parse_period, metavar="YYYY-MM",
                    help="Restrict --analyse to a single period (default: all)")
+    p.add_argument("--trend-window", type=int, default=6, metavar="N",
+                   help="Rolling baseline window in months for trend analyses (default: 6)")
+    p.add_argument("--z-threshold", type=float, default=1.5, metavar="Z",
+                   help="Minimum |z| to emit a trend finding (default: 1.5)")
     p.add_argument("--dry-run", action="store_true", help="Fetch + parse but don't write to DB")
     args = p.parse_args()
 
     if args.analyse == "mirror-trade":
         counts = anomalies.detect_mirror_trade_gaps(period=args.analyse_period)
         log.info("Mirror-trade analysis: %s", counts)
+        return
+
+    if args.analyse == "mirror-gap-trends":
+        counts = anomalies.detect_mirror_gap_trends(
+            window_months=args.trend_window,
+            z_threshold=args.z_threshold,
+            period=args.analyse_period,
+        )
+        log.info("Mirror-gap trend analysis: %s", counts)
         return
 
     if args.fetch_fx:

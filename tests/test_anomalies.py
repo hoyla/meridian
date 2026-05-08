@@ -202,6 +202,121 @@ def test_mirror_gap_skips_when_no_fx(empty_op_tables, test_db_url):
     assert counts["emitted"] == 0
 
 
+def _seed_mirror_gap_findings(conn, iso2: str, gap_pcts: list[tuple[date, float]]) -> list[int]:
+    """Insert a series of mirror_gap findings for the given iso2 across periods.
+    Each finding gets a stub GACC observation+release so the trend detector can
+    join through observation_ids[1] to recover the period."""
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO scrape_runs (source_url, status) VALUES ('seed', 'success') RETURNING id",
+    )
+    run_id = cur.fetchone()[0]
+
+    finding_ids = []
+    for period, gap_pct in gap_pcts:
+        cur.execute(
+            """
+            INSERT INTO releases (source, section_number, currency, period, release_kind, source_url, unit)
+            VALUES ('gacc', 4, 'CNY', %s, 'preliminary', 'x', 'CNY 100 Million')
+            RETURNING id
+            """,
+            (period,),
+        )
+        rel_id = cur.fetchone()[0]
+        cur.execute(
+            """
+            INSERT INTO observations (release_id, scrape_run_id, period_kind, flow,
+                                      partner_country, value_amount, value_currency, source_row)
+            VALUES (%s, %s, 'monthly', 'export', %s, 1000, 'CNY', '{}')
+            RETURNING id
+            """,
+            (rel_id, run_id, iso2),
+        )
+        gacc_obs_id = cur.fetchone()[0]
+        detail = {
+            "method": "mirror_trade_v1",
+            "iso2": iso2,
+            "gap_pct": gap_pct,
+        }
+        cur.execute(
+            """
+            INSERT INTO findings (scrape_run_id, kind, subkind, observation_ids, score,
+                                  title, body, detail)
+            VALUES (%s, 'anomaly', 'mirror_gap', %s, %s, %s, %s, %s::jsonb)
+            RETURNING id
+            """,
+            (run_id, [gacc_obs_id], abs(gap_pct), f"seed {iso2} {period}", "seed body",
+             '{"method":"mirror_trade_v1","iso2":"' + iso2 + '","gap_pct":' + str(gap_pct) + '}'),
+        )
+        finding_ids.append(cur.fetchone()[0])
+    conn.commit()
+    return finding_ids
+
+
+def test_trend_emits_finding_when_gap_jumps(empty_op_tables, test_db_url):
+    """A steady ~50% baseline followed by a sudden jump to 80% should fire a
+    z-score finding for that period."""
+    with psycopg2.connect(test_db_url) as conn:
+        # 6 months of baseline at 50%, 51%, 49%, 50%, 50%, 51%, then 80% (the jump)
+        series = [
+            (date(2025, 7, 1), 0.50),
+            (date(2025, 8, 1), 0.51),
+            (date(2025, 9, 1), 0.49),
+            (date(2025, 10, 1), 0.50),
+            (date(2025, 11, 1), 0.50),
+            (date(2025, 12, 1), 0.51),
+            (date(2026, 1, 1), 0.80),  # the news
+        ]
+        _seed_mirror_gap_findings(conn, "NL", series)
+
+    counts = anomalies.detect_mirror_gap_trends(window_months=6, z_threshold=1.5, min_baseline_n=3)
+    assert counts["emitted"] == 1, f"expected 1 finding, got counts={counts}"
+    # i=0,1,2 lack a 3-point baseline; i=3,4,5 are within-baseline noise (below threshold);
+    # i=6 is the jump and fires.
+    assert counts["skipped_insufficient_baseline"] == 3
+    assert counts["skipped_below_threshold"] == 3
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT subkind, score, title, detail FROM findings WHERE subkind='mirror_gap_zscore'"
+        )
+        subkind, score, title, detail = cur.fetchone()
+    assert subkind == "mirror_gap_zscore"
+    assert "NL" in title
+    assert "2026-01" in title
+    # Baseline mean ≈ 0.5017; stdev ≈ 0.008; jump to 0.80 → z ≈ 38; well above threshold
+    assert detail["z_score"] > 5
+    assert float(score) == abs(detail["z_score"])
+    assert detail["baseline"]["n"] == 6
+    assert detail["underlying_mirror_gap_finding_id"] is not None
+
+
+def test_trend_silent_when_below_threshold(empty_op_tables, test_db_url):
+    """A noisy series with no real shift should produce no findings."""
+    import random
+    random.seed(42)
+    with psycopg2.connect(test_db_url) as conn:
+        series = [(date(2025, m, 1), 0.50 + random.uniform(-0.02, 0.02)) for m in range(3, 13)]
+        _seed_mirror_gap_findings(conn, "DE", series)
+
+    counts = anomalies.detect_mirror_gap_trends(window_months=6, z_threshold=2.0, min_baseline_n=3)
+    assert counts["emitted"] == 0
+
+
+def test_trend_skips_when_baseline_too_short(empty_op_tables, test_db_url):
+    """Only 2 periods of history → can't form a baseline of n>=3."""
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_mirror_gap_findings(conn, "FR", [
+            (date(2025, 11, 1), 0.50),
+            (date(2025, 12, 1), 0.80),
+        ])
+
+    counts = anomalies.detect_mirror_gap_trends(window_months=6, z_threshold=1.0, min_baseline_n=3)
+    assert counts["emitted"] == 0
+    # 2 points: i=0 has 0 prior, i=1 has 1 prior. Both < 3.
+    assert counts["skipped_insufficient_baseline"] == 2
+
+
 def test_mirror_gap_skips_when_no_eurostat(empty_op_tables, test_db_url):
     """If only GACC has data for that period, comparator skips — no half-comparisons."""
     period = date(2025, 12, 1)

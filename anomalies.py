@@ -22,6 +22,8 @@ import logging
 import math
 import os
 import re
+import statistics
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 
@@ -33,6 +35,7 @@ import lookups
 log = logging.getLogger(__name__)
 
 ANALYSIS_SOURCE_URL = "analysis://mirror_trade/v1"
+TREND_ANALYSIS_SOURCE_URL = "analysis://mirror_gap_trends/v1"
 
 # Caveats every mirror_gap finding should cite by default. Specific findings can
 # add more (e.g. 'reporting_lag' if periods don't align).
@@ -326,4 +329,206 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> None:
             )
             """,
             (analysis_run_id, obs_ids, score, title, body, json.dumps(detail)),
+        )
+
+
+# =============================================================================
+# Trend / time-series anomaly detection over the mirror_gap series itself.
+# =============================================================================
+# The structural mirror-gap (e.g. NL ~65% Eurostat-higher, IT ~70%) is a known
+# fact of EU-China trade reporting and isn't itself news. The story is when
+# that gap *moves*: a partner whose gap was steady and suddenly shifts is the
+# kind of thing a desk wants flagged. This module computes a rolling-baseline
+# z-score of each (iso2, period) gap_pct against its prior `window_months`
+# of values, and emits 'mirror_gap_zscore' findings where |z| > threshold.
+
+
+@dataclass
+class _GapPoint:
+    finding_id: int
+    iso2: str
+    period: date
+    gap_pct: float
+    observation_ids: list[int]
+
+
+def _select_latest_mirror_gap_series(period_filter: date | None) -> list[_GapPoint]:
+    """Return the latest mirror_gap finding's gap_pct per (iso2, period). If a
+    period_filter is given, the SERIES still spans all periods (we need the
+    history for the baseline) — the period_filter only restricts which periods
+    we *generate trend findings for* downstream, not what we read here."""
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT ON (f.detail->>'iso2', r.period)
+                f.id              AS finding_id,
+                f.detail->>'iso2' AS iso2,
+                r.period          AS period,
+                (f.detail->>'gap_pct')::numeric AS gap_pct,
+                f.observation_ids
+              FROM findings f
+              JOIN observations o ON o.id = f.observation_ids[1]
+              JOIN releases r     ON r.id = o.release_id
+             WHERE f.subkind = 'mirror_gap'
+          ORDER BY f.detail->>'iso2', r.period, f.created_at DESC
+            """
+        )
+        rows = cur.fetchall()
+    return [
+        _GapPoint(
+            finding_id=row["finding_id"], iso2=row["iso2"], period=row["period"],
+            gap_pct=float(row["gap_pct"]),
+            observation_ids=list(row["observation_ids"] or []),
+        )
+        for row in rows
+    ]
+
+
+def detect_mirror_gap_trends(
+    window_months: int = 6,
+    period: date | None = None,
+    z_threshold: float = 1.5,
+    min_baseline_n: int = 3,
+) -> dict[str, int]:
+    """Compute rolling z-score of each (iso2, period) gap_pct against the prior
+    `window_months` for the same iso2. Emit a 'mirror_gap_zscore' finding when
+    |z| >= z_threshold. Below threshold, the period-iso2 pair is silently
+    skipped (so the findings table stays signal-only).
+
+    The structural baseline gap is partner-specific (NL ~65% Eurostat-higher
+    is normal; a sudden jump to 80% is the news), so we baseline per-iso2
+    rather than across all partners.
+
+    Args:
+        window_months: rolling baseline length (default 6).
+        period: if given, only generate trend findings for that period; the
+                baseline always uses the full prior history available.
+        z_threshold: minimum |z| to emit a finding (default 1.5 — generous;
+                     tune up as more history accrues).
+        min_baseline_n: skip if baseline has fewer than this many points.
+
+    Returns counts: {'emitted', 'skipped_insufficient_baseline',
+                     'skipped_zero_stdev', 'skipped_below_threshold'}.
+    """
+    counts = {
+        "emitted": 0, "skipped_insufficient_baseline": 0,
+        "skipped_zero_stdev": 0, "skipped_below_threshold": 0,
+    }
+
+    series_all = _select_latest_mirror_gap_series(period_filter=None)
+    if not series_all:
+        return counts
+
+    by_iso2: dict[str, list[_GapPoint]] = defaultdict(list)
+    for p in series_all:
+        by_iso2[p.iso2].append(p)
+    for points in by_iso2.values():
+        points.sort(key=lambda p: p.period)
+
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'running') RETURNING id",
+            (TREND_ANALYSIS_SOURCE_URL,),
+        )
+        analysis_run_id = cur.fetchone()[0]
+
+    try:
+        for iso2, points in by_iso2.items():
+            for i, point in enumerate(points):
+                if period is not None and point.period != period:
+                    continue
+                baseline = points[max(0, i - window_months):i]
+                if len(baseline) < min_baseline_n:
+                    counts["skipped_insufficient_baseline"] += 1
+                    continue
+                baseline_pcts = [b.gap_pct for b in baseline]
+                mean = statistics.mean(baseline_pcts)
+                stdev = statistics.stdev(baseline_pcts) if len(baseline_pcts) > 1 else 0.0
+                if stdev == 0:
+                    counts["skipped_zero_stdev"] += 1
+                    continue
+                z = (point.gap_pct - mean) / stdev
+                if abs(z) < z_threshold:
+                    counts["skipped_below_threshold"] += 1
+                    continue
+                _insert_zscore_finding(analysis_run_id, point, baseline, mean, stdev, z, window_months)
+                counts["emitted"] += 1
+
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='success', ended_at=now() WHERE id=%s",
+                (analysis_run_id,),
+            )
+    except Exception as e:
+        log.exception("Mirror-gap trend analysis failed")
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='failed', error_message=%s, ended_at=now() WHERE id=%s",
+                (str(e), analysis_run_id),
+            )
+        raise
+    return counts
+
+
+def _insert_zscore_finding(
+    analysis_run_id: int,
+    point: _GapPoint,
+    baseline: list[_GapPoint],
+    mean: float,
+    stdev: float,
+    z: float,
+    window_months: int,
+) -> None:
+    direction = "above" if z > 0 else "below"
+    title = (
+        f"Mirror-gap shift, China ↔ {point.iso2}, {point.period.strftime('%Y-%m')}: "
+        f"{point.gap_pct*100:+.1f}% gap is {abs(z):.1f}σ {direction} "
+        f"the {len(baseline)}-month baseline mean of {mean*100:+.1f}%"
+    )
+    body = (
+        f"The mirror-trade gap for {point.iso2} in {point.period.strftime('%Y-%m')} "
+        f"({point.gap_pct*100:+.1f}%) is {abs(z):.2f} standard deviations {direction} "
+        f"the rolling {window_months}-month baseline (mean {mean*100:+.2f}%, "
+        f"stdev {stdev*100:.2f}%, n={len(baseline)} prior periods).\n\n"
+        f"Underlying mirror_gap finding id: {point.finding_id}.\n"
+        f"Baseline window periods: {baseline[0].period.strftime('%Y-%m')} → "
+        f"{baseline[-1].period.strftime('%Y-%m')}.\n\n"
+        f"Caveats inherited from the underlying mirror_gap finding apply; the "
+        f"'currency_timing' caveat is especially relevant here because we use "
+        f"the ECB monthly average rate for the period being scored."
+    )
+    detail = {
+        "method": "mirror_gap_zscore_v1",
+        "iso2": point.iso2,
+        "period": point.period.isoformat(),
+        "gap_pct": point.gap_pct,
+        "z_score": z,
+        "baseline": {
+            "window_months": window_months,
+            "n": len(baseline),
+            "mean": mean,
+            "stdev": stdev,
+            "first_period": baseline[0].period.isoformat(),
+            "last_period": baseline[-1].period.isoformat(),
+            "values": [{"period": b.period.isoformat(), "gap_pct": b.gap_pct} for b in baseline],
+        },
+        "underlying_mirror_gap_finding_id": point.finding_id,
+        # Caveats inherited; promote to a column when the schema gets its
+        # first migration.
+        "caveat_codes": DEFAULT_MIRROR_GAP_CAVEATS + ["aggregate_composition_drift"],
+    }
+    score = abs(z)
+
+    import json
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO findings (
+                scrape_run_id, kind, subkind, observation_ids, score,
+                title, body, detail
+            ) VALUES (
+                %s, 'anomaly', 'mirror_gap_zscore', %s, %s, %s, %s, %s
+            )
+            """,
+            (analysis_run_id, point.observation_ids, score, title, body, json.dumps(detail)),
         )
