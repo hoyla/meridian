@@ -179,6 +179,8 @@ def main() -> None:
                    help="Restrict --analyse hs-group-yoy to specific group name(s); repeat for multiple")
     p.add_argument("--yoy-threshold", type=float, default=0.0, metavar="PCT",
                    help="Minimum |YoY %% as fraction| to emit hs-group-yoy findings (default 0.0 = always)")
+    p.add_argument("--flow", type=int, choices=[1, 2], default=1, metavar="N",
+                   help="Eurostat flow direction for hs-group-yoy: 1=EU imports from CN (default), 2=EU exports to CN")
     p.add_argument("--analyse-period", type=_parse_period, metavar="YYYY-MM",
                    help="Restrict --analyse to a single period (default: all)")
     p.add_argument("--trend-window", type=int, default=6, metavar="N",
@@ -206,8 +208,9 @@ def main() -> None:
         counts = anomalies.detect_hs_group_yoy(
             group_names=args.hs_group,
             yoy_threshold_pct=args.yoy_threshold,
+            flow=args.flow,
         )
-        log.info("HS-group YoY analysis: %s", counts)
+        log.info("HS-group YoY analysis (flow=%d): %s", args.flow, counts)
         return
 
     if args.analyse == "hs-group-trajectory":

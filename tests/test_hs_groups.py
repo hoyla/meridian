@@ -27,11 +27,13 @@ def empty_op(test_db_url):
 def _seed_eurostat_imports(
     conn, hs_code: str, value_per_period: list[tuple[date, float]],
     kg_per_period: list[float] | None = None,
+    flow: int = 1,
 ) -> None:
     """For each (period, value), insert a Eurostat release + a single raw row +
-    a matching aggregated observation, representing DE imports from CN at the
-    given hs_code. The analyser queries eurostat_raw_rows for value/kg totals,
-    so the raw row carries the kg figure.
+    a matching aggregated observation, representing DE → CN trade at the
+    given hs_code. flow=1 is import (CN→DE), flow=2 is export (DE→CN). The
+    analyser queries eurostat_raw_rows for value/kg totals, so the raw row
+    carries the kg figure.
 
     `kg_per_period`: parallel list of kg values; defaults to value/10 (i.e. an
     arbitrary €10/kg unit price) when not specified, so existing tests that
@@ -39,6 +41,7 @@ def _seed_eurostat_imports(
     cur = conn.cursor()
     if kg_per_period is None:
         kg_per_period = [v / 10.0 for _, v in value_per_period]
+    flow_label = "import" if flow == 1 else "export"
     for (period, value), kg in zip(value_per_period, kg_per_period):
         cur.execute(
             "INSERT INTO releases (source, period, source_url) VALUES ('eurostat', %s, %s) "
@@ -56,18 +59,18 @@ def _seed_eurostat_imports(
             INSERT INTO eurostat_raw_rows (
                 scrape_run_id, period, reporter, partner, product_nc, flow,
                 value_eur, value_nac, quantity_kg, quantity_suppl_unit
-            ) VALUES (%s, %s, 'DE', 'CN', %s, 1, %s, %s, %s, 0)
+            ) VALUES (%s, %s, 'DE', 'CN', %s, %s, %s, %s, %s, 0)
             """,
-            (run, period, hs_code, value, value, kg),
+            (run, period, hs_code, flow, value, value, kg),
         )
         cur.execute(
             """
             INSERT INTO observations (release_id, scrape_run_id, period_kind, flow,
                                       reporter_country, partner_country, hs_code,
                                       value_amount, value_currency, source_row)
-            VALUES (%s, %s, 'monthly', 'import', 'DE', 'CN', %s, %s, 'EUR', '{}')
+            VALUES (%s, %s, 'monthly', %s, 'DE', 'CN', %s, %s, 'EUR', '{}')
             """,
-            (rel, run, hs_code, value),
+            (rel, run, flow_label, hs_code, value),
         )
     conn.commit()
 
@@ -186,6 +189,52 @@ def test_yoy_records_per_month_series_and_top_reporters(empty_op, test_db_url):
     top = detail["top_reporters_in_current_12mo"]
     assert top[0]["reporter"] == "DE"
     assert top[0]["total_kg"] > 0
+
+
+def test_yoy_export_flow_isolated_from_import(empty_op, test_db_url):
+    """flow=2 query (EU→CN exports) reads only flow=2 raw rows, even when
+    flow=1 rows exist in the same DB. Subkind is 'hs_group_yoy_export' to
+    keep export findings separate from import findings."""
+    with psycopg2.connect(test_db_url) as conn:
+        # Pork (HS 0203). Imports trending up; exports trending down.
+        # Imports (flow=1): rising
+        _seed_eurostat_imports(
+            conn, "02031910",
+            _make_24_months(date(2024, 1, 1), [100.0] * 12 + [200.0] * 12),
+            flow=1,
+        )
+        # Exports (flow=2): falling
+        _seed_eurostat_imports(
+            conn, "02031910",
+            _make_24_months(date(2024, 1, 1), [500.0] * 12 + [400.0] * 12),
+            flow=2,
+        )
+
+    # Import-side: should see +100% YoY
+    counts_imp = anomalies.detect_hs_group_yoy(
+        group_names=["Pork (HS 0203)"], yoy_threshold_pct=0.0, flow=1,
+    )
+    assert counts_imp["emitted"] >= 1
+
+    # Export-side: should see -20% YoY
+    counts_exp = anomalies.detect_hs_group_yoy(
+        group_names=["Pork (HS 0203)"], yoy_threshold_pct=0.0, flow=2,
+    )
+    assert counts_exp["emitted"] >= 1
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT subkind, (detail->'totals'->>'yoy_pct')::numeric AS yoy "
+            "FROM findings WHERE detail->'group'->>'name' = 'Pork (HS 0203)' "
+            "ORDER BY subkind"
+        )
+        rows = cur.fetchall()
+
+    by_subkind = {r[0]: float(r[1]) for r in rows}
+    assert "hs_group_yoy" in by_subkind
+    assert "hs_group_yoy_export" in by_subkind
+    assert abs(by_subkind["hs_group_yoy"] - 1.0) < 1e-9          # +100% on imports
+    assert abs(by_subkind["hs_group_yoy_export"] + 0.2) < 1e-9   # -20% on exports
 
 
 def test_yoy_decomposition_volume_vs_price(empty_op, test_db_url):

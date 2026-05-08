@@ -67,6 +67,22 @@ def test_classify_inverse_u_peak():
     assert shape == "inverse_u_peak"
 
 
+def test_classify_dip_recovery():
+    """Wind-turbines-style: positive → negative → positive."""
+    yoys = [0.22, 0.18, 0.10, -0.05, -0.20, -0.27, -0.10, 0.10, 0.30, 0.48, 0.30, 0.17]
+    shape, features = anomalies._classify_trajectory(yoys)
+    assert shape == "dip_recovery", f"got {shape}, features={features}"
+    assert features["smoothed_sign_changes"] == 2
+
+
+def test_classify_failed_recovery():
+    """Negative → positive → negative."""
+    yoys = [-0.20, -0.18, -0.10, 0.05, 0.20, 0.30, 0.10, -0.05, -0.20, -0.30, -0.40, -0.45]
+    shape, features = anomalies._classify_trajectory(yoys)
+    assert shape == "failed_recovery", f"got {shape}, features={features}"
+    assert features["smoothed_sign_changes"] == 2
+
+
 def test_classify_volatile():
     # Multiple sign changes — no clear direction
     yoys = [0.10, -0.08, 0.05, -0.12, 0.08, -0.06, 0.04, -0.09]

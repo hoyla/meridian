@@ -334,7 +334,14 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
    ARRAY['870380%', '870370%', '870360%'], 'seed:lisa_article'),
   ('Pork (HS 0203)',
    'HS 0203 — meat of swine, fresh, chilled or frozen. EU exports to China declined notably in Feb 2026 (Soapbox/Lisa).',
-   ARRAY['0203%'], 'seed:lisa_article');
+   ARRAY['0203%'], 'seed:lisa_article'),
+  -- Added after Tan's May 2026 The Conversation piece on wind turbines —
+  -- isolates finished generating sets from the broader components group
+  -- so 'is China selling more turbines' can be answered without confusion
+  -- with 'is China selling more wind-related metalwork'.
+  ('Wind generating sets only',
+   'HS 850231 — wind-powered electric generating sets. Narrower than "Wind turbine components"; isolates the finished-turbine question from generator parts and steel towers.',
+   ARRAY['850231%'], 'seed:tan_article');
 
 -- Caveats journalists should weigh when reading cross-source findings.
 INSERT INTO caveats (code, summary, detail, applies_to) VALUES

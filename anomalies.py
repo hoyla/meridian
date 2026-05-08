@@ -646,10 +646,11 @@ def _list_hs_groups(group_names: list[str] | None = None) -> list[_HsGroup]:
 
 
 def _hs_group_per_period_totals(
-    patterns: list[str],
+    patterns: list[str], flow: int = 1,
 ) -> list[tuple[date, float, float, int]]:
     """Returns (period, total_eur, total_kg, n_raw_rows) per period for Eurostat
-    imports from CN matching any of the given hs_patterns.
+    rows matching the given hs_patterns + partner='CN' + flow.
+    flow=1: EU imports from China. flow=2: EU exports to China.
 
     Queries eurostat_raw_rows rather than observations because raw_rows preserves
     quantity_kg as a native column. The aggregated `observations.quantity` field
@@ -657,7 +658,7 @@ def _hs_group_per_period_totals(
     means cross-HS kg totals from observations would silently drop the kg of
     rows whose primary unit is something else (pieces, litres, etc.).
 
-    Periods with no matching obs are absent from the result — caller handles gaps.
+    Periods with no matching rows are absent — caller handles gaps.
     """
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -667,19 +668,19 @@ def _hs_group_per_period_totals(
                    SUM(quantity_kg) AS total_kg,
                    COUNT(*) AS n_raw
               FROM eurostat_raw_rows
-             WHERE flow = 1
+             WHERE flow = %s
                AND partner = 'CN'
                AND product_nc LIKE ANY(%s)
           GROUP BY period
           ORDER BY period
             """,
-            (patterns,),
+            (flow, patterns),
         )
         return [(row[0], float(row[1] or 0), float(row[2] or 0), int(row[3]))
                 for row in cur.fetchall()]
 
 
-def _hs_group_top_cn8s(patterns: list[str], start: date, end: date, limit: int = 10) -> list[dict]:
+def _hs_group_top_cn8s(patterns: list[str], start: date, end: date, flow: int = 1, limit: int = 10) -> list[dict]:
     """Top contributing HS-CN8 codes within a group across [start, end]."""
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -690,20 +691,20 @@ def _hs_group_top_cn8s(patterns: list[str], start: date, end: date, limit: int =
                    COUNT(*) AS n_raw
               FROM eurostat_raw_rows
              WHERE period >= %s AND period <= %s
-               AND flow = 1 AND partner = 'CN'
+               AND flow = %s AND partner = 'CN'
                AND product_nc LIKE ANY(%s)
           GROUP BY product_nc
           ORDER BY SUM(value_eur) DESC NULLS LAST
              LIMIT %s
             """,
-            (start, end, patterns, limit),
+            (start, end, flow, patterns, limit),
         )
         return [{"hs_code": r[0], "total_eur": float(r[1] or 0),
                  "total_kg": float(r[2] or 0), "n_raw": int(r[3])}
                 for r in cur.fetchall()]
 
 
-def _hs_group_top_reporters(patterns: list[str], start: date, end: date, limit: int = 10) -> list[dict]:
+def _hs_group_top_reporters(patterns: list[str], start: date, end: date, flow: int = 1, limit: int = 10) -> list[dict]:
     """Top contributing EU reporters within a group across [start, end]."""
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -714,13 +715,13 @@ def _hs_group_top_reporters(patterns: list[str], start: date, end: date, limit: 
                    COUNT(*) AS n_raw
               FROM eurostat_raw_rows
              WHERE period >= %s AND period <= %s
-               AND flow = 1 AND partner = 'CN'
+               AND flow = %s AND partner = 'CN'
                AND product_nc LIKE ANY(%s)
           GROUP BY reporter
           ORDER BY SUM(value_eur) DESC NULLS LAST
              LIMIT %s
             """,
-            (start, end, patterns, limit),
+            (start, end, flow, patterns, limit),
         )
         return [{"reporter": r[0], "total_eur": float(r[1] or 0),
                  "total_kg": float(r[2] or 0), "n_raw": int(r[3])}
@@ -736,16 +737,23 @@ def _months_back(period: date, n: int) -> date:
 def detect_hs_group_yoy(
     group_names: list[str] | None = None,
     yoy_threshold_pct: float = 0.0,
+    flow: int = 1,
 ) -> dict[str, int]:
     """For each (hs_group, period_t) where 24 months of history exist, compute:
-        current_12mo  = sum(value_amount) for periods [t-11 .. t]
-        prior_12mo    = sum(value_amount) for periods [t-23 .. t-12]
+        current_12mo  = sum(value_eur) for periods [t-11 .. t]
+        prior_12mo    = sum(value_eur) for periods [t-23 .. t-12]
         yoy_pct       = (current_12mo - prior_12mo) / abs(prior_12mo)
     Emit a finding when |yoy_pct| >= yoy_threshold_pct. Default 0.0 means emit
     one finding per (group, period) — useful for a 'current state' snapshot.
 
+    `flow`: 1 = EU imports from China (default — the 'is China selling more X
+    to Europe' question); 2 = EU exports to China (the 'is Europe selling more
+    X to China' question, e.g. for the 'EU pork to China declining' angle).
+
     Returns counts: {'emitted', 'skipped_insufficient_history', 'skipped_below_threshold', 'skipped_zero_prior'}.
     """
+    if flow not in (1, 2):
+        raise ValueError(f"flow must be 1 (import) or 2 (export); got {flow}")
     counts = {
         "emitted": 0, "skipped_insufficient_history": 0,
         "skipped_below_threshold": 0, "skipped_zero_prior": 0,
@@ -764,7 +772,7 @@ def detect_hs_group_yoy(
 
     try:
         for group in groups:
-            series = _hs_group_per_period_totals(group.hs_patterns)
+            series = _hs_group_per_period_totals(group.hs_patterns, flow=flow)
             eur_by_period: dict[date, float] = {p: e for p, e, _, _ in series}
             kg_by_period:  dict[date, float] = {p: k for p, _, k, _ in series}
             n_by_period:   dict[date, int]   = {p: n for p, _, _, n in series}
@@ -808,14 +816,15 @@ def detect_hs_group_yoy(
                     counts["skipped_below_threshold"] += 1
                     continue
 
-                top_cn8s = _hs_group_top_cn8s(group.hs_patterns, start_curr, end_curr)
-                top_reporters = _hs_group_top_reporters(group.hs_patterns, start_curr, end_curr)
+                top_cn8s = _hs_group_top_cn8s(group.hs_patterns, start_curr, end_curr, flow=flow)
+                top_reporters = _hs_group_top_reporters(group.hs_patterns, start_curr, end_curr, flow=flow)
                 _insert_hs_group_yoy_finding(
                     analysis_run_id, group, t, start_curr, end_curr,
                     start_prior, end_prior,
                     current_eur, prior_eur, yoy_pct_eur,
                     current_kg,  prior_kg,  yoy_pct_kg,
                     series, top_cn8s, top_reporters, n_by_period,
+                    flow=flow,
                 )
                 counts["emitted"] += 1
 
@@ -854,9 +863,12 @@ def _insert_hs_group_yoy_finding(
     top_cn8s: list[dict],
     top_reporters: list[dict],
     n_obs_by_period: dict[date, int],
+    flow: int = 1,
 ) -> None:
     direction = "up" if yoy_pct_eur > 0 else "down"
     kg_yoy_str = f"{yoy_pct_kg*100:+.1f}%" if yoy_pct_kg is not None else "n/a"
+    flow_label = "EU imports from CN" if flow == 1 else "EU exports to CN"
+    flow_subkind_suffix = "" if flow == 1 else "_export"
     unit_price_curr = (current_eur / current_kg) if current_kg else None
     unit_price_prior = (prior_eur / prior_kg) if prior_kg else None
     unit_price_pct = (
@@ -866,8 +878,8 @@ def _insert_hs_group_yoy_finding(
     )
 
     title = (
-        f"Component trend: {group.name}, rolling 12mo to {end_curr.strftime('%Y-%m')}: "
-        f"€{current_eur/1e9:,.2f}B from CN ({yoy_pct_eur*100:+.1f}% {direction} value, "
+        f"Component trend ({flow_label}): {group.name}, rolling 12mo to {end_curr.strftime('%Y-%m')}: "
+        f"€{current_eur/1e9:,.2f}B ({yoy_pct_eur*100:+.1f}% {direction} value, "
         f"{kg_yoy_str} kg)"
     )
 
@@ -915,9 +927,10 @@ def _insert_hs_group_yoy_finding(
     )
 
     detail = {
-        "method": "hs_group_yoy_v2_with_kg",
+        "method": "hs_group_yoy_v3_with_kg_and_flow",
         "method_query": {
-            "source": "eurostat_raw_rows", "flow": 1, "partner": "CN",
+            "source": "eurostat_raw_rows", "flow": flow, "partner": "CN",
+            "flow_label": flow_label,
             "hs_patterns": group.hs_patterns,
             "rolling_window_months": 12,
         },
@@ -960,6 +973,7 @@ def _insert_hs_group_yoy_finding(
     score = abs(yoy_pct_eur)
 
     import json
+    subkind = f"hs_group_yoy{flow_subkind_suffix}"  # 'hs_group_yoy' for imports, 'hs_group_yoy_export' for exports
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -967,10 +981,10 @@ def _insert_hs_group_yoy_finding(
                 scrape_run_id, kind, subkind, observation_ids, hs_group_ids,
                 score, title, body, detail
             ) VALUES (
-                %s, 'anomaly', 'hs_group_yoy', %s, %s, %s, %s, %s, %s
+                %s, 'anomaly', %s, %s, %s, %s, %s, %s, %s
             )
             """,
-            (analysis_run_id, [], [group.id], score, title,
+            (analysis_run_id, subkind, [], [group.id], score, title,
              "\n".join(body_lines), json.dumps(detail)),
         )
 
@@ -995,6 +1009,8 @@ SHAPE_LABELS = {
     "falling_decelerating":  "falling, decelerating",
     "u_recovery":            "U-shape recovery (was falling, now rising)",
     "inverse_u_peak":        "peak-and-fall (was rising, now falling)",
+    "dip_recovery":          "dip-and-recovery (was rising, dipped, now rising again)",
+    "failed_recovery":       "failed recovery (was falling, briefly rose, now falling again)",
     "volatile":              "volatile (multiple direction changes)",
     "insufficient_data":     "insufficient data to classify",
 }
@@ -1048,6 +1064,30 @@ def _count_sign_changes(signs: list[int]) -> int:
         elif s != 0:
             last_nonzero = s
     return changes
+
+
+def _sign_runs(signs: list[int]) -> list[tuple[int, int, int]]:
+    """Collapse a sign sequence into [(sign, start_idx, end_idx_inclusive), ...].
+    Zero values are absorbed into the surrounding non-zero run; if the series
+    starts with zeros, they're absorbed into the first non-zero run."""
+    n = len(signs)
+    if n == 0:
+        return []
+    # Find first non-zero sign to anchor. If the whole thing is zero, return one zero run.
+    first_nz = next((s for s in signs if s != 0), 0)
+    if first_nz == 0:
+        return [(0, 0, n - 1)]
+    runs: list[tuple[int, int, int]] = []
+    current = first_nz
+    start = 0
+    for i in range(n):
+        s = signs[i]
+        if s != 0 and s != current:
+            runs.append((current, start, i - 1))
+            current = s
+            start = i
+    runs.append((current, start, n - 1))
+    return runs
 
 
 def _classify_trajectory(yoys: list[float]) -> tuple[str, dict]:
@@ -1111,7 +1151,27 @@ def _classify_trajectory(yoys: list[float]) -> tuple[str, dict]:
     if mean_abs < TRAJECTORY_FLAT_MEAN_ABS_YOY and stdev < TRAJECTORY_FLAT_STDEV:
         return "flat", features
 
-    if smoothed_sign_changes >= 2:
+    if smoothed_sign_changes == 2:
+        # Detect dip_recovery (positive → negative → positive) and
+        # failed_recovery (negative → positive → negative) patterns by looking
+        # at the run sequence on the smoothed series. These are common in
+        # post-COVID trade data — a clean shape that 'volatile' was hiding.
+        runs = _sign_runs(smoothed_signs)
+        features["smoothed_runs"] = [
+            {"sign": s, "start_idx": a, "end_idx": b, "length": b - a + 1}
+            for (s, a, b) in runs
+        ]
+        if len(runs) == 3:
+            first_sign, _, _ = runs[0]
+            mid_sign, _, _ = runs[1]
+            last_sign, _, _ = runs[2]
+            if first_sign == last_sign and mid_sign == -first_sign and first_sign != 0:
+                if last_sign > 0:
+                    return "dip_recovery", features
+                return "failed_recovery", features
+        return "volatile", features
+
+    if smoothed_sign_changes >= 3:
         return "volatile", features
 
     if smoothed_sign_changes == 1:
