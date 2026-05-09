@@ -355,6 +355,9 @@ def _section_mirror_gaps(cur) -> _Section:
             (detail->>'gap_eur')::numeric AS gap_eur,
             (detail->>'gap_pct')::numeric AS gap_pct,
             (detail->>'is_aggregate')::boolean AS is_aggregate,
+            detail->'caveat_codes' AS caveat_codes,
+            detail->'transshipment_hub'->>'iso2' AS hub_iso2,
+            detail->'transshipment_hub'->>'notes' AS hub_notes,
             (SELECT to_char(r.period, 'YYYY-MM')
                FROM observations o JOIN releases r ON r.id = o.release_id
               WHERE o.id = f.observation_ids[1]) AS period
@@ -396,7 +399,18 @@ def _section_mirror_gaps(cur) -> _Section:
                 f"- Period: **{r['period']}** | GACC (EUR-converted): {_fmt_eur(r['gacc_eur'])} "
                 f"| Eurostat: {_fmt_eur(r['eurostat_eur'])} | Gap: **{_fmt_pct(r['gap_pct'])}**"
             )
-            lines.append("- *Caveats*: cif_fob, classification_drift, currency_timing")
+            # Caveats now read from the finding's actual caveat_codes list,
+            # so editorial-framing caveats added in Phase 2 (e.g.
+            # `transshipment_hub`) surface correctly.
+            caveats = r['caveat_codes'] or []
+            lines.append(f"- *Caveats*: {', '.join(caveats) if caveats else '—'}")
+            if r['hub_iso2']:
+                # One-line transshipment-hub annotation when the partner is in
+                # the table — the finding body has the longer version.
+                lines.append(
+                    f"- ⚓ **Transshipment hub** ({r['hub_iso2']}): "
+                    f"{r['hub_notes'][:200] if r['hub_notes'] else '—'}"
+                )
             ids = _release_ids_for_observations(cur, list(r['observation_ids'] or []))
             release_ids |= ids
             lines.append(

@@ -61,10 +61,13 @@ DEFAULT_MIRROR_GAP_CAVEATS = [
     "eurostat_stat_procedure_mix",
 ]
 
-# Expected baseline gap from CIF/FOB alone: Eurostat (CIF) typically reports 5-10%
-# higher than GACC (FOB) for the same flow before any other effects. Below this
-# the gap is unremarkable; above is a candidate for editorial attention.
-CIF_FOB_BASELINE_PCT = 0.075
+# Phase 2.2: CIF/FOB baseline now lives in the `cif_fob_baselines` table
+# (lookups.lookup_cif_fob_baseline). This constant is kept as a
+# last-resort fallback only — used if the table is somehow empty (e.g. a
+# fresh DB before seed data has been applied). In normal operation the
+# lookup returns either a per-partner row or the global default seeded
+# from this same value.
+CIF_FOB_BASELINE_PCT_FALLBACK = 0.075
 
 # A 12-month total below this threshold is "low base": a percentage change on
 # such a small denominator can look dramatic but doesn't carry the editorial
@@ -103,6 +106,8 @@ class _MirrorGapResult:
     gap_eur: float                 # eurostat - gacc_eur (positive = EU reports more)
     gap_pct: float                 # gap_eur / max(both)
     excess_over_cif_fob_baseline_pct: float
+    cif_fob_baseline: lookups.CifFobBaseline | None
+    transshipment_hub: lookups.TransshipmentHub | None
     # Aggregate-specific (None for single-country comparisons)
     aggregate_kind: str | None = None
     aggregate_members: list[str] | None = None
@@ -298,7 +303,24 @@ def _compute_one_gap(gr: dict) -> _MirrorGapResult | str:
     gap_eur = float(eurostat_total) - gacc_value_eur
     larger = max(abs(gacc_value_eur), abs(float(eurostat_total)))
     gap_pct = gap_eur / larger if larger else 0.0
-    excess = abs(gap_pct) - CIF_FOB_BASELINE_PCT
+
+    # Phase 2.2: CIF/FOB baseline now comes from the lookup table — per-partner
+    # row if present, else global default. Fallback to the in-code constant
+    # only if the table is somehow empty (which would be a config error).
+    # The lookup applies to single-country partners only; for aggregates we
+    # use the global default (per-partner baselines for blocs aren't a
+    # well-defined concept yet).
+    lookup_partner_iso2 = resolved.iso2 if aggregate_kind is None else None
+    cif_fob = lookups.lookup_cif_fob_baseline(lookup_partner_iso2)
+    baseline_pct = cif_fob.baseline_pct if cif_fob else CIF_FOB_BASELINE_PCT_FALLBACK
+    excess = abs(gap_pct) - baseline_pct
+
+    # Phase 2.1: transshipment hub auto-flag. Aggregates don't have an
+    # iso2; only check single-country partners.
+    transshipment_hub = (
+        lookups.lookup_transshipment_hub(resolved.iso2)
+        if aggregate_kind is None and resolved.iso2 else None
+    )
 
     return _MirrorGapResult(
         period=period,
@@ -319,6 +341,8 @@ def _compute_one_gap(gr: dict) -> _MirrorGapResult | str:
         gap_eur=gap_eur,
         gap_pct=gap_pct,
         excess_over_cif_fob_baseline_pct=excess,
+        cif_fob_baseline=cif_fob,
+        transshipment_hub=transshipment_hub,
         aggregate_kind=aggregate_kind,
         aggregate_members=aggregate_members,
         aggregate_sources=aggregate_sources,
@@ -373,6 +397,13 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
         f"GACC reports €{r.gacc_value_eur:,.0f}, Eurostat reports €{r.eurostat_total_eur:,.0f} "
         f"({r.gap_pct*100:+.1f}%, {direction})"
     )
+    baseline_pct = (
+        r.cif_fob_baseline.baseline_pct if r.cif_fob_baseline else CIF_FOB_BASELINE_PCT_FALLBACK
+    )
+    baseline_scope = (
+        f"per-partner ({r.cif_fob_baseline.partner_iso2})"
+        if r.cif_fob_baseline and r.cif_fob_baseline.partner_iso2 else "global default"
+    )
     body = (
         f"GACC: China's reported {r.gacc_value_raw:,.1f} ({r.gacc_value_currency} ×{r.gacc_unit_scale:,.0f}) "
         f"export to '{r.gacc_partner_label}', converted at the ECB "
@@ -381,9 +412,22 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
         f"Eurostat: imports from CN summed across {r.eurostat_n_hs_codes:,} HS-CN8 "
         f"observations from {eurostat_descriptor} = €{r.eurostat_total_eur:,.0f}.\n\n"
         f"Gap: €{r.gap_eur:,.0f} ({r.gap_pct*100:+.1f}% of larger value). "
-        f"CIF/FOB baseline expects ~{CIF_FOB_BASELINE_PCT*100:.0f}% Eurostat-higher; "
+        f"CIF/FOB baseline ({baseline_scope}) expects ~{baseline_pct*100:.1f}% Eurostat-higher; "
         f"excess over baseline is {r.excess_over_cif_fob_baseline_pct*100:+.1f} percentage points."
     )
+    if r.transshipment_hub is not None:
+        # Phase 2.1: editorial framing for known hubs. The body annotation is
+        # what a journalist sees; the caveat code is what the LLM framing
+        # layer / briefing pack will surface.
+        body += (
+            f"\n\n⚓ TRANSSHIPMENT-HUB CONTEXT: {r.iso2} is a known transshipment "
+            f"hub. Persistent gaps for hub partners primarily reflect routing "
+            f"rather than direct trade: goods Chinese-in-origin may transit "
+            f"through {r.iso2} before being declared by another EU member, or "
+            f"vice versa. The absolute gap level is therefore not the editorial "
+            f"signal — movements relative to {r.iso2}'s own baseline are. "
+            f"See caveat 'transshipment_hub'. Hub note: {r.transshipment_hub.notes or '—'}"
+        )
     if is_aggregate:
         body += (
             f"\n\nThis is an aggregate-to-aggregate comparison. GACC's '{r.gacc_partner_label}' "
@@ -396,9 +440,11 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
     caveat_codes = list(DEFAULT_MIRROR_GAP_CAVEATS)
     if is_aggregate:
         caveat_codes.append("aggregate_composition")
+    if r.transshipment_hub is not None:
+        caveat_codes.append("transshipment_hub")
 
     detail = {
-        "method": "mirror_trade_v1",
+        "method": "mirror_trade_v2_lookup_baselines_and_hubs",
         # Caveat codes — journalists should weigh these when interpreting the gap.
         # Promote to a dedicated findings.caveat_codes column when the schema
         # gets its first migration after the lookups went in.
@@ -434,7 +480,37 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
         "iso2": r.iso2,
         "gap_eur": r.gap_eur,
         "gap_pct": r.gap_pct,
-        "cif_fob_baseline_pct": CIF_FOB_BASELINE_PCT,
+        # Phase 2.2: record exactly which CIF/FOB baseline was used and where
+        # it came from, so a journalist can audit. Falls back to the in-code
+        # constant only when the lookup table is empty (config error).
+        "cif_fob_baseline": (
+            {
+                "baseline_pct": r.cif_fob_baseline.baseline_pct,
+                "scope": ("per-partner" if r.cif_fob_baseline.partner_iso2 else "global"),
+                "partner_iso2": r.cif_fob_baseline.partner_iso2,
+                "source": r.cif_fob_baseline.source,
+                "source_url": r.cif_fob_baseline.source_url,
+                "baseline_id": r.cif_fob_baseline.baseline_id,
+            } if r.cif_fob_baseline else
+            {"baseline_pct": CIF_FOB_BASELINE_PCT_FALLBACK,
+             "scope": "fallback_constant",
+             "source": "in-code fallback (cif_fob_baselines table empty)"}
+        ),
+        # Phase 2.1: record the hub flag with its provenance, so the editorial
+        # context travels with the finding. Null when the partner isn't a hub
+        # or when the comparison is aggregate-level.
+        "transshipment_hub": (
+            {
+                "iso2": r.transshipment_hub.iso2,
+                "notes": r.transshipment_hub.notes,
+                "evidence_url": r.transshipment_hub.evidence_url,
+            } if r.transshipment_hub else None
+        ),
+        # Legacy fields retained for downstream compatibility (used by
+        # existing tests and the briefing pack).
+        "cif_fob_baseline_pct": (
+            r.cif_fob_baseline.baseline_pct if r.cif_fob_baseline else CIF_FOB_BASELINE_PCT_FALLBACK
+        ),
         "excess_over_baseline_pct": r.excess_over_cif_fob_baseline_pct,
     }
     score = abs(r.gap_pct) if r.gap_pct is not None else None

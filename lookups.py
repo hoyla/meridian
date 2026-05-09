@@ -171,3 +171,79 @@ def lookup_fx(currency_from: str, currency_to: str, period: date) -> FxRate | No
         rate_source=row["rate_source"], rate_source_url=row["rate_source_url"],
         rate_id=row["id"],
     )
+
+
+# =============================================================================
+# Phase 2.1 / 2.2 lookups: transshipment hubs + CIF/FOB baselines.
+# =============================================================================
+
+
+@dataclass
+class TransshipmentHub:
+    iso2: str
+    notes: str | None
+    evidence_url: str | None
+
+
+def lookup_transshipment_hub(iso2: str) -> TransshipmentHub | None:
+    """Return the transshipment_hubs row for `iso2` if present, else None.
+    Used by the mirror-trade analyser to auto-attach a `transshipment_hub`
+    caveat when the partner is in the table."""
+    if not iso2:
+        return None
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        cur.execute(
+            "SELECT iso2, notes, evidence_url FROM transshipment_hubs WHERE iso2 = %s",
+            (iso2,),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    return TransshipmentHub(
+        iso2=row["iso2"], notes=row["notes"], evidence_url=row["evidence_url"],
+    )
+
+
+@dataclass
+class CifFobBaseline:
+    baseline_pct: float
+    source: str
+    source_url: str | None
+    partner_iso2: str | None  # None = global default
+    baseline_id: int
+
+
+def lookup_cif_fob_baseline(partner_iso2: str | None) -> CifFobBaseline | None:
+    """Return the CIF/FOB baseline for the given partner_iso2 (or global if
+    no per-partner row). Returns None if neither is configured — caller
+    should treat that as a configuration error and skip the comparison
+    rather than guessing."""
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        # Per-partner first; fall back to global.
+        if partner_iso2:
+            cur.execute(
+                "SELECT id, partner_iso2, baseline_pct, source, source_url "
+                "  FROM cif_fob_baselines WHERE partner_iso2 = %s",
+                (partner_iso2,),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                return _row_to_cif_fob(row)
+        cur.execute(
+            "SELECT id, partner_iso2, baseline_pct, source, source_url "
+            "  FROM cif_fob_baselines WHERE partner_iso2 IS NULL"
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    return _row_to_cif_fob(row)
+
+
+def _row_to_cif_fob(row) -> CifFobBaseline:
+    return CifFobBaseline(
+        baseline_pct=float(row["baseline_pct"]),
+        source=row["source"],
+        source_url=row["source_url"],
+        partner_iso2=row["partner_iso2"],
+        baseline_id=row["id"],
+    )
