@@ -28,6 +28,7 @@ import db
 import eurostat
 import fx
 import parse
+import sheets_export
 
 load_dotenv()
 logging.basicConfig(
@@ -175,6 +176,14 @@ def main() -> None:
     p.add_argument("--analyse",
                    choices=["mirror-trade", "mirror-gap-trends", "hs-group-yoy", "hs-group-trajectory"],
                    help="Run a deterministic anomaly pass over already-ingested data")
+    p.add_argument("--export-sheet", action="store_true",
+                   help="Export findings to a spreadsheet (default: local .xlsx)")
+    p.add_argument("--out-format", choices=["xlsx", "sheets"], default="xlsx",
+                   help="Spreadsheet output format (default: xlsx)")
+    p.add_argument("--out-path", metavar="PATH",
+                   help="Output file path for xlsx export (default: ./exports/findings-{timestamp}.xlsx)")
+    p.add_argument("--spreadsheet-id", metavar="ID",
+                   help="Google Sheets spreadsheet ID (for --out-format sheets)")
     p.add_argument("--hs-group", action="append", metavar="NAME",
                    help="Restrict --analyse hs-group-yoy to specific group name(s); repeat for multiple")
     p.add_argument("--yoy-threshold", type=float, default=0.0, metavar="PCT",
@@ -218,6 +227,15 @@ def main() -> None:
             group_names=args.hs_group, flow=args.flow,
         )
         log.info("HS-group trajectory analysis (flow=%d): %s", args.flow, counts)
+        return
+
+    if args.export_sheet:
+        out = sheets_export.export(
+            out_format=args.out_format,
+            out_path=args.out_path,
+            spreadsheet_id=args.spreadsheet_id,
+        )
+        log.info("Exported to %s", out)
         return
 
     if args.fetch_fx:
