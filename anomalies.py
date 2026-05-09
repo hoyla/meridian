@@ -451,8 +451,11 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
             # Editorially-meaningful values: if any of these move, the finding
             # is a revision and should supersede the prior row. We deliberately
             # exclude observation_ids and string descriptors that change without
-            # the *story* changing.
+            # the *story* changing. `method` is included so an analyser version
+            # bump triggers supersedes even when numbers don't move (e.g. a
+            # caveat-list change).
             value_fields={
+                "method": detail["method"],
                 "gacc_value_eur": round(r.gacc_value_eur, 2),
                 "eurostat_total_eur": round(r.eurostat_total_eur, 2),
                 "gap_eur": round(r.gap_eur, 2),
@@ -520,6 +523,15 @@ def _select_latest_mirror_gap_series(period_filter: date | None) -> list[_GapPoi
     ]
 
 
+LOW_BASELINE_N_THRESHOLD = 6
+"""Below this many baseline points, mirror_gap_zscore findings are flagged
+with a `low_baseline_n` caveat. The mathematical floor (`min_baseline_n`,
+configurable per call) stays low — you can compute *something* with 3 points
+— but the editorial confidence in that z-score is limited until the baseline
+has at least one full default window (6 months) behind it. Phase 1.4 of
+dev_notes/roadmap-2026-05-09.md."""
+
+
 def detect_mirror_gap_trends(
     window_months: int = 6,
     period: date | None = None,
@@ -541,9 +553,14 @@ def detect_mirror_gap_trends(
                 baseline always uses the full prior history available.
         z_threshold: minimum |z| to emit a finding (default 1.5 — generous;
                      tune up as more history accrues).
-        min_baseline_n: skip if baseline has fewer than this many points.
+        min_baseline_n: hard floor — below this, refuse to compute a z-score
+                        at all (default 3, the minimum for a meaningful
+                        stdev). Findings with 3 ≤ n < LOW_BASELINE_N_THRESHOLD
+                        DO emit but carry a `low_baseline_n` caveat so a
+                        journalist knows the confidence is limited.
 
-    Returns counts: {'emitted', 'skipped_insufficient_baseline',
+    Returns counts: {'emitted', 'inserted_new', 'confirmed_existing',
+                     'superseded', 'skipped_insufficient_baseline',
                      'skipped_zero_stdev', 'skipped_below_threshold'}.
     """
     counts = {
@@ -637,8 +654,25 @@ def _insert_zscore_finding(
         f"'currency_timing' caveat is especially relevant here because we use "
         f"the ECB monthly average rate for the period being scored."
     )
+    if len(baseline) < LOW_BASELINE_N_THRESHOLD:
+        body += (
+            f"\n\n⚠ LOW BASELINE-N FLAG: this z-score rests on only "
+            f"{len(baseline)} prior periods (below the "
+            f"{LOW_BASELINE_N_THRESHOLD}-point confidence threshold). The "
+            f"stdev estimate is noisy at this baseline length; the |z| value "
+            f"is mathematically computed but should not be quoted as if it "
+            f"carried the same weight as a full-window baseline. See caveat "
+            f"`low_baseline_n`."
+        )
+    caveat_codes = DEFAULT_MIRROR_GAP_CAVEATS + ["aggregate_composition_drift"]
+    # Phase 1.4: flag low-confidence z-scores rather than dropping them.
+    # The mathematical floor was already enforced upstream (min_baseline_n);
+    # this caveat says "we computed a z-score, but the baseline is short
+    # enough that a journalist should weigh it accordingly."
+    if len(baseline) < LOW_BASELINE_N_THRESHOLD:
+        caveat_codes.append("low_baseline_n")
     detail = {
-        "method": "mirror_gap_zscore_v1",
+        "method": "mirror_gap_zscore_v2_low_baseline_n_caveat",
         "iso2": point.iso2,
         "period": point.period.isoformat(),
         "gap_pct": point.gap_pct,
@@ -651,11 +685,11 @@ def _insert_zscore_finding(
             "first_period": baseline[0].period.isoformat(),
             "last_period": baseline[-1].period.isoformat(),
             "values": [{"period": b.period.isoformat(), "gap_pct": b.gap_pct} for b in baseline],
+            "low_n_threshold": LOW_BASELINE_N_THRESHOLD,
+            "low_n_flag": len(baseline) < LOW_BASELINE_N_THRESHOLD,
         },
         "underlying_mirror_gap_finding_id": point.finding_id,
-        # Caveats inherited; promote to a column when the schema gets its
-        # first migration.
-        "caveat_codes": DEFAULT_MIRROR_GAP_CAVEATS + ["aggregate_composition_drift"],
+        "caveat_codes": caveat_codes,
     }
     score = abs(z)
     period_yyyymm = point.period.strftime("%Y-%m")
@@ -668,8 +702,10 @@ def _insert_zscore_finding(
             subkind="mirror_gap_zscore",
             natural_key=findings_io.nk_mirror_gap_zscore(point.iso2, period_yyyymm),
             # If any of (gap_pct, baseline mean/stdev, z) moves, the finding
-            # has revised — supersede.
+            # has revised — supersede. `method` included so version bumps
+            # propagate even when numbers don't move.
             value_fields={
+                "method": detail["method"],
                 "gap_pct": round(point.gap_pct, 6),
                 "z_score": round(z, 4),
                 "baseline_mean": round(mean, 6),
@@ -1089,7 +1125,9 @@ def _insert_hs_group_yoy_finding(
             # would notice if they shifted. Top-N CN8 / reporter lists and the
             # full monthly_series live in `detail` but aren't part of the
             # signature — they shift constantly without the *story* changing.
+            # `method` included so version bumps propagate.
             value_fields={
+                "method": detail["method"],
                 "yoy_pct": round(yoy_pct_eur, 6) if yoy_pct_eur is not None else None,
                 "current_eur": round(current_eur, 2),
                 "prior_eur": round(prior_eur, 2),
@@ -1584,6 +1622,7 @@ def _insert_trajectory_finding(
             subkind=subkind,
             natural_key=findings_io.nk_hs_group_trajectory(group.id),
             value_fields={
+                "method": detail["method"],
                 "shape": shape,
                 "last_yoy": round(last["yoy_pct"], 6) if last.get("yoy_pct") is not None else None,
                 "last_period": last["period"].isoformat(),

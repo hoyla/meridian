@@ -417,6 +417,42 @@ def test_trend_emits_finding_when_gap_jumps(empty_op_tables, test_db_url):
     assert float(score) == abs(detail["z_score"])
     assert detail["baseline"]["n"] == 6
     assert detail["underlying_mirror_gap_finding_id"] is not None
+    # Phase 1.4: with n=6, the baseline is right at the confidence threshold,
+    # so no low_baseline_n caveat should fire here.
+    assert "low_baseline_n" not in detail["caveat_codes"]
+
+
+def test_trend_attaches_low_baseline_n_caveat_below_threshold(empty_op_tables, test_db_url):
+    """Phase 1.4: with only 4 baseline points (≥ min_baseline_n=3 but
+    < LOW_BASELINE_N_THRESHOLD=6), the z-score finding still emits but
+    must carry the `low_baseline_n` caveat. Editorial honesty over silent
+    drops."""
+    with psycopg2.connect(test_db_url) as conn:
+        # 4 months of low-noise baseline, then a jump.
+        series = [
+            (date(2025, 9, 1), 0.50),
+            (date(2025, 10, 1), 0.51),
+            (date(2025, 11, 1), 0.49),
+            (date(2025, 12, 1), 0.50),
+            (date(2026, 1, 1), 0.80),  # jump
+        ]
+        _seed_mirror_gap_findings(conn, "BE", series)
+
+    counts = anomalies.detect_mirror_gap_trends(
+        window_months=6, z_threshold=1.5, min_baseline_n=3,
+    )
+    assert counts["emitted"] == 1, f"counts={counts}"
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT detail, body FROM findings WHERE subkind='mirror_gap_zscore'"
+        )
+        detail, body = cur.fetchone()
+    assert detail["baseline"]["n"] == 4
+    assert detail["baseline"]["low_n_flag"] is True
+    assert detail["baseline"]["low_n_threshold"] == anomalies.LOW_BASELINE_N_THRESHOLD
+    assert "low_baseline_n" in detail["caveat_codes"]
+    assert "LOW BASELINE-N FLAG" in body
 
 
 def test_trend_silent_when_below_threshold(empty_op_tables, test_db_url):

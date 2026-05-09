@@ -399,5 +399,9 @@ INSERT INTO caveats (code, summary, detail, applies_to) VALUES
   ('low_base_effect',
    'Percentage change rests on a tiny denominator',
    'YoY percentages for HS groups whose prior or current 12-month total is small in absolute terms can look dramatic without being journalistically significant. A "+750%" rise on a €5M base is a €40M absolute move — meaningful for a niche subgroup but not "China shock" headline material. Always interpret a flagged finding alongside its absolute EUR totals before quoting the percentage.',
-   ARRAY['hs_group_yoy', 'hs_group_trajectory']);
+   ARRAY['hs_group_yoy', 'hs_group_trajectory']),
+  ('low_baseline_n',
+   'Z-score baseline is below the confidence threshold',
+   'The z-score for this finding rests on fewer than 6 prior periods (the threshold for one full default rolling window). Stdev estimates are noisy at this baseline length: a z=2.0 from a 4-point baseline does not carry the same weight as a z=2.0 from a 12-point baseline. The |z| value is mathematically correct but the editorial confidence is limited until the partner has accumulated more history. Re-evaluate when the baseline grows past the threshold.',
+   ARRAY['mirror_gap_zscore']);
 
