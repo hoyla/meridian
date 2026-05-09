@@ -109,7 +109,49 @@ def test_unit_scale_parses_known_forms():
     assert anomalies.parse_unit_scale("EUR Billion") == (1e9, "EUR")
     assert anomalies.parse_unit_scale("EUR") == (1.0, "EUR")
     assert anomalies.parse_unit_scale(None) == (1.0, None)
-    assert anomalies.parse_unit_scale("not a unit") == (1.0, None)
+    assert anomalies.parse_unit_scale("") == (1.0, None)
+    # Numeric-only multipliers are still recognised (currency required, but no
+    # scale-word needed).
+    assert anomalies.parse_unit_scale("USD 10000") == (10000.0, "USD")
+
+
+def test_unit_scale_unrecognised_returns_none_not_silent_fallback(caplog):
+    """Phase 1.2: a non-empty unit string we can't parse must signal failure
+    via (None, None), not silently fall back to (1.0, None) which can produce
+    a converted EUR value off by orders of magnitude. Logs at ERROR."""
+    import logging as _logging
+    with caplog.at_level(_logging.ERROR, logger="anomalies"):
+        result = anomalies.parse_unit_scale("CNY 万")  # Chinese-style scale not in regex
+    assert result == (None, None)
+    assert any("Unrecognised unit string" in rec.message for rec in caplog.records)
+    assert any(rec.levelno == _logging.ERROR for rec in caplog.records)
+
+
+def test_mirror_gap_skips_unrecognised_unit(empty_op_tables, test_db_url):
+    """End-to-end: a GACC release with an unrecognised unit string must NOT
+    produce a mirror_gap finding. The skip is tallied under
+    skipped_unrecognised_unit so journalists notice the gap."""
+    period = date(2025, 12, 1)
+    with psycopg2.connect(test_db_url) as conn:
+        gacc_obs_id, _ = _seed_one_pair(conn, period)
+        # Mutate the GACC release's unit to something the parser won't handle.
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE releases SET unit = 'CNY 万' "  # Chinese ten-thousand — not in regex
+                "WHERE source = 'gacc' AND period = %s",
+                (period,),
+            )
+            conn.commit()
+
+    counts = anomalies.detect_mirror_trade_gaps(period=period)
+    assert counts["skipped_unrecognised_unit"] == 1
+    assert counts["emitted"] == 0
+    assert counts["inserted_new"] == 0
+
+    # No mirror_gap finding should have been written.
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM findings WHERE subkind = 'mirror_gap'")
+        assert cur.fetchone()[0] == 0
 
 
 def test_mirror_gap_emits_finding_with_provenance(empty_op_tables, test_db_url):

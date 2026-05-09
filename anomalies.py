@@ -112,15 +112,33 @@ class _MirrorGapResult:
 _UNIT_RE = re.compile(r"^([A-Z]{3})(?:\s+(\d+(?:[.,]\d+)?))?(?:\s+(Thousand|Million|Billion))?\s*$")
 
 
-def parse_unit_scale(unit: str | None) -> tuple[float, str | None]:
+def parse_unit_scale(unit: str | None) -> tuple[float | None, str | None]:
     """Parse a release.unit string like 'CNY 100 Million' into (multiplier, currency).
-    Returns (1.0, None) for missing/unrecognised units."""
+
+    Two distinct "no useful info" return shapes, on purpose:
+    - `(1.0, None)` — the unit field is *missing* (None or empty). The
+      caller can safely treat the value as a raw, un-scaled amount.
+    - `(None, None)` — a unit string was provided but did not match any
+      recognised form. The caller MUST treat this as a skip and emit an
+      ERROR. Silently applying multiplier 1.0 here would produce a
+      converted value off by potentially orders of magnitude (e.g. a
+      release stating "USD 10,000" would be read as 1× when the real
+      scale was 10⁴), which is a bug-class error rather than a hedge.
+    Phase 1.2 of dev_notes/roadmap-2026-05-09.md.
+    """
     if not unit:
         return 1.0, None
     m = _UNIT_RE.match(unit.strip())
     if not m:
-        log.warning("Unrecognised unit string %r — assuming raw amount", unit)
-        return 1.0, None
+        log.error(
+            "Unrecognised unit string %r — skipping row. Silently applying "
+            "multiplier 1.0 here would risk an order-of-magnitude error in "
+            "the converted EUR value, so we refuse rather than guess. "
+            "Either extend _UNIT_RE to handle this form or correct the "
+            "release's unit field.",
+            unit,
+        )
+        return None, None
     currency, magnitude_str, scale_word = m.groups()
     multiplier = 1.0
     if magnitude_str:
@@ -156,6 +174,7 @@ def detect_mirror_trade_gaps(period: date | None = None) -> dict[str, int]:
         "skipped_aggregate_no_members": 0,
         "skipped_aggregate_no_eurostat_counterpart": 0,
         "skipped_unmapped": 0,
+        "skipped_unrecognised_unit": 0,
         "skipped_no_value": 0,
     }
 
@@ -265,6 +284,10 @@ def _compute_one_gap(gr: dict) -> _MirrorGapResult | str:
         return "skipped_no_eurostat"
 
     unit_scale, unit_currency = parse_unit_scale(gr["unit"])
+    if unit_scale is None:
+        # Unrecognised unit format — refuse to compute a possibly off-by-10⁴
+        # converted EUR value. parse_unit_scale already logged ERROR.
+        return "skipped_unrecognised_unit"
     currency_for_fx = unit_currency or gr["value_currency"]
     fx = lookups.lookup_fx(currency_for_fx, "EUR", period)
     if fx is None:
