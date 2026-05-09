@@ -448,7 +448,15 @@ INSERT INTO caveats (code, summary, detail, applies_to) VALUES
   ('multi_partner_sum',
    'Eurostat side sums across multiple partner_country codes (e.g. CN + HK)',
    'The EU import side of this finding sums across multiple Eurostat partner_country codes — typically CN + HK to capture Hong-Kong-routed Chinese trade (~15% of China''s exports). The aggregate view is more inclusive of de-facto Chinese trade than a CN-only view, but is not directly comparable to single-partner findings. If you compare findings emitted with different partner lists, you are comparing different methodological choices, not different data realities. detail.eurostat.partners_summed records the exact list used.',
-   ARRAY['mirror_gap']);
+   ARRAY['mirror_gap']),
+  ('partial_window',
+   'YoY computed on a 24-month window with 1 missing month',
+   'This hs_group_yoy finding rests on a 24-month window where 1 month is missing from Eurostat (most commonly the most-recent month, which lags publication by 6-8 weeks). The current/prior totals sum what was available; the YoY percentage is computed against partial-window denominators. detail.totals.missing_months_current and missing_months_prior list which months were absent. Re-check the finding once the missing month has been ingested.',
+   ARRAY['hs_group_yoy', 'hs_group_yoy_export']),
+  ('cn8_revision',
+   'YoY window spans a Eurostat CN8 nomenclature revision boundary',
+   'Eurostat revises the Combined Nomenclature (CN8) annually, effective each January. When a 24-month YoY window spans a calendar-year boundary (which is true for most of them) the LIKE patterns this analyser uses may capture a subtly different commodity scope pre- and post-revision. Most revisions are minor — a code split, a new sub-heading, a description change — but for stories that rest on a precise YoY figure for a specific HS-CN8 code, verify the code definition didn''t change at the year boundary. A full concordance table is roadmap Phase 4 work; this caveat is the cheap-honesty interim flag.',
+   ARRAY['hs_group_yoy', 'hs_group_yoy_export']);
 
 -- Phase 2.1: known transshipment hubs. Each row should carry an evidence_url
 -- documenting the editorial basis. These are starting points — journalists

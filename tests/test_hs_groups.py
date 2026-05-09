@@ -108,7 +108,9 @@ def test_yoy_emits_when_growth_above_threshold(empty_op, test_db_url):
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT title, score, detail FROM findings "
-            "WHERE subkind='hs_group_yoy' ORDER BY score DESC LIMIT 1"
+            "WHERE subkind='hs_group_yoy' "
+            "  AND (detail->'totals'->>'partial_window')::boolean = false "
+            "ORDER BY score DESC LIMIT 1"
         )
         title, score, detail = cur.fetchone()
 
@@ -173,7 +175,9 @@ def test_yoy_records_per_month_series_and_top_reporters(empty_op, test_db_url):
     )
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT detail FROM findings WHERE subkind='hs_group_yoy' ORDER BY score DESC LIMIT 1"
+            "SELECT detail FROM findings WHERE subkind='hs_group_yoy' "
+            "  AND (detail->'totals'->>'partial_window')::boolean = false "
+            "ORDER BY score DESC LIMIT 1"
         )
         detail = cur.fetchone()[0]
 
@@ -303,6 +307,7 @@ def test_yoy_decomposition_volume_vs_price(empty_op, test_db_url):
         cur.execute(
             "SELECT detail FROM findings WHERE subkind='hs_group_yoy' "
             "AND detail->'group'->>'name' = 'EV batteries (Li-ion)' "
+            "  AND (detail->'totals'->>'partial_window')::boolean = false "
             "ORDER BY score DESC LIMIT 1"
         )
         detail = cur.fetchone()[0]
@@ -363,6 +368,97 @@ def test_yoy_low_base_threshold_is_configurable(empty_op, test_db_url):
     assert detail["totals"]["low_base"] is True
     assert detail["totals"]["low_base_threshold_eur"] == 100_000_000.0
     assert "low_base_effect" in detail["caveat_codes"]
+
+
+def test_yoy_partial_window_caveat_when_one_month_missing(empty_op, test_db_url):
+    """Phase 2.7: when the 24-month window has 1 missing month, the
+    finding emits with a `partial_window` caveat and records which
+    month is missing in detail.totals.missing_months_*."""
+    with psycopg2.connect(test_db_url) as conn:
+        # 23 months, NOT 24 — the most-recent (anchor) month is missing,
+        # which is the realistic case where Eurostat hasn't published yet.
+        # We'll use anchor t such that exactly one month from the window
+        # is absent.
+        full_24 = _make_24_months(date(2024, 1, 1), [100.0] * 12 + [150.0] * 12)
+        # Drop the 24th period entirely.
+        partial = full_24[:-1]  # 23 months
+        _seed_eurostat_imports(conn, "85076010", partial)
+
+    counts = anomalies.detect_hs_group_yoy(
+        group_names=["EV batteries (Li-ion)"], yoy_threshold_pct=0.0,
+    )
+    # Anchor t = the missing 24th month (Dec 2025): all 12 prior months
+    # present, all but the last current month present → exactly 1 missing.
+    assert counts["emitted"] >= 1, f"counts={counts}"
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT detail FROM findings WHERE subkind='hs_group_yoy' "
+            "  AND detail->'group'->>'name' = 'EV batteries (Li-ion)' "
+            "  AND (detail->'totals'->>'partial_window')::boolean = true "
+            "ORDER BY score DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+        assert row is not None, "expected at least one partial_window finding"
+        detail = row[0]
+    assert detail["totals"]["partial_window"] is True
+    # 1 month missing from current; 0 from prior in this fixture.
+    total_missing = (
+        len(detail["totals"]["missing_months_current"]) +
+        len(detail["totals"]["missing_months_prior"])
+    )
+    assert total_missing == 1
+    assert "partial_window" in detail["caveat_codes"]
+
+
+def test_yoy_skips_window_with_two_missing_months(empty_op, test_db_url):
+    """Phase 2.7: when 2+ months are missing from the 24-month window, the
+    analyser still skips. The 1-month tolerance is deliberately narrow."""
+    with psycopg2.connect(test_db_url) as conn:
+        full_24 = _make_24_months(date(2024, 1, 1), [100.0] * 12 + [150.0] * 12)
+        # Drop the last 2 months.
+        partial = full_24[:-2]  # 22 months
+        _seed_eurostat_imports(conn, "85076010", partial)
+
+    counts = anomalies.detect_hs_group_yoy(
+        group_names=["EV batteries (Li-ion)"], yoy_threshold_pct=0.0,
+    )
+    # No findings should have partial_window=true with 2 missing.
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM findings WHERE subkind='hs_group_yoy' "
+            "  AND detail->'group'->>'name' = 'EV batteries (Li-ion)' "
+            "  AND (detail->'totals'->>'partial_window')::boolean = true"
+        )
+        partial_count = cur.fetchone()[0]
+    # And the skip count went up (per anchor where 2+ months are missing).
+    assert counts["skipped_insufficient_history"] >= 1
+    # No partial_window emitted.
+    assert partial_count == 0
+
+
+def test_yoy_attaches_cn8_revision_caveat_for_cross_year_window(empty_op, test_db_url):
+    """Phase 2.8: any 24-month window spanning a calendar-year boundary
+    gets a `cn8_revision` caveat. That's most windows in practice."""
+    with psycopg2.connect(test_db_url) as conn:
+        # Window from Jan 2024 (start_prior) to Dec 2025 (end_curr) —
+        # spans 2024→2025 boundary. Expect cn8_revision caveat.
+        _seed_eurostat_imports(
+            conn, "85076010",
+            _make_24_months(date(2024, 1, 1), [100.0] * 24),
+        )
+
+    anomalies.detect_hs_group_yoy(
+        group_names=["EV batteries (Li-ion)"], yoy_threshold_pct=0.0,
+    )
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT detail FROM findings WHERE subkind='hs_group_yoy' "
+            "  AND detail->'group'->>'name' = 'EV batteries (Li-ion)' "
+            "  AND (detail->'totals'->>'partial_window')::boolean = false "
+            "  ORDER BY score DESC LIMIT 1"
+        )
+        detail = cur.fetchone()[0]
+    assert "cn8_revision" in detail["caveat_codes"]
 
 
 def test_yoy_decomposition_suppressed_when_kg_coverage_low(empty_op, test_db_url):

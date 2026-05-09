@@ -1120,26 +1120,38 @@ def detect_hs_group_yoy(
                 start_prior = _months_back(t, 23)
                 end_prior   = _months_back(t, 12)
 
-                # All 24 months must be present in the data for a clean window.
+                # Phase 2.7: allow up to 1 missing month per window. The
+                # most-recent Eurostat month often lags publication by 6-8
+                # weeks; if we required all 24 months strictly we'd skip
+                # every "close to current" window. Compromise: tolerate 1
+                # gap, sum what's there, and tag the finding with a
+                # `partial_window` caveat. 2+ gaps still skip.
                 want = []
                 p = start_prior
                 while p <= end_curr:
                     want.append(p)
                     p = _months_back(p, -1)
-                if not all(p in eur_by_period for p in want):
+                want_curr = [p for p in want if start_curr <= p <= end_curr]
+                want_prior = [p for p in want if start_prior <= p <= end_prior]
+                missing_curr = [p for p in want_curr if p not in eur_by_period]
+                missing_prior = [p for p in want_prior if p not in eur_by_period]
+                missing_total = len(missing_curr) + len(missing_prior)
+                if missing_total > 1:
                     counts["skipped_insufficient_history"] += 1
                     continue
+                partial_window = missing_total == 1
 
-                current_eur = sum(eur_by_period[p] for p in want if start_curr <= p <= end_curr)
-                prior_eur   = sum(eur_by_period[p] for p in want if start_prior <= p <= end_prior)
-                current_kg  = sum(kg_by_period[p]  for p in want if start_curr <= p <= end_curr)
-                prior_kg    = sum(kg_by_period[p]  for p in want if start_prior <= p <= end_prior)
+                current_eur = sum(eur_by_period[p] for p in want_curr if p in eur_by_period)
+                prior_eur   = sum(eur_by_period[p] for p in want_prior if p in eur_by_period)
+                current_kg  = sum(kg_by_period[p]  for p in want_curr if p in kg_by_period)
+                prior_kg    = sum(kg_by_period[p]  for p in want_prior if p in kg_by_period)
                 # kg coverage over the current rolling window: fraction of
                 # value_eur backed by an actual kg measurement. Below the
                 # threshold (default 80%) the unit-price decomposition is
                 # suppressed downstream — see _insert_hs_group_yoy_finding.
                 current_eur_with_kg = sum(
-                    eur_with_kg_by_period[p] for p in want if start_curr <= p <= end_curr
+                    eur_with_kg_by_period[p] for p in want_curr
+                    if p in eur_with_kg_by_period
                 )
                 kg_coverage_pct = (current_eur_with_kg / current_eur) if current_eur else 0.0
 
@@ -1170,6 +1182,9 @@ def detect_hs_group_yoy(
                     kg_coverage_pct=kg_coverage_pct,
                     flow=flow, low_base=low_base,
                     low_base_threshold_eur=low_base_threshold_eur,
+                    partial_window=partial_window,
+                    missing_curr=missing_curr,
+                    missing_prior=missing_prior,
                 )
                 _tally(counts, action)
 
@@ -1218,6 +1233,9 @@ def _insert_hs_group_yoy_finding(
     flow: int = 1,
     low_base: bool = False,
     low_base_threshold_eur: float = LOW_BASE_THRESHOLD_EUR,
+    partial_window: bool = False,
+    missing_curr: list[date] | None = None,
+    missing_prior: list[date] | None = None,
 ) -> findings_io.EmitAction:
     direction = "up" if yoy_pct_eur > 0 else "down"
     kg_yoy_str = f"{yoy_pct_kg*100:+.1f}%" if yoy_pct_kg is not None else "n/a"
@@ -1322,9 +1340,35 @@ def _insert_hs_group_yoy_finding(
         caveat_codes.append("low_base_effect")
     if decomposition_suppressed:
         caveat_codes.append("low_kg_coverage")
+    if partial_window:
+        # Phase 2.7: window has 1 missing month. Sums are incomplete; YoY
+        # comparison is on partial data. Editorially we keep the finding
+        # rather than dropping signal, but a journalist quoting the % must
+        # weigh the partial-window caveat.
+        caveat_codes.append("partial_window")
+        body_lines.append("")
+        missing_strs = ", ".join(
+            d.strftime("%Y-%m") for d in (missing_curr or []) + (missing_prior or [])
+        )
+        body_lines.append(
+            f"⚠ PARTIAL WINDOW: 1 month is missing from this 24-month window "
+            f"({missing_strs}). The current/prior totals sum what's there; "
+            f"the YoY comparison is therefore on partial data. The most-recent "
+            f"Eurostat month often lags publication by 6-8 weeks — re-check the "
+            f"finding once that month has been ingested. See caveat 'partial_window'."
+        )
+
+    # Phase 2.8: any 24-month window spanning a calendar-year boundary
+    # crosses at least one Eurostat CN8 nomenclature revision (annual,
+    # each January). Pattern-matching with our LIKE patterns may capture
+    # subtly different commodity scopes pre- vs. post-revision. We add
+    # the caveat as a blanket flag rather than building a full
+    # concordance table — concordance work is parked in Phase 4.
+    if start_prior.year != end_curr.year:
+        caveat_codes.append("cn8_revision")
 
     detail = {
-        "method": "hs_group_yoy_v5_kg_coverage_gating",
+        "method": "hs_group_yoy_v6_partial_window_and_cn8_revision_caveats",
         "method_query": {
             "source": "eurostat_raw_rows", "flow": flow, "partner": "CN",
             "flow_label": flow_label,
@@ -1356,6 +1400,12 @@ def _insert_hs_group_yoy_finding(
             "decomposition_suppressed": decomposition_suppressed,
             "low_base": low_base,
             "low_base_threshold_eur": low_base_threshold_eur,
+            # Phase 2.7
+            "partial_window": partial_window,
+            "missing_months_current": [d.isoformat() for d in (missing_curr or [])],
+            "missing_months_prior": [d.isoformat() for d in (missing_prior or [])],
+            "n_months_used_current": 12 - len(missing_curr or []),
+            "n_months_used_prior": 12 - len(missing_prior or []),
         },
         "monthly_series": [
             {"period": p.isoformat(), "value_eur": e, "quantity_kg": k,
