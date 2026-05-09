@@ -9,3 +9,7 @@ venv/
 .DS_Store
 *.egg-info/
 .claude/
+
+# Generated spreadsheet exports — regenerated per run, not tracked.
+exports/
+
