@@ -317,6 +317,54 @@ def test_yoy_decomposition_volume_vs_price(empty_op, test_db_url):
     assert detail["totals"]["decomposition_suppressed"] is False
 
 
+def test_yoy_low_base_threshold_is_configurable(empty_op, test_db_url):
+    """Phase 1.6: a group with €60M rolling totals should NOT be flagged
+    low-base under the default €50M threshold, but SHOULD be flagged when
+    the threshold is bumped to €100M. The threshold itself is recorded in
+    the finding's detail for auditability."""
+    with psycopg2.connect(test_db_url) as conn:
+        # 24 months × €5M each → both windows = €60M. Above €50M default,
+        # below a €100M caller-provided threshold.
+        _seed_eurostat_imports(
+            conn, "85076010",
+            _make_24_months(date(2024, 1, 1), [5_000_000.0] * 24),
+        )
+
+    # Default threshold: not flagged.
+    counts_default = anomalies.detect_hs_group_yoy(
+        group_names=["EV batteries (Li-ion)"], yoy_threshold_pct=0.0,
+    )
+    assert counts_default["emitted"] >= 1
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT detail FROM findings WHERE subkind='hs_group_yoy' "
+            "AND detail->'group'->>'name' = 'EV batteries (Li-ion)' "
+            "AND superseded_at IS NULL ORDER BY score DESC LIMIT 1"
+        )
+        detail = cur.fetchone()[0]
+    assert detail["totals"]["low_base"] is False
+    assert detail["totals"]["low_base_threshold_eur"] == anomalies.LOW_BASE_THRESHOLD_EUR
+
+    # Bumped threshold: now flagged. Re-running with a different threshold
+    # supersedes the prior finding (low_base bool changes → value_signature
+    # changes → supersede).
+    counts_strict = anomalies.detect_hs_group_yoy(
+        group_names=["EV batteries (Li-ion)"], yoy_threshold_pct=0.0,
+        low_base_threshold_eur=100_000_000.0,
+    )
+    assert counts_strict["superseded"] >= 1
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT detail FROM findings WHERE subkind='hs_group_yoy' "
+            "AND detail->'group'->>'name' = 'EV batteries (Li-ion)' "
+            "AND superseded_at IS NULL ORDER BY score DESC LIMIT 1"
+        )
+        detail = cur.fetchone()[0]
+    assert detail["totals"]["low_base"] is True
+    assert detail["totals"]["low_base_threshold_eur"] == 100_000_000.0
+    assert "low_base_effect" in detail["caveat_codes"]
+
+
 def test_yoy_decomposition_suppressed_when_kg_coverage_low(empty_op, test_db_url):
     """Phase 1.5: when most of the value_eur in a group is backed by rows
     with no kg measurement (pieces-, litres-, units-denominated HS codes),

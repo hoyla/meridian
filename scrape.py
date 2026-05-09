@@ -200,6 +200,12 @@ def main() -> None:
                    help="Minimum |YoY %% as fraction| to emit hs-group-yoy findings (default 0.0 = always)")
     p.add_argument("--flow", type=int, choices=[1, 2], default=1, metavar="N",
                    help="Eurostat flow direction for hs-group-yoy: 1=EU imports from CN (default), 2=EU exports to CN")
+    p.add_argument("--low-base-threshold", type=float, metavar="EUR",
+                   default=anomalies.LOW_BASE_THRESHOLD_EUR,
+                   help=(f"Per-12mo-window EUR threshold below which an hs-group-yoy or "
+                         f"hs-group-trajectory window is flagged low-base. Default: "
+                         f"€{anomalies.LOW_BASE_THRESHOLD_EUR:,.0f}. Lower for niche-commodity "
+                         f"investigations; raise for macro-only analyses."))
     p.add_argument("--analyse-period", type=_parse_period, metavar="YYYY-MM",
                    help="Restrict --analyse to a single period (default: all)")
     p.add_argument("--trend-window", type=int, default=6, metavar="N",
@@ -228,6 +234,7 @@ def main() -> None:
             group_names=args.hs_group,
             yoy_threshold_pct=args.yoy_threshold,
             flow=args.flow,
+            low_base_threshold_eur=args.low_base_threshold,
         )
         log.info("HS-group YoY analysis (flow=%d): %s", args.flow, counts)
         return
@@ -235,6 +242,7 @@ def main() -> None:
     if args.analyse == "hs-group-trajectory":
         counts = anomalies.detect_hs_group_trajectories(
             group_names=args.hs_group, flow=args.flow,
+            low_base_threshold_eur=args.low_base_threshold,
         )
         log.info("HS-group trajectory analysis (flow=%d): %s", args.flow, counts)
         return

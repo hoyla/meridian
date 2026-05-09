@@ -1448,6 +1448,7 @@ def _classify_trajectory(yoys: list[float]) -> tuple[str, dict]:
 def detect_hs_group_trajectories(
     group_names: list[str] | None = None,
     flow: int = 1,
+    low_base_threshold_eur: float = LOW_BASE_THRESHOLD_EUR,
 ) -> dict[str, int]:
     """For each hs_group, classify the rolling-12mo-EUR YoY series across all
     available windows into a trajectory shape. Reads the matching hs_group_yoy
@@ -1458,6 +1459,12 @@ def detect_hs_group_trajectories(
     `flow`: 1 = imports (CN→EU); 2 = exports (EU→CN). The two are analysed
     separately and emit different subkinds ('hs_group_trajectory' vs
     'hs_group_trajectory_export') so their series can't accidentally mix.
+
+    `low_base_threshold_eur`: per-window EUR threshold below which a YoY
+    window counts as "low-base" for the low_base_majority feature. Defaults
+    to LOW_BASE_THRESHOLD_EUR (€50M); pass a smaller value for niche-
+    commodity investigations or a larger one for macro-only analysis.
+    Phase 1.6 of dev_notes/roadmap-2026-05-09.md.
 
     Returns counts: {'emitted', 'skipped_insufficient_data', 'skipped_no_findings'}.
     """
@@ -1491,9 +1498,9 @@ def detect_hs_group_trajectories(
             if shape == "insufficient_data":
                 counts["skipped_insufficient_data"] += 1
                 continue
-            n_low_base = sum(1 for s in series if s["current_eur"] < LOW_BASE_THRESHOLD_EUR)
+            n_low_base = sum(1 for s in series if s["current_eur"] < low_base_threshold_eur)
             features["n_low_base_windows"] = n_low_base
-            features["low_base_threshold_eur"] = LOW_BASE_THRESHOLD_EUR
+            features["low_base_threshold_eur"] = low_base_threshold_eur
             features["low_base_majority"] = (n_low_base / len(series)) >= TRAJECTORY_LOW_BASE_FRACTION
             action = _insert_trajectory_finding(analysis_run_id, group, series, shape, features, flow=flow)
             _tally(counts, action)
