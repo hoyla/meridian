@@ -444,6 +444,10 @@ INSERT INTO caveats (code, summary, detail, applies_to) VALUES
   ('transshipment_hub',
    'Partner is a known transshipment hub — gap may reflect routing not direct trade',
    'The partner country in this mirror_gap finding is a known transshipment hub (Rotterdam for NL, Antwerp for BE, port-based re-export economies for HK/SG/AE, Pacific gateway for MX). Goods reported by China as exported to a third country may transit through the hub before being declared by Eurostat as imported from China by a different EU member, and vice versa. Persistent large gaps for hub partners are therefore primarily a routing artefact — distinct from CIF/FOB baseline (cif_fob caveat) and from sudden gap movements (mirror_gap_zscore). Editorial weight should be on movements relative to the hub''s own baseline, not on the absolute level.',
+   ARRAY['mirror_gap']),
+  ('multi_partner_sum',
+   'Eurostat side sums across multiple partner_country codes (e.g. CN + HK)',
+   'The EU import side of this finding sums across multiple Eurostat partner_country codes — typically CN + HK to capture Hong-Kong-routed Chinese trade (~15% of China''s exports). The aggregate view is more inclusive of de-facto Chinese trade than a CN-only view, but is not directly comparable to single-partner findings. If you compare findings emitted with different partner lists, you are comparing different methodological choices, not different data realities. detail.eurostat.partners_summed records the exact list used.',
    ARRAY['mirror_gap']);
 
 -- Phase 2.1: known transshipment hubs. Each row should carry an evidence_url

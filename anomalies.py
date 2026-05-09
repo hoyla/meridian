@@ -108,6 +108,7 @@ class _MirrorGapResult:
     excess_over_cif_fob_baseline_pct: float
     cif_fob_baseline: lookups.CifFobBaseline | None
     transshipment_hub: lookups.TransshipmentHub | None
+    eurostat_partners: list[str]   # Phase 2.3 — partners summed on the EU import side; ['CN'] = baseline
     # Aggregate-specific (None for single-country comparisons)
     aggregate_kind: str | None = None
     aggregate_members: list[str] | None = None
@@ -157,7 +158,10 @@ def parse_unit_scale(unit: str | None) -> tuple[float | None, str | None]:
     return multiplier, currency
 
 
-def detect_mirror_trade_gaps(period: date | None = None) -> dict[str, int]:
+def detect_mirror_trade_gaps(
+    period: date | None = None,
+    eurostat_partners: list[str] | None = None,
+) -> dict[str, int]:
     """Compare GACC China-export-to-X to Eurostat X-import-from-China for each
     overlapping (period, partner) pair. Each comparison emits a findings row of
     kind='anomaly', subkind='mirror_gap'.
@@ -165,10 +169,18 @@ def detect_mirror_trade_gaps(period: date | None = None) -> dict[str, int]:
     Args:
         period: if specified, only analyse that period; otherwise all periods
                 that have GACC data.
+        eurostat_partners: list of Eurostat partner_country codes to sum over
+                on the EU import side. Default `['CN']` (just direct China
+                trade). Pass `['CN', 'HK']` to also capture HK-routed trade,
+                or `['CN', 'HK', 'MO']` to include Macau. When more than one
+                partner is used, findings carry a `multi_partner_sum`
+                caveat. Phase 2.3 of dev_notes/roadmap-2026-05-09.md.
 
     Returns counts: {'emitted', 'skipped_no_eurostat', 'skipped_no_fx',
                      'skipped_aggregate', 'skipped_unmapped', 'skipped_no_value'}.
     """
+    if eurostat_partners is None:
+        eurostat_partners = ["CN"]
     counts = {
         "emitted": 0,
         "inserted_new": 0,
@@ -195,7 +207,7 @@ def detect_mirror_trade_gaps(period: date | None = None) -> dict[str, int]:
     try:
         gacc_rows = _select_gacc_export_rows(period)
         for gr in gacc_rows:
-            result = _compute_one_gap(gr)
+            result = _compute_one_gap(gr, eurostat_partners=eurostat_partners)
             if isinstance(result, str):
                 counts[result] += 1
                 continue
@@ -248,8 +260,13 @@ def _select_gacc_export_rows(period: date | None) -> list[dict]:
         return [dict(r) for r in cur.fetchall()]
 
 
-def _compute_one_gap(gr: dict) -> _MirrorGapResult | str:
+def _compute_one_gap(
+    gr: dict,
+    eurostat_partners: list[str] | None = None,
+) -> _MirrorGapResult | str:
     """Returns the result, OR a sentinel string naming the skip reason for counts."""
+    if eurostat_partners is None:
+        eurostat_partners = ["CN"]
     if gr["value_amount"] is None or float(gr["value_amount"]) == 0:
         return "skipped_no_value"
 
@@ -279,10 +296,14 @@ def _compute_one_gap(gr: dict) -> _MirrorGapResult | str:
         aggregate_members = membership.members_iso2
         aggregate_kind = membership.aggregate_kind
         aggregate_sources = membership.sources
-        eurostat_total, eurostat_ids, n_hs = _eurostat_aggregate_for_members(period, aggregate_members)
+        eurostat_total, eurostat_ids, n_hs = _eurostat_aggregate_for_members(
+            period, aggregate_members, partners=eurostat_partners,
+        )
         result_iso2 = f"BLOC:{membership.aggregate_kind}"
     else:
-        eurostat_total, eurostat_ids, n_hs = _eurostat_aggregate_for(period, resolved.iso2)
+        eurostat_total, eurostat_ids, n_hs = _eurostat_aggregate_for(
+            period, resolved.iso2, partners=eurostat_partners,
+        )
         result_iso2 = resolved.iso2
 
     if eurostat_total is None:
@@ -343,23 +364,36 @@ def _compute_one_gap(gr: dict) -> _MirrorGapResult | str:
         excess_over_cif_fob_baseline_pct=excess,
         cif_fob_baseline=cif_fob,
         transshipment_hub=transshipment_hub,
+        eurostat_partners=list(eurostat_partners),
         aggregate_kind=aggregate_kind,
         aggregate_members=aggregate_members,
         aggregate_sources=aggregate_sources,
     )
 
 
-def _eurostat_aggregate_for(period: date, iso2: str) -> tuple[float | None, list[int], int]:
-    return _eurostat_aggregate_for_members(period, [iso2])
+def _eurostat_aggregate_for(
+    period: date, iso2: str, partners: list[str] | None = None,
+) -> tuple[float | None, list[int], int]:
+    return _eurostat_aggregate_for_members(period, [iso2], partners=partners)
 
 
 def _eurostat_aggregate_for_members(
-    period: date, member_iso2s: list[str]
+    period: date, member_iso2s: list[str],
+    partners: list[str] | None = None,
 ) -> tuple[float | None, list[int], int]:
-    """Sum Eurostat imports from CN across the given list of EU member ISO-2 codes
-    for the given period. Returns (total_eur, obs_ids, n_obs)."""
+    """Sum Eurostat imports from `partners` (default ['CN']) across the given
+    list of EU member ISO-2 codes for the given period.
+
+    Phase 2.3: when `partners` has more than one entry (e.g. ['CN', 'HK']),
+    we sum across them — this captures HK-routed Chinese trade that
+    Eurostat reports under partner=HK rather than CN. Caller is responsible
+    for attaching the `multi_partner_sum` caveat.
+
+    Returns (total_eur, obs_ids, n_obs)."""
     if not member_iso2s:
         return None, [], 0
+    if partners is None:
+        partners = ["CN"]
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -373,9 +407,9 @@ def _eurostat_aggregate_for_members(
                AND r.period = %s
                AND o.flow = 'import'
                AND o.reporter_country = ANY(%s)
-               AND o.partner_country = 'CN'
+               AND o.partner_country = ANY(%s)
             """,
-            (period, member_iso2s),
+            (period, member_iso2s, partners),
         )
         total, ids, n = cur.fetchone()
     if n == 0:
@@ -442,9 +476,26 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
         caveat_codes.append("aggregate_composition")
     if r.transshipment_hub is not None:
         caveat_codes.append("transshipment_hub")
+    if len(r.eurostat_partners) > 1:
+        # Phase 2.3: when the analyser sums across CN+HK (or +MO), the
+        # comparison no longer maps cleanly to "China's exports vs EU's
+        # imports from China" — it's "China's exports vs EU's imports
+        # from China-or-its-routing-hubs". The number is more inclusive
+        # (catches HK-routed trade); the caveat surfaces the methodological
+        # change so a journalist doesn't compare it directly with single-
+        # partner runs.
+        caveat_codes.append("multi_partner_sum")
+        body += (
+            f"\n\nMulti-partner Eurostat sum: includes "
+            f"{', '.join(r.eurostat_partners)} on the import side. The "
+            f"single-partner ('CN' only) figure misses ~15% of China's trade "
+            f"that routes via Hong Kong, so this aggregated view is more "
+            f"inclusive — but is not directly comparable to single-partner "
+            f"findings. See caveat 'multi_partner_sum'."
+        )
 
     detail = {
-        "method": "mirror_trade_v2_lookup_baselines_and_hubs",
+        "method": "mirror_trade_v3_multi_partner",
         # Caveat codes — journalists should weigh these when interpreting the gap.
         # Promote to a dedicated findings.caveat_codes column when the schema
         # gets its first migration after the lookups went in.
@@ -468,6 +519,7 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
             "obs_ids_count": len(r.eurostat_obs_ids),
             "n_hs_codes": r.eurostat_n_hs_codes,
             "total_eur": r.eurostat_total_eur,
+            "partners_summed": r.eurostat_partners,  # Phase 2.3
         },
         "fx": {
             "rate_id": r.fx_rate_id,

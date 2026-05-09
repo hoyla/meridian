@@ -177,6 +177,11 @@ def main() -> None:
     p.add_argument("--analyse",
                    choices=["mirror-trade", "mirror-gap-trends", "hs-group-yoy", "hs-group-trajectory"],
                    help="Run a deterministic anomaly pass over already-ingested data")
+    p.add_argument("--eurostat-partners", metavar="LIST",
+                   help="Comma-separated Eurostat partner_country codes to sum on the EU "
+                        "import side for mirror-trade. Default: 'CN'. Use 'CN,HK' to also "
+                        "capture Hong-Kong-routed Chinese trade (~15%% of China's exports). "
+                        "When >1 partner is used, findings carry a multi_partner_sum caveat.")
     p.add_argument("--export-sheet", action="store_true",
                    help="Export findings to a spreadsheet (default: local .xlsx)")
     p.add_argument("--out-format", choices=["xlsx", "sheets"], default="xlsx",
@@ -216,7 +221,14 @@ def main() -> None:
     args = p.parse_args()
 
     if args.analyse == "mirror-trade":
-        counts = anomalies.detect_mirror_trade_gaps(period=args.analyse_period)
+        partners = (
+            [p.strip().upper() for p in args.eurostat_partners.split(",") if p.strip()]
+            if args.eurostat_partners else None
+        )
+        counts = anomalies.detect_mirror_trade_gaps(
+            period=args.analyse_period,
+            eurostat_partners=partners,
+        )
         log.info("Mirror-trade analysis: %s", counts)
         return
 

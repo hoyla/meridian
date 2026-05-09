@@ -231,6 +231,80 @@ def test_mirror_gap_no_transshipment_caveat_for_non_hub(empty_op_tables, test_db
     assert "TRANSSHIPMENT-HUB CONTEXT" not in body
 
 
+def _seed_extra_eurostat_partner(conn, period: date, reporter: str,
+                                  partner_iso2: str, value: float) -> None:
+    """Add one extra Eurostat import row with a non-CN partner_country (e.g.
+    'HK') for an existing reporter+period. Used by Phase 2.3 multi-partner
+    tests."""
+    cur = conn.cursor()
+    # Find the existing eurostat release for this period.
+    cur.execute(
+        "SELECT id FROM releases WHERE source = 'eurostat' AND period = %s",
+        (period,),
+    )
+    rel = cur.fetchone()
+    assert rel is not None, "expected a Eurostat release seeded for the period"
+    cur.execute(
+        "INSERT INTO scrape_runs (source_url, status) VALUES "
+        "('http://example/extra-partner', 'success') RETURNING id"
+    )
+    run = cur.fetchone()[0]
+    cur.execute(
+        "INSERT INTO observations (release_id, scrape_run_id, period_kind, flow, "
+        "                          reporter_country, partner_country, hs_code, "
+        "                          value_amount, value_currency, source_row) "
+        "VALUES (%s, %s, 'monthly', 'import', %s, %s, '85076010', %s, 'EUR', '{}')",
+        (rel[0], run, reporter, partner_iso2, value),
+    )
+    conn.commit()
+
+
+def test_mirror_gap_default_partners_excludes_hk(empty_op_tables, test_db_url):
+    """Phase 2.3 baseline: with the default eurostat_partners=['CN'], a
+    Eurostat partner=HK row is NOT counted in the mirror-gap sum. The
+    finding has no `multi_partner_sum` caveat."""
+    period = date(2025, 12, 1)
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_pair_for_partner(conn, period, "Germany", "DE")
+        # Add a HK-routed €1B import for DE — this should NOT show up.
+        _seed_extra_eurostat_partner(conn, period, "DE", "HK", 1_000_000_000)
+
+    anomalies.detect_mirror_trade_gaps(period=period)
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT detail FROM findings WHERE subkind = 'mirror_gap'"
+        )
+        detail = cur.fetchone()[0]
+    assert detail["eurostat"]["partners_summed"] == ["CN"]
+    assert "multi_partner_sum" not in detail["caveat_codes"]
+    # Eurostat total = 11B (CN-only), not 12B (CN + HK).
+    assert abs(detail["eurostat"]["total_eur"] - 11_000_000_000) < 1
+
+
+def test_mirror_gap_with_cn_hk_sums_both_partners(empty_op_tables, test_db_url):
+    """Phase 2.3: when --eurostat-partners CN,HK is used, the analyser sums
+    both partner_country rows. The multi_partner_sum caveat is attached
+    and the body annotation explains the methodological shift."""
+    period = date(2025, 12, 1)
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_pair_for_partner(conn, period, "Germany", "DE")
+        _seed_extra_eurostat_partner(conn, period, "DE", "HK", 1_000_000_000)
+
+    anomalies.detect_mirror_trade_gaps(
+        period=period, eurostat_partners=["CN", "HK"],
+    )
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT body, detail FROM findings WHERE subkind = 'mirror_gap'"
+        )
+        body, detail = cur.fetchone()
+    assert detail["eurostat"]["partners_summed"] == ["CN", "HK"]
+    assert "multi_partner_sum" in detail["caveat_codes"]
+    # Eurostat total = 12B (CN + HK).
+    assert abs(detail["eurostat"]["total_eur"] - 12_000_000_000) < 1
+    assert "Multi-partner Eurostat sum" in body
+
+
 def test_mirror_gap_records_cif_fob_baseline_provenance(empty_op_tables, test_db_url):
     """Phase 2.2: each finding records exactly which CIF/FOB baseline row
     drove the comparison — including a `source` string and `source_url`
