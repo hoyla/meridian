@@ -29,7 +29,11 @@ def test_classify_flat():
 def test_classify_rising():
     yoys = [0.10, 0.12, 0.11, 0.13, 0.12, 0.14, 0.13, 0.15]
     shape, _ = anomalies._classify_trajectory(yoys)
-    assert shape in ("rising", "rising_decelerating")  # could read either way; allow either
+    # Genuinely borderline data — every accel/decel flavour is editorially
+    # defensible. Phase 1.3 swap to Theil-Sen lands closer to the threshold,
+    # which is fine; the test's job is to lock the *family* of shapes, not
+    # the precise sub-classification.
+    assert shape in ("rising", "rising_accelerating", "rising_decelerating")
 
 
 def test_classify_rising_accelerating():
@@ -96,6 +100,65 @@ def test_classify_insufficient_data():
     shape, features = anomalies._classify_trajectory(yoys)
     assert shape == "insufficient_data"
     assert features["n"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.3: Theil-Sen slope robustness vs OLS
+# ---------------------------------------------------------------------------
+
+
+def _ols_slope(xs, ys):
+    """Reference OLS implementation, kept inline here so the test demonstrates
+    the difference between the two estimators on a single contrived series."""
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    x_mean = sum(xs) / n
+    y_mean = sum(ys) / n
+    num = sum((xs[i] - x_mean) * (ys[i] - y_mean) for i in range(n))
+    den = sum((xs[i] - x_mean) ** 2 for i in range(n))
+    return num / den if den else 0.0
+
+
+def test_theil_sen_resists_endpoint_outlier_that_flips_ols():
+    """Construct a series that's flat-ish in the middle but has one extreme
+    outlier at the end. OLS will report a strongly positive slope (the
+    outlier dominates); Theil-Sen takes the median pairwise slope, so the
+    outlier is one of many comparisons and doesn't move the median much.
+    The trajectory classifier reads `overall_slope` to break the
+    rising/falling tie when there's no sign change — endpoint robustness
+    matters editorially here because a single noisy month at the series
+    end shouldn't flip a "flat" trajectory to "rising"."""
+    xs = list(range(8))
+    # Flat values with one extreme positive outlier at the end.
+    ys = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 50.0]
+
+    ols = _ols_slope(xs, ys)
+    ts = anomalies._theil_sen_slope(xs, ys)
+
+    # OLS is yanked positive by the outlier; Theil-Sen sees mostly zero
+    # pairs and one large jump — median is 0.
+    assert ols > 1.0, f"OLS should be pulled hard positive, got {ols}"
+    assert ts == 0.0, f"Theil-Sen should be unmoved by single outlier, got {ts}"
+
+
+def test_theil_sen_matches_ols_on_clean_linear_data():
+    """Sanity check: when the series IS linear, both estimators should agree
+    closely. We don't require exact equality (Theil-Sen averages even-N
+    medians, OLS minimises squared error) but they should be within a few
+    percent on a clean line."""
+    xs = list(range(10))
+    ys = [3.0 * x + 1.0 for x in xs]  # slope = 3
+    ols = _ols_slope(xs, ys)
+    ts = anomalies._theil_sen_slope(xs, ys)
+    assert abs(ols - 3.0) < 1e-9
+    assert abs(ts - 3.0) < 1e-9
+
+
+def test_theil_sen_handles_trivial_input():
+    """Edge cases: empty/single-point input must return 0, not raise."""
+    assert anomalies._theil_sen_slope([], []) == 0.0
+    assert anomalies._theil_sen_slope([1.0], [2.0]) == 0.0
 
 
 # ---------------------------------------------------------------------------

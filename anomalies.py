@@ -1145,16 +1145,33 @@ TRAJECTORY_SMOOTH_WINDOW = 3          # centered moving-average window for shape
                                       # would otherwise trigger spurious 'volatile' labels.
 
 
-def _linear_slope(xs: list[float], ys: list[float]) -> float:
-    """Ordinary least-squares slope. Returns 0 if N < 2 or no variance in x."""
+def _theil_sen_slope(xs: list[float], ys: list[float]) -> float:
+    """Theil-Sen slope estimator: median of pairwise slopes.
+
+    Used in place of OLS for the trajectory classifier (Phase 1.3 of
+    dev_notes/roadmap-2026-05-09.md). OLS is sensitive to outliers at
+    the endpoints — a single extreme first or last window can flip the
+    accelerating/decelerating classification. Theil-Sen takes the
+    median of all pairwise slopes, which gives the same answer as OLS
+    on clean data but is unmoved by individual outliers.
+
+    Cost is O(n²) but at our series lengths (24–50 windows) that's
+    300–1200 pairwise comparisons, well under a millisecond.
+
+    Returns 0 if N < 2 or all xs are equal.
+    """
     n = len(xs)
     if n < 2:
         return 0.0
-    x_mean = sum(xs) / n
-    y_mean = sum(ys) / n
-    num = sum((xs[i] - x_mean) * (ys[i] - y_mean) for i in range(n))
-    den = sum((xs[i] - x_mean) ** 2 for i in range(n))
-    return num / den if den else 0.0
+    slopes: list[float] = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            dx = xs[j] - xs[i]
+            if dx != 0:
+                slopes.append((ys[j] - ys[i]) / dx)
+    if not slopes:
+        return 0.0
+    return statistics.median(slopes)
 
 
 def _smooth_centered(ys: list[float], window: int) -> list[float]:
@@ -1236,12 +1253,12 @@ def _classify_trajectory(yoys: list[float]) -> tuple[str, dict]:
 
     # Slope of the smoothed YoY series. Positive slope = YoY values rising over
     # time (growth accelerating if positive, decline easing if negative).
-    overall_slope = _linear_slope(list(range(n)), smoothed)
+    overall_slope = _theil_sen_slope(list(range(n)), smoothed)
     # Two-half slopes kept in features as additional evidence (not used in primary
     # classification — overall_slope handles the core distinction more robustly).
     half = n // 2
-    earlier_slope = _linear_slope(list(range(half)), smoothed[:half])
-    recent_slope = _linear_slope(list(range(n - half)), smoothed[half:])
+    earlier_slope = _theil_sen_slope(list(range(half)), smoothed[:half])
+    recent_slope = _theil_sen_slope(list(range(n - half)), smoothed[half:])
 
     max_y = max(yoys); max_idx = yoys.index(max_y)
     min_y = min(yoys); min_idx = yoys.index(min_y)
@@ -1528,7 +1545,7 @@ def _insert_trajectory_finding(
         )
 
     detail = {
-        "method": "hs_group_trajectory_v2_flow_aware",
+        "method": "hs_group_trajectory_v3_theil_sen_slope",
         "flow": flow,
         "flow_label": flow_label,
         "group": {"id": group.id, "name": group.name, "hs_patterns": group.hs_patterns},
