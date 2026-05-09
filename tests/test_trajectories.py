@@ -312,21 +312,31 @@ def test_trajectory_export_side_isolated_from_import(empty_op, test_db_url):
 
 
 def test_trajectory_u_recovery_integration(empty_op, test_db_url):
-    """Wind-turbine-style series: declining then recovering."""
-    series = [
-        (date(2024, 1, 1), -0.27),
-        (date(2024, 4, 1), -0.20),
-        (date(2024, 7, 1), -0.18),
-        (date(2024, 10, 1), 0.04),
-        (date(2025, 1, 1), 0.25),
-        (date(2025, 4, 1), 0.35),
-        (date(2025, 7, 1), 0.48),
-        (date(2026, 2, 1), 0.17),
-    ]
+    """Wind-turbine-style series: declining then recovering. Phase 1.7 added
+    a gap-detection check, so this test now seeds a continuous monthly
+    series — sparse quarterly fixtures fail the gap check (and editorially
+    they should: trajectory shapes inferred over discontinuous data are
+    misleading)."""
+    # 24 months of monthly data shaped as a U: declining negative,
+    # crossing zero, then climbing positive.
+    # Skip exactly-zero values — the cross_zero_idx detector requires both
+    # neighbouring smoothed signs to be non-zero, so we transition directly
+    # from negative to positive.
+    yoys = [-0.30, -0.28, -0.25, -0.22, -0.18, -0.15,
+            -0.10, -0.05, -0.02, 0.05, 0.10, 0.15,
+            0.20, 0.24, 0.28, 0.32, 0.36, 0.40,
+            0.42, 0.40, 0.36, 0.30, 0.22, 0.17]
+    series = []
+    p = date(2024, 1, 1)
+    for y in yoys:
+        series.append((p, y))
+        p = date(p.year + 1, 1, 1) if p.month == 12 else date(p.year, p.month + 1, 1)
+
     with psycopg2.connect(test_db_url) as conn:
         _seed_yoy_findings(conn, group_id=4, periods_and_yoys=series)  # Wind turbine components
 
-    anomalies.detect_hs_group_trajectories(group_names=["Wind turbine components"])
+    counts = anomalies.detect_hs_group_trajectories(group_names=["Wind turbine components"])
+    assert counts.get("skipped_incomplete_series", 0) == 0
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT detail FROM findings WHERE subkind='hs_group_trajectory'"
@@ -336,3 +346,65 @@ def test_trajectory_u_recovery_integration(empty_op, test_db_url):
     assert detail["shape"] == "u_recovery"
     # Should cite the cross-zero point in body+detail
     assert "cross_zero_idx" in detail["features"]
+
+
+def test_trajectory_skips_incomplete_series(empty_op, test_db_url):
+    """Phase 1.7: when the underlying YoY series has a missing month, the
+    classifier refuses to fit a trajectory and tallies under
+    skipped_incomplete_series. Editorially, smoothing and slope estimators
+    assume continuous monthly data — fitting a shape across a gap would
+    mislead."""
+    # 12 months but with Apr 2025 missing — a 1-month gap is enough to skip.
+    series = [
+        (date(2024, 12, 1), 0.10),
+        (date(2025, 1, 1), 0.12),
+        (date(2025, 2, 1), 0.14),
+        (date(2025, 3, 1), 0.16),
+        # MISSING: 2025-04
+        (date(2025, 5, 1), 0.20),
+        (date(2025, 6, 1), 0.22),
+        (date(2025, 7, 1), 0.24),
+        (date(2025, 8, 1), 0.26),
+    ]
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_yoy_findings(conn, group_id=4, periods_and_yoys=series)
+
+    counts = anomalies.detect_hs_group_trajectories(group_names=["Wind turbine components"])
+    assert counts["skipped_incomplete_series"] == 1
+    assert counts["emitted"] == 0
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM findings WHERE subkind = 'hs_group_trajectory'")
+        assert cur.fetchone()[0] == 0
+
+
+def test_detect_series_gaps_helper():
+    """Pure-function test of the gap detector."""
+    # Continuous monthly series → no gaps.
+    assert anomalies._detect_series_gaps([
+        date(2025, 1, 1), date(2025, 2, 1), date(2025, 3, 1),
+    ]) == []
+    # One-month gap → reported.
+    missing = anomalies._detect_series_gaps([
+        date(2025, 1, 1), date(2025, 2, 1),
+        # gap at 2025-03
+        date(2025, 4, 1),
+    ])
+    assert missing == [date(2025, 3, 1)]
+    # Multi-month gap.
+    missing = anomalies._detect_series_gaps([
+        date(2025, 1, 1),
+        # gap Feb–Apr
+        date(2025, 5, 1),
+    ])
+    assert missing == [date(2025, 2, 1), date(2025, 3, 1), date(2025, 4, 1)]
+    # Year-boundary gap.
+    missing = anomalies._detect_series_gaps([
+        date(2025, 11, 1),
+        # gap 2025-12
+        date(2026, 1, 1),
+    ])
+    assert missing == [date(2025, 12, 1)]
+    # Trivial input.
+    assert anomalies._detect_series_gaps([]) == []
+    assert anomalies._detect_series_gaps([date(2025, 1, 1)]) == []

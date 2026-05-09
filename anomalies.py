@@ -1474,6 +1474,7 @@ def detect_hs_group_trajectories(
         "emitted": 0,
         "inserted_new": 0, "confirmed_existing": 0, "superseded": 0,
         "skipped_insufficient_data": 0, "skipped_no_findings": 0,
+        "skipped_incomplete_series": 0,
     }
 
     groups = _list_hs_groups(group_names)
@@ -1492,6 +1493,22 @@ def detect_hs_group_trajectories(
             series = _fetch_group_yoy_series(group.id, flow=flow)
             if not series:
                 counts["skipped_no_findings"] += 1
+                continue
+            # Phase 1.7: refuse to classify trajectories on a discontinuous
+            # series. A "rising_decelerating" shape fitted across a 6-month
+            # gap isn't honest — the smoothing and slope estimators assume
+            # continuous monthly observation. Better to surface the gap
+            # than label a partial series.
+            missing_periods = _detect_series_gaps([s["period"] for s in series])
+            if missing_periods:
+                log.info(
+                    "Trajectory skipped for group %r (flow=%d): YoY series has %d "
+                    "missing periods between %s and %s. Re-run hs-group-yoy on the "
+                    "underlying data first.",
+                    group.name, flow, len(missing_periods),
+                    series[0]["period"], series[-1]["period"],
+                )
+                counts["skipped_incomplete_series"] += 1
                 continue
             yoys = [s["yoy_pct"] for s in series]
             shape, features = _classify_trajectory(yoys)
@@ -1521,10 +1538,34 @@ def detect_hs_group_trajectories(
     return counts
 
 
+def _detect_series_gaps(periods: list[date]) -> list[date]:
+    """Return the list of months missing from `periods` (sorted ascending).
+    A continuous monthly series should have no gaps; a returned list of one
+    or more periods means the trajectory classifier should refuse to fit.
+    Phase 1.7 of dev_notes/roadmap-2026-05-09.md."""
+    if len(periods) < 2:
+        return []
+    sorted_periods = sorted(periods)
+    missing: list[date] = []
+    p = sorted_periods[0]
+    end = sorted_periods[-1]
+    present = set(sorted_periods)
+    while p < end:
+        # Advance one month.
+        p = date(p.year + 1, 1, 1) if p.month == 12 else date(p.year, p.month + 1, 1)
+        if p > end:
+            break
+        if p not in present:
+            missing.append(p)
+    return missing
+
+
 def _fetch_group_yoy_series(group_id: int, flow: int = 1) -> list[dict]:
     """Return [{period, yoy_pct, finding_id, current_eur}] for the given group,
     one row per period (latest finding per period if there are duplicates).
-    flow=1 reads subkind 'hs_group_yoy', flow=2 reads 'hs_group_yoy_export'."""
+    flow=1 reads subkind 'hs_group_yoy', flow=2 reads 'hs_group_yoy_export'.
+    Filters to active (un-superseded) findings only — trajectory always
+    builds on the current revision."""
     subkind = "hs_group_yoy" if flow == 1 else "hs_group_yoy_export"
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         cur.execute(
@@ -1538,6 +1579,7 @@ def _fetch_group_yoy_series(group_id: int, flow: int = 1) -> list[dict]:
               FROM findings
              WHERE subkind = %s
                AND %s = ANY(hs_group_ids)
+               AND superseded_at IS NULL
           ORDER BY (detail->'windows'->>'current_end')::date, created_at DESC
             """,
             (subkind, group_id),
