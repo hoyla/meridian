@@ -137,8 +137,11 @@ def _section_headline(cur) -> _Section:
         "FROM releases GROUP BY source ORDER BY source"
     )
     sources = cur.fetchall()
+    # Active (un-superseded) findings only — superseded rows are revision
+    # history, queryable but not part of the current picture.
     cur.execute(
-        "SELECT subkind, COUNT(*) FROM findings WHERE kind = 'anomaly' "
+        "SELECT subkind, COUNT(*) FROM findings "
+        "WHERE kind = 'anomaly' AND superseded_at IS NULL "
         "GROUP BY subkind ORDER BY subkind"
     )
     counts = cur.fetchall()
@@ -186,7 +189,7 @@ def _section_hs_yoy_movers(cur, flow: int, top_n: int) -> _Section:
                  (detail->'totals'->>'low_base')::boolean AS low_base,
                  detail->'method_query'->'hs_patterns' AS hs_patterns
             FROM findings
-           WHERE subkind = %s
+           WHERE subkind = %s AND superseded_at IS NULL
         ORDER BY detail->'group'->>'name', (detail->'windows'->>'current_end')::date DESC, id DESC
         )
         SELECT * FROM latest ORDER BY abs(yoy_pct) DESC NULLS LAST LIMIT %s
@@ -275,6 +278,7 @@ def _section_trajectories(cur) -> _Section:
                (detail->'features'->>'low_base_majority')::boolean AS low_base_majority
           FROM findings
          WHERE subkind IN ('hs_group_trajectory', 'hs_group_trajectory_export')
+           AND superseded_at IS NULL
       ORDER BY detail->>'shape', subkind, detail->'group'->>'name'
         """
     )
@@ -355,7 +359,7 @@ def _section_mirror_gaps(cur) -> _Section:
                FROM observations o JOIN releases r ON r.id = o.release_id
               WHERE o.id = f.observation_ids[1]) AS period
           FROM findings f
-         WHERE subkind = 'mirror_gap'
+         WHERE subkind = 'mirror_gap' AND superseded_at IS NULL
       ORDER BY detail->>'iso2',
                (SELECT r.period FROM observations o JOIN releases r ON r.id = o.release_id
                  WHERE o.id = f.observation_ids[1]) DESC,
@@ -410,7 +414,7 @@ def _section_mirror_gaps(cur) -> _Section:
                (detail->'baseline'->>'mean')::numeric AS baseline_mean,
                (detail->>'z_score')::numeric AS z
           FROM findings
-         WHERE subkind = 'mirror_gap_zscore'
+         WHERE subkind = 'mirror_gap_zscore' AND superseded_at IS NULL
       ORDER BY abs((detail->>'z_score')::numeric) DESC NULLS LAST
          LIMIT 10
         """
@@ -453,6 +457,7 @@ def _section_low_base(cur) -> _Section:
           FROM findings
          WHERE subkind IN ('hs_group_yoy', 'hs_group_yoy_export')
            AND (detail->'totals'->>'low_base')::boolean = true
+           AND superseded_at IS NULL
       ORDER BY abs((detail->'totals'->>'yoy_pct')::numeric) DESC NULLS LAST
         """
     )

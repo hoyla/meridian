@@ -224,11 +224,30 @@ CREATE TABLE findings (
                         CHECK (editorial_status IN ('open', 'noted', 'investigating', 'published', 'dismissed')),
     editorial_notes     TEXT,
     editorial_updated_at TIMESTAMPTZ,
+    -- Idempotency + revision history (Phase 1.1, see reviews/roadmap-2026-05-09.md):
+    -- Each emitted finding declares a `natural_key_hash` (deterministic hash of
+    -- subkind + identity fields, e.g. (hs_group_id, period)) and a `value_signature`
+    -- (hash of the meaningful values that would change story-wise if the underlying
+    -- data revised). On re-run, the emit_finding helper looks up the existing
+    -- un-superseded row by natural_key_hash and either bumps `last_confirmed_at`
+    -- (values unchanged) or inserts a new row + supersedes the old one (values
+    -- moved). The supersede chain preserves the revision history — newsworthy in
+    -- itself when Eurostat republishes data.
+    natural_key_hash         TEXT,
+    value_signature          TEXT,
+    superseded_at            TIMESTAMPTZ,
+    superseded_by_finding_id BIGINT      REFERENCES findings(id),
+    last_confirmed_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_findings_run ON findings (scrape_run_id);
 CREATE INDEX idx_findings_kind ON findings (kind, subkind);
 CREATE INDEX idx_findings_status ON findings (editorial_status, created_at DESC);
+-- DB-enforced idempotency: at most one active (un-superseded) finding per natural key.
+CREATE UNIQUE INDEX uq_findings_active_natural_key
+    ON findings (natural_key_hash) WHERE superseded_at IS NULL;
+CREATE INDEX idx_findings_supersede_chain
+    ON findings (superseded_by_finding_id) WHERE superseded_by_finding_id IS NOT NULL;
 
 -- =============================================================================
 -- Seed data

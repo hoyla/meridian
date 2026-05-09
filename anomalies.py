@@ -30,11 +30,23 @@ from datetime import date
 import psycopg2
 import psycopg2.extras
 
+import findings_io
 import lookups
 
 log = logging.getLogger(__name__)
 
 ANALYSIS_SOURCE_URL = "analysis://mirror_trade/v1"
+
+
+def _tally(counts: dict, action: findings_io.EmitAction) -> None:
+    """Bump granular action counter + the `emitted` total.
+
+    `emitted` is the sum of inserted_new + confirmed_existing + superseded.
+    Useful as a one-number summary; the breakdown matters when the analyser
+    is re-run (most actions will be confirmed_existing in steady-state)."""
+    counts[action] = counts.get(action, 0) + 1
+    counts["emitted"] = counts.get("emitted", 0) + 1
+
 TREND_ANALYSIS_SOURCE_URL = "analysis://mirror_gap_trends/v1"
 HS_GROUP_TREND_SOURCE_URL = "analysis://hs_group_trends/v1"
 HS_GROUP_TRAJECTORY_SOURCE_URL = "analysis://hs_group_trajectory/v1"
@@ -136,6 +148,9 @@ def detect_mirror_trade_gaps(period: date | None = None) -> dict[str, int]:
     """
     counts = {
         "emitted": 0,
+        "inserted_new": 0,
+        "confirmed_existing": 0,
+        "superseded": 0,
         "skipped_no_eurostat": 0,
         "skipped_no_fx": 0,
         "skipped_aggregate_no_members": 0,
@@ -160,8 +175,8 @@ def detect_mirror_trade_gaps(period: date | None = None) -> dict[str, int]:
             if isinstance(result, str):
                 counts[result] += 1
                 continue
-            _insert_finding(analysis_run_id, result)
-            counts["emitted"] += 1
+            action = _insert_finding(analysis_run_id, result)
+            _tally(counts, action)
         with _conn() as conn, conn.cursor() as cur:
             cur.execute(
                 "UPDATE scrape_runs SET status='success', ended_at=now() WHERE id=%s",
@@ -321,7 +336,7 @@ def _eurostat_aggregate_for_members(
     return total, list(ids), n
 
 
-def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> None:
+def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.EmitAction:
     direction = "Eurostat > GACC" if r.gap_eur > 0 else "GACC > Eurostat"
     is_aggregate = r.aggregate_kind is not None
     label = f"{r.aggregate_kind} ({len(r.aggregate_members or [])} members)" if is_aggregate else r.iso2
@@ -401,20 +416,33 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> None:
     }
     score = abs(r.gap_pct) if r.gap_pct is not None else None
     obs_ids = [r.gacc_obs_id] + r.eurostat_obs_ids
+    period_yyyymm = r.period.strftime("%Y-%m")
 
-    import json
     with _conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO findings (
-                scrape_run_id, kind, subkind, observation_ids, score,
-                title, body, detail
-            ) VALUES (
-                %s, 'anomaly', 'mirror_gap', %s, %s, %s, %s, %s
-            )
-            """,
-            (analysis_run_id, obs_ids, score, title, body, json.dumps(detail)),
+        _, action = findings_io.emit_finding(
+            cur,
+            scrape_run_id=analysis_run_id,
+            kind="anomaly",
+            subkind="mirror_gap",
+            natural_key=findings_io.nk_mirror_gap(r.iso2, period_yyyymm),
+            # Editorially-meaningful values: if any of these move, the finding
+            # is a revision and should supersede the prior row. We deliberately
+            # exclude observation_ids and string descriptors that change without
+            # the *story* changing.
+            value_fields={
+                "gacc_value_eur": round(r.gacc_value_eur, 2),
+                "eurostat_total_eur": round(r.eurostat_total_eur, 2),
+                "gap_eur": round(r.gap_eur, 2),
+                "gap_pct": round(r.gap_pct, 6) if r.gap_pct is not None else None,
+                "is_aggregate": is_aggregate,
+            },
+            observation_ids=obs_ids,
+            score=score,
+            title=title,
+            body=body,
+            detail=detail,
         )
+    return action
 
 
 # =============================================================================
@@ -496,7 +524,9 @@ def detect_mirror_gap_trends(
                      'skipped_zero_stdev', 'skipped_below_threshold'}.
     """
     counts = {
-        "emitted": 0, "skipped_insufficient_baseline": 0,
+        "emitted": 0,
+        "inserted_new": 0, "confirmed_existing": 0, "superseded": 0,
+        "skipped_insufficient_baseline": 0,
         "skipped_zero_stdev": 0, "skipped_below_threshold": 0,
     }
 
@@ -536,8 +566,10 @@ def detect_mirror_gap_trends(
                 if abs(z) < z_threshold:
                     counts["skipped_below_threshold"] += 1
                     continue
-                _insert_zscore_finding(analysis_run_id, point, baseline, mean, stdev, z, window_months)
-                counts["emitted"] += 1
+                action = _insert_zscore_finding(
+                    analysis_run_id, point, baseline, mean, stdev, z, window_months,
+                )
+                _tally(counts, action)
 
         with _conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -563,7 +595,7 @@ def _insert_zscore_finding(
     stdev: float,
     z: float,
     window_months: int,
-) -> None:
+) -> findings_io.EmitAction:
     direction = "above" if z > 0 else "below"
     title = (
         f"Mirror-gap shift, China ↔ {point.iso2}, {point.period.strftime('%Y-%m')}: "
@@ -603,20 +635,31 @@ def _insert_zscore_finding(
         "caveat_codes": DEFAULT_MIRROR_GAP_CAVEATS + ["aggregate_composition_drift"],
     }
     score = abs(z)
+    period_yyyymm = point.period.strftime("%Y-%m")
 
-    import json
     with _conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO findings (
-                scrape_run_id, kind, subkind, observation_ids, score,
-                title, body, detail
-            ) VALUES (
-                %s, 'anomaly', 'mirror_gap_zscore', %s, %s, %s, %s, %s
-            )
-            """,
-            (analysis_run_id, point.observation_ids, score, title, body, json.dumps(detail)),
+        _, action = findings_io.emit_finding(
+            cur,
+            scrape_run_id=analysis_run_id,
+            kind="anomaly",
+            subkind="mirror_gap_zscore",
+            natural_key=findings_io.nk_mirror_gap_zscore(point.iso2, period_yyyymm),
+            # If any of (gap_pct, baseline mean/stdev, z) moves, the finding
+            # has revised — supersede.
+            value_fields={
+                "gap_pct": round(point.gap_pct, 6),
+                "z_score": round(z, 4),
+                "baseline_mean": round(mean, 6),
+                "baseline_stdev": round(stdev, 6),
+                "baseline_n": len(baseline),
+            },
+            observation_ids=point.observation_ids,
+            score=score,
+            title=title,
+            body=body,
+            detail=detail,
         )
+    return action
 
 
 # =============================================================================
@@ -768,7 +811,9 @@ def detect_hs_group_yoy(
     if flow not in (1, 2):
         raise ValueError(f"flow must be 1 (import) or 2 (export); got {flow}")
     counts = {
-        "emitted": 0, "skipped_insufficient_history": 0,
+        "emitted": 0,
+        "inserted_new": 0, "confirmed_existing": 0, "superseded": 0,
+        "skipped_insufficient_history": 0,
         "skipped_below_threshold": 0, "skipped_zero_prior": 0,
     }
 
@@ -835,7 +880,7 @@ def detect_hs_group_yoy(
                     current_eur < low_base_threshold_eur
                     or prior_eur < low_base_threshold_eur
                 )
-                _insert_hs_group_yoy_finding(
+                action = _insert_hs_group_yoy_finding(
                     analysis_run_id, group, t, start_curr, end_curr,
                     start_prior, end_prior,
                     current_eur, prior_eur, yoy_pct_eur,
@@ -844,7 +889,7 @@ def detect_hs_group_yoy(
                     flow=flow, low_base=low_base,
                     low_base_threshold_eur=low_base_threshold_eur,
                 )
-                counts["emitted"] += 1
+                _tally(counts, action)
 
         with _conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -884,7 +929,7 @@ def _insert_hs_group_yoy_finding(
     flow: int = 1,
     low_base: bool = False,
     low_base_threshold_eur: float = LOW_BASE_THRESHOLD_EUR,
-) -> None:
+) -> findings_io.EmitAction:
     direction = "up" if yoy_pct_eur > 0 else "down"
     kg_yoy_str = f"{yoy_pct_kg*100:+.1f}%" if yoy_pct_kg is not None else "n/a"
     flow_label = "EU imports from CN" if flow == 1 else "EU exports to CN"
@@ -1008,21 +1053,35 @@ def _insert_hs_group_yoy_finding(
     # Score reflects EUR YoY (the editorial-comparable signal across groups).
     score = abs(yoy_pct_eur)
 
-    import json
     subkind = f"hs_group_yoy{flow_subkind_suffix}"  # 'hs_group_yoy' for imports, 'hs_group_yoy_export' for exports
+    current_end_yyyymm = end_curr.strftime("%Y-%m")
     with _conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO findings (
-                scrape_run_id, kind, subkind, observation_ids, hs_group_ids,
-                score, title, body, detail
-            ) VALUES (
-                %s, 'anomaly', %s, %s, %s, %s, %s, %s, %s
-            )
-            """,
-            (analysis_run_id, subkind, [], [group.id], score, title,
-             "\n".join(body_lines), json.dumps(detail)),
+        _, action = findings_io.emit_finding(
+            cur,
+            scrape_run_id=analysis_run_id,
+            kind="anomaly",
+            subkind=subkind,
+            natural_key=findings_io.nk_hs_group_yoy(group.id, current_end_yyyymm),
+            # Editorially-meaningful values: the headline numbers a journalist
+            # would notice if they shifted. Top-N CN8 / reporter lists and the
+            # full monthly_series live in `detail` but aren't part of the
+            # signature — they shift constantly without the *story* changing.
+            value_fields={
+                "yoy_pct": round(yoy_pct_eur, 6) if yoy_pct_eur is not None else None,
+                "current_eur": round(current_eur, 2),
+                "prior_eur": round(prior_eur, 2),
+                "yoy_pct_kg": round(yoy_pct_kg, 6) if yoy_pct_kg is not None else None,
+                "current_kg": round(current_kg, 2) if current_kg is not None else None,
+                "unit_price_pct": round(unit_price_pct, 6) if unit_price_pct is not None else None,
+                "low_base": low_base,
+            },
+            hs_group_ids=[group.id],
+            score=score,
+            title=title,
+            body="\n".join(body_lines),
+            detail=detail,
         )
+    return action
 
 
 # =============================================================================
@@ -1258,7 +1317,11 @@ def detect_hs_group_trajectories(
     """
     if flow not in (1, 2):
         raise ValueError(f"flow must be 1 (import) or 2 (export); got {flow}")
-    counts = {"emitted": 0, "skipped_insufficient_data": 0, "skipped_no_findings": 0}
+    counts = {
+        "emitted": 0,
+        "inserted_new": 0, "confirmed_existing": 0, "superseded": 0,
+        "skipped_insufficient_data": 0, "skipped_no_findings": 0,
+    }
 
     groups = _list_hs_groups(group_names)
     if not groups:
@@ -1286,8 +1349,8 @@ def detect_hs_group_trajectories(
             features["n_low_base_windows"] = n_low_base
             features["low_base_threshold_eur"] = LOW_BASE_THRESHOLD_EUR
             features["low_base_majority"] = (n_low_base / len(series)) >= TRAJECTORY_LOW_BASE_FRACTION
-            _insert_trajectory_finding(analysis_run_id, group, series, shape, features, flow=flow)
-            counts["emitted"] += 1
+            action = _insert_trajectory_finding(analysis_run_id, group, series, shape, features, flow=flow)
+            _tally(counts, action)
 
         with _conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -1345,7 +1408,7 @@ def _insert_trajectory_finding(
     shape: str,
     features: dict,
     flow: int = 1,
-) -> None:
+) -> findings_io.EmitAction:
     first = series[0]
     last  = series[-1]
     peak  = max(series, key=lambda s: s["yoy_pct"])
@@ -1469,18 +1532,31 @@ def _insert_trajectory_finding(
     # Score = absolute latest YoY; lets journalists rank by "how much movement is happening now".
     score = abs(last["yoy_pct"])
 
-    import json
     subkind = f"hs_group_trajectory{flow_subkind_suffix}"
     with _conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO findings (
-                scrape_run_id, kind, subkind, observation_ids, hs_group_ids,
-                score, title, body, detail
-            ) VALUES (
-                %s, 'anomaly', %s, %s, %s, %s, %s, %s, %s
-            )
-            """,
-            (analysis_run_id, subkind, [], [group.id], score, title,
-             "\n".join(body_lines), json.dumps(detail)),
+        # Trajectory natural key is just (hs_group_id) per flow — there's only
+        # one current trajectory per group per flow at any time. New data lands
+        # via supersede when shape or features change.
+        _, action = findings_io.emit_finding(
+            cur,
+            scrape_run_id=analysis_run_id,
+            kind="anomaly",
+            subkind=subkind,
+            natural_key=findings_io.nk_hs_group_trajectory(group.id),
+            value_fields={
+                "shape": shape,
+                "last_yoy": round(last["yoy_pct"], 6) if last.get("yoy_pct") is not None else None,
+                "last_period": last["period"].isoformat(),
+                "first_period": first["period"].isoformat(),
+                "max_yoy": round(features.get("max_yoy", 0), 6),
+                "min_yoy": round(features.get("min_yoy", 0), 6),
+                "n": features.get("n"),
+                "low_base_majority": features.get("low_base_majority"),
+            },
+            hs_group_ids=[group.id],
+            score=score,
+            title=title,
+            body="\n".join(body_lines),
+            detail=detail,
         )
+    return action

@@ -119,7 +119,9 @@ def test_mirror_gap_emits_finding_with_provenance(empty_op_tables, test_db_url):
 
     counts = anomalies.detect_mirror_trade_gaps(period=period)
     assert counts["emitted"] == 1
-    assert all(v == 0 for k, v in counts.items() if k != "emitted")
+    assert counts["inserted_new"] == 1  # empty DB → first emission inserts new
+    # No skip categories should fire on this clean seeded data.
+    assert all(v == 0 for k, v in counts.items() if k.startswith("skipped_"))
 
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
         cur.execute(

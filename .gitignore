@@ -13,5 +13,5 @@ venv/
 # Generated spreadsheet exports — regenerated per run, not tracked.
 exports/
 
-# Assessments and notes not to be included in GH repo.
-reviews/
+# Other stuff not to be included in GH repo.
+aob/

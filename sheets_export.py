@@ -99,7 +99,7 @@ def _summary_sheet() -> SheetData:
                      (detail->'totals'->>'yoy_pct_kg')::numeric AS imp_yoy_kg,
                      (detail->'totals'->>'low_base')::boolean AS imp_low_base
                 FROM findings
-               WHERE subkind = 'hs_group_yoy'
+               WHERE subkind = 'hs_group_yoy' AND superseded_at IS NULL
             ORDER BY detail->'group'->>'name', (detail->'windows'->>'current_end')::date DESC, id DESC
             ),
             latest_exports AS (
@@ -111,21 +111,21 @@ def _summary_sheet() -> SheetData:
                      (detail->'totals'->>'yoy_pct_kg')::numeric AS exp_yoy_kg,
                      (detail->'totals'->>'low_base')::boolean AS exp_low_base
                 FROM findings
-               WHERE subkind = 'hs_group_yoy_export'
+               WHERE subkind = 'hs_group_yoy_export' AND superseded_at IS NULL
             ORDER BY detail->'group'->>'name', (detail->'windows'->>'current_end')::date DESC, id DESC
             ),
             traj_imp AS (
               SELECT DISTINCT ON (detail->'group'->>'name')
                      detail->'group'->>'name' AS group_name,
                      detail->>'shape' AS imp_shape
-                FROM findings WHERE subkind = 'hs_group_trajectory'
+                FROM findings WHERE subkind = 'hs_group_trajectory' AND superseded_at IS NULL
             ORDER BY detail->'group'->>'name', created_at DESC
             ),
             traj_exp AS (
               SELECT DISTINCT ON (detail->'group'->>'name')
                      detail->'group'->>'name' AS group_name,
                      detail->>'shape' AS exp_shape
-                FROM findings WHERE subkind = 'hs_group_trajectory_export'
+                FROM findings WHERE subkind = 'hs_group_trajectory_export' AND superseded_at IS NULL
             ORDER BY detail->'group'->>'name', created_at DESC
             )
             SELECT g.name AS group_name,
@@ -187,7 +187,7 @@ def _hs_yoy_latest_sheet(flow: int) -> SheetData:
                 (detail->'totals'->>'unit_price_pct_change')::numeric AS unit_price_pct,
                 (detail->'totals'->>'low_base')::boolean AS low_base
               FROM findings
-             WHERE subkind = %s
+             WHERE subkind = %s AND superseded_at IS NULL
           ORDER BY detail->'group'->>'name', (detail->'windows'->>'current_end')::date DESC, id DESC
             """,
             (subkind,),
@@ -232,7 +232,7 @@ def _hs_trajectories_sheet() -> SheetData:
                      (detail->'features'->>'max_yoy')::numeric AS imp_peak,
                      (detail->'features'->>'min_yoy')::numeric AS imp_trough,
                      (detail->'features'->>'low_base_majority')::boolean AS imp_low_base
-                FROM findings WHERE subkind = 'hs_group_trajectory'
+                FROM findings WHERE subkind = 'hs_group_trajectory' AND superseded_at IS NULL
             ORDER BY detail->'group'->>'name', created_at DESC
             ),
             exp AS (
@@ -243,7 +243,7 @@ def _hs_trajectories_sheet() -> SheetData:
                      (detail->'features'->>'max_yoy')::numeric AS exp_peak,
                      (detail->'features'->>'min_yoy')::numeric AS exp_trough,
                      (detail->'features'->>'low_base_majority')::boolean AS exp_low_base
-                FROM findings WHERE subkind = 'hs_group_trajectory_export'
+                FROM findings WHERE subkind = 'hs_group_trajectory_export' AND superseded_at IS NULL
             ORDER BY detail->'group'->>'name', created_at DESC
             )
             SELECT g.name AS group_name,
@@ -301,7 +301,7 @@ def _mirror_gaps_latest_sheet() -> SheetData:
                    FROM observations o JOIN releases r ON r.id = o.release_id
                   WHERE o.id = f.observation_ids[1]) AS period
               FROM findings f
-             WHERE subkind = 'mirror_gap'
+             WHERE subkind = 'mirror_gap' AND superseded_at IS NULL
           ORDER BY detail->>'iso2',
                    (SELECT r.period FROM observations o JOIN releases r ON r.id = o.release_id
                      WHERE o.id = f.observation_ids[1]) DESC,
@@ -347,7 +347,7 @@ def _trend_movers_sheet() -> SheetData:
                    (detail->'baseline'->>'n')::int AS baseline_n,
                    (detail->>'z_score')::numeric AS z
               FROM findings
-             WHERE subkind = 'mirror_gap_zscore'
+             WHERE subkind = 'mirror_gap_zscore' AND superseded_at IS NULL
           ORDER BY abs((detail->>'z_score')::numeric) DESC
              LIMIT 50
             """
@@ -390,6 +390,7 @@ def _low_base_review_sheet() -> SheetData:
               FROM findings
              WHERE subkind IN ('hs_group_yoy', 'hs_group_yoy_export')
                AND (detail->'totals'->>'low_base')::boolean = true
+               AND superseded_at IS NULL
           ORDER BY abs((detail->'totals'->>'yoy_pct')::numeric) DESC
             """
         )
