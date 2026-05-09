@@ -761,16 +761,29 @@ def _list_hs_groups(group_names: list[str] | None = None) -> list[_HsGroup]:
 
 def _hs_group_per_period_totals(
     patterns: list[str], flow: int = 1,
-) -> list[tuple[date, float, float, int]]:
-    """Returns (period, total_eur, total_kg, n_raw_rows) per period for Eurostat
-    rows matching the given hs_patterns + partner='CN' + flow.
-    flow=1: EU imports from China. flow=2: EU exports to China.
+) -> list[tuple[date, float, float, int, float]]:
+    """Returns (period, total_eur, total_kg, n_raw_rows, eur_with_kg) per period.
 
-    Queries eurostat_raw_rows rather than observations because raw_rows preserves
-    quantity_kg as a native column. The aggregated `observations.quantity` field
-    holds either the supplementary unit (PST, kg, etc.) or kg as fallback, which
-    means cross-HS kg totals from observations would silently drop the kg of
-    rows whose primary unit is something else (pieces, litres, etc.).
+    The 5th tuple element (`eur_with_kg`) is the value_eur summed only over
+    rows where quantity_kg is non-null and > 0. The ratio
+    `eur_with_kg / total_eur` over a window is the kg-coverage metric used
+    by the unit-price decomposition (Phase 1.5 of dev_notes/roadmap-2026-05-09.md).
+
+    Why this matters: groups dominated by HS codes that report a primary
+    supplementary unit other than kg (machine tools by pieces, vehicles by
+    units, beverages by litres) have low kg coverage. Computing a unit
+    price as eur/kg over those groups is misleading — most of the
+    transactions don't carry a kg value at all, so eur/kg is just (sum of
+    eur over ALL transactions) / (sum of kg over the SUBSET that reported
+    kg). The decomposition narrative (volume- vs. price-driven) is then
+    derived from a partly-unrelated denominator.
+
+    Queries eurostat_raw_rows rather than observations because raw_rows
+    preserves quantity_kg as a native column. The aggregated
+    `observations.quantity` field holds either the supplementary unit
+    (PST, kg, etc.) or kg as fallback, which means cross-HS kg totals
+    from observations would silently drop the kg of rows whose primary
+    unit is something else.
 
     Periods with no matching rows are absent — caller handles gaps.
     """
@@ -778,9 +791,11 @@ def _hs_group_per_period_totals(
         cur.execute(
             """
             SELECT period,
-                   SUM(value_eur) AS total_eur,
-                   SUM(quantity_kg) AS total_kg,
-                   COUNT(*) AS n_raw
+                   SUM(value_eur)                                            AS total_eur,
+                   SUM(quantity_kg)                                          AS total_kg,
+                   COUNT(*)                                                  AS n_raw,
+                   SUM(value_eur) FILTER (WHERE quantity_kg IS NOT NULL
+                                            AND quantity_kg > 0)             AS eur_with_kg
               FROM eurostat_raw_rows
              WHERE flow = %s
                AND partner = 'CN'
@@ -790,8 +805,11 @@ def _hs_group_per_period_totals(
             """,
             (flow, patterns),
         )
-        return [(row[0], float(row[1] or 0), float(row[2] or 0), int(row[3]))
-                for row in cur.fetchall()]
+        return [
+            (row[0], float(row[1] or 0), float(row[2] or 0),
+             int(row[3]), float(row[4] or 0))
+            for row in cur.fetchall()
+        ]
 
 
 def _hs_group_top_cn8s(patterns: list[str], start: date, end: date, flow: int = 1, limit: int = 10) -> list[dict]:
@@ -890,9 +908,14 @@ def detect_hs_group_yoy(
     try:
         for group in groups:
             series = _hs_group_per_period_totals(group.hs_patterns, flow=flow)
-            eur_by_period: dict[date, float] = {p: e for p, e, _, _ in series}
-            kg_by_period:  dict[date, float] = {p: k for p, _, k, _ in series}
-            n_by_period:   dict[date, int]   = {p: n for p, _, _, n in series}
+            eur_by_period: dict[date, float] = {p: e for p, e, _, _, _ in series}
+            kg_by_period:  dict[date, float] = {p: k for p, _, k, _, _ in series}
+            n_by_period:   dict[date, int]   = {p: n for p, _, _, n, _ in series}
+            # Per-period: how much of value_eur was backed by an actual kg
+            # measurement. Groups dominated by pieces/litres have low coverage.
+            eur_with_kg_by_period: dict[date, float] = {
+                p: ek for p, _, _, _, ek in series
+            }
             if not series:
                 counts["skipped_insufficient_history"] += 1
                 continue
@@ -920,6 +943,14 @@ def detect_hs_group_yoy(
                 prior_eur   = sum(eur_by_period[p] for p in want if start_prior <= p <= end_prior)
                 current_kg  = sum(kg_by_period[p]  for p in want if start_curr <= p <= end_curr)
                 prior_kg    = sum(kg_by_period[p]  for p in want if start_prior <= p <= end_prior)
+                # kg coverage over the current rolling window: fraction of
+                # value_eur backed by an actual kg measurement. Below the
+                # threshold (default 80%) the unit-price decomposition is
+                # suppressed downstream — see _insert_hs_group_yoy_finding.
+                current_eur_with_kg = sum(
+                    eur_with_kg_by_period[p] for p in want if start_curr <= p <= end_curr
+                )
+                kg_coverage_pct = (current_eur_with_kg / current_eur) if current_eur else 0.0
 
                 if prior_eur == 0:
                     counts["skipped_zero_prior"] += 1
@@ -945,6 +976,7 @@ def detect_hs_group_yoy(
                     current_eur, prior_eur, yoy_pct_eur,
                     current_kg,  prior_kg,  yoy_pct_kg,
                     series, top_cn8s, top_reporters, n_by_period,
+                    kg_coverage_pct=kg_coverage_pct,
                     flow=flow, low_base=low_base,
                     low_base_threshold_eur=low_base_threshold_eur,
                 )
@@ -967,6 +999,12 @@ def detect_hs_group_yoy(
     return counts
 
 
+KG_COVERAGE_DECOMPOSITION_THRESHOLD = 0.80
+"""Below this fraction of value_eur backed by an actual kg value, the unit-
+price decomposition is suppressed (NULL in detail.totals + body annotation
++ low_kg_coverage caveat). Phase 1.5 of dev_notes/roadmap-2026-05-09.md."""
+
+
 def _insert_hs_group_yoy_finding(
     analysis_run_id: int,
     group: _HsGroup,
@@ -981,10 +1019,11 @@ def _insert_hs_group_yoy_finding(
     current_kg: float,
     prior_kg: float,
     yoy_pct_kg: float | None,
-    series: list[tuple[date, float, float, int]],
+    series: list[tuple[date, float, float, int, float]],
     top_cn8s: list[dict],
     top_reporters: list[dict],
     n_obs_by_period: dict[date, int],
+    kg_coverage_pct: float = 1.0,
     flow: int = 1,
     low_base: bool = False,
     low_base_threshold_eur: float = LOW_BASE_THRESHOLD_EUR,
@@ -994,13 +1033,23 @@ def _insert_hs_group_yoy_finding(
     flow_label = "EU imports from CN" if flow == 1 else "EU exports to CN"
     flow_subkind_suffix = "" if flow == 1 else "_export"
     low_base_marker = " ⚠ low-base" if low_base else ""
-    unit_price_curr = (current_eur / current_kg) if current_kg else None
-    unit_price_prior = (prior_eur / prior_kg) if prior_kg else None
-    unit_price_pct = (
-        ((unit_price_curr - unit_price_prior) / abs(unit_price_prior))
-        if unit_price_curr is not None and unit_price_prior is not None and unit_price_prior != 0
-        else None
-    )
+    # Phase 1.5: only compute and report unit prices when kg coverage is
+    # high enough that eur/kg is editorially meaningful. For groups dominated
+    # by pieces (machine tools, EV cars) or litres (beverages), kg coverage
+    # is sparse and the decomposition is misleading.
+    decomposition_suppressed = kg_coverage_pct < KG_COVERAGE_DECOMPOSITION_THRESHOLD
+    if decomposition_suppressed:
+        unit_price_curr = None
+        unit_price_prior = None
+        unit_price_pct = None
+    else:
+        unit_price_curr = (current_eur / current_kg) if current_kg else None
+        unit_price_prior = (prior_eur / prior_kg) if prior_kg else None
+        unit_price_pct = (
+            ((unit_price_curr - unit_price_prior) / abs(unit_price_prior))
+            if unit_price_curr is not None and unit_price_prior is not None and unit_price_prior != 0
+            else None
+        )
 
     title = (
         f"Component trend ({flow_label}): {group.name}, rolling 12mo to {end_curr.strftime('%Y-%m')}: "
@@ -1018,10 +1067,24 @@ def _insert_hs_group_yoy_finding(
         f"  Value:    €{current_eur:,.0f} ({yoy_pct_eur*100:+.2f}% YoY vs €{prior_eur:,.0f})",
         f"  Quantity: {current_kg:,.0f} kg ({kg_yoy_str} YoY vs {prior_kg:,.0f} kg)",
     ]
-    if unit_price_curr is not None and unit_price_prior is not None:
+    if decomposition_suppressed:
+        body_lines.append(
+            f"  Unit price (€/kg): SUPPRESSED — only {kg_coverage_pct*100:.0f}% of "
+            f"value_eur in this group is backed by a non-zero kg measurement "
+            f"(threshold {KG_COVERAGE_DECOMPOSITION_THRESHOLD*100:.0f}%). The group is "
+            f"dominated by HS codes whose primary unit is something other than kg "
+            f"(pieces, litres, etc.); a unit price computed as eur/kg over the "
+            f"subset that did report kg would be misleading. The volume- vs. "
+            f"price-driven decomposition is therefore omitted. See caveat "
+            f"'low_kg_coverage'."
+        )
+    elif unit_price_curr is not None and unit_price_prior is not None:
         body_lines.append(
             f"  Unit price: €{unit_price_curr:,.4f}/kg current vs €{unit_price_prior:,.4f}/kg prior"
             f" ({unit_price_pct*100:+.2f}% change)"
+        )
+        body_lines.append(
+            f"  kg coverage in current 12mo: {kg_coverage_pct*100:.0f}% of value_eur."
         )
         if abs(yoy_pct_eur) > 0.01 and unit_price_pct is not None:
             # Decomposition note — this is what tells the journalist
@@ -1066,9 +1129,11 @@ def _insert_hs_group_yoy_finding(
     ]
     if low_base:
         caveat_codes.append("low_base_effect")
+    if decomposition_suppressed:
+        caveat_codes.append("low_kg_coverage")
 
     detail = {
-        "method": "hs_group_yoy_v4_with_low_base_flag",
+        "method": "hs_group_yoy_v5_kg_coverage_gating",
         "method_query": {
             "source": "eurostat_raw_rows", "flow": flow, "partner": "CN",
             "flow_label": flow_label,
@@ -1095,6 +1160,9 @@ def _insert_hs_group_yoy_finding(
             "current_unit_price_eur_per_kg": unit_price_curr,
             "prior_unit_price_eur_per_kg": unit_price_prior,
             "unit_price_pct_change": unit_price_pct,
+            "kg_coverage_pct": kg_coverage_pct,
+            "kg_coverage_threshold": KG_COVERAGE_DECOMPOSITION_THRESHOLD,
+            "decomposition_suppressed": decomposition_suppressed,
             "low_base": low_base,
             "low_base_threshold_eur": low_base_threshold_eur,
         },
@@ -1102,7 +1170,7 @@ def _insert_hs_group_yoy_finding(
             {"period": p.isoformat(), "value_eur": e, "quantity_kg": k,
              "unit_price_eur_per_kg": (e / k) if k else None,
              "n_raw_rows": n_obs_by_period.get(p, 0)}
-            for (p, e, k, _) in series
+            for (p, e, k, _, _) in series
             if start_prior <= p <= end_curr
         ],
         "top_cn8_codes_in_current_12mo": top_cn8s,

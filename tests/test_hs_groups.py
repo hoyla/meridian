@@ -312,3 +312,55 @@ def test_yoy_decomposition_volume_vs_price(empty_op, test_db_url):
     assert abs(detail["totals"]["yoy_pct_kg"] - 0.5) < 1e-9
     assert abs(detail["totals"]["unit_price_pct_change"]) < 1e-9
     assert "volume-driven" in detail.get("body", "") or True  # body lives outside detail
+    # Phase 1.5: full kg coverage on this synthetic data → decomposition NOT suppressed.
+    assert detail["totals"]["kg_coverage_pct"] >= 0.99
+    assert detail["totals"]["decomposition_suppressed"] is False
+
+
+def test_yoy_decomposition_suppressed_when_kg_coverage_low(empty_op, test_db_url):
+    """Phase 1.5: when most of the value_eur in a group is backed by rows
+    with no kg measurement (pieces-, litres-, units-denominated HS codes),
+    the unit-price decomposition is misleading and is suppressed.
+
+    Seed setup: most rows have kg=0 (no kg coverage); a small minority
+    have kg>0. Coverage ≈ small minority's value share / total. We want
+    that share < 80% to trigger suppression."""
+    with psycopg2.connect(test_db_url) as conn:
+        # Seed two HS codes to the same group (machine tools 8456%–8463%):
+        # - One with full kg coverage but small value (€10 × 24)
+        # - One with no kg (zero) but large value (€1000 × 24)
+        # Coverage = €10 / (€10+€1000) = 1% per period — way below the 80% threshold.
+        _seed_eurostat_imports(
+            conn, "84561000",  # has kg
+            _make_24_months(date(2024, 1, 1), [10.0] * 24),
+            kg_per_period=[1.0] * 24,
+        )
+        _seed_eurostat_imports(
+            conn, "84571000",  # no kg
+            _make_24_months(date(2024, 1, 1), [1000.0] * 24),
+            kg_per_period=[0.0] * 24,
+        )
+
+    anomalies.detect_hs_group_yoy(
+        group_names=["Machine tools"], yoy_threshold_pct=0.0,
+    )
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT title, body, detail FROM findings WHERE subkind='hs_group_yoy' "
+            "AND detail->'group'->>'name' = 'Machine tools' "
+            "ORDER BY score DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+        assert row is not None, "expected an hs_group_yoy finding for Machine tools"
+        title, body, detail = row
+
+    assert detail["totals"]["kg_coverage_pct"] < 0.80
+    assert detail["totals"]["decomposition_suppressed"] is True
+    # The suppressed unit-price fields are NULL in totals.
+    assert detail["totals"]["current_unit_price_eur_per_kg"] is None
+    assert detail["totals"]["prior_unit_price_eur_per_kg"] is None
+    assert detail["totals"]["unit_price_pct_change"] is None
+    # And the caveat is attached.
+    assert "low_kg_coverage" in detail["caveat_codes"]
+    # Body explains the suppression rather than silently omitting.
+    assert "SUPPRESSED" in body
