@@ -660,6 +660,61 @@ has at least one full default window (6 months) behind it. Phase 1.4 of
 dev_notes/roadmap-2026-05-09.md."""
 
 
+def _log_mirror_gap_staleness() -> None:
+    """Phase 2.6: log a WARNING when the latest active mirror_gap finding's
+    period is older than the latest available Eurostat or GACC release.
+    The trend analyser then builds on stale input — not silently dangerous,
+    but the journalist should know to re-run --analyse mirror-trade first.
+
+    No-op when fully fresh (logs INFO with period summary instead). Never
+    raises; never blocks the analyser. Editorial intent: surface the state,
+    let the journalist decide."""
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        cur.execute(
+            """
+            SELECT
+              (SELECT MAX(r.period) FROM observations o
+                 JOIN releases r ON r.id = o.release_id
+                WHERE o.id = ANY(
+                  SELECT unnest(observation_ids) FROM findings
+                   WHERE subkind = 'mirror_gap' AND superseded_at IS NULL
+                )
+              ) AS latest_mirror_gap_period,
+              (SELECT MAX(period) FROM releases WHERE source = 'eurostat') AS latest_eurostat_period,
+              (SELECT MAX(period) FROM releases WHERE source = 'gacc')     AS latest_gacc_period
+            """
+        )
+        row = cur.fetchone()
+    latest_mg = row["latest_mirror_gap_period"]
+    latest_eu = row["latest_eurostat_period"]
+    latest_gacc = row["latest_gacc_period"]
+
+    if latest_mg is None:
+        log.info(
+            "Mirror-gap-trends staleness check: no active mirror_gap findings "
+            "exist yet. The trend pass will be a no-op until you run "
+            "--analyse mirror-trade first."
+        )
+        return
+
+    upstream_latest = max(filter(None, [latest_eu, latest_gacc])) if (latest_eu or latest_gacc) else None
+    if upstream_latest is None or latest_mg >= upstream_latest:
+        log.info(
+            "Mirror-gap-trends staleness check OK: latest mirror_gap is %s; "
+            "latest Eurostat=%s, latest GACC=%s.",
+            latest_mg, latest_eu, latest_gacc,
+        )
+        return
+
+    log.warning(
+        "Mirror-gap-trends staleness: latest active mirror_gap finding is %s, "
+        "but Eurostat data extends to %s and GACC to %s. "
+        "Re-run --analyse mirror-trade first to refresh the upstream findings, "
+        "or expect this trend pass to operate on stale input.",
+        latest_mg, latest_eu, latest_gacc,
+    )
+
+
 def detect_mirror_gap_trends(
     window_months: int = 6,
     period: date | None = None,
@@ -697,6 +752,14 @@ def detect_mirror_gap_trends(
         "skipped_insufficient_baseline": 0,
         "skipped_zero_stdev": 0, "skipped_below_threshold": 0,
     }
+
+    # Phase 2.6: staleness check. The trend analyser builds on existing
+    # mirror_gap findings, so if the upstream pass hasn't been re-run after
+    # new Eurostat data landed, the trend pass is operating on stale input.
+    # We log a WARNING with the exact periods so the journalist sees what's
+    # happening — not auto-triggering, because that hides which pass
+    # produced what.
+    _log_mirror_gap_staleness()
 
     series_all = _select_latest_mirror_gap_series(period_filter=None)
     if not series_all:

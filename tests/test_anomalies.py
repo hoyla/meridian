@@ -664,6 +664,45 @@ def test_trend_emits_finding_when_gap_jumps(empty_op_tables, test_db_url):
     assert "low_baseline_n" not in detail["caveat_codes"]
 
 
+def test_trend_logs_staleness_warning_when_upstream_lags(
+    empty_op_tables, test_db_url, caplog,
+):
+    """Phase 2.6: when the latest active mirror_gap finding's period is
+    older than the latest Eurostat/GACC release, a WARNING fires before
+    the trend analyser runs. The journalist sees the staleness instead
+    of receiving findings built silently on stale input."""
+    import logging as _logging
+    # Seed: an old mirror_gap finding (Sep 2025) but a newer Eurostat
+    # release (Feb 2026) — so the upstream pass clearly hasn't been
+    # re-run after newer data landed.
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_mirror_gap_findings(conn, "DE", [
+            (date(2025, 9, 1), 0.50),
+        ])
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO releases (source, period, source_url) "
+                "VALUES ('eurostat', '2026-02-01', 'http://example/eu-feb')"
+            )
+            cur.execute(
+                "INSERT INTO releases (source, period, source_url) "
+                "VALUES ('gacc', '2026-02-01', 'http://example/gacc-feb')"
+            )
+            conn.commit()
+
+    with caplog.at_level(_logging.WARNING, logger="anomalies"):
+        anomalies.detect_mirror_gap_trends(
+            window_months=6, z_threshold=1.5, min_baseline_n=3,
+        )
+
+    staleness = [r for r in caplog.records
+                 if "staleness" in r.message and r.levelno == _logging.WARNING]
+    assert len(staleness) >= 1, (
+        f"expected a staleness WARNING; got records: "
+        f"{[(r.levelname, r.message) for r in caplog.records]}"
+    )
+
+
 def test_trend_attaches_low_baseline_n_caveat_below_threshold(empty_op_tables, test_db_url):
     """Phase 1.4: with only 4 baseline points (≥ min_baseline_n=3 but
     < LOW_BASELINE_N_THRESHOLD=6), the z-score finding still emits but
