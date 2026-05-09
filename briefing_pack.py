@@ -166,6 +166,68 @@ def _section_headline(cur) -> _Section:
     return _Section(markdown="\n".join(lines))
 
 
+def _section_llm_narratives(cur) -> _Section:
+    """Top-line narratives from llm_framing — one short paragraph per HS group
+    that has a current narrative finding. Suppressed entirely when there are
+    no narratives (so a journalist who hasn't run the framing pass still gets
+    a clean deterministic-only brief).
+
+    Each narrative carries an `llm_drafted` caveat plus the union of caveats
+    on its underlying findings. We surface those inline so the editorial
+    framing is honest about its own provenance.
+    """
+    cur.execute(
+        """
+        SELECT f.id, f.body, f.detail, f.last_confirmed_at
+          FROM findings f
+         WHERE f.subkind = 'narrative_hs_group'
+           AND f.superseded_at IS NULL
+      ORDER BY f.detail->'group'->>'name'
+        """
+    )
+    rows = cur.fetchall()
+
+    lines: list[str] = []
+    if not rows:
+        # Nothing to render — caller treats empty markdown as "skip section".
+        return _Section(markdown="")
+
+    lines.append("## Top-line narratives")
+    lines.append("")
+    lines.append(
+        f"LLM-drafted editorial framing for each HS group, ordered by group "
+        f"name. Each narrative cites only numbers present in the underlying "
+        f"deterministic findings (verified at generation time). The "
+        f"`llm_drafted` caveat tags every paragraph below as editorial origin; "
+        f"underlying caveats (low_base, partial_window, transshipment_hub, "
+        f"cn8_revision, low_kg_coverage, etc.) propagate from the source "
+        f"findings. Trace ids point to the narrative finding, not the "
+        f"underlying — query `findings.detail->>'underlying_finding_ids'` "
+        f"to walk the chain."
+    )
+    lines.append("")
+    for r in rows:
+        detail = r["detail"]
+        group_name = detail.get("group", {}).get("name", "—")
+        caveats = detail.get("caveat_codes") or []
+        # Don't emit `llm_drafted` inline — it's implied by the section header.
+        visible_caveats = [c for c in caveats if c != "llm_drafted"]
+        lines.append(f"### {group_name}")
+        lines.append("")
+        lines.append(r["body"])
+        lines.append("")
+        if visible_caveats:
+            lines.append(f"*Caveats from underlying findings: {', '.join(visible_caveats)}*")
+        lines.append(
+            f"*Underlying findings: "
+            f"{', '.join(str(i) for i in detail.get('underlying_finding_ids', []))} "
+            f"— Trace: {_trace_token(r['id'])}*"
+        )
+        lines.append("")
+
+    return _Section(markdown="\n".join(lines))
+
+
 def _section_hs_yoy_movers(cur, flow: int, top_n: int) -> _Section:
     """Top-N movers by |yoy_pct| for the latest period per group."""
     subkind = "hs_group_yoy" if flow == 1 else "hs_group_yoy_export"
@@ -613,6 +675,12 @@ def render(top_n: int = DEFAULT_TOP_N) -> str:
     release_ids: set[int] = set()
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         sections.append(_section_headline(cur))
+
+        # Phase 3 integration: LLM-drafted narratives sit ABOVE the
+        # deterministic mover sections — they're the editorial framing
+        # the journalist scans first, with the structured sections below
+        # acting as the audit trail.
+        sections.append(_section_llm_narratives(cur))
 
         for flow in (1, 2):
             sec = _section_hs_yoy_movers(cur, flow=flow, top_n=top_n)

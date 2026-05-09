@@ -28,6 +28,7 @@ import briefing_pack
 import db
 import eurostat
 import fx
+import llm_framing
 import parse
 import sheets_export
 
@@ -175,8 +176,14 @@ def main() -> None:
     p.add_argument("--fx-since", type=_parse_period, metavar="YYYY-MM",
                    help="Only fetch FX rates from this period onwards (default: full history)")
     p.add_argument("--analyse",
-                   choices=["mirror-trade", "mirror-gap-trends", "hs-group-yoy", "hs-group-trajectory"],
-                   help="Run a deterministic anomaly pass over already-ingested data")
+                   choices=["mirror-trade", "mirror-gap-trends", "hs-group-yoy",
+                            "hs-group-trajectory", "llm-framing"],
+                   help="Run a deterministic anomaly pass over already-ingested data, "
+                        "or 'llm-framing' to generate narrative top-lines per hs-group "
+                        "(consumes existing deterministic findings)")
+    p.add_argument("--llm-model", metavar="NAME", default=None,
+                   help=f"Ollama model name for --analyse llm-framing. Default: "
+                        f"{llm_framing.DEFAULT_OLLAMA_MODEL}")
     p.add_argument("--eurostat-partners", metavar="LIST",
                    help="Comma-separated Eurostat partner_country codes to sum on the EU "
                         "import side for mirror-trade. Default: 'CN'. Use 'CN,HK' to also "
@@ -264,6 +271,14 @@ def main() -> None:
             smooth_window=args.smooth_window,
         )
         log.info("HS-group trajectory analysis (flow=%d): %s", args.flow, counts)
+        return
+
+    if args.analyse == "llm-framing":
+        counts = llm_framing.detect_llm_framings(
+            group_names=args.hs_group,
+            model=args.llm_model,
+        )
+        log.info("LLM framing run: %s", counts)
         return
 
     if args.export_sheet:
