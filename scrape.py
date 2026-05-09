@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 
 import anomalies
 import api_client
+import briefing_pack
 import db
 import eurostat
 import fx
@@ -184,6 +185,15 @@ def main() -> None:
                    help="Output file path for xlsx export (default: ./exports/findings-{timestamp}.xlsx)")
     p.add_argument("--spreadsheet-id", metavar="ID",
                    help="Google Sheets spreadsheet ID (for --out-format sheets)")
+    p.add_argument("--briefing-pack", action="store_true",
+                   help="Export findings to a Markdown briefing pack (NotebookLM-ready). "
+                        "Default output: ./exports/briefing-{timestamp}.md")
+    p.add_argument("--briefing-out", metavar="PATH",
+                   help="Output file path for the briefing pack (default: "
+                        "./exports/briefing-{timestamp}.md)")
+    p.add_argument("--briefing-top-n", type=int, default=briefing_pack.DEFAULT_TOP_N, metavar="N",
+                   help=f"Top N hs_group_yoy movers per flow direction "
+                        f"(default: {briefing_pack.DEFAULT_TOP_N})")
     p.add_argument("--hs-group", action="append", metavar="NAME",
                    help="Restrict --analyse hs-group-yoy to specific group name(s); repeat for multiple")
     p.add_argument("--yoy-threshold", type=float, default=0.0, metavar="PCT",
@@ -236,6 +246,11 @@ def main() -> None:
             spreadsheet_id=args.spreadsheet_id,
         )
         log.info("Exported to %s", out)
+        return
+
+    if args.briefing_pack:
+        out = briefing_pack.export(out_path=args.briefing_out, top_n=args.briefing_top_n)
+        log.info("Wrote briefing pack to %s", out)
         return
 
     if args.fetch_fx:
