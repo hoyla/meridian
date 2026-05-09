@@ -1,6 +1,8 @@
 # gacc
 
-Ingest China–EU trade statistics from both sides of the customs fence — GACC (China) and Eurostat Comext (EU) — into a shared schema, cross-compare them to surface mirror-trade gaps and HS-group trends, and have an LLM frame the most journalistically interesting findings. ECB FX rates are pulled automatically so all values are comparable in EUR.
+Ingest China–EU trade statistics from both sides of the customs fence — GACC (China) and Eurostat Comext (EU) — into a shared schema, cross-compare them to surface mirror-trade gaps and HS-group trends, and surface the most journalistically interesting findings to a spreadsheet, a Markdown briefing pack (NotebookLM-ready), or — eventually — an LLM-framed narrative. ECB FX rates are pulled automatically so all values are comparable in EUR.
+
+For Guardian journalists. Domain-agnostic by design: HS-group definitions live in a journalist-editable `hs_groups` table, so the same machinery investigates EVs, solar PV, rare earths, pork, or whatever the next desk asks about.
 
 ## Stack
 
@@ -41,16 +43,24 @@ python scrape.py --fetch-fx CNY                       # full ECB history
 python scrape.py --fetch-fx CNY --fx-since 2024-01     # from a given month
 
 # Anomaly detection (over already-ingested data)
-python scrape.py --analyse mirror-trade
+python scrape.py --analyse mirror-trade                       # CN-export vs EU-import per partner
 python scrape.py --analyse mirror-gap-trends --trend-window 6 --z-threshold 1.5
-python scrape.py --analyse hs-group-yoy --hs-group "Electric vehicles" --yoy-threshold 0.1
-python scrape.py --analyse hs-group-trajectory --analyse-period 2026-03 --flow 1
+python scrape.py --analyse hs-group-yoy --flow 1              # imports (CN→EU); --flow 2 for exports
+python scrape.py --analyse hs-group-yoy --hs-group "EV batteries (Li-ion)" --yoy-threshold 0.1
+python scrape.py --analyse hs-group-trajectory --flow 1       # rolling YoY shape classifier
 
-# Spreadsheet export
-python scrape.py --export-sheet                               # local .xlsx (default)
+# Spreadsheet export (editorial scanning)
+python scrape.py --export-sheet                               # local .xlsx, 7 sheets
 python scrape.py --export-sheet --out-path exports/custom.xlsx
-python scrape.py --export-sheet --out-format sheets --spreadsheet-id <ID>
+python scrape.py --export-sheet --out-format sheets --spreadsheet-id <ID>   # Google Sheets (pending creds)
+
+# Markdown briefing pack (narrative reading; NotebookLM-ready)
+python scrape.py --briefing-pack                              # ./exports/briefing-{timestamp}.md
+python scrape.py --briefing-pack --briefing-top-n 20          # 20 movers per flow direction
+python scrape.py --briefing-pack --briefing-out exports/today.md
 ```
+
+The two export surfaces share the same underlying data layer: switching between them — or adding a new one — is a thin render shim, not a re-ingest.
 
 ## Layout
 
@@ -63,15 +73,19 @@ python scrape.py --export-sheet --out-format sheets --spreadsheet-id <ID>
 | `eurostat.py`      | Eurostat Comext bulk-file fetcher (7z download, stream-decompress, filter, aggregate) |
 | `fx.py`            | ECB monthly-average FX rate fetcher → `fx_rates`        |
 | `lookups.py`       | Country-alias resolution, caveat metadata, FX rate lookups |
-| `anomalies.py`     | Deterministic anomaly detection (mirror-gap implemented; YoY/MoM/rank-shift planned) |
-| `llm_framing.py`   | LLM narrative layer over `anomalies` findings           |
-| `sheets_export.py` | Export findings to local `.xlsx` (primary) or Google Sheets (stub) |
+| `anomalies.py`     | Deterministic anomaly detection: 6 finding subkinds — `mirror_gap`, `mirror_gap_zscore`, `hs_group_yoy` (+ `_export`), `hs_group_trajectory` (+ `_export`) |
+| `llm_framing.py`   | LLM narrative layer over `anomalies` findings (planned) |
+| `sheets_export.py` | Export findings to local `.xlsx` (shipped) or Google Sheets (stub, pending service-account creds) |
+| `briefing_pack.py` | Markdown briefing-pack export — NotebookLM-ready, with a Sources appendix tracing every finding back to a third-party URL |
 | `schema.sql`       | Canonical initial schema (move to Alembic on 1st change)|
-| `exports/`         | Default output directory for `.xlsx` exports            |
+| `exports/`         | Default output directory for generated `.xlsx` and `.md` exports (gitignored) |
 | `tests/`           | pytest, live local Postgres                             |
 
 ## Design notes
 
-- Raw response bytes are stored in `source_snapshots` for every fetch — full audit trail.
-- Observations are versioned: when the same (release, dimension) reappears with a different value (preliminary → monthly → revised), `version_seen` is bumped rather than overwritten. The revisions are sometimes the story.
-- The LLM never computes numbers. `anomalies.py` does the maths; `llm_framing.py` only clusters and narrates the deterministic findings, with every numeric claim validated back to a source row before storage.
+- **Two-source by design.** GACC and Eurostat ingest into a shared `observations` table with a per-cell view, so any cross-source query (mirror-gap, agg-vs-agg) is just a join. The schema anticipated the second source from the start.
+- **Provenance discipline.** Raw response bytes for every GACC fetch are stored in `source_snapshots`; raw Eurostat CSV rows are preserved verbatim in `eurostat_raw_rows` (the aggregated `observations` row carries an FK array back to its raw rows, so any aggregation can be audited or re-derived). Findings reference observation_ids so a journalist clicking through any number can land on the underlying row. The briefing pack's Sources appendix lists every third-party URL the brief rests on.
+- **Observations are versioned.** When the same (release, dimension) reappears with a different value (preliminary → monthly → revised), `version_seen` is bumped rather than overwritten. The revisions are sometimes the story.
+- **Permalink scheme.** Every finding has a stable `finding/{id}` handle. Spreadsheet outputs include a `link` column that emits a Sheets `HYPERLINK` formula resolved at view-time against `GACC_PERMALINK_BASE`; the briefing pack renders the same handle as a Markdown link. When a web UI later exists, set the env var and existing exports light up automatically — no backfill.
+- **The LLM never computes numbers.** `anomalies.py` does the maths; `llm_framing.py` (planned) will only cluster and narrate the deterministic findings, with every numeric claim validated back to a source row before storage.
+- **Low-base flagging.** YoY findings whose prior or current 12mo total is below €50M get auto-flagged. The briefing pack and Sheets export both surface a dedicated review section so percentages aren't quoted from tiny denominators without a verifier glance.
