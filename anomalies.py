@@ -1459,7 +1459,54 @@ def _sign_runs(signs: list[int]) -> list[tuple[int, int, int]]:
     return runs
 
 
-def _classify_trajectory(yoys: list[float]) -> tuple[str, dict]:
+SEASONAL_AUTOCORR_LAG = 12   # lag-12 autocorrelation captures annual seasonality
+SEASONAL_SIGNAL_THRESHOLD = 0.5  # |autocorr| above this counts as a strong seasonal signal
+
+
+def _autocorrelation_at_lag(ys: list[float], lag: int) -> float | None:
+    """Detrended Pearson correlation between `ys[:-lag]` and `ys[lag:]` —
+    used to detect *seasonality*, not generic linear trend. Returns None
+    if the series is too short (< lag+2 points) or either slice has zero
+    variance after detrending.
+
+    A naive Pearson autocorrelation at lag k is high for any
+    monotonically-trending series (a straight line correlates with its
+    shifted self), which is not what we want here — we want to flag
+    series that *oscillate* annually, distinct from series that simply
+    rise or fall. The fix is to subtract a Theil-Sen linear fit before
+    computing the correlation; the residual carries the cyclical
+    component if any exists.
+
+    Editorial use: lag-12 autocorrelation on the rolling-12mo YoY series
+    captures whether the YoY shape itself oscillates annually — e.g. a
+    group whose YoY pattern repeats year-on-year (Christmas surge,
+    Lunar-New-Year dip) rather than progressing linearly. Phase 2.5 of
+    dev_notes/roadmap-2026-05-09.md."""
+    n = len(ys)
+    if n < lag + 2:
+        return None
+    # Detrend with Theil-Sen (robust). For a linear series the residuals
+    # are essentially zero and we'll return None via zero-variance.
+    xs = list(range(n))
+    slope = _theil_sen_slope(xs, list(ys))
+    # Intercept: median of (y_i - slope * x_i), the Theil-Sen intercept.
+    intercept = statistics.median([ys[i] - slope * xs[i] for i in range(n)])
+    residuals = [ys[i] - (slope * xs[i] + intercept) for i in range(n)]
+
+    a = residuals[:-lag]
+    b = residuals[lag:]
+    m = len(a)
+    mean_a = sum(a) / m
+    mean_b = sum(b) / m
+    cov = sum((a[i] - mean_a) * (b[i] - mean_b) for i in range(m))
+    var_a = sum((a[i] - mean_a) ** 2 for i in range(m))
+    var_b = sum((b[i] - mean_b) ** 2 for i in range(m))
+    if var_a == 0 or var_b == 0:
+        return None
+    return cov / ((var_a * var_b) ** 0.5)
+
+
+def _classify_trajectory(yoys: list[float], smooth_window: int | None = None) -> tuple[str, dict]:
     """Returns (shape_key, features_dict). The features carry the numeric
     evidence so a finding's body can spell out *why* it got the shape it did.
 
@@ -1471,7 +1518,13 @@ def _classify_trajectory(yoys: list[float]) -> tuple[str, dict]:
     if n < TRAJECTORY_MIN_WINDOWS:
         return "insufficient_data", {"n": n, "min_required": TRAJECTORY_MIN_WINDOWS}
 
-    smoothed = _smooth_centered(yoys, TRAJECTORY_SMOOTH_WINDOW)
+    # Phase 2.4: smoothing window is now configurable. Default 3 (the historic
+    # behaviour). Pass smooth_window=1 to disable smoothing for analyses
+    # focused on short-term policy effects (tariff pre-loading, single-month
+    # spikes that 3-window smoothing would absorb).
+    if smooth_window is None:
+        smooth_window = TRAJECTORY_SMOOTH_WINDOW
+    smoothed = _smooth_centered(yoys, smooth_window)
 
     # Raw stats (for transparency in the finding body)
     raw_signs = [1 if y > 0 else (-1 if y < 0 else 0) for y in yoys]
@@ -1497,6 +1550,16 @@ def _classify_trajectory(yoys: list[float]) -> tuple[str, dict]:
     max_y = max(yoys); max_idx = yoys.index(max_y)
     min_y = min(yoys); min_idx = yoys.index(min_y)
 
+    # Phase 2.5: detrended lag-12 autocorrelation of the raw YoY series.
+    # POSITIVE autocorrelation at lag 12 means values 12 months apart move
+    # together — the editorial signature of an annual cycle (Christmas
+    # surge, Lunar-New-Year dip repeating year-on-year). Negative values
+    # at lag 12 are common artefacts of detrending a U-shape or
+    # inverse-U-shape (the second half mirrors the first), and are NOT
+    # seasonality — they're already captured by the directional shape
+    # vocabulary. So the strong-signal gate is positive-only.
+    seasonal_autocorr = _autocorrelation_at_lag(yoys, SEASONAL_AUTOCORR_LAG)
+
     features = {
         "n": n,
         "first_yoy": yoys[0], "last_yoy": yoys[-1],
@@ -1508,7 +1571,14 @@ def _classify_trajectory(yoys: list[float]) -> tuple[str, dict]:
         "smoothed_first": smoothed[0], "smoothed_last": smoothed[-1],
         "earlier_slope": earlier_slope, "recent_slope": recent_slope,
         "overall_slope": overall_slope,
-        "smoothing_window": TRAJECTORY_SMOOTH_WINDOW,
+        "smoothing_window": smooth_window,
+        "seasonal_signal_strength": seasonal_autocorr,
+        "seasonal_signal_lag": SEASONAL_AUTOCORR_LAG,
+        "seasonal_signal_threshold": SEASONAL_SIGNAL_THRESHOLD,
+        "has_strong_seasonal_signal": (
+            seasonal_autocorr is not None
+            and seasonal_autocorr >= SEASONAL_SIGNAL_THRESHOLD
+        ),
         "thresholds": {
             "flat_mean_abs_yoy": TRAJECTORY_FLAT_MEAN_ABS_YOY,
             "flat_stdev": TRAJECTORY_FLAT_STDEV,
@@ -1577,6 +1647,7 @@ def detect_hs_group_trajectories(
     group_names: list[str] | None = None,
     flow: int = 1,
     low_base_threshold_eur: float = LOW_BASE_THRESHOLD_EUR,
+    smooth_window: int | None = None,
 ) -> dict[str, int]:
     """For each hs_group, classify the rolling-12mo-EUR YoY series across all
     available windows into a trajectory shape. Reads the matching hs_group_yoy
@@ -1639,7 +1710,7 @@ def detect_hs_group_trajectories(
                 counts["skipped_incomplete_series"] += 1
                 continue
             yoys = [s["yoy_pct"] for s in series]
-            shape, features = _classify_trajectory(yoys)
+            shape, features = _classify_trajectory(yoys, smooth_window=smooth_window)
             if shape == "insufficient_data":
                 counts["skipped_insufficient_data"] += 1
                 continue
@@ -1827,8 +1898,24 @@ def _insert_trajectory_finding(
             )
         )
 
+    if features.get("has_strong_seasonal_signal"):
+        # Phase 2.5: surface seasonality as body context, not as a 13th
+        # shape. The shape vocabulary stays clean for editorial sorting;
+        # the seasonal note pairs with whatever directional shape was
+        # assigned ("dip_recovery with strong seasonal component").
+        ac = features["seasonal_signal_strength"]
+        body_lines.append("")
+        body_lines.append(
+            f"📅 Seasonal signal: lag-12 autocorrelation = {ac:+.2f} "
+            f"(threshold ±{SEASONAL_SIGNAL_THRESHOLD:.2f}). The YoY series "
+            f"oscillates annually — interpret the assigned shape "
+            f"('{shape}') as the *direction* of the trend, with the "
+            f"seasonal pattern overlaid. Compare period-to-same-period-"
+            f"prior-year rather than month-to-month."
+        )
+
     detail = {
-        "method": "hs_group_trajectory_v3_theil_sen_slope",
+        "method": "hs_group_trajectory_v4_seasonal_feature_and_configurable_smoothing",
         "flow": flow,
         "flow_label": flow_label,
         "group": {"id": group.id, "name": group.name, "hs_patterns": group.hs_patterns},
@@ -1876,6 +1963,13 @@ def _insert_trajectory_finding(
                 "min_yoy": round(features.get("min_yoy", 0), 6),
                 "n": features.get("n"),
                 "low_base_majority": features.get("low_base_majority"),
+                # Phase 2.5: include the seasonal flag so changes propagate
+                # via supersede. The numeric strength isn't included
+                # (round-to-2dp would defeat the deterministic-hash purpose
+                # for borderline values); the boolean flag is the editorial
+                # signal that matters.
+                "has_strong_seasonal_signal": features.get("has_strong_seasonal_signal", False),
+                "smoothing_window": features.get("smoothing_window"),
             },
             hs_group_ids=[group.id],
             score=score,

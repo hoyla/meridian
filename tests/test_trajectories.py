@@ -162,6 +162,69 @@ def test_theil_sen_handles_trivial_input():
 
 
 # ---------------------------------------------------------------------------
+# Phase 2.4: configurable smoothing window
+# ---------------------------------------------------------------------------
+
+
+def test_smooth_window_1_disables_smoothing():
+    """Phase 2.4: smooth_window=1 should treat the raw series as the smoothed
+    series, exposing single-period spikes (tariff pre-loading) that the
+    default 3-window smoothing would absorb. The features dict records the
+    window actually used."""
+    yoys = [0.10] * 6 + [0.50] + [0.10] * 6  # one-month spike
+    # Default smoothing absorbs the spike → flat or slight rising.
+    shape_default, feat_default = anomalies._classify_trajectory(yoys)
+    assert feat_default["smoothing_window"] == anomalies.TRAJECTORY_SMOOTH_WINDOW
+
+    # No smoothing → spike survives and triggers a sign-changes count
+    # consistent with the unsmoothed pattern. (We're not assertion the
+    # specific shape because the classifier may legitimately read either;
+    # the contract here is that the *window value round-trips*.)
+    shape_raw, feat_raw = anomalies._classify_trajectory(yoys, smooth_window=1)
+    assert feat_raw["smoothing_window"] == 1
+    # smoothed and raw signs should be the same when window=1.
+    assert feat_raw["smoothed_first"] == yoys[0]
+    assert feat_raw["smoothed_last"] == yoys[-1]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.5: seasonality as a feature, not a shape
+# ---------------------------------------------------------------------------
+
+
+def test_autocorrelation_at_lag_pure_function():
+    """Edge cases for the autocorrelation helper."""
+    # Series too short for the requested lag → None.
+    assert anomalies._autocorrelation_at_lag([1, 2, 3], lag=12) is None
+    # Constant series → 0 variance → None.
+    assert anomalies._autocorrelation_at_lag([1.0] * 20, lag=12) is None
+    # Perfectly periodic series at lag 12 → autocorrelation ≈ 1.
+    periodic = [float((i % 12) - 6) for i in range(36)]
+    ac = anomalies._autocorrelation_at_lag(periodic, lag=12)
+    assert ac is not None
+    assert ac > 0.95
+
+
+def test_seasonal_signal_surfaces_in_features():
+    """Phase 2.5: trajectory features include seasonal_signal_strength and
+    has_strong_seasonal_signal. A series with a clear annual pattern
+    should flag has_strong_seasonal_signal=True; a non-seasonal series
+    should not."""
+    # 24 months of strong annual oscillation around zero.
+    seasonal = [0.30 * (1 if (i % 12) < 6 else -1) for i in range(24)]
+    _, feat_seasonal = anomalies._classify_trajectory(seasonal)
+    assert feat_seasonal["seasonal_signal_lag"] == 12
+    assert feat_seasonal["seasonal_signal_strength"] is not None
+    assert abs(feat_seasonal["seasonal_signal_strength"]) >= anomalies.SEASONAL_SIGNAL_THRESHOLD
+    assert feat_seasonal["has_strong_seasonal_signal"] is True
+
+    # A linear rise has no seasonal pattern.
+    linear = [0.01 * i for i in range(24)]
+    _, feat_linear = anomalies._classify_trajectory(linear)
+    assert feat_linear["has_strong_seasonal_signal"] is False
+
+
+# ---------------------------------------------------------------------------
 # Integration tests
 # ---------------------------------------------------------------------------
 

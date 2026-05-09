@@ -211,6 +211,12 @@ def main() -> None:
                          f"hs-group-trajectory window is flagged low-base. Default: "
                          f"€{anomalies.LOW_BASE_THRESHOLD_EUR:,.0f}. Lower for niche-commodity "
                          f"investigations; raise for macro-only analyses."))
+    p.add_argument("--smooth-window", type=int, default=None, metavar="N",
+                   help=f"Centered moving-average window for trajectory shape detection. "
+                        f"Default {anomalies.TRAJECTORY_SMOOTH_WINDOW} (the historic behaviour). "
+                        f"Pass 1 to disable smoothing — useful for analyses focused on short-"
+                        f"term policy effects (tariff pre-loading spikes that 3-window "
+                        f"smoothing would absorb).")
     p.add_argument("--analyse-period", type=_parse_period, metavar="YYYY-MM",
                    help="Restrict --analyse to a single period (default: all)")
     p.add_argument("--trend-window", type=int, default=6, metavar="N",
@@ -255,6 +261,7 @@ def main() -> None:
         counts = anomalies.detect_hs_group_trajectories(
             group_names=args.hs_group, flow=args.flow,
             low_base_threshold_eur=args.low_base_threshold,
+            smooth_window=args.smooth_window,
         )
         log.info("HS-group trajectory analysis (flow=%d): %s", args.flow, counts)
         return
