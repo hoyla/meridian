@@ -1,4 +1,14 @@
-# Forward work: UK trade data is missing
+# UK trade data is missing — SHIPPED 2026-05-10 (Phase 6.1)
+
+**STATUS (2026-05-10)**: closed. HMRC OTS ingest via OData REST API
+ships in Phase 6.1 (commits `9489970` through `fb7dd57`). The original
+2026-05-09 gap analysis below is preserved for the historical design
+record; "What shipped" + "Remaining gaps" sections at the bottom
+capture the actual outcome.
+
+---
+
+## Original gap (2026-05-09)
 
 Captured 2026-05-09. Surfaced after the user clarified the editorial
 target is **the Guardian** — a UK publication. The current ingest
@@ -121,3 +131,69 @@ The two big political/social lenses Guardian readers care about — UK
 domestic industry effects, and the Brexit-era UK-China relationship
 specifically — both need UK data. Until we have it, the tool serves
 Lisa O'Carroll (Brussels) better than a UK-desk reporter.
+
+---
+
+## What shipped (2026-05-10)
+
+Phase 6.1, six commits (`9489970` → `fb7dd57`):
+
+- **`hmrc.py`** — OData ingest module. Pagination via explicit `$skip`
+  (HMRC API does not emit `@odata.nextLink`); chained `or` predicates
+  for multi-country filter (the OData `in` operator is rejected with
+  HTTP 403); GBP→EUR conversion at ingest using period FX from
+  `fx_rates`; SuppressionIndex-aware aggregation (suppressed rows
+  preserved for audit but excluded from sums).
+- **Schema**: new `hmrc_raw_rows` table mirroring `eurostat_raw_rows`
+  shape + HMRC-specific columns (`suppression_index`, `port_id`,
+  `value_gbp`, `value_eur`). `releases.source` CHECK widens to allow
+  `'hmrc'`. `observations.hmrc_raw_row_ids` array column for
+  provenance. Covering analyser index matching the
+  `idx_eu_raw_analyser` shape.
+- **`comparison_scope` parameter** on `detect_hs_group_yoy` and
+  `detect_hs_group_trajectories`. Three scopes — `eu_27`, `uk`,
+  `eu_27_plus_uk` — fan out to source-specific helper queries and
+  merge per-period totals in Python. New subkinds carry `_uk` and
+  `_combined` suffixes so scopes don't supersede each other.
+- **Briefing pack** renders one section per scope present in active
+  findings. Empty scopes produce empty markdown so the brief stays
+  terse if a journalist hasn't run all three scopes.
+- **CLI**: `--hmrc-period YYYY-MM`, `--comparison-scope <scope>`,
+  `--fetch-fx GBP --fx-since 2017-01`.
+
+**Live state post-shipping**:
+- 3.9M HMRC raw rows across 110 periods (2017-01 → 2026-02), partners
+  CN+HK+MO.
+- 13 finding subkinds across 3 scopes × 2 flows × {yoy, trajectory},
+  ~6,000 active hs-group findings combined.
+- 148 tests passing (8 new HMRC tests + 2 new comparison_scope tests).
+
+**Validation outcome (Phase 6.1f)**:
+- UK-side numbers cross-check against HMRC published headlines (Feb
+  2026 UK→CN imports £5.77B; ONS/HMRC range typically £4-7B). ✓
+- EU-27 absolute totals run ~2x Eurostat published headlines —
+  pre-existing issue not introduced by Phase 6.1. Captured in
+  `dev_notes/forward-work-eurostat-aggregate-scale.md`.
+
+## Remaining gaps (post-shipping)
+
+The original "three options" doc above proposed routes; the actual
+shipping took option A (HMRC OData) plus the three-scope abstraction.
+Still open:
+
+- **mirror-trade not yet scoped**. `mirror-trade` analyser still
+  compares GACC against Eurostat only; UK partner findings are
+  currently empty for 2021+. Phase 6.2 if a journalist needs the
+  cross-source UK mirror-gap. The aggregate-label logic in
+  `_compute_one_gap` makes this more involved than the hs-group
+  scoping.
+- **No HMRC+GACC mirror comparison**. We could compare GACC's
+  China-export-to-UK against HMRC's UK-import-from-CN directly
+  (analogous to mirror-trade for EU), but that's a new analyser
+  rather than a comparison_scope extension.
+- **mode 2 (UN Comtrade)** still parked. If a journalist asks about
+  China-Saudi or China-Brazil trade, we can't answer; comtrade is
+  the path. Significant effort (different API, different HS
+  granularity).
+- **mode 3 (ONS scrape)** abandoned. HMRC OData was sufficient —
+  ONS pulls from HMRC anyway. Removed from the route map.
