@@ -140,6 +140,22 @@ def test_verify_numbers_currency_not_sign_flipped_by_decrease_context():
     assert ok is True
 
 
+def test_verify_numbers_ignores_hs_chapter_references():
+    """Groups whose name embeds an HS chapter number (e.g. 'Electrical
+    equipment & machinery (chapters 84-85, broad)') prompt the LLM to
+    write any of: 'chapter 84', 'chapters 84-85', 'HS-84/85', 'HS 84'.
+    The bare 2-digit numbers should NOT reach number extraction."""
+    facts = {"imports": {"yoy_pct": 0.342}}
+    for phrasing in [
+        "EU-27 imports rose 34% in chapters 84-85.",
+        "EU-27 imports rose 34% in chapter 85, the main driver.",
+        "EU-27 imports rose 34%; the broad HS-84/85 group is up.",
+        "EU-27 imports rose 34%; HS 84 components led.",
+    ]:
+        ok, _ = llm_framing.verify_numbers(phrasing, facts)
+        assert ok is True, f"failed on: {phrasing!r}"
+
+
 def test_verify_numbers_ignores_geo_labels_like_eu27():
     """When rule G requires the LLM to write 'EU-27 imports from China',
     the bare '27' in 'EU-27' should NOT reach number extraction. Same
@@ -344,31 +360,40 @@ def test_validate_lead_scaffold_accepts_empty_hypotheses_list():
     assert result.corroboration_steps == []
 
 
-def test_user_prompt_carries_explicit_perspective_preamble():
-    """The user prompt must explicitly tell the LLM that 'imports' and
-    'exports' are from the EU-27 perspective and require it to name the
-    parties in any direction reference. A journalist reading the
-    anomaly summary should never see bare 'imports rose' — it should
-    always be 'EU-27 imports from China rose'."""
+def test_user_prompt_carries_multi_scope_perspective_preamble():
+    """The user prompt must name all three comparison scopes (EU-27 / UK /
+    combined) and require explicit scope-and-parties naming in any
+    direction reference. A journalist reading the anomaly summary should
+    never see bare 'imports rose' — always 'EU-27 imports from China
+    rose' or 'UK imports from China rose'."""
     cluster = llm_framing.HsGroupCluster(
         group_id=1, group_name="Test group", group_description="x",
         hs_patterns=["8507%"],
     )
-    facts = {"imports": {"yoy_pct": 0.30}}
+    facts = {"scopes": {"eu_27": {"imports": {"yoy_pct": 0.30}}}}
     prompt = llm_framing._build_user_prompt(cluster, facts)
-    # Perspective preamble names both directions explicitly
+    # Perspective preamble names all three scopes explicitly
     assert "EU-27 imports from China" in prompt
     assert "EU-27 exports to China" in prompt
-    # Forbids bare direction references
-    assert "imports rose" in prompt or "imports fell" in prompt  # rule example
+    assert "UK imports from China" in prompt
+    assert "UK exports to China" in prompt
+    assert "EU-27 + UK combined imports from China" in prompt
+    # Cross-scope coverage rule present so LLM knows when to mention UK
+    assert "CROSS-SCOPE COVERAGE" in prompt
 
 
-def test_system_prompt_requires_explicit_party_naming():
-    """Rule G in SYSTEM_PROMPT enforces explicit party naming. Catches
-    accidental rule-removal in future edits."""
-    assert "ALWAYS NAME THE PARTIES EXPLICITLY" in llm_framing.SYSTEM_PROMPT
-    assert "EU-27 imports from China" in llm_framing.SYSTEM_PROMPT
-    assert "EU-27 exports to China" in llm_framing.SYSTEM_PROMPT
+def test_system_prompt_requires_explicit_scope_and_parties():
+    """Rule G in SYSTEM_PROMPT enforces explicit scope+parties naming.
+    Rule H requires cross-scope coverage discipline. Catches accidental
+    rule-removal in future edits.
+
+    Asserts on collapsed-whitespace text to be robust against line-wrap
+    changes in the prompt source."""
+    collapsed = " ".join(llm_framing.SYSTEM_PROMPT.split())
+    assert "ALWAYS NAME BOTH THE SCOPE AND THE PARTIES" in collapsed
+    assert "EU-27 imports from China" in collapsed
+    assert "UK imports from China" in collapsed
+    assert "CROSS-SCOPE COVERAGE" in collapsed
 
 
 def test_render_lead_scaffold_as_body_includes_all_three_parts():
@@ -449,8 +474,8 @@ def test_load_clusters_skips_groups_with_no_findings(empty_op, test_db_url):
 
 
 def test_load_clusters_unions_caveats_across_underlying(empty_op, test_db_url):
-    """Cluster.caveat_codes should be the union across both flows + both
-    trajectory + yoy."""
+    """Cluster.caveat_codes should be the union across all (scope, flow)
+    permutations that have findings."""
     with psycopg2.connect(test_db_url) as conn:
         _seed_yoy(conn, group_id=1, subkind="hs_group_yoy",
                   period=date(2026, 2, 1), yoy_pct=0.342,
@@ -467,6 +492,110 @@ def test_load_clusters_unions_caveats_across_underlying(empty_op, test_db_url):
     assert "low_base_effect" in c.caveat_codes
     assert "cif_fob" in c.caveat_codes
     assert len(c.underlying_finding_ids) == 2
+    # Findings landed in the eu_27 scope (their subkinds have no scope suffix)
+    assert c.scopes["eu_27"].yoy_import is not None
+    assert c.scopes["eu_27"].yoy_export is not None
+    # Other scopes empty
+    assert c.scopes["uk"].has_any() is False
+    assert c.scopes["eu_27_plus_uk"].has_any() is False
+
+
+def test_load_clusters_collects_findings_across_all_three_scopes(
+    empty_op, test_db_url,
+):
+    """Phase: multi-scope cluster loading. Seed findings in all three
+    scopes for the same group; cluster should hold them under the
+    correct scope keys."""
+    with psycopg2.connect(test_db_url) as conn:
+        # eu_27 imports
+        _seed_yoy(conn, group_id=1, subkind="hs_group_yoy",
+                  period=date(2026, 2, 1), yoy_pct=0.342)
+        # UK imports
+        _seed_yoy(conn, group_id=1, subkind="hs_group_yoy_uk",
+                  period=date(2026, 2, 1), yoy_pct=0.182)
+        # combined imports
+        _seed_yoy(conn, group_id=1, subkind="hs_group_yoy_combined",
+                  period=date(2026, 2, 1), yoy_pct=0.331)
+
+    clusters = llm_framing._load_hs_group_clusters(
+        group_names=["EV batteries (Li-ion)"]
+    )
+    assert len(clusters) == 1
+    c = clusters[0]
+    assert c.scopes["eu_27"].yoy_import is not None
+    assert c.scopes["uk"].yoy_import is not None
+    assert c.scopes["eu_27_plus_uk"].yoy_import is not None
+    # All three contributed to underlying ids
+    assert len(c.underlying_finding_ids) == 3
+
+
+def test_build_facts_drops_low_base_imports_for_non_eu27_scopes(
+    empty_op, test_db_url,
+):
+    """Defensive: low_base imports/exports for UK / combined scopes are
+    filtered out of the prompt. Telling the LLM 'skip low_base UK'
+    via a rule was unreliable in practice (qwen3.6 cited them anyway in
+    half of test cases). Removing them from the facts means the LLM
+    literally can't see them. EU-27 low_base data is preserved because
+    it's the always-lead."""
+    with psycopg2.connect(test_db_url) as conn:
+        # EU-27 imports: low_base, but kept (it's the lead)
+        _seed_yoy(conn, group_id=1, subkind="hs_group_yoy",
+                  period=date(2026, 2, 1), yoy_pct=0.20,
+                  caveats=["low_base_effect"])
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE findings SET detail = jsonb_set(detail, '{totals,low_base}', 'true') "
+            "WHERE subkind = 'hs_group_yoy'"
+        )
+        # UK imports: low_base, should be dropped
+        _seed_yoy(conn, group_id=1, subkind="hs_group_yoy_uk",
+                  period=date(2026, 2, 1), yoy_pct=0.50)
+        cur.execute(
+            "UPDATE findings SET detail = jsonb_set(detail, '{totals,low_base}', 'true') "
+            "WHERE subkind = 'hs_group_yoy_uk'"
+        )
+        # Combined imports: NOT low_base, should be kept
+        _seed_yoy(conn, group_id=1, subkind="hs_group_yoy_combined",
+                  period=date(2026, 2, 1), yoy_pct=0.25)
+        conn.commit()
+
+    clusters = llm_framing._load_hs_group_clusters(
+        group_names=["EV batteries (Li-ion)"]
+    )
+    facts = llm_framing._build_facts(clusters[0])
+    # EU-27 imports kept even though low_base
+    assert "imports" in facts["scopes"]["eu_27"]
+    assert facts["scopes"]["eu_27"]["imports"]["low_base"] is True
+    # UK imports dropped (low_base AND non-eu_27)
+    assert "uk" not in facts["scopes"] or "imports" not in facts["scopes"]["uk"]
+    # Combined imports kept (not low_base)
+    assert facts["scopes"]["eu_27_plus_uk"]["imports"]["yoy_pct"] == 0.25
+
+
+def test_build_facts_nests_by_scope(empty_op, test_db_url):
+    """Phase: facts dict is structured as {scopes: {eu_27: {...}, uk:
+    {...}, ...}} so the LLM sees the multi-scope picture explicitly.
+    Empty scopes are omitted to keep the prompt terse."""
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_yoy(conn, group_id=1, subkind="hs_group_yoy",
+                  period=date(2026, 2, 1), yoy_pct=0.342,
+                  current_eur=2.69e10)
+        _seed_yoy(conn, group_id=1, subkind="hs_group_yoy_uk",
+                  period=date(2026, 2, 1), yoy_pct=0.182,
+                  current_eur=1.87e9)
+    clusters = llm_framing._load_hs_group_clusters(
+        group_names=["EV batteries (Li-ion)"]
+    )
+    facts = llm_framing._build_facts(clusters[0])
+    assert "scopes" in facts
+    assert "eu_27" in facts["scopes"]
+    assert "uk" in facts["scopes"]
+    # combined scope had no findings → omitted entirely
+    assert "eu_27_plus_uk" not in facts["scopes"]
+    # Per-scope shape preserved
+    assert facts["scopes"]["eu_27"]["imports"]["yoy_pct"] == 0.342
+    assert facts["scopes"]["uk"]["imports"]["yoy_pct"] == 0.182
 
 
 # ---------------------------------------------------------------------------

@@ -133,23 +133,62 @@ class OllamaBackend:
 # =============================================================================
 
 
+# Subkind suffix per comparison scope. Mirrors the convention in
+# briefing_pack._SCOPE_SUBKIND_SUFFIX and anomalies.COMPARISON_SCOPE_*;
+# kept local here to avoid coupling llm_framing to briefing_pack.
+SCOPES: tuple[str, ...] = ("eu_27", "uk", "eu_27_plus_uk")
+_SCOPE_SUBKIND_SUFFIX: dict[str, str] = {
+    "eu_27": "",
+    "uk": "_uk",
+    "eu_27_plus_uk": "_combined",
+}
+# Human-readable scope labels for the LLM prompt's PERSPECTIVE block.
+_SCOPE_PARTIES: dict[str, tuple[str, str]] = {
+    # (imports phrasing, exports phrasing)
+    "eu_27": ("EU-27 imports from China", "EU-27 exports to China"),
+    "uk": ("UK imports from China", "UK exports to China"),
+    "eu_27_plus_uk": (
+        "EU-27 + UK combined imports from China",
+        "EU-27 + UK combined exports to China",
+    ),
+}
+
+
 @dataclass
-class HsGroupCluster:
-    """Findings clustered for one HS group across both flows. Either side
-    may be missing (group has yoy_imports but no yoy_exports yet, etc.) —
-    the prompt builder handles that."""
-    group_id: int
-    group_name: str
-    group_description: str | None
-    hs_patterns: list[str]
-    # Latest active findings:
+class HsGroupScopeData:
+    """One comparison scope's data for an HS group: latest active YoY +
+    trajectory finding for each flow direction. Every field optional —
+    a group may have findings in some scopes but not others (especially
+    UK / combined for groups with thin UK trade, or recently-added
+    groups where only the default eu_27 analyser pass has run)."""
     yoy_import: dict | None = None
     yoy_export: dict | None = None
     trajectory_import: dict | None = None
     trajectory_export: dict | None = None
-    # Union of underlying finding ids for provenance.
+
+    def has_any(self) -> bool:
+        return any(
+            x is not None for x in (
+                self.yoy_import, self.yoy_export,
+                self.trajectory_import, self.trajectory_export,
+            )
+        )
+
+
+@dataclass
+class HsGroupCluster:
+    """Findings clustered for one HS group across all three comparison
+    scopes (EU-27 / UK / combined) and both flows. The lead-scaffold layer
+    reasons over the full picture so a journalist sees how the story
+    differs between EU-27 and UK perspectives."""
+    group_id: int
+    group_name: str
+    group_description: str | None
+    hs_patterns: list[str]
+    scopes: dict[str, HsGroupScopeData] = field(default_factory=dict)
+    # Union of underlying finding ids across all scopes for provenance.
     underlying_finding_ids: list[int] = field(default_factory=list)
-    # Union of caveat codes across the underlying findings.
+    # Union of caveat codes across all underlying findings.
     caveat_codes: set[str] = field(default_factory=set)
 
 
@@ -159,8 +198,10 @@ def _conn():
 
 def _load_hs_group_clusters(group_names: list[str] | None = None) -> list[HsGroupCluster]:
     """Build one HsGroupCluster per hs_group from the latest active findings.
-    Skips groups with no underlying findings at all (they have nothing to
-    scaffold)."""
+    Walks 4 subkinds × 3 scopes = 12 subkind names per group; missing
+    findings per (scope, subkind) are tolerated (the corresponding
+    HsGroupScopeData field stays None). Skips groups with no underlying
+    findings at all in any scope (they have nothing to scaffold)."""
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         if group_names:
             cur.execute(
@@ -179,93 +220,134 @@ def _load_hs_group_clusters(group_names: list[str] | None = None) -> list[HsGrou
             cluster = HsGroupCluster(
                 group_id=g["id"], group_name=g["name"],
                 group_description=g["description"], hs_patterns=list(g["hs_patterns"]),
+                scopes={s: HsGroupScopeData() for s in SCOPES},
             )
-            for subkind, attr in [
-                ("hs_group_yoy", "yoy_import"),
-                ("hs_group_yoy_export", "yoy_export"),
-                ("hs_group_trajectory", "trajectory_import"),
-                ("hs_group_trajectory_export", "trajectory_export"),
-            ]:
-                cur.execute(
-                    """
-                    SELECT id, detail FROM findings
-                     WHERE subkind = %s AND %s = ANY(hs_group_ids)
-                       AND superseded_at IS NULL
-                  ORDER BY (detail->'windows'->>'current_end')::date DESC NULLS LAST,
-                           created_at DESC
-                     LIMIT 1
-                    """,
-                    (subkind, g["id"]),
-                )
-                row = cur.fetchone()
-                if row is not None:
-                    setattr(cluster, attr, dict(row["detail"]))
-                    cluster.underlying_finding_ids.append(row["id"])
-                    cluster.caveat_codes.update(row["detail"].get("caveat_codes") or [])
+            for scope in SCOPES:
+                suffix = _SCOPE_SUBKIND_SUFFIX[scope]
+                for subkind_root, attr in [
+                    (f"hs_group_yoy{suffix}", "yoy_import"),
+                    (f"hs_group_yoy{suffix}_export", "yoy_export"),
+                    (f"hs_group_trajectory{suffix}", "trajectory_import"),
+                    (f"hs_group_trajectory{suffix}_export", "trajectory_export"),
+                ]:
+                    cur.execute(
+                        """
+                        SELECT id, detail FROM findings
+                         WHERE subkind = %s AND %s = ANY(hs_group_ids)
+                           AND superseded_at IS NULL
+                      ORDER BY (detail->'windows'->>'current_end')::date DESC NULLS LAST,
+                               created_at DESC
+                         LIMIT 1
+                        """,
+                        (subkind_root, g["id"]),
+                    )
+                    row = cur.fetchone()
+                    if row is not None:
+                        setattr(cluster.scopes[scope], attr, dict(row["detail"]))
+                        cluster.underlying_finding_ids.append(row["id"])
+                        cluster.caveat_codes.update(row["detail"].get("caveat_codes") or [])
             if cluster.underlying_finding_ids:
                 clusters.append(cluster)
         return clusters
 
 
 def _build_facts(cluster: HsGroupCluster) -> dict[str, Any]:
-    """Extract the typed facts the LLM is allowed to use. Same shape as v1 —
-    the verifier uses these as the universe of allowed numbers."""
+    """Extract the typed facts the LLM is allowed to use. Nested by scope:
+    the LLM gets the full picture across EU-27 / UK / combined so it can
+    surface cross-scope divergence in the anomaly summary.
+
+    Defensive filtering: for NON-EU-27 scopes, low_base imports/exports
+    blocks are dropped from the prompt entirely. Telling the LLM "skip
+    low_base UK numbers" via a rule was unreliable in practice — qwen3.6
+    cited them anyway in ~half of test cases. Removing them from the
+    facts means the LLM literally can't see them. EU-27 is preserved
+    even when low_base because it's the always-lead and dropping it
+    would leave nothing to anchor the summary to.
+    """
     facts: dict[str, Any] = {
         "group_name": cluster.group_name,
         "hs_patterns": cluster.hs_patterns,
         "caveats": sorted(cluster.caveat_codes),
+        "scopes": {},
     }
-    if cluster.yoy_import:
-        t = cluster.yoy_import.get("totals", {})
-        w = cluster.yoy_import.get("windows", {})
-        facts["imports"] = {
-            "period_end": w.get("current_end"),
-            "yoy_pct": t.get("yoy_pct"),
-            "yoy_pct_kg": t.get("yoy_pct_kg"),
-            "current_12mo_eur": t.get("current_12mo_eur"),
-            "prior_12mo_eur": t.get("prior_12mo_eur"),
-            "unit_price_pct_change": t.get("unit_price_pct_change"),
-            "low_base": t.get("low_base"),
-            "decomposition_suppressed": t.get("decomposition_suppressed"),
-            "partial_window": t.get("partial_window"),
-        }
-    if cluster.yoy_export:
-        t = cluster.yoy_export.get("totals", {})
-        w = cluster.yoy_export.get("windows", {})
-        facts["exports"] = {
-            "period_end": w.get("current_end"),
-            "yoy_pct": t.get("yoy_pct"),
-            "yoy_pct_kg": t.get("yoy_pct_kg"),
-            "current_12mo_eur": t.get("current_12mo_eur"),
-            "prior_12mo_eur": t.get("prior_12mo_eur"),
-            "unit_price_pct_change": t.get("unit_price_pct_change"),
-            "low_base": t.get("low_base"),
-            "decomposition_suppressed": t.get("decomposition_suppressed"),
-            "partial_window": t.get("partial_window"),
-        }
-    if cluster.trajectory_import:
-        f = cluster.trajectory_import.get("features", {})
-        facts["trajectory_imports"] = {
-            "shape": cluster.trajectory_import.get("shape"),
-            "shape_label": cluster.trajectory_import.get("shape_label"),
-            "last_yoy": f.get("last_yoy"),
-            "max_yoy": f.get("max_yoy"),
-            "min_yoy": f.get("min_yoy"),
-            "n_windows": f.get("n"),
-            "has_strong_seasonal_signal": f.get("has_strong_seasonal_signal"),
-        }
-    if cluster.trajectory_export:
-        f = cluster.trajectory_export.get("features", {})
-        facts["trajectory_exports"] = {
-            "shape": cluster.trajectory_export.get("shape"),
-            "shape_label": cluster.trajectory_export.get("shape_label"),
-            "last_yoy": f.get("last_yoy"),
-            "max_yoy": f.get("max_yoy"),
-            "min_yoy": f.get("min_yoy"),
-            "n_windows": f.get("n"),
-            "has_strong_seasonal_signal": f.get("has_strong_seasonal_signal"),
-        }
+    for scope_name, scope_data in cluster.scopes.items():
+        scope_facts = _build_scope_facts(scope_data)
+        if scope_name != "eu_27":
+            # Drop low_base imports/exports for non-EU-27 scopes — and the
+            # matching trajectory blocks too, since trajectory features
+            # (last_yoy, max_yoy, min_yoy) carry the same now-suspect
+            # percentage and qwen3.6 will happily cite "+23.9% (trajectory)"
+            # if the trajectory is the only source left.
+            for direction, traj_key in (
+                ("imports", "trajectory_imports"),
+                ("exports", "trajectory_exports"),
+            ):
+                if (
+                    direction in scope_facts
+                    and scope_facts[direction].get("low_base") is True
+                ):
+                    del scope_facts[direction]
+                    scope_facts.pop(traj_key, None)
+        if scope_facts:
+            facts["scopes"][scope_name] = scope_facts
     return facts
+
+
+def _build_scope_facts(scope: HsGroupScopeData) -> dict[str, Any]:
+    """Per-scope fact block: imports + exports YoY + trajectories. Returns
+    empty dict if the scope has no findings (caller drops it)."""
+    block: dict[str, Any] = {}
+    if scope.yoy_import:
+        t = scope.yoy_import.get("totals", {})
+        w = scope.yoy_import.get("windows", {})
+        block["imports"] = {
+            "period_end": w.get("current_end"),
+            "yoy_pct": t.get("yoy_pct"),
+            "yoy_pct_kg": t.get("yoy_pct_kg"),
+            "current_12mo_eur": t.get("current_12mo_eur"),
+            "prior_12mo_eur": t.get("prior_12mo_eur"),
+            "unit_price_pct_change": t.get("unit_price_pct_change"),
+            "low_base": t.get("low_base"),
+            "decomposition_suppressed": t.get("decomposition_suppressed"),
+            "partial_window": t.get("partial_window"),
+        }
+    if scope.yoy_export:
+        t = scope.yoy_export.get("totals", {})
+        w = scope.yoy_export.get("windows", {})
+        block["exports"] = {
+            "period_end": w.get("current_end"),
+            "yoy_pct": t.get("yoy_pct"),
+            "yoy_pct_kg": t.get("yoy_pct_kg"),
+            "current_12mo_eur": t.get("current_12mo_eur"),
+            "prior_12mo_eur": t.get("prior_12mo_eur"),
+            "unit_price_pct_change": t.get("unit_price_pct_change"),
+            "low_base": t.get("low_base"),
+            "decomposition_suppressed": t.get("decomposition_suppressed"),
+            "partial_window": t.get("partial_window"),
+        }
+    if scope.trajectory_import:
+        f = scope.trajectory_import.get("features", {})
+        block["trajectory_imports"] = {
+            "shape": scope.trajectory_import.get("shape"),
+            "shape_label": scope.trajectory_import.get("shape_label"),
+            "last_yoy": f.get("last_yoy"),
+            "max_yoy": f.get("max_yoy"),
+            "min_yoy": f.get("min_yoy"),
+            "n_windows": f.get("n"),
+            "has_strong_seasonal_signal": f.get("has_strong_seasonal_signal"),
+        }
+    if scope.trajectory_export:
+        f = scope.trajectory_export.get("features", {})
+        block["trajectory_exports"] = {
+            "shape": scope.trajectory_export.get("shape"),
+            "shape_label": scope.trajectory_export.get("shape_label"),
+            "last_yoy": f.get("last_yoy"),
+            "max_yoy": f.get("max_yoy"),
+            "min_yoy": f.get("min_yoy"),
+            "n_windows": f.get("n"),
+            "has_strong_seasonal_signal": f.get("has_strong_seasonal_signal"),
+        }
+    return block
 
 
 SYSTEM_PROMPT = """You are an editorial research assistant for Guardian trade journalists.
@@ -300,15 +382,37 @@ D. If a caveat applies (low_base, partial_window, transshipment_hub,
    motivates the pick.
 E. NEVER claim "volume-driven" or "price-driven" when decomposition_suppressed
    is true.
-F. "Imports" / "exports" in the FACTS block are from the EU-27 reporter's
-   perspective: `imports` = goods coming INTO the EU-27 from China;
-   `exports` = EU-27 goods going TO China.
-G. ALWAYS NAME THE PARTIES EXPLICITLY in any direction reference. Don't
-   write "imports rose" — write "EU-27 imports from China rose". Don't
-   write "exports collapsed" — write "EU-27 exports to China collapsed".
-   This applies to the anomaly_summary AND every rationale. A journalist
-   reading the lead doesn't share your context; spell it out.
-H. Output VALID JSON ONLY. No markdown, no preamble, no code fences."""
+F. The FACTS block has a `scopes` object with up to three entries:
+   `eu_27` (Eurostat-side, EU-27 reporters with partners CN+HK+MO),
+   `uk` (HMRC-side, UK only), `eu_27_plus_uk` (cross-source sum).
+   Inside each, `imports` = goods coming INTO the reporter from China;
+   `exports` = reporter's goods going TO China.
+G. ALWAYS NAME BOTH THE SCOPE AND THE PARTIES in any direction
+   reference. Don't write "imports rose" — write "EU-27 imports from
+   China rose" or "UK imports from China rose". Don't write "exports
+   collapsed" — write "EU-27 exports to China collapsed" or "UK
+   exports to China collapsed". The combined scope renders as
+   "EU-27 + UK combined imports from China". This applies to the
+   anomaly_summary AND every rationale. A journalist reading the
+   lead doesn't share your context; spell it out every time.
+H. CROSS-SCOPE COVERAGE — be ACTIVELY USEFUL here; this is the main
+   editorial value of having all three scopes:
+   - Lead with the EU-27 view (the largest slice, methodologically
+     cleanest comparison).
+   - For each non-EU-27 scope present in the FACTS, if its `yoy_pct`
+     differs from EU-27 by more than 5 percentage points (or has the
+     opposite sign), you MUST mention it explicitly in the
+     anomaly_summary. Phrase like:
+       "EU-27 imports from China of EV batteries rose +34.5% to €27.25B,
+        but UK imports rose only +13.8% to €1.66B — the surge is broadly
+        EU-driven."
+   - If all scopes present show the same story within ~5pp, lead with
+     EU-27 and stop. Don't narrate non-divergence.
+   - NB: low-base UK / combined imports + exports are pre-filtered out
+     of the FACTS block above. If a scope's imports/exports key is
+     ABSENT, it means we judged the base too small for the figure to
+     be quotable. Don't speculate about absent data.
+I. Output VALID JSON ONLY. No markdown, no preamble, no code fences."""
 
 
 _PCT_KEYS = {"yoy_pct", "yoy_pct_kg", "unit_price_pct_change", "last_yoy",
@@ -364,16 +468,30 @@ def _build_user_prompt(cluster: HsGroupCluster, facts: dict[str, Any]) -> str:
     return (
         f"Group: {cluster.group_name}\n"
         f"Definition: {cluster.group_description or '—'}\n\n"
-        f"PERSPECTIVE — all numbers below are EU-27 trade with China "
-        f"(Eurostat-side, partners CN+HK+MO summed). When you cite a "
-        f"figure in the anomaly_summary or any rationale, ALWAYS name "
-        f"the parties explicitly:\n"
-        f"  - `imports` → write \"EU-27 imports from China\"\n"
-        f"  - `exports` → write \"EU-27 exports to China\"\n"
-        f"  - `trajectory_imports` / `trajectory_exports` → same convention\n"
-        f"Never write bare \"imports rose\" or \"exports fell\" — a "
-        f"journalist reading the lead doesn't share your context.\n\n"
-        f"FACTS (the only numbers you may cite):\n"
+        f"PERSPECTIVE — three comparison scopes are available, all China-trade:\n"
+        f"  - `eu_27`: Eurostat-side, EU-27 reporters with partners CN+HK+MO summed.\n"
+        f"      → \"EU-27 imports from China\" / \"EU-27 exports to China\"\n"
+        f"  - `uk`: HMRC-side, UK only (post-Brexit canonical UK source).\n"
+        f"      → \"UK imports from China\" / \"UK exports to China\"\n"
+        f"  - `eu_27_plus_uk`: cross-source sum (Eurostat + HMRC). Carries\n"
+        f"      a `cross_source_sum` caveat — the two sources have different\n"
+        f"      methodologies; use this view for headline framing, not\n"
+        f"      precise figures.\n"
+        f"      → \"EU-27 + UK combined imports from China\"\n"
+        f"\n"
+        f"When you cite a figure, ALWAYS name BOTH the scope AND the parties\n"
+        f"(see the substitutions above). Never bare \"imports rose\" or\n"
+        f"\"exports fell\".\n"
+        f"\n"
+        f"CROSS-SCOPE COVERAGE: lead with EU-27 (the largest slice). Mention\n"
+        f"UK or combined ONLY if they diverge meaningfully from EU-27 (>5pp\n"
+        f"shift difference, opposite sign, or striking magnitude gap). If\n"
+        f"all three scopes tell the same story within ~5pp, lead with EU-27\n"
+        f"and stop — don't narrate noise. UK numbers are sometimes small-base\n"
+        f"and can show wild swings that don't reflect real trends.\n"
+        f"\n"
+        f"FACTS (the only numbers you may cite — only scopes with findings\n"
+        f"are present; absent scopes mean we don't have data, NOT zero):\n"
         f"{json.dumps(formatted, indent=2, default=str)}\n\n"
         f"HYPOTHESIS CATALOG (pick 2-3 ids that best fit the facts):\n"
         f"{json.dumps(catalog, indent=2)}\n\n"
@@ -422,6 +540,17 @@ _HS_CODE_RE = re.compile(r"\bHS\s*\d{4,8}\b", re.IGNORECASE)
 # evening rule-G addition; without it, every other lead would falsely
 # fail verification.
 _GEO_LABEL_RE = re.compile(r"\b(?:EU-?\d{1,3}|G-?\d{1,3})\b")
+# HS chapter references: groups whose name embeds a chapter number
+# (e.g. "Electrical equipment & machinery (chapters 84-85, broad)")
+# prompt the LLM to write "chapter 84", "chapters 84-85", "HS-84",
+# "HS-84/85", or "HS 84/85" in the anomaly summary or rationale. Bare
+# 2-digit chapter numbers reach the verifier as unverifiable counts.
+# Strip all those forms before extraction.
+_HS_CHAPTER_RE = re.compile(
+    r"\b(?:chapters?\s+\d{1,2}(?:[-–/]\d{1,2})?"
+    r"|HS[-\s]?\d{1,2}(?:[-–/]\d{1,2})?)\b",
+    re.IGNORECASE,
+)
 
 # Words that signal a *decrease* — used for sign-inference around unsigned
 # numbers in LLM prose. Matches verb forms ("decreased", "fell"), noun forms
@@ -475,6 +604,7 @@ def _extract_numbers_from_text(text: str) -> list[tuple[str, float, str]]:
     text_for_extraction = _TIME_PERIOD_RE.sub("PERIOD", text_for_extraction)
     text_for_extraction = _HS_CODE_RE.sub("HSCODE", text_for_extraction)
     text_for_extraction = _GEO_LABEL_RE.sub("GEOLABEL", text_for_extraction)
+    text_for_extraction = _HS_CHAPTER_RE.sub("CHAPTER", text_for_extraction)
     out: list[tuple[str, float, str]] = []
     for m in _NUMBER_RE.finditer(text_for_extraction):
         raw = m.group(0).strip()
