@@ -576,7 +576,7 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
         )
 
     detail = {
-        "method": "mirror_trade_v4_multi_partner_default",
+        "method": "mirror_trade_v5_per_country_cif_fob_baselines",
         # Caveat codes — journalists should weigh these when interpreting the gap.
         # Promote to a dedicated findings.caveat_codes column when the schema
         # gets its first migration after the lookups went in.
@@ -670,6 +670,12 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
                 "gap_eur": round(r.gap_eur, 2),
                 "gap_pct": round(r.gap_pct, 6) if r.gap_pct is not None else None,
                 "is_aggregate": is_aggregate,
+                # cif_fob baseline is editorially load-bearing (the "expected"
+                # gap that excess_over_baseline_pct is measured against).
+                # Including it here means a baseline update — e.g. swapping the
+                # global default for a per-country OECD ITIC value — propagates
+                # as a supersede so the briefing pack picks up the new framing.
+                "cif_fob_baseline_pct": round(detail["cif_fob_baseline_pct"], 6),
             },
             observation_ids=obs_ids,
             score=score,
