@@ -259,14 +259,15 @@ def _seed_extra_eurostat_partner(conn, period: date, reporter: str,
     conn.commit()
 
 
-def test_mirror_gap_default_partners_excludes_hk(empty_op_tables, test_db_url):
-    """Phase 2.3 baseline: with the default eurostat_partners=['CN'], a
-    Eurostat partner=HK row is NOT counted in the mirror-gap sum. The
-    finding has no `multi_partner_sum` caveat."""
+def test_mirror_gap_default_includes_hk_mo(empty_op_tables, test_db_url):
+    """Default eurostat_partners is now (CN, HK, MO) — the editorially-correct
+    'Chinese trade' envelope. A Eurostat partner=HK row IS counted in the
+    mirror-gap sum without an explicit CLI override. The finding carries a
+    `multi_partner_sum` caveat (since len > 1)."""
     period = date(2025, 12, 1)
     with psycopg2.connect(test_db_url) as conn:
         _seed_pair_for_partner(conn, period, "Germany", "DE")
-        # Add a HK-routed €1B import for DE — this should NOT show up.
+        # Add a HK-routed €1B import for DE — this should now BE included by default.
         _seed_extra_eurostat_partner(conn, period, "DE", "HK", 1_000_000_000)
 
     anomalies.detect_mirror_trade_gaps(period=period)
@@ -275,9 +276,29 @@ def test_mirror_gap_default_partners_excludes_hk(empty_op_tables, test_db_url):
             "SELECT detail FROM findings WHERE subkind = 'mirror_gap'"
         )
         detail = cur.fetchone()[0]
+    assert detail["eurostat"]["partners_summed"] == ["CN", "HK", "MO"]
+    assert "multi_partner_sum" in detail["caveat_codes"]
+    # Eurostat total = 12B (CN + HK; MO has no rows but is requested).
+    assert abs(detail["eurostat"]["total_eur"] - 12_000_000_000) < 1
+
+
+def test_mirror_gap_cn_only_override_excludes_hk(empty_op_tables, test_db_url):
+    """Explicit `eurostat_partners=['CN']` is the narrower override (matches
+    Soapbox/Merics single-partner figures). HK rows are NOT summed; the
+    `multi_partner_sum` caveat is absent."""
+    period = date(2025, 12, 1)
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_pair_for_partner(conn, period, "Germany", "DE")
+        _seed_extra_eurostat_partner(conn, period, "DE", "HK", 1_000_000_000)
+
+    anomalies.detect_mirror_trade_gaps(period=period, eurostat_partners=["CN"])
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT detail FROM findings WHERE subkind = 'mirror_gap'"
+        )
+        detail = cur.fetchone()[0]
     assert detail["eurostat"]["partners_summed"] == ["CN"]
     assert "multi_partner_sum" not in detail["caveat_codes"]
-    # Eurostat total = 11B (CN-only), not 12B (CN + HK).
     assert abs(detail["eurostat"]["total_eur"] - 11_000_000_000) < 1
 
 
@@ -795,3 +816,143 @@ def test_mirror_gap_skips_when_no_eurostat(empty_op_tables, test_db_url):
     counts = anomalies.detect_mirror_trade_gaps(period=period)
     assert counts["skipped_no_eurostat"] == 1
     assert counts["emitted"] == 0
+
+
+def _seed_gacc_aggregate_24mo(
+    conn, aggregate_label: str, anchor_period: date,
+    prior_monthly: list[float], current_monthly: list[float],
+):
+    """Seed 24 months of GACC observations for a non-EU aggregate label.
+    Each month gets one CNY release + a CNY/EUR FX rate. value_amount is
+    in 'CNY 100 Million' units (matches the standard GACC unit).
+    `prior_monthly`: 12 values for months [t-23 .. t-12].
+    `current_monthly`: 12 values for months [t-11 .. t]."""
+    assert len(prior_monthly) == 12 and len(current_monthly) == 12
+    monthlies = prior_monthly + current_monthly
+    cur = conn.cursor()
+    for i, val in enumerate(monthlies):
+        period = _add_months(anchor_period, -23 + i)
+        cur.execute(
+            """
+            INSERT INTO releases (source, section_number, currency, period, release_kind,
+                                  source_url, unit, title, description)
+            VALUES ('gacc', 4, 'CNY', %s, 'preliminary', %s, 'CNY 100 Million', 't', 'd')
+            RETURNING id
+            """,
+            (period, f"http://example/gacc-agg-{period.isoformat()}.html"),
+        )
+        rel_id = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'success') RETURNING id",
+            (f"http://example/gacc-agg-{period.isoformat()}.html",),
+        )
+        run_id = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO observations (release_id, scrape_run_id, period_kind, flow, "
+            "                          partner_country, value_amount, value_currency, source_row) "
+            "VALUES (%s, %s, 'monthly', 'export', %s, %s, 'CNY', '{}')",
+            (rel_id, run_id, aggregate_label, val),
+        )
+        cur.execute(
+            "INSERT INTO fx_rates (currency_from, currency_to, rate_date, rate, rate_source, "
+            "                      rate_source_url, notes) "
+            "VALUES ('CNY', 'EUR', %s, 0.125, 'test', 'http://example/fx', 't')",
+            (period,),
+        )
+    conn.commit()
+
+
+def _add_months(d: date, n: int) -> date:
+    """date + n months (n may be negative). Anchors on first of month."""
+    y, m = d.year, d.month + n
+    while m <= 0:
+        y -= 1; m += 12
+    while m > 12:
+        y += 1; m -= 12
+    return date(y, m, 1)
+
+
+def test_gacc_aggregate_yoy_emits_finding_for_asean(empty_op_tables, test_db_url):
+    """ASEAN, 24 months: prior averaged 800 (CNY 100M each), current averaged
+    1200 → YoY = +50%. Should emit one finding under subkind
+    `gacc_aggregate_yoy` with the canonical natural key (aggregate_kind,
+    current_end_yyyymm) and the multi_partner_sum caveat absent (this is
+    GACC-only — Eurostat partners aren't relevant here)."""
+    anchor = date(2025, 12, 1)
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_gacc_aggregate_24mo(
+            conn, "ASEAN", anchor,
+            prior_monthly=[800.0] * 12,
+            current_monthly=[1200.0] * 12,
+        )
+
+    counts = anomalies.detect_gacc_aggregate_yoy(
+        flow="export", aggregate_kinds=["asean"], yoy_threshold_pct=0.10,
+    )
+    assert counts["emitted"] >= 1, f"counts={counts}"
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT title, detail FROM findings "
+            "WHERE subkind='gacc_aggregate_yoy' "
+            "  AND (detail->'totals'->>'partial_window')::boolean = false "
+            "ORDER BY score DESC LIMIT 1"
+        )
+        title, detail = cur.fetchone()
+
+    assert "ASEAN" in title
+    assert "+50.0%" in title or "+50.00%" in title
+    # Arithmetic: 1200 * 1e8 (unit_scale) * 0.125 (FX) = 1.5e10 EUR per month
+    # × 12 months = 1.8e11 = €180B current 12mo
+    assert abs(detail["totals"]["current_12mo_eur"] - 180_000_000_000.0) < 1_000_000
+    assert abs(detail["totals"]["prior_12mo_eur"] - 120_000_000_000.0) < 1_000_000
+    assert abs(detail["totals"]["yoy_pct"] - 0.5) < 1e-9
+    assert detail["aggregate"]["kind"] == "asean"
+    assert detail["aggregate"]["raw_label"] == "ASEAN"
+    # No multi_partner_sum — this analyser doesn't sum Eurostat partners.
+    assert "multi_partner_sum" not in detail["caveat_codes"]
+    assert detail["method"] == "gacc_aggregate_yoy_v2_loose_partial_window"
+
+
+def test_gacc_aggregate_yoy_skips_when_no_history(empty_op_tables, test_db_url):
+    """Aggregate label with only 6 months of data shouldn't produce a finding
+    (insufficient for a 24-month YoY window). Counter to the inverse case
+    above — proves the partial_window tolerance only allows 1 missing month,
+    not a half-empty history."""
+    anchor = date(2025, 12, 1)
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        for i in range(6):
+            period = _add_months(anchor, -5 + i)
+            cur.execute(
+                "INSERT INTO releases (source, section_number, currency, period, release_kind, "
+                "                      source_url, unit, title, description) "
+                "VALUES ('gacc', 4, 'CNY', %s, 'preliminary', %s, 'CNY 100 Million', 't', 'd') "
+                "RETURNING id",
+                (period, f"http://example/short-{period.isoformat()}.html"),
+            )
+            rel_id = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'success') RETURNING id",
+                (f"http://example/short-{period.isoformat()}.html",),
+            )
+            run_id = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO observations (release_id, scrape_run_id, period_kind, flow, "
+                "                          partner_country, value_amount, value_currency, source_row) "
+                "VALUES (%s, %s, 'monthly', 'export', 'ASEAN', 1000, 'CNY', '{}')",
+                (rel_id, run_id),
+            )
+            cur.execute(
+                "INSERT INTO fx_rates (currency_from, currency_to, rate_date, rate, rate_source, "
+                "                      rate_source_url, notes) "
+                "VALUES ('CNY', 'EUR', %s, 0.125, 'test', 'http://example/fx', 't')",
+                (period,),
+            )
+        conn.commit()
+
+    counts = anomalies.detect_gacc_aggregate_yoy(
+        flow="export", aggregate_kinds=["asean"],
+    )
+    assert counts["emitted"] == 0
+    assert counts["skipped_insufficient_history"] >= 1

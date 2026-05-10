@@ -81,6 +81,17 @@ LOW_BASE_THRESHOLD_EUR = 50_000_000
 # tagged as low-base, the trajectory finding itself flags low_base_effect.
 TRAJECTORY_LOW_BASE_FRACTION = 0.5
 
+# Default Eurostat partners for "Chinese trade" — CN plus the two Special
+# Administrative Regions. Editorially, China-via-Hong-Kong is still Chinese
+# trade for Lisa O'Carroll's "China shock" framing; Eurostat reports it under
+# partner=HK because HK is a separate trade jurisdiction, but a journalist
+# investigating Chinese trade volumes wants HK and MO summed in by default.
+# All four analysers (mirror-trade, hs-group-yoy, hs-group-trajectory,
+# llm-framing-via-the-others) inherit this default. Override via CLI
+# --eurostat-partners CN  (CN-only, narrower) when comparing against
+# Soapbox/Merics figures that are themselves CN-only.
+EUROSTAT_PARTNERS_DEFAULT: tuple[str, ...] = ("CN", "HK", "MO")
+
 
 def _conn():
     return psycopg2.connect(os.environ["DATABASE_URL"])
@@ -108,7 +119,7 @@ class _MirrorGapResult:
     excess_over_cif_fob_baseline_pct: float
     cif_fob_baseline: lookups.CifFobBaseline | None
     transshipment_hub: lookups.TransshipmentHub | None
-    eurostat_partners: list[str]   # Phase 2.3 — partners summed on the EU import side; ['CN'] = baseline
+    eurostat_partners: list[str]   # partners summed on the EU import side; default EUROSTAT_PARTNERS_DEFAULT
     # Aggregate-specific (None for single-country comparisons)
     aggregate_kind: str | None = None
     aggregate_members: list[str] | None = None
@@ -170,17 +181,18 @@ def detect_mirror_trade_gaps(
         period: if specified, only analyse that period; otherwise all periods
                 that have GACC data.
         eurostat_partners: list of Eurostat partner_country codes to sum over
-                on the EU import side. Default `['CN']` (just direct China
-                trade). Pass `['CN', 'HK']` to also capture HK-routed trade,
-                or `['CN', 'HK', 'MO']` to include Macau. When more than one
-                partner is used, findings carry a `multi_partner_sum`
-                caveat. Phase 2.3 of dev_notes/roadmap-2026-05-09.md.
+                on the EU import side. Default `EUROSTAT_PARTNERS_DEFAULT`
+                (CN+HK+MO — the editorially-correct "Chinese trade" envelope
+                including the two Special Administrative Regions). Pass
+                `['CN']` for a narrower direct-China-only view (matches
+                Soapbox/Merics single-partner figures). When more than one
+                partner is used, findings carry a `multi_partner_sum` caveat.
 
     Returns counts: {'emitted', 'skipped_no_eurostat', 'skipped_no_fx',
                      'skipped_aggregate', 'skipped_unmapped', 'skipped_no_value'}.
     """
     if eurostat_partners is None:
-        eurostat_partners = ["CN"]
+        eurostat_partners = list(EUROSTAT_PARTNERS_DEFAULT)
     counts = {
         "emitted": 0,
         "inserted_new": 0,
@@ -266,7 +278,7 @@ def _compute_one_gap(
 ) -> _MirrorGapResult | str:
     """Returns the result, OR a sentinel string naming the skip reason for counts."""
     if eurostat_partners is None:
-        eurostat_partners = ["CN"]
+        eurostat_partners = list(EUROSTAT_PARTNERS_DEFAULT)
     if gr["value_amount"] is None or float(gr["value_amount"]) == 0:
         return "skipped_no_value"
 
@@ -381,19 +393,20 @@ def _eurostat_aggregate_for_members(
     period: date, member_iso2s: list[str],
     partners: list[str] | None = None,
 ) -> tuple[float | None, list[int], int]:
-    """Sum Eurostat imports from `partners` (default ['CN']) across the given
-    list of EU member ISO-2 codes for the given period.
+    """Sum Eurostat imports from `partners` (default EUROSTAT_PARTNERS_DEFAULT
+    = CN+HK+MO) across the given list of EU member ISO-2 codes for the given
+    period.
 
-    Phase 2.3: when `partners` has more than one entry (e.g. ['CN', 'HK']),
-    we sum across them — this captures HK-routed Chinese trade that
-    Eurostat reports under partner=HK rather than CN. Caller is responsible
-    for attaching the `multi_partner_sum` caveat.
+    When `partners` has more than one entry (the default), we sum across them
+    — this captures HK/MO-routed Chinese trade that Eurostat reports under
+    partner=HK or partner=MO rather than CN. Caller is responsible for
+    attaching the `multi_partner_sum` caveat.
 
     Returns (total_eur, obs_ids, n_obs)."""
     if not member_iso2s:
         return None, [], 0
     if partners is None:
-        partners = ["CN"]
+        partners = list(EUROSTAT_PARTNERS_DEFAULT)
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -495,7 +508,7 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
         )
 
     detail = {
-        "method": "mirror_trade_v3_multi_partner",
+        "method": "mirror_trade_v4_multi_partner_default",
         # Caveat codes — journalists should weigh these when interpreting the gap.
         # Promote to a dedicated findings.caveat_codes column when the schema
         # gets its first migration after the lookups went in.
@@ -952,6 +965,7 @@ def _list_hs_groups(group_names: list[str] | None = None) -> list[_HsGroup]:
 
 def _hs_group_per_period_totals(
     patterns: list[str], flow: int = 1,
+    partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS_DEFAULT,
 ) -> list[tuple[date, float, float, int, float]]:
     """Returns (period, total_eur, total_kg, n_raw_rows, eur_with_kg) per period.
 
@@ -989,12 +1003,12 @@ def _hs_group_per_period_totals(
                                             AND quantity_kg > 0)             AS eur_with_kg
               FROM eurostat_raw_rows
              WHERE flow = %s
-               AND partner = 'CN'
+               AND partner = ANY(%s)
                AND product_nc LIKE ANY(%s)
           GROUP BY period
           ORDER BY period
             """,
-            (flow, patterns),
+            (flow, list(partners), patterns),
         )
         return [
             (row[0], float(row[1] or 0), float(row[2] or 0),
@@ -1003,7 +1017,10 @@ def _hs_group_per_period_totals(
         ]
 
 
-def _hs_group_top_cn8s(patterns: list[str], start: date, end: date, flow: int = 1, limit: int = 10) -> list[dict]:
+def _hs_group_top_cn8s(
+    patterns: list[str], start: date, end: date, flow: int = 1, limit: int = 10,
+    partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS_DEFAULT,
+) -> list[dict]:
     """Top contributing HS-CN8 codes within a group across [start, end]."""
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -1014,20 +1031,23 @@ def _hs_group_top_cn8s(patterns: list[str], start: date, end: date, flow: int = 
                    COUNT(*) AS n_raw
               FROM eurostat_raw_rows
              WHERE period >= %s AND period <= %s
-               AND flow = %s AND partner = 'CN'
+               AND flow = %s AND partner = ANY(%s)
                AND product_nc LIKE ANY(%s)
           GROUP BY product_nc
           ORDER BY SUM(value_eur) DESC NULLS LAST
              LIMIT %s
             """,
-            (start, end, flow, patterns, limit),
+            (start, end, flow, list(partners), patterns, limit),
         )
         return [{"hs_code": r[0], "total_eur": float(r[1] or 0),
                  "total_kg": float(r[2] or 0), "n_raw": int(r[3])}
                 for r in cur.fetchall()]
 
 
-def _hs_group_top_reporters(patterns: list[str], start: date, end: date, flow: int = 1, limit: int = 10) -> list[dict]:
+def _hs_group_top_reporters(
+    patterns: list[str], start: date, end: date, flow: int = 1, limit: int = 10,
+    partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS_DEFAULT,
+) -> list[dict]:
     """Top contributing EU reporters within a group across [start, end]."""
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -1038,13 +1058,13 @@ def _hs_group_top_reporters(patterns: list[str], start: date, end: date, flow: i
                    COUNT(*) AS n_raw
               FROM eurostat_raw_rows
              WHERE period >= %s AND period <= %s
-               AND flow = %s AND partner = 'CN'
+               AND flow = %s AND partner = ANY(%s)
                AND product_nc LIKE ANY(%s)
           GROUP BY reporter
           ORDER BY SUM(value_eur) DESC NULLS LAST
              LIMIT %s
             """,
-            (start, end, flow, patterns, limit),
+            (start, end, flow, list(partners), patterns, limit),
         )
         return [{"reporter": r[0], "total_eur": float(r[1] or 0),
                  "total_kg": float(r[2] or 0), "n_raw": int(r[3])}
@@ -1062,6 +1082,7 @@ def detect_hs_group_yoy(
     yoy_threshold_pct: float = 0.0,
     flow: int = 1,
     low_base_threshold_eur: float = LOW_BASE_THRESHOLD_EUR,
+    eurostat_partners: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, int]:
     """For each (hs_group, period_t) where 24 months of history exist, compute:
         current_12mo  = sum(value_eur) for periods [t-11 .. t]
@@ -1074,10 +1095,20 @@ def detect_hs_group_yoy(
     to Europe' question); 2 = EU exports to China (the 'is Europe selling more
     X to China' question, e.g. for the 'EU pork to China declining' angle).
 
+    `eurostat_partners`: Eurostat partner_country codes to sum over on the
+    Chinese-trade side. Default `EUROSTAT_PARTNERS_DEFAULT` (CN+HK+MO — the
+    full "Chinese trade" envelope including the two SARs). Pass `['CN']` to
+    get the narrower direct-China-only view that matches Soapbox/Merics
+    headline figures. When more than one partner is summed, findings carry
+    a `multi_partner_sum` caveat.
+
     Returns counts: {'emitted', 'skipped_insufficient_history', 'skipped_below_threshold', 'skipped_zero_prior'}.
     """
     if flow not in (1, 2):
         raise ValueError(f"flow must be 1 (import) or 2 (export); got {flow}")
+    partners: tuple[str, ...] = (
+        tuple(eurostat_partners) if eurostat_partners else EUROSTAT_PARTNERS_DEFAULT
+    )
     counts = {
         "emitted": 0,
         "inserted_new": 0, "confirmed_existing": 0, "superseded": 0,
@@ -1098,7 +1129,7 @@ def detect_hs_group_yoy(
 
     try:
         for group in groups:
-            series = _hs_group_per_period_totals(group.hs_patterns, flow=flow)
+            series = _hs_group_per_period_totals(group.hs_patterns, flow=flow, partners=partners)
             eur_by_period: dict[date, float] = {p: e for p, e, _, _, _ in series}
             kg_by_period:  dict[date, float] = {p: k for p, _, k, _, _ in series}
             n_by_period:   dict[date, int]   = {p: n for p, _, _, n, _ in series}
@@ -1167,8 +1198,12 @@ def detect_hs_group_yoy(
                     counts["skipped_below_threshold"] += 1
                     continue
 
-                top_cn8s = _hs_group_top_cn8s(group.hs_patterns, start_curr, end_curr, flow=flow)
-                top_reporters = _hs_group_top_reporters(group.hs_patterns, start_curr, end_curr, flow=flow)
+                top_cn8s = _hs_group_top_cn8s(
+                    group.hs_patterns, start_curr, end_curr, flow=flow, partners=partners,
+                )
+                top_reporters = _hs_group_top_reporters(
+                    group.hs_patterns, start_curr, end_curr, flow=flow, partners=partners,
+                )
                 low_base = (
                     current_eur < low_base_threshold_eur
                     or prior_eur < low_base_threshold_eur
@@ -1185,6 +1220,7 @@ def detect_hs_group_yoy(
                     partial_window=partial_window,
                     missing_curr=missing_curr,
                     missing_prior=missing_prior,
+                    partners=partners,
                 )
                 _tally(counts, action)
 
@@ -1236,6 +1272,7 @@ def _insert_hs_group_yoy_finding(
     partial_window: bool = False,
     missing_curr: list[date] | None = None,
     missing_prior: list[date] | None = None,
+    partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS_DEFAULT,
 ) -> findings_io.EmitAction:
     direction = "up" if yoy_pct_eur > 0 else "down"
     kg_yoy_str = f"{yoy_pct_kg*100:+.1f}%" if yoy_pct_kg is not None else "n/a"
@@ -1367,10 +1404,15 @@ def _insert_hs_group_yoy_finding(
     if start_prior.year != end_curr.year:
         caveat_codes.append("cn8_revision")
 
+    partner_list = list(partners)
+    if len(partner_list) > 1:
+        caveat_codes.append("multi_partner_sum")
+
     detail = {
-        "method": "hs_group_yoy_v6_partial_window_and_cn8_revision_caveats",
+        "method": "hs_group_yoy_v7_multi_partner_default",
         "method_query": {
-            "source": "eurostat_raw_rows", "flow": flow, "partner": "CN",
+            "source": "eurostat_raw_rows", "flow": flow,
+            "partners": partner_list,
             "flow_label": flow_label,
             "hs_patterns": group.hs_patterns,
             "rolling_window_months": 12,
@@ -2028,7 +2070,7 @@ def _insert_trajectory_finding(
         )
 
     detail = {
-        "method": "hs_group_trajectory_v4_seasonal_feature_and_configurable_smoothing",
+        "method": "hs_group_trajectory_v5_inherits_multi_partner_yoy",
         "flow": flow,
         "flow_label": flow_label,
         "group": {"id": group.id, "name": group.name, "hs_patterns": group.hs_patterns},
@@ -2085,6 +2127,353 @@ def _insert_trajectory_finding(
                 "smoothing_window": features.get("smoothing_window"),
             },
             hs_group_ids=[group.id],
+            score=score,
+            title=title,
+            body="\n".join(body_lines),
+            detail=detail,
+        )
+    return action
+
+
+# =============================================================================
+# GACC-aggregate YoY for non-EU partner aggregates (ASEAN, RCEP, Belt&Road, ...)
+# =============================================================================
+# Mirror-trade compares per-partner pairs where both GACC and Eurostat have
+# data — i.e. EU members only (Eurostat doesn't cover non-EU partners). This
+# analyser handles the other editorial story: tracking China's reported trade
+# with non-EU aggregates over time, GACC-side only. No mirror-comparison, but
+# a 12mo rolling YoY answers "is China-ASEAN trade growing or shrinking?" —
+# exactly the kind of pattern story Soapbox / Merics regularly cover.
+#
+# Pre-requisite: country_aliases must have aggregate_kind set for the labels
+# we want to analyse. Schema seeds these:
+#   asean, rcep, belt_road, region (Africa, LatAm), world (Total).
+# eu_bloc is excluded — mirror-trade handles EU.
+
+GACC_AGGREGATE_KINDS: tuple[str, ...] = ("asean", "rcep", "belt_road", "region", "world")
+GACC_AGGREGATE_TREND_SOURCE_URL = "analysis://gacc_aggregate_yoy/v1"
+
+
+def detect_gacc_aggregate_yoy(
+    flow: str = "export",
+    aggregate_kinds: list[str] | None = None,
+    yoy_threshold_pct: float = 0.0,
+) -> dict[str, int]:
+    """For each (aggregate, anchor_period) where 24 months of GACC history
+    exist, compute the 12mo rolling YoY in EUR-equivalent. Emits one finding
+    per (aggregate, anchor) under subkind 'gacc_aggregate_yoy[_import]'.
+
+    Editorial use: surfaces "China-ASEAN trade rose +X%", "China-Belt&Road
+    contracted -Y%" stories that mirror-trade can't tell because Eurostat
+    has no data for non-EU partners. GACC-only — no mirror gap.
+
+    `flow`: 'export' (China selling to bloc) or 'import' (China buying).
+    `aggregate_kinds`: subset of GACC_AGGREGATE_KINDS. Default: all five.
+    `yoy_threshold_pct`: minimum |yoy_pct| to emit (0.0 = emit one per anchor).
+    """
+    if flow not in ("export", "import"):
+        raise ValueError(f"flow must be 'export' or 'import'; got {flow!r}")
+    kinds = list(aggregate_kinds or GACC_AGGREGATE_KINDS)
+    counts = {
+        "emitted": 0,
+        "inserted_new": 0, "confirmed_existing": 0, "superseded": 0,
+        "skipped_insufficient_history": 0,
+        "skipped_zero_prior": 0,
+        "skipped_below_threshold": 0,
+        "skipped_no_aggregates": 0,
+    }
+
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        cur.execute(
+            """
+            SELECT id AS alias_id, raw_label, aggregate_kind
+              FROM country_aliases
+             WHERE source = 'gacc'
+               AND aggregate_kind = ANY(%s)
+          ORDER BY aggregate_kind, raw_label
+            """,
+            (kinds,),
+        )
+        aggregates = [dict(r) for r in cur.fetchall()]
+
+    if not aggregates:
+        counts["skipped_no_aggregates"] += 1
+        return counts
+
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'running') RETURNING id",
+            (GACC_AGGREGATE_TREND_SOURCE_URL,),
+        )
+        analysis_run_id = cur.fetchone()[0]
+
+    try:
+        for agg in aggregates:
+            series = _gacc_aggregate_per_period_totals(agg["raw_label"], flow=flow)
+            if not series:
+                counts["skipped_insufficient_history"] += 1
+                continue
+            eur_by_period: dict[date, float] = {p: e for p, e, _ in series}
+            obs_by_period: dict[date, list[int]] = {p: ids for p, _, ids in series}
+            periods_sorted = sorted(eur_by_period.keys())
+
+            for t in periods_sorted:
+                start_curr = _months_back(t, 11)
+                end_curr   = t
+                start_prior = _months_back(t, 23)
+                end_prior   = _months_back(t, 12)
+
+                # Walk through the 24-month window. GACC publishes Jan + Feb
+                # as a combined cumulative release (Chinese New Year
+                # disruption), and our parser doesn't yet handle the
+                # "January-February YYYY" title format — so for non-EU
+                # aggregate labels every Jan + Feb is a structural data gap.
+                # Looser tolerance than hs_group_yoy: accept up to 4 missing
+                # months per 24-month window (covers 2 Jan + 2 Feb), set
+                # partial_window when ANY months are missing, and require at
+                # least 8 of 12 months in EACH half so we don't compute YoY
+                # on a half-empty side. Editorially: still useful, but the
+                # caveat carries weight.
+                want = []
+                p = start_prior
+                while p <= end_curr:
+                    want.append(p)
+                    p = _months_back(p, -1)
+                want_curr = [p for p in want if start_curr <= p <= end_curr]
+                want_prior = [p for p in want if start_prior <= p <= end_prior]
+                missing_curr = [p for p in want_curr if p not in eur_by_period]
+                missing_prior = [p for p in want_prior if p not in eur_by_period]
+                n_curr = 12 - len(missing_curr)
+                n_prior = 12 - len(missing_prior)
+                if n_curr < 8 or n_prior < 8:
+                    counts["skipped_insufficient_history"] += 1
+                    continue
+                partial_window = (len(missing_curr) + len(missing_prior)) > 0
+
+                current_eur = sum(eur_by_period[p] for p in want_curr if p in eur_by_period)
+                prior_eur   = sum(eur_by_period[p] for p in want_prior if p in eur_by_period)
+                if prior_eur == 0:
+                    counts["skipped_zero_prior"] += 1
+                    continue
+                yoy_pct = (current_eur - prior_eur) / abs(prior_eur)
+                if abs(yoy_pct) < yoy_threshold_pct:
+                    counts["skipped_below_threshold"] += 1
+                    continue
+
+                # Collect underlying observation_ids across the full window
+                # so the finding can be traced back to source rows.
+                obs_ids: list[int] = []
+                for p in want_curr + want_prior:
+                    obs_ids.extend(obs_by_period.get(p, []))
+
+                action = _insert_gacc_aggregate_yoy_finding(
+                    analysis_run_id, agg, t, start_curr, end_curr,
+                    start_prior, end_prior,
+                    current_eur, prior_eur, yoy_pct,
+                    series, obs_ids, flow=flow,
+                    partial_window=partial_window,
+                    missing_curr=missing_curr,
+                    missing_prior=missing_prior,
+                )
+                _tally(counts, action)
+
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='success', ended_at=now() WHERE id=%s",
+                (analysis_run_id,),
+            )
+    except Exception as e:
+        log.exception("GACC-aggregate YoY analysis failed")
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='failed', error_message=%s, ended_at=now() WHERE id=%s",
+                (str(e), analysis_run_id),
+            )
+        raise
+    return counts
+
+
+def _gacc_aggregate_per_period_totals(
+    aggregate_label: str, flow: str = "export",
+) -> list[tuple[date, float, list[int]]]:
+    """Returns (period, total_eur, [observation_ids]) per period for the given
+    GACC aggregate label. Filters to canonical CNY releases (USD releases
+    duplicate the same underlying transactions in a different currency); does
+    FX conversion to EUR via lookups.lookup_fx. Periods with no FX rate are
+    skipped silently — the YoY analyser sees a gap and applies its
+    partial_window tolerance.
+
+    Editorial subtlety: aggregating partner='ASEAN' (etc.) sums the values as
+    GACC published them; we don't decompose to per-member country totals. The
+    GACC bloc total may differ from sum-of-individual-members on the same
+    release if GACC reports a Total cell using different rounding."""
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                r.period,
+                o.value_amount,
+                r.unit,
+                o.id AS obs_id
+              FROM observations o
+              JOIN releases r ON r.id = o.release_id
+             WHERE r.source = 'gacc'
+               AND r.currency = 'CNY'
+               AND o.flow = %s
+               AND o.period_kind = 'monthly'
+               AND o.partner_country = %s
+               AND o.value_amount IS NOT NULL
+          ORDER BY r.period, o.id
+            """,
+            (flow, aggregate_label),
+        )
+        rows = cur.fetchall()
+
+    by_period: dict[date, tuple[float, list[int]]] = {}
+    for period, value_amount, unit, obs_id in rows:
+        scale, currency = parse_unit_scale(unit)
+        if scale is None:
+            log.warning(
+                "Skipping GACC aggregate %r row at %s — unrecognised unit %r",
+                aggregate_label, period, unit,
+            )
+            continue
+        ccy = currency or "CNY"
+        fx = lookups.lookup_fx(ccy, "EUR", period)
+        if fx is None:
+            log.info(
+                "Skipping GACC aggregate %r row at %s — no FX rate for %s/EUR",
+                aggregate_label, period, ccy,
+            )
+            continue
+        eur = float(value_amount) * scale * fx.rate
+        existing = by_period.get(period)
+        if existing is None:
+            by_period[period] = (eur, [obs_id])
+        else:
+            # Multiple observations for the same period (e.g. preliminary +
+            # revised release). Sum and append — version_seen would handle
+            # this more cleanly, but for aggregate-level totals the sum is
+            # already small so this rarely matters editorially.
+            old_eur, old_ids = existing
+            by_period[period] = (old_eur + eur, old_ids + [obs_id])
+
+    return [(p, eur, ids) for p, (eur, ids) in sorted(by_period.items())]
+
+
+def _insert_gacc_aggregate_yoy_finding(
+    analysis_run_id: int,
+    agg: dict,
+    anchor_period: date,
+    start_curr: date,
+    end_curr: date,
+    start_prior: date,
+    end_prior: date,
+    current_eur: float,
+    prior_eur: float,
+    yoy_pct: float,
+    series: list[tuple[date, float, list[int]]],
+    obs_ids: list[int],
+    flow: str = "export",
+    partial_window: bool = False,
+    missing_curr: list[date] | None = None,
+    missing_prior: list[date] | None = None,
+) -> findings_io.EmitAction:
+    direction = "up" if yoy_pct > 0 else "down"
+    flow_label = "China exports to" if flow == "export" else "China imports from"
+    flow_subkind_suffix = "" if flow == "export" else "_import"
+
+    title = (
+        f"GACC aggregate ({flow_label} {agg['raw_label']}): rolling 12mo to "
+        f"{end_curr.strftime('%Y-%m')}: €{current_eur/1e9:,.2f}B "
+        f"({yoy_pct*100:+.1f}% {direction} YoY)"
+    )
+
+    body_lines = [
+        f"GACC aggregate: {agg['raw_label']} (kind={agg['aggregate_kind']})",
+        f"Direction: {flow_label} {agg['raw_label']}",
+        "",
+        f"Rolling 12 months ending {end_curr.strftime('%Y-%m')}:",
+        f"  Value:  €{current_eur:,.0f} ({yoy_pct*100:+.2f}% YoY vs €{prior_eur:,.0f})",
+        "",
+        ("This is GACC-side data only; no Eurostat counterpart exists for "
+         "non-EU partner aggregates. Cross-reference with UN Comtrade or "
+         "destination-country customs data when corroborating."),
+    ]
+    caveat_codes: list[str] = []
+    if partial_window:
+        caveat_codes.append("partial_window")
+        n_missing = len(missing_curr or []) + len(missing_prior or [])
+        missing_strs = ", ".join(
+            d.strftime("%Y-%m") for d in (missing_curr or []) + (missing_prior or [])
+        )
+        body_lines.append("")
+        body_lines.append(
+            f"⚠ PARTIAL WINDOW: {n_missing} of 24 months missing from this window "
+            f"({missing_strs}). GACC publishes Jan + Feb as a combined "
+            f"cumulative release (Chinese New Year), and our parser doesn't yet "
+            f"handle that format — so every January and February is a "
+            f"structural data gap for non-EU aggregates. Sums are over "
+            f"available months only; treat the YoY as approximate. See "
+            f"caveat 'partial_window' and `dev_notes/forward-work-gacc-2018-parser.md` "
+            f"(the title-format issue is the same one that blocks 2018)."
+        )
+
+    detail = {
+        "method": "gacc_aggregate_yoy_v2_loose_partial_window",
+        "method_query": {
+            "source": "observations (source=gacc)",
+            "flow": flow,
+            "partner_country_label": agg["raw_label"],
+            "aggregate_kind": agg["aggregate_kind"],
+            "rolling_window_months": 12,
+        },
+        "aggregate": {
+            "alias_id": agg["alias_id"],
+            "raw_label": agg["raw_label"],
+            "kind": agg["aggregate_kind"],
+        },
+        "windows": {
+            "current_start": start_curr.isoformat(), "current_end": end_curr.isoformat(),
+            "prior_start": start_prior.isoformat(), "prior_end": end_prior.isoformat(),
+        },
+        "totals": {
+            "current_12mo_eur": current_eur,
+            "prior_12mo_eur": prior_eur,
+            "delta_eur": current_eur - prior_eur,
+            "yoy_pct": yoy_pct,
+            "partial_window": partial_window,
+            "missing_months_current": [d.isoformat() for d in (missing_curr or [])],
+            "missing_months_prior": [d.isoformat() for d in (missing_prior or [])],
+        },
+        "monthly_series": [
+            {"period": p.isoformat(), "value_eur": e}
+            for (p, e, _) in series
+            if start_prior <= p <= end_curr
+        ],
+        "caveat_codes": caveat_codes,
+    }
+    score = abs(yoy_pct)
+    subkind = f"gacc_aggregate_yoy{flow_subkind_suffix}"
+    current_end_yyyymm = end_curr.strftime("%Y-%m")
+
+    with _conn() as conn, conn.cursor() as cur:
+        _, action = findings_io.emit_finding(
+            cur,
+            scrape_run_id=analysis_run_id,
+            kind="anomaly",
+            subkind=subkind,
+            natural_key=findings_io.nk_gacc_aggregate_yoy(
+                agg["aggregate_kind"], current_end_yyyymm,
+            ),
+            value_fields={
+                "method": detail["method"],
+                "yoy_pct": round(yoy_pct, 6),
+                "current_eur": round(current_eur, 2),
+                "prior_eur": round(prior_eur, 2),
+                "partial_window": partial_window,
+            },
+            observation_ids=sorted(set(obs_ids)),
             score=score,
             title=title,
             body="\n".join(body_lines),

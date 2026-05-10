@@ -282,3 +282,19 @@ def test_export_writes_to_disk(empty_findings, test_db_url, tmp_path):
     assert out.endswith("brief.md")
     content = (tmp_path / "brief.md").read_text()
     assert content.startswith("# GACC × Eurostat trade briefing")
+
+
+def test_construct_chinese_source_url():
+    """The Chinese-language equivalent is constructed by host substitution
+    (`english.customs.gov.cn` → `www.customs.gov.cn`); the Statics/<UUID>.html
+    path is identical on both. Returns None for non-GACC URLs so callers can
+    skip the link cleanly."""
+    from briefing_pack import _construct_chinese_source_url
+
+    en = "http://english.customs.gov.cn/Statics/2e61c8a1-17b2-4074-b909-c039ccf8c8fb.html"
+    cn = _construct_chinese_source_url(en)
+    assert cn == "http://www.customs.gov.cn/Statics/2e61c8a1-17b2-4074-b909-c039ccf8c8fb.html"
+
+    assert _construct_chinese_source_url("https://ec.europa.eu/foo.html") is None
+    assert _construct_chinese_source_url("") is None
+    assert _construct_chinese_source_url(None) is None

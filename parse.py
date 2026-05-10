@@ -23,18 +23,33 @@ _MONTH_ABBREVS = {
     "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
 }
 
-# Release page <title> / .atcl-ttl format:
-#   "(4) China's Total Export & Import Values by Country/Region, Mar 2026 (in CNY)"
-# GACC inconsistently uses either the 3-letter abbreviation ('Mar') or the full
-# name ('March') in the title — both forms must parse. We capture the first 3
-# letters and look them up in _MONTH_ABBREVS.
+# Release page <title> / .atcl-ttl format. Format varies by year:
+#   2026: "(4) China's Total Export & Import Values by Country/Region, Mar 2026 (in CNY)"
+#   2018: "China's Total Export & Import Values by Country/Region, March 2018 (in CNY)"
+#         (no leading section number — must infer from description)
+#         "(2) China's Total Export & Import Values by Trade Mode, August 2018 (Only August, in CNY)"
+#         (parenthetical includes "Only August" prefix on some 2018 monthly releases)
+#   2018: also uses "in RMB" variant (treat as synonym for CNY)
+# Months: GACC inconsistently uses 3-letter abbreviation or full name in the title.
 _RELEASE_TITLE_RE = re.compile(
-    r"^\((?P<section>\d+)\)\s*(?P<description>.+?),\s*"
+    r"^(?:\((?P<section>\d+)\)\s*)?(?P<description>.+?),\s*"
     r"(?P<month>Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
     r"Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
     r"Nov(?:ember)?|Dec(?:ember)?)\s*"
-    r"(?P<year>\d{4})\s*\(in\s*(?P<currency>CNY|USD)\)\s*$"
+    r"(?P<year>\d{4})\s*\((?:Only\s+\w+,\s*)?in\s*(?P<currency>CNY|USD|RMB)\)\s*$"
 )
+
+
+def _infer_section_from_description(description: str) -> int:
+    """Used when the title lacks a leading "(N)" prefix (2018 historical format).
+    Returns the section number to assign based on the description prose.
+    Section 1 is the catch-all default since it has no descriptive suffix."""
+    d = description.lower()
+    if "by country" in d or "by region" in d:
+        return 4
+    if "by trade mode" in d:
+        return 2
+    return 1
 
 
 class ParsedObservation(TypedDict, total=False):
@@ -111,9 +126,15 @@ def extract_metadata(soup: BeautifulSoup, url: str) -> ReleaseMetadata:
     pub_date_el = soup.find("div", class_="atcl-date")
     if pub_date_el:
         raw = pub_date_el.get_text(strip=True)
-        try:
-            pub_date = datetime.strptime(raw, "%Y/%m/%d").date()
-        except ValueError:
+        # Modern releases use YYYY/MM/DD; 2018-era historical releases use
+        # DD/MM/YYYY. Try both before warning.
+        for fmt in ("%Y/%m/%d", "%d/%m/%Y"):
+            try:
+                pub_date = datetime.strptime(raw, fmt).date()
+                break
+            except ValueError:
+                continue
+        else:
             log.warning("Unparseable publication date: %r", raw)
 
     # Unit annotation appears in either a <span> wrapper (most pages) or directly
@@ -133,11 +154,21 @@ def extract_metadata(soup: BeautifulSoup, url: str) -> ReleaseMetadata:
             # Source uses Windows-style backslashes in the href.
             excel_url = a["href"].replace("\\", "/")
 
+    section_str = m.group("section")
+    description = m.group("description").strip()
+    section = int(section_str) if section_str else _infer_section_from_description(description)
+    # GACC uses RMB and CNY interchangeably in titles (RMB appears in some 2018
+    # releases). They're the same currency — normalise to CNY so the dimensional
+    # key in releases matches across years.
+    currency = m.group("currency")
+    if currency == "RMB":
+        currency = "CNY"
+
     return ReleaseMetadata(
-        section_number=int(m.group("section")),
-        description=m.group("description").strip(),
+        section_number=section,
+        description=description,
         period=period,
-        currency=m.group("currency"),
+        currency=currency,
         publication_date=pub_date,
         unit=unit,
         excel_url=excel_url,

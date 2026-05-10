@@ -123,13 +123,51 @@ def test_yoy_emits_when_growth_above_threshold(empty_op, test_db_url):
     assert detail["totals"]["current_12mo_kg"] > 0
     assert detail["totals"]["yoy_pct_kg"] is not None
     assert detail["totals"]["current_unit_price_eur_per_kg"] is not None
-    # Provenance: the method definition is queryable from the finding alone
-    assert detail["method_query"]["partner"] == "CN"
+    # Provenance: the method definition is queryable from the finding alone.
+    # New default sums CN+HK+MO; explicit partner override available via the
+    # eurostat_partners parameter.
+    assert detail["method_query"]["partners"] == ["CN", "HK", "MO"]
     assert detail["method_query"]["hs_patterns"] == ["854142%", "854143%"]
+    # multi_partner_sum caveat fires by default (>1 partner summed).
+    assert "multi_partner_sum" in detail["caveat_codes"]
     # Top contributors recorded with kg
     top = detail["top_cn8_codes_in_current_12mo"]
     assert any(c["hs_code"] == "85414210" for c in top)
     assert all("total_kg" in c for c in top)
+
+
+def test_yoy_cn_only_override_excludes_hk_mo(empty_op, test_db_url):
+    """Mirrors test_yoy_emits_when_growth_above_threshold but with explicit
+    eurostat_partners=['CN']. The finding records partner='CN' alone in
+    method_query.partners and DOES NOT carry the multi_partner_sum caveat
+    (the override is single-partner so the comparison is direct, not summed).
+    Editorial use: the journalist comparing against a single-partner
+    Soapbox/Merics figure passes --eurostat-partners CN to match scope."""
+    with psycopg2.connect(test_db_url) as conn:
+        prior_12 = [100.0] * 12
+        current_12 = [150.0] * 12
+        _seed_eurostat_imports(
+            conn, "85414210",
+            _make_24_months(date(2024, 1, 1), prior_12 + current_12),
+        )
+
+    counts = anomalies.detect_hs_group_yoy(
+        group_names=["Solar PV cells & modules"], yoy_threshold_pct=0.10,
+        eurostat_partners=["CN"],
+    )
+    assert counts["emitted"] >= 1, f"counts={counts}"
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT detail FROM findings "
+            "WHERE subkind='hs_group_yoy' "
+            "  AND (detail->'totals'->>'partial_window')::boolean = false "
+            "ORDER BY score DESC LIMIT 1"
+        )
+        detail = cur.fetchone()[0]
+
+    assert detail["method_query"]["partners"] == ["CN"]
+    assert "multi_partner_sum" not in detail["caveat_codes"]
 
 
 def test_yoy_silent_when_below_threshold(empty_op, test_db_url):

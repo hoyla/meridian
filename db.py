@@ -195,19 +195,33 @@ def upsert_observations(
     has the same value, skip; if the value differs, insert a new row with
     version_seen bumped. Returns counts {'inserted', 'versioned', 'unchanged'}.
 
-    Fast path: when no observations exist for this release_id (first ingest),
-    skip the per-row SELECT and bulk-INSERT via execute_values. This is the
-    dominant case for backfill and is ~1000x faster than the per-row path.
+    Fast path: when none of the incoming observations' partner_countries already
+    have rows under this release, skip the per-row SELECT and bulk-INSERT via
+    execute_values. Covers both the first-ingest case and partner-additive
+    extensions of an existing release (e.g. adding HK/MO to a CN-only release),
+    ~1000x faster than the per-row path. Falls back to release-level freshness
+    when any incoming observation has NULL partner_country.
     """
     counts = {"inserted": 0, "versioned": 0, "unchanged": 0}
     if not observations:
         return counts
 
     with transaction() as conn, conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM observations WHERE release_id = %s LIMIT 1", (release_id,))
-        is_fresh_release = cur.fetchone() is None
+        partners_seen = {obs.get("partner_country") for obs in observations}
+        if None in partners_seen:
+            cur.execute(
+                "SELECT 1 FROM observations WHERE release_id = %s LIMIT 1",
+                (release_id,),
+            )
+        else:
+            cur.execute(
+                "SELECT 1 FROM observations "
+                " WHERE release_id = %s AND partner_country = ANY(%s) LIMIT 1",
+                (release_id, sorted(partners_seen)),
+            )
+        is_fresh_partition = cur.fetchone() is None
 
-        if is_fresh_release:
+        if is_fresh_partition:
             cols_sql = ", ".join(_OBS_INSERT_COLS)
             psycopg2.extras.execute_values(
                 cur,

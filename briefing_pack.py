@@ -42,6 +42,29 @@ log = logging.getLogger(__name__)
 PERMALINK_BASE_ENV = "GACC_PERMALINK_BASE"
 DEFAULT_TOP_N = 10
 
+# Caveats that apply by default to every active finding (because of analyser
+# defaults rather than something unusual about a specific finding). Suppressing
+# them inline keeps the per-finding caveat list focused on signal — what's
+# *unusual* about THIS finding — while a top-of-brief note covers the defaults.
+# `multi_partner_sum`: the default eurostat_partners is (CN, HK, MO), so
+#   every finding sums across all three. Mentioned at the top of the brief.
+# `llm_drafted`: implied by the LLM-narratives section header itself.
+SUPPRESSED_INLINE_CAVEATS = frozenset({"multi_partner_sum", "llm_drafted"})
+
+
+def _construct_chinese_source_url(english_url: str | None) -> str | None:
+    """Construct the Chinese-language equivalent of a GACC English release URL.
+    GACC keeps the same Statics/<UUID>.html path on both hosts; only the
+    subdomain changes. Returns None if the URL doesn't match the expected
+    GACC English pattern (so callers can skip the link cleanly)."""
+    if not english_url:
+        return None
+    en_host = "english.customs.gov.cn"
+    cn_host = "www.customs.gov.cn"
+    if en_host not in english_url:
+        return None
+    return english_url.replace(en_host, cn_host)
+
 
 @dataclass
 class _Section:
@@ -155,6 +178,18 @@ def _section_headline(cur) -> _Section:
     lines.append("into the project's database. A **Sources** appendix at the end lists every third-party ")
     lines.append("URL the brief rests on, with fetch timestamps.")
     lines.append("")
+    lines.append("## Defaults applied to every finding")
+    lines.append("")
+    lines.append("- **Eurostat partners summed**: CN + HK + MO (the editorially-correct \"Chinese trade\" ")
+    lines.append("  envelope including the two Special Administrative Regions). Every active finding ")
+    lines.append("  carries a `multi_partner_sum` caveat; it is suppressed inline below to keep per-finding ")
+    lines.append("  caveat lists focused on what's *unusual* about each finding. Pass `--eurostat-partners CN` ")
+    lines.append("  to get a narrower direct-China-only view (matches Soapbox / Merics single-partner figures).")
+    lines.append("- **EU-side data EXCLUDES the United Kingdom.** Eurostat dropped UK reporting after Brexit ")
+    lines.append("  (UK left fully on 2021-01). For a UK-domestic angle on any of these stories, cross-")
+    lines.append("  reference HMRC trade stats at <https://www.uktradeinfo.com/>. See ")
+    lines.append("  `dev_notes/forward-work-uk-data-gap.md` for the planned fix.")
+    lines.append("")
     lines.append("## Period coverage")
     for s in sources:
         lines.append(f"- **{s['source']}**: {s['lo']} → {s['hi']} ({s['n']} releases)")
@@ -210,8 +245,7 @@ def _section_llm_narratives(cur) -> _Section:
         detail = r["detail"]
         group_name = detail.get("group", {}).get("name", "—")
         caveats = detail.get("caveat_codes") or []
-        # Don't emit `llm_drafted` inline — it's implied by the section header.
-        visible_caveats = [c for c in caveats if c != "llm_drafted"]
+        visible_caveats = [c for c in caveats if c not in SUPPRESSED_INLINE_CAVEATS]
         lines.append(f"### {group_name}")
         lines.append("")
         lines.append(r["body"])
@@ -249,7 +283,8 @@ def _section_hs_yoy_movers(cur, flow: int, top_n: int) -> _Section:
                  (detail->'totals'->>'yoy_pct_kg')::numeric AS yoy_pct_kg,
                  (detail->'totals'->>'unit_price_pct_change')::numeric AS unit_price_pct,
                  (detail->'totals'->>'low_base')::boolean AS low_base,
-                 detail->'method_query'->'hs_patterns' AS hs_patterns
+                 detail->'method_query'->'hs_patterns' AS hs_patterns,
+                 detail->'method_query'->'partners' AS partners_used
             FROM findings
            WHERE subkind = %s AND superseded_at IS NULL
         ORDER BY detail->'group'->>'name', (detail->'windows'->>'current_end')::date DESC, id DESC
@@ -297,9 +332,15 @@ def _section_hs_yoy_movers(cur, flow: int, top_n: int) -> _Section:
                 "- ⚠️ **Low-base flag**: prior or current 12mo total below the €50M "
                 "threshold. Verify absolute figures before quoting the percentage."
             )
+        # Pull partner list from the finding's method_query (default new
+        # behaviour: CN+HK+MO; legacy CN-only findings are superseded after
+        # the v7 method bump but rendering here stays defensive).
+        partners_used = (
+            r.get("partners_used") or ["CN", "HK", "MO"]
+        )
         lines.append(
-            f"- *Method*: 12mo rolling, partner=CN, flow={flow_short}, "
-            f"hs_patterns=`{r['hs_patterns']}`"
+            f"- *Method*: 12mo rolling, partners={','.join(partners_used)}, "
+            f"flow={flow_short}, hs_patterns=`{r['hs_patterns']}`"
         )
         # Window-traced source span
         period_start = r['prior_start']
@@ -463,8 +504,10 @@ def _section_mirror_gaps(cur) -> _Section:
             )
             # Caveats now read from the finding's actual caveat_codes list,
             # so editorial-framing caveats added in Phase 2 (e.g.
-            # `transshipment_hub`) surface correctly.
-            caveats = r['caveat_codes'] or []
+            # `transshipment_hub`) surface correctly. Caveats that apply to
+            # essentially every finding by default (multi_partner_sum) are
+            # suppressed inline; the top-of-brief note covers them.
+            caveats = [c for c in (r['caveat_codes'] or []) if c not in SUPPRESSED_INLINE_CAVEATS]
             lines.append(f"- *Caveats*: {', '.join(caveats) if caveats else '—'}")
             if r['hub_iso2']:
                 # One-line transshipment-hub annotation when the partner is in
@@ -630,8 +673,9 @@ def _section_sources_appendix(cur, release_ids: set[int]) -> _Section:
         lines.append("")
         lines.append(
             "*Page bytes preserved in `source_snapshots`. The `fetched_at` "
-            "timestamp is when we last successfully read the page; the link "
-            "below points to the live page.*"
+            "timestamp is when we last successfully read the page; the EN "
+            "link below points to the live page. The CN link is the "
+            "constructed Chinese-language equivalent (see note below).*"
         )
         lines.append("")
         for r in by_source['gacc']:
@@ -642,19 +686,26 @@ def _section_sources_appendix(cur, release_ids: set[int]) -> _Section:
                 r['currency'],
                 r['release_kind'],
             ]))
+            chinese_url = _construct_chinese_source_url(r['source_url'])
+            cn_link = f" / CN: <{chinese_url}>" if chinese_url else ""
             lines.append(
                 f"- **{r['period'].strftime('%Y-%m')}** "
-                f"({kind_bits}) — fetched {ts_str} — <{r['source_url']}>"
+                f"({kind_bits}) — fetched {ts_str} — EN: <{r['source_url']}>{cn_link}"
             )
         lines.append("")
 
     lines.append("### Known gaps in source coverage")
     lines.append("")
     lines.append(
-        "- We scrape the GACC English-language pages. The underlying "
-        "Chinese-language release at `customs.gov.cn` is a separate URL "
-        "we don't currently track — a journalist triangulating in Chinese "
-        "would need to navigate there independently."
+        "- The `CN:` Chinese-language URLs above are *constructed* from the "
+        "English URL by host substitution (`english.customs.gov.cn` → "
+        "`www.customs.gov.cn`); GACC keeps the same `Statics/<UUID>.html` "
+        "path on both. We don't verify these links automatically — the "
+        "Chinese site fronts a JavaScript anti-bot challenge that blocks "
+        "headless `curl` — but a journalist clicking through in a real "
+        "browser will land on the Chinese-language version of the same "
+        "release. Useful for in-language verification or when the English "
+        "translation drops a nuance."
     )
     lines.append(
         "- Caveat codes referenced inline (e.g. `cif_fob`, `low_base_effect`) "

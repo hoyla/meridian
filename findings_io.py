@@ -230,3 +230,13 @@ def nk_hs_group_trajectory(hs_group_id: int) -> tuple[int]:
     one current trajectory per group per flow at any time. New data lands
     via supersede. Flow direction is in the subkind."""
     return (hs_group_id,)
+
+
+def nk_gacc_aggregate_yoy(aggregate_kind: str, current_end_yyyymm: str) -> tuple[str, str]:
+    """A gacc_aggregate_yoy finding is identified by (aggregate_kind, window-end).
+    aggregate_kind is e.g. 'asean', 'rcep', 'belt_road', 'region', 'world'.
+    The flow direction (China-side export vs import) is encoded in the subkind
+    (`gacc_aggregate_yoy` vs `gacc_aggregate_yoy_import`). The aggregate label
+    string itself isn't part of the key — kind is the editorial identity, the
+    label may shift over time (e.g. "Belt and Road Routes" wording changes)."""
+    return (aggregate_kind, current_end_yyyymm)

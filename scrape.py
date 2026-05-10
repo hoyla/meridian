@@ -41,8 +41,15 @@ log = logging.getLogger(__name__)
 
 
 # Index URLs and the release_kind their links represent.
+# `preliminary.html` serves the current year (the year picker reflects 2026
+# at time of writing); `preliminaryYYYY.html` serves the historical year-
+# specific archive. GACC publishes year archives back to 2018.
 SEED_INDEXES: list[tuple[str, str]] = [
     ("http://english.customs.gov.cn/statics/report/preliminary.html", "preliminary"),
+    *(
+        (f"http://english.customs.gov.cn/statics/report/preliminary{y}.html", "preliminary")
+        for y in range(2018, 2026)
+    ),
 ]
 
 
@@ -177,7 +184,7 @@ def main() -> None:
                    help="Only fetch FX rates from this period onwards (default: full history)")
     p.add_argument("--analyse",
                    choices=["mirror-trade", "mirror-gap-trends", "hs-group-yoy",
-                            "hs-group-trajectory", "llm-framing"],
+                            "hs-group-trajectory", "gacc-aggregate-yoy", "llm-framing"],
                    help="Run a deterministic anomaly pass over already-ingested data, "
                         "or 'llm-framing' to generate narrative top-lines per hs-group "
                         "(consumes existing deterministic findings)")
@@ -186,9 +193,13 @@ def main() -> None:
                         f"{llm_framing.DEFAULT_OLLAMA_MODEL}")
     p.add_argument("--eurostat-partners", metavar="LIST",
                    help="Comma-separated Eurostat partner_country codes to sum on the EU "
-                        "import side for mirror-trade. Default: 'CN'. Use 'CN,HK' to also "
-                        "capture Hong-Kong-routed Chinese trade (~15%% of China's exports). "
-                        "When >1 partner is used, findings carry a multi_partner_sum caveat.")
+                        "import side. Applies to --analyse mirror-trade and "
+                        "--analyse hs-group-yoy (trajectory inherits from yoy). "
+                        "Default: 'CN,HK,MO' (the editorially-correct 'Chinese trade' "
+                        "envelope including HK and MO Special Administrative Regions). "
+                        "Pass 'CN' for the narrower direct-China-only view that matches "
+                        "Soapbox/Merics single-partner figures. When >1 partner is used, "
+                        "findings carry a multi_partner_sum caveat.")
     p.add_argument("--export-sheet", action="store_true",
                    help="Export findings to a spreadsheet (default: local .xlsx)")
     p.add_argument("--out-format", choices=["xlsx", "sheets"], default="xlsx",
@@ -255,22 +266,43 @@ def main() -> None:
         return
 
     if args.analyse == "hs-group-yoy":
+        partners = (
+            [p.strip().upper() for p in args.eurostat_partners.split(",") if p.strip()]
+            if args.eurostat_partners else None
+        )
         counts = anomalies.detect_hs_group_yoy(
             group_names=args.hs_group,
             yoy_threshold_pct=args.yoy_threshold,
             flow=args.flow,
             low_base_threshold_eur=args.low_base_threshold,
+            eurostat_partners=partners,
         )
         log.info("HS-group YoY analysis (flow=%d): %s", args.flow, counts)
         return
 
     if args.analyse == "hs-group-trajectory":
+        # No eurostat_partners arg: trajectory reads from active hs_group_yoy
+        # findings, so its partner scope is whatever the most recent yoy run
+        # produced. To narrow trajectory to CN-only, re-run hs-group-yoy with
+        # --eurostat-partners CN first.
         counts = anomalies.detect_hs_group_trajectories(
             group_names=args.hs_group, flow=args.flow,
             low_base_threshold_eur=args.low_base_threshold,
             smooth_window=args.smooth_window,
         )
         log.info("HS-group trajectory analysis (flow=%d): %s", args.flow, counts)
+        return
+
+    if args.analyse == "gacc-aggregate-yoy":
+        # GACC-only YoY for non-EU partner aggregates (ASEAN, RCEP, Belt&Road,
+        # Africa, Latin America, world Total). No mirror-comparison; the
+        # editorial story is "is China-bloc trade growing or shrinking" rather
+        # than "do the two sides agree".
+        flow_str = "export" if args.flow == 1 else "import"
+        counts = anomalies.detect_gacc_aggregate_yoy(
+            flow=flow_str, yoy_threshold_pct=args.yoy_threshold,
+        )
+        log.info("GACC-aggregate YoY analysis (flow=%s): %s", flow_str, counts)
         return
 
     if args.analyse == "llm-framing":

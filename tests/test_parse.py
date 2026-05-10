@@ -71,6 +71,63 @@ def test_metadata_handles_full_month_name():
         assert m, f"failed to match: {title!r}"
 
 
+def test_metadata_accepts_dd_mm_yyyy_publication_date():
+    """2018-era release pages render the publication date as DD/MM/YYYY rather
+    than the modern YYYY/MM/DD; both formats must parse so the historical
+    backfill captures the correct pub_date instead of dropping it."""
+    from bs4 import BeautifulSoup
+    from parse import extract_metadata
+
+    html = """
+    <html><body>
+      <div class="atcl-ttl">China's Total Export & Import Values by Country/Region, July 2018 (in CNY)</div>
+      <div class="atcl-date">08/08/2018</div>
+    </body></html>
+    """
+    meta = extract_metadata(BeautifulSoup(html, "lxml"), "http://example/x.html")
+    assert meta.publication_date == date(2018, 8, 8)
+
+
+def test_metadata_handles_2018_historical_formats():
+    """Historical (2018) release titles diverge from the current format in two ways:
+    (1) the leading "(N)" section prefix is omitted — section must be inferred from
+    the description; (2) currency may appear as "RMB" instead of "CNY"; (3) some
+    monthly releases use "(Only August, in CNY)" parenthetical instead of the
+    bare "(in CNY)". The parser must accept all three so 2018 section-4 releases
+    backfill cleanly."""
+    from bs4 import BeautifulSoup
+    from parse import extract_metadata
+
+    cases = [
+        # No (N) prefix → section inferred as 4 from "by Country/Region"
+        (
+            "China's Total Export & Import Values by Country/Region, July 2018 (in CNY)",
+            4, "CNY", date(2018, 7, 1),
+        ),
+        # RMB normalised to CNY
+        (
+            "China's Total Export & Import Values by Country/Region, June 2018 (in RMB)",
+            4, "CNY", date(2018, 6, 1),
+        ),
+        # (N) prefix present + "Only August" parenthetical
+        (
+            "(2) China's Total Export & Import Values by Trade Mode, August 2018 (Only August, in CNY)",
+            2, "CNY", date(2018, 8, 1),
+        ),
+    ]
+    for title, expected_section, expected_ccy, expected_period in cases:
+        html = f"""
+        <html><body>
+          <div class="atcl-ttl">{title}</div>
+          <div class="atcl-date">2018/09/08</div>
+        </body></html>
+        """
+        meta = extract_metadata(BeautifulSoup(html, "lxml"), "http://example/x.html")
+        assert meta.section_number == expected_section, f"{title!r}: section"
+        assert meta.currency == expected_ccy, f"{title!r}: currency"
+        assert meta.period == expected_period, f"{title!r}: period"
+
+
 def test_metadata_extraction():
     soup = BeautifulSoup(_load_section4(), "lxml")
     meta = extract_metadata(soup, SECTION4_URL)
