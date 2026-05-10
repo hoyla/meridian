@@ -418,6 +418,95 @@ larger than her surplus number. Two reasons for the gap:
 The numbers are in the same ballpark editorially but methodology
 choices matter.
 
+## EU-27 methodology audit (2026-05-10) — RESULTS
+
+Discovered post-validation: our `eurostat_raw_rows` table contained
+UK-reporter (`reporter='GB'`) rows for 2017 through Q1 2020 because
+the UK was an EU-28 reporter pre-Brexit. The hs-group SQL helpers
+summed across all reporters with no filter, so 2017–Q1 2020 findings
+silently answered "EU-28 incl. UK" while 2021+ findings answered
+"EU-27 excl. UK" — breaking any cross-Brexit comparison. The original
+validation pass above ran on this inconsistent baseline.
+
+**Fix shipped** (commit `388be73`): three SQL helpers in
+`anomalies.py` now filter `reporter <> ALL(EU27_EXCLUDE_REPORTERS)`
+where `EU27_EXCLUDE_REPORTERS = ('GB',)`. Method bumped to
+`hs_group_yoy_v8_excludes_gb_reporter_pre_brexit` and
+`hs_group_trajectory_v6_inherits_eu27_yoy`. The supersede chain
+captures the diff per finding. (A separate commit `70d7bc5` added
+a covering index and rewrote `LIKE ANY` as ORed LIKEs to keep the
+re-run fast — without it, the analyser would have taken ~3 hours;
+with it, ~7 minutes.)
+
+**Editorial impact** (4596 superseded hs_group_yoy findings):
+
+| Severity bucket | Count | % | Reading |
+|---|---|---|---|
+| Method-tag bump only (numbers identical) | 3255 | 71% | 2021+ windows where there were no GB rows to remove |
+| €-amount changed > €1 | **1341** | 29% | Pre-Brexit windows; UK trade subtracted |
+| YoY shifted > 0.5pp | **1754** | 38% | Noticeable editorial difference |
+| YoY shifted > 5pp | **1144** | 25% | Substantial editorial difference |
+| **YoY direction flipped** ("growth" ↔ "decline" with >5pp shift) | **337** | 7% | The headline conclusion was wrong before |
+
+**Most editorially-significant patterns**:
+
+1. **Aluminium (broad), 2018-2019** — old findings reported steady
+   growth (+27% YoY in 2019-04, +29% in 2019-05); new EU-27 findings
+   show **decline** (-26%, -20% over the same windows). UK was
+   apparently a large component of EU-28 aluminium imports from China
+   in 2018, and that trade contracted sharply in 2019, masking the
+   EU-27 picture. A journalist quoting the OLD figures for 2019
+   would have said "Chinese aluminium surged into Europe" when in
+   fact "EU-27 aluminium imports from China collapsed by a quarter".
+
+2. **Electrical equipment & machinery (chapters 84-85, broad)** —
+   the broadest category. 2019-Jul old = +10.4% growth; new = -28.6%
+   decline. Same story shape, larger absolute magnitude (UK was
+   ~€27B of EU-28 electrical-machinery imports from China in 2019).
+
+3. **Cotton (raw + woven), exports EU→China 2018-2019** — old
+   showed strong export growth (+50% in 2019-04, +60% in 2019-05);
+   new shows decline. The post-Xinjiang-cotton-controversy story
+   would have read very differently with the old methodology.
+
+4. **2021 anchors with prior in 2020** — 12mo windows that straddle
+   Brexit had asymmetric prior periods (UK present in early 2020,
+   gone by end-2020). The fix recomputes prior consistently as
+   EU-27, which produces materially different YoYs even when the
+   current period was already EU-27. E.g. Aluminium exports
+   2021-01: old -14.7%, new +7.3%.
+
+**Bottom line for editorial use**:
+
+- Anyone consulting the OLD briefing pack for a pre-2022 trade
+  trend may have been told the wrong direction — substantial risk
+  for any piece referencing the 2017-2020 history.
+- Post-2022 trend statements are unaffected.
+- The supersede chain in the DB is the audit trail: a journalist
+  spot-checking can run `SELECT … FROM findings new JOIN findings
+  old ON old.superseded_by_finding_id = new.id WHERE …` and see the
+  before-and-after for any finding.
+
+**Saved diff materials**:
+- `exports/briefing-clean-state.md` — pre-fix briefing pack (was
+  the morning brief)
+- `exports/briefing-eu27-fix.md` — post-fix briefing pack
+- The "latest 12mo to Feb 2026" sections of both are *identical in
+  numbers* (post-Brexit period); the methodology change shows up
+  only in older windows that the briefing pack doesn't surface
+  prominently. The supersede-chain query above is the right place
+  to look for the editorial impact.
+
+**Forward work surfaced by this audit**:
+- A `created_by` change-log column on `findings` would let us tag
+  the methodology version with a human-readable "what changed"
+  string alongside the machine-readable method version. Currently
+  the journalist has to read the method-name string to understand
+  the supersede.
+- mirror-trade still uses `reporter='GB'` for UK partner findings
+  (correct for 2017-Q1 2020 only); when HMRC ingest lands, that
+  becomes a backfill question.
+
 ## Overall verdict
 
 | Shock | Pre-reg expected | Found | Verdict |
@@ -437,3 +526,14 @@ classifier's gap-intolerance — see §5.1.
 pre-registered prediction. The methodology fired the data, not my
 expectation. This is exactly what pre-registration is supposed to
 verify.
+
+**Post-validation methodology audit (2026-05-10)**: even with the
+shock validation passing, the audit surfaced a separate inconsistency
+— the EU sums silently included UK pre-Brexit. Fix shipped. 1144
+findings (25% of all hs-group YoY) had > 5pp YoY shifts after the
+fix, including 337 where the direction flipped (e.g., 2018-2019
+aluminium "growth" → "decline"). See "EU-27 methodology audit"
+section above. **The lesson**: shock-class validation + post-hoc
+methodology audit are complementary; this kind of silent-default
+inconsistency wouldn't have shown up in a standard shock test
+because the predicted-shape patterns are mostly post-Brexit.
