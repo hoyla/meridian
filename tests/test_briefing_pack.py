@@ -373,10 +373,16 @@ def test_paired_export_cross_references_each_other(
     )
     brief = Path(brief_path).read_text()
     leads = Path(leads_path).read_text()
-    # Brief headline cites leads.md and notes it's in the same folder.
-    assert "`leads.md` in this folder" in brief
-    # Leads cites findings.md and notes the same.
-    assert "Companion to: `findings.md` (in this folder," in leads
+    # Both docs carry an "In this export folder" block listing all three
+    # artefacts. The block names every artefact by filename and marks
+    # the current doc as "(this document)".
+    for doc in (brief, leads):
+        assert "## In this export folder" in doc
+        assert "`findings.md`" in doc
+        assert "`leads.md`" in doc
+        assert "`data.xlsx`" in doc
+    assert "**`findings.md`** — deterministic Markdown findings (this document)" in brief
+    assert "**`leads.md`** — LLM-scaffolded investigation leads (this document)" in leads
 
 
 def test_about_findings_endnote_appears_in_both_docs(

@@ -204,16 +204,28 @@ def _section_headline(
     lines.append("into the project's database. A **Sources** appendix at the end lists every third-party ")
     lines.append("URL the findings rest on, with fetch timestamps.")
     lines.append("")
-    if companion_filename:
-        leads_ref = f"`{companion_filename}` in this folder"
-    else:
-        leads_ref = "`leads.md` in the same export folder"
-    lines.append(f"**Investigation leads** sit in a separate companion document ({leads_ref}), ")
-    lines.append("generated alongside this findings document. The leads use an LLM to scaffold a starting ")
-    lines.append("position per HS group (anomaly summary, picked hypotheses from a curated catalog, ")
-    lines.append("corroboration steps). They're kept out of the findings here so a downstream LLM tool ")
-    lines.append("(NotebookLM, etc.) is reasoning over the raw findings, not over another LLM's ")
-    lines.append("interpretation of them.")
+    leads_ref = f"`{companion_filename}`" if companion_filename else "`leads.md`"
+    lines.append("## In this export folder")
+    lines.append("")
+    lines.append(
+        "This is one of three artefacts generated together from the same DB "
+        "snapshot. All three share the same finding IDs; switch between them "
+        "depending on what you need."
+    )
+    lines.append("")
+    lines.append("- **`findings.md`** — deterministic Markdown findings (this document). NotebookLM-ready.")
+    lines.append(
+        f"- **{leads_ref}** — LLM-scaffolded investigation leads. One per HS group: "
+        "anomaly summary, 2-3 picked hypotheses from a curated catalog, "
+        "corroboration steps. Kept separate so a downstream LLM tool reasoning "
+        "over this findings document sees raw data, not another LLM's "
+        "interpretation."
+    )
+    lines.append(
+        "- **`data.xlsx`** — 8-tab spreadsheet for data journalists. Same "
+        "findings, long-format with filterable scope/flow columns, "
+        "predictability badges, CIF/FOB baseline expansion. Also LLM-free."
+    )
     lines.append("")
     lines.append("## Scope notes")
     lines.append("")
@@ -1374,32 +1386,44 @@ def render_leads(
     )
     if scope_label:
         lines.append(f"*Scope: **{scope_label}**.*")
-    if companion_filename:
-        lines.append(
-            f"*Companion to: `{companion_filename}` (in this folder, "
-            "generated together; cite the findings document for the "
-            "deterministic context).*"
-        )
     lines.append("")
     lines.append(
-        "Companion document to the deterministic findings document. Each "
-        "lead below is an LLM-scaffolded starting position for one HS "
-        "group: a one-sentence anomaly summary, 2–3 hypotheses picked "
-        "from a curated catalog of standard causes for China-EU/UK trade "
-        "movements, and concrete corroboration steps to test them. The "
-        "LLM does NOT compute, draft prose, or invent hypotheses outside "
-        "the catalog. Every number cited is verified against the "
-        "underlying findings before storage; failures are silently "
-        "rejected rather than published."
+        "Each lead below is an LLM-scaffolded starting position for one HS "
+        "group: a one-sentence anomaly summary, 2–3 hypotheses picked from "
+        "a curated catalog of standard causes for China-EU/UK trade "
+        "movements, and concrete corroboration steps to test them. The LLM "
+        "does NOT compute, draft prose, or invent hypotheses outside the "
+        "catalog. Every number cited is verified against the underlying "
+        "findings before storage; failures are silently rejected rather "
+        "than published. Use the leads as starting positions for "
+        "investigation; verify against the deterministic findings or the "
+        "underlying database."
+    )
+    lines.append("")
+    findings_ref = f"`{companion_filename}`" if companion_filename else "`findings.md`"
+    lines.append("## In this export folder")
+    lines.append("")
+    lines.append(
+        "This is one of three artefacts generated together from the same DB "
+        "snapshot. All three share the same finding IDs; switch between them "
+        "depending on what you need."
     )
     lines.append("")
     lines.append(
-        "**This document is intentionally separate from the findings** "
-        "so a downstream LLM tool (NotebookLM, Claude, etc.) reasoning "
-        "over the findings is reasoning over the raw data, not over "
-        "another LLM's interpretation of it. Use the leads as starting "
-        "positions for investigation; verify against the findings "
-        "document or the underlying database."
+        f"- **{findings_ref}** — deterministic Markdown findings. "
+        "NotebookLM-ready, no LLM in the loop. Cite this for the "
+        "underlying numbers any lead below references."
+    )
+    lines.append(
+        "- **`leads.md`** — LLM-scaffolded investigation leads (this "
+        "document). Kept separate from the findings so a downstream LLM "
+        "tool reasoning over them sees raw data, not another LLM's "
+        "interpretation."
+    )
+    lines.append(
+        "- **`data.xlsx`** — 8-tab spreadsheet for data journalists. Same "
+        "findings, long-format with filterable scope/flow columns, "
+        "predictability badges, CIF/FOB baseline expansion. Also LLM-free."
     )
     lines.append("")
     lines.append(

@@ -256,8 +256,9 @@ def _summary_sheet(predictability: dict[str, tuple[str, float, int]]) -> SheetDa
             "combined) and both flows (imports / exports) side by side. "
             "Predictability badge: 🟢 = headline % is robust over 6mo, "
             "🟡 = noisy, 🔴 = volatile (lean on trajectory shape instead). "
-            "For LLM-scaffolded investigation leads, see leads.md alongside "
-            "this spreadsheet in the same export folder."
+            "Companion documents in this folder: findings.md (deterministic "
+            "Markdown rendering of the same findings, NotebookLM-ready) and "
+            "leads.md (LLM-scaffolded investigation starts per HS group)."
         ),
         headers=headers, rows=rows,
     )
