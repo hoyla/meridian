@@ -177,19 +177,22 @@ three per-scope sections.
 
 ### Export
 
-`briefing_pack.export()` writes a paired brief + leads doc per call,
-into a per-export folder for easy pairing:
+`briefing_pack.export()` writes a three-artefact bundle per call,
+into a per-export folder so all three share a single DB snapshot:
 
 ```
 exports/
   2026-05-10-1747/
-    brief.md   ← deterministic; NotebookLM-ready, no LLM in the loop
-    leads.md   ← LLM lead scaffold (anomaly summary + picked hypotheses
-                  + corroboration steps); cross-references finding IDs
-                  the brief also surfaces
+    brief.md     ← deterministic; NotebookLM-ready, no LLM in the loop
+    leads.md     ← LLM lead scaffold (anomaly summary + picked
+                    hypotheses + corroboration steps); cross-
+                    references finding IDs the brief also surfaces
+    data.xlsx    ← 8-tab spreadsheet for data journalists; LLM-free,
+                    same DB snapshot as the brief
   2026-05-10-1830-ev-batteries-li-ion/   ← future scoped export
     brief.md
     leads.md
+    data.xlsx
 ```
 
 Folder name pattern: `YYYY-MM-DD-HHMM[-slug]/`. The optional slug comes

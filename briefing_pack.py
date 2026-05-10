@@ -479,6 +479,20 @@ def _compute_predictability_per_group(cur) -> dict[str, tuple[str, float, int]]:
     return out
 
 
+def is_threshold_fragile(curr_eur: Any, prior_eur: Any, threshold_eur: Any) -> bool:
+    """Return True if smaller-of-(curr, prior) sits within
+    THRESHOLD_FRAGILITY_RATIO of `threshold_eur` (above OR below).
+    Shared with sheets_export so both the brief and the spreadsheet use
+    the same definition of "near the low_base threshold"."""
+    if curr_eur is None or prior_eur is None or threshold_eur is None:
+        return False
+    smaller = min(float(curr_eur), float(prior_eur))
+    thr = float(threshold_eur)
+    if thr <= 0:
+        return False
+    return smaller < thr * THRESHOLD_FRAGILITY_RATIO and smaller > thr / THRESHOLD_FRAGILITY_RATIO
+
+
 def _threshold_fragility_annotation(curr_eur: Any, prior_eur: Any, threshold_eur: Any) -> str | None:
     """If the smaller-of-(curr, prior) is within 1.5× the threshold (above
     OR below it), return a markdown annotation; else None.
@@ -488,20 +502,16 @@ def _threshold_fragility_annotation(curr_eur: Any, prior_eur: Any, threshold_eur
     move. The annotation surfaces that without making editorial claims
     about which way the classification "should" go.
     """
-    if curr_eur is None or prior_eur is None or threshold_eur is None:
+    if not is_threshold_fragile(curr_eur, prior_eur, threshold_eur):
         return None
     smaller = min(float(curr_eur), float(prior_eur))
     thr = float(threshold_eur)
-    if thr <= 0:
-        return None
-    if smaller < thr * THRESHOLD_FRAGILITY_RATIO and smaller > thr / THRESHOLD_FRAGILITY_RATIO:
-        return (
-            f"- ⚖️ **Near low-base threshold** ({_fmt_eur(smaller)} vs "
-            f"€{thr/1e6:.0f}M threshold) — classification is fragile to "
-            "small threshold changes; see "
-            "`dev_notes/sensitivity-sweep-2026-05-10.md`."
-        )
-    return None
+    return (
+        f"- ⚖️ **Near low-base threshold** ({_fmt_eur(smaller)} vs "
+        f"€{thr/1e6:.0f}M threshold) — classification is fragile to "
+        "small threshold changes; see "
+        "`dev_notes/sensitivity-sweep-2026-05-10.md`."
+    )
 
 
 def _section_hs_yoy_movers(
@@ -1435,6 +1445,7 @@ def export(
     top_n: int = DEFAULT_TOP_N,
     out_path: str | None = None,
     leads_path: str | None = None,
+    spreadsheet: bool | None = None,
 ) -> tuple[str, str]:
     """Write the briefing pack AND the companion leads file to disk.
     Returns (brief_path, leads_path).
@@ -1459,6 +1470,16 @@ def export(
     Use the folder approach by default — these are kept only for
     callers (e.g. tests) that want explicit control.
 
+    `spreadsheet`: also write `data.xlsx` into the export folder so
+    all three artefacts (brief / leads / spreadsheet) share a single
+    DB snapshot. A data journalist opens data.xlsx; an editorial
+    journalist opens brief.md; everyone is working from the same point
+    in time. Default depends on mode: folder mode → True (spreadsheet
+    is part of the user-facing bundle); legacy explicit-paths mode →
+    False (callers using explicit paths are typically tests / preview
+    / programmatic use that don't need the bundle). Pass explicitly
+    to override either default.
+
     Records the brief run in `brief_runs` so the next brief can compute
     "what changed since" (Phase 6.8). render() is called for the
     markdown but doesn't record — record only on disk-writing exports
@@ -1472,6 +1493,8 @@ def export(
             )
         p = Path(out_path)
         lp = Path(leads_path)
+        if spreadsheet is None:
+            spreadsheet = False  # legacy callers opt in if they want it
     else:
         if out_dir is None:
             ts = datetime.now().strftime("%Y-%m-%d-%H%M")
@@ -1480,6 +1503,8 @@ def export(
         d = Path(out_dir)
         p = d / "brief.md"
         lp = d / "leads.md"
+        if spreadsheet is None:
+            spreadsheet = True  # bundle is the default user-facing mode
 
     # Each render gets the OTHER doc's basename as its companion citation.
     brief_basename = p.name
@@ -1498,5 +1523,16 @@ def export(
         companion_filename=brief_basename, scope_label=scope_label,
     ))
     log.info("Wrote investigation leads to %s", lp)
+
+    if spreadsheet:
+        # Lazy import — sheets_export imports from this module, so a
+        # top-level import would create a cycle. The sheet always lives
+        # next to the brief in the same folder; filename is `data.xlsx`.
+        import sheets_export
+        xlsx_path = p.parent / "data.xlsx"
+        sheets_export.XlsxWriter().write(
+            sheets_export.assemble_sheets(), str(xlsx_path),
+        )
+        log.info("Wrote spreadsheet to %s", xlsx_path)
 
     return str(p), str(lp)
