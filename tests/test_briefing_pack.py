@@ -456,6 +456,127 @@ def test_universal_caveats_suppressed_inline_in_finding_lines(empty_findings, te
     assert "currency_timing" not in inline_caveat_line
 
 
+def test_threshold_fragility_annotation_helper():
+    """Pure-function test: a finding within 1.5x of the threshold (above
+    OR below it) gets an annotation; outside that band returns None."""
+    from briefing_pack import _threshold_fragility_annotation as fn
+    threshold = 5e7  # €50M
+    # Just below the threshold
+    assert fn(4.8e7, 4.9e7, threshold) is not None
+    # Just above the threshold
+    assert fn(5.5e7, 4.5e7, threshold) is not None
+    # Well below the band (curr=€10M, threshold=€50M → ratio 0.2)
+    assert fn(1e7, 1e7, threshold) is None
+    # Well above the band (curr=€200M, threshold=€50M → ratio 4)
+    assert fn(2e8, 2e8, threshold) is None
+    # Edge: NULL inputs return None
+    assert fn(None, 1e9, threshold) is None
+    assert fn(1e9, None, threshold) is None
+    assert fn(1e9, 1e9, None) is None
+
+
+def test_predictability_badge_appears_when_t_minus_6_pair_exists(
+    empty_findings, test_db_url,
+):
+    """Phase: per-group YoY-predictability badge. Seed the same group at
+    T (2026-02) and T-6 (2025-08) with the same yoy_pct → 100% persistent
+    → 🟢 badge. Seed another with sign-flipped yoy → 🔴 badge."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        # Releases for both windows
+        for y, m in [(2024, 2), (2024, 8), (2025, 2), (2025, 8), (2026, 2)]:
+            _seed_eurostat_release(cur, date(y, m, 1))
+        # Persistent group: same yoy at T and T-6
+        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)", yoy_pct=0.30,
+                             period=date(2025, 8, 1))
+        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)", yoy_pct=0.32,
+                             period=date(2026, 2, 1))
+        # Volatile group: sign flip between T-6 and T
+        _seed_hs_yoy_finding(cur, run, "Rare-earth materials", yoy_pct=0.40,
+                             period=date(2025, 8, 1))
+        _seed_hs_yoy_finding(cur, run, "Rare-earth materials", yoy_pct=-0.30,
+                             period=date(2026, 2, 1))
+        conn.commit()
+
+    md = briefing_pack.render(top_n=20)
+    # The persistent group gets 🟢; the volatile group gets 🔴.
+    assert "🟢" in md
+    assert "🔴" in md
+    # Anchor the assertion to the specific group lines so we know each
+    # got the right badge.
+    ev_line = next(line for line in md.splitlines()
+                   if line.startswith("### EV batteries (Li-ion)"))
+    assert "🟢" in ev_line
+    re_line = next(line for line in md.splitlines()
+                   if line.startswith("### Rare-earth materials"))
+    assert "🔴" in re_line
+    # Brief explains the badge.
+    assert "YoY predictability" in md
+
+
+def test_threshold_fragility_appears_in_brief(empty_findings, test_db_url):
+    """A finding whose 12mo EUR sits just above the €50M threshold gets a
+    fragility annotation in the brief — even though `low_base = False`."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        _seed_eurostat_release(cur, date(2026, 2, 1))
+        # current=€55M, prior=€60M — both above €50M threshold (so
+        # low_base=False), but smaller-of (€55M) is within 1.5x band.
+        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)",
+                             yoy_pct=0.10, current_eur=5.5e7,
+                             prior_eur=6.0e7, low_base=False)
+        conn.commit()
+
+    md = briefing_pack.render(top_n=20)
+    assert "Near low-base threshold" in md
+    assert "⚖️" in md
+
+
+def test_cif_fob_baseline_per_finding_renders_in_mirror_gap(
+    empty_findings, test_db_url,
+):
+    """The mirror-gap section now displays the per-finding CIF/FOB baseline
+    (from detail.cif_fob_baseline) and the excess over it."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        rel_eu = _seed_eurostat_release(cur, date(2026, 2, 1))
+        rel_gacc = _seed_gacc_release(cur, date(2026, 2, 1))
+        gacc_obs = _seed_observation(cur, run, rel_gacc)
+        eu_obs = _seed_observation(cur, run, rel_eu)
+        # Seed a mirror_gap finding with the new cif_fob_baseline detail
+        # the v5 method emits.
+        detail = {
+            "iso2": "NL",
+            "gacc": {"partner_label_raw": "Netherlands", "value_eur_converted": 1e10},
+            "eurostat": {"total_eur": 1.7e10},
+            "gap_eur": 7e9, "gap_pct": 0.65, "is_aggregate": False,
+            "cif_fob_baseline": {
+                "baseline_pct": 0.0655,
+                "scope": "per-partner",
+                "partner_iso2": "NL",
+                "source": "OECD ITIC dataset 2022 (NL)",
+                "source_url": "https://www.oecd.org/...",
+            },
+        }
+        cur.execute(
+            "INSERT INTO findings (scrape_run_id, kind, subkind, observation_ids, "
+            "                       score, title, body, detail) "
+            "VALUES (%s, 'anomaly', 'mirror_gap', %s, 0.65, 'NL gap', 'b', %s::jsonb)",
+            (run, [gacc_obs, eu_obs], json.dumps(detail)),
+        )
+        conn.commit()
+
+    md = briefing_pack.render()
+    assert "**CIF/FOB baseline**: 6.55%" in md
+    assert "(per-partner)" in md
+    assert "OECD ITIC" in md
+    # Excess: |0.65| - 0.0655 = 0.5845 → +58.5pp
+    assert "+58.5 pp" in md
+
+
 def test_construct_chinese_source_url():
     """The Chinese-language equivalent is constructed by host substitution
     (`english.customs.gov.cn` → `www.customs.gov.cn`); the Statics/<UUID>.html

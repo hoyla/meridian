@@ -376,11 +376,133 @@ _SCOPE_LABEL = {
 }
 _SCOPE_SUBKIND_SUFFIX = {"eu_27": "", "uk": "_uk", "eu_27_plus_uk": "_combined"}
 
+# Phase 6 transparency annotations.
+#
+# Predictability: for each HS group, pair its `hs_group_yoy*` finding at
+# the latest anchor period (T) against the same (group, subkind) finding
+# 6 months earlier (T-6) and ask: did the YoY signal age well? A group
+# whose multiple (scope, flow) permutations all stayed persistent is
+# giving robust signals; a group where every permutation flipped is
+# noise-dominated at the YoY level. Mirrors the methodology in
+# scripts/out_of_sample_backtest.py.
+#
+# Threshold fragility: a finding whose smaller-of-(curr,prior) sits
+# within 1.5× the low_base threshold is in the "flip zone" identified
+# by scripts/sensitivity_sweep.py — small threshold movements would
+# change its low_base classification. Surface that fragility per-finding.
+PREDICTABILITY_LOOKBACK_MONTHS = 6
+PREDICTABILITY_SHIFT_PP = 5.0    # |yoy_T - yoy_{T-6}| pp threshold
+PREDICTABILITY_GREEN_PCT = 0.67  # ≥67% persistent → 🟢
+PREDICTABILITY_YELLOW_PCT = 0.33  # 33-67% → 🟡; <33% → 🔴
+THRESHOLD_FRAGILITY_RATIO = 1.5  # within 1.5× of threshold → flag
 
-def _section_hs_yoy_movers(cur, flow: int, top_n: int, comparison_scope: str = "eu_27") -> _Section:
+
+def _compute_predictability_per_group(cur) -> dict[str, tuple[str, float, int]]:
+    """Returns {group_name: (badge, persistence_pct, n_pairs)}.
+    Empty if no T-6 pairs available (e.g. fresh DB)."""
+    cur.execute(
+        """
+        SELECT MAX((detail->'windows'->>'current_end')::date)
+          FROM findings
+         WHERE subkind LIKE 'hs_group_yoy%%'
+           AND superseded_at IS NULL
+        """
+    )
+    period_t = cur.fetchone()[0]
+    if period_t is None:
+        return {}
+    # Compute T-6
+    m = period_t.month - PREDICTABILITY_LOOKBACK_MONTHS
+    y = period_t.year + (m - 1) // 12
+    m = ((m - 1) % 12) + 1
+    period_t6 = date(y, m, 1)
+
+    cur.execute(
+        """
+        SELECT subkind,
+               detail->'group'->>'name'                       AS group_name,
+               (detail->'windows'->>'current_end')::date      AS period,
+               (detail->'totals'->>'yoy_pct')::float          AS yoy_pct
+          FROM findings
+         WHERE subkind LIKE 'hs_group_yoy%%'
+           AND superseded_at IS NULL
+           AND (detail->'windows'->>'current_end')::date = ANY(%s)
+        """,
+        ([period_t, period_t6],),
+    )
+    rows = cur.fetchall()
+    # Pair (group, subkind) → {t: yoy, t6: yoy}
+    pairs: dict[tuple[str, str], dict[str, float]] = {}
+    for sk, gn, p, yoy in rows:
+        if yoy is None:
+            continue
+        which = "t" if p == period_t else "t6"
+        pairs.setdefault((gn, sk), {})[which] = float(yoy)
+    # Per-group: count permutations + persistent permutations
+    by_group: dict[str, list[bool]] = {}
+    for (gn, _sk), parts in pairs.items():
+        if "t" not in parts or "t6" not in parts:
+            continue
+        yoy_t = parts["t"]
+        yoy_t6 = parts["t6"]
+        sign_flip = (yoy_t > 0) != (yoy_t6 > 0) and (yoy_t * yoy_t6 != 0)
+        big_shift = abs((yoy_t - yoy_t6) * 100) >= PREDICTABILITY_SHIFT_PP
+        persistent = not sign_flip and not big_shift
+        by_group.setdefault(gn, []).append(persistent)
+
+    out: dict[str, tuple[str, float, int]] = {}
+    for gn, persists in by_group.items():
+        n = len(persists)
+        pct = sum(persists) / n if n else 0.0
+        if pct >= PREDICTABILITY_GREEN_PCT:
+            badge = "🟢"
+        elif pct >= PREDICTABILITY_YELLOW_PCT:
+            badge = "🟡"
+        else:
+            badge = "🔴"
+        out[gn] = (badge, pct, n)
+    return out
+
+
+def _threshold_fragility_annotation(curr_eur: Any, prior_eur: Any, threshold_eur: Any) -> str | None:
+    """If the smaller-of-(curr, prior) is within 1.5× the threshold (above
+    OR below it), return a markdown annotation; else None.
+
+    A finding at €48M (just below €50M threshold) is low_base; a finding
+    at €52M (just above) is not. Both are fragile to a small threshold
+    move. The annotation surfaces that without making editorial claims
+    about which way the classification "should" go.
+    """
+    if curr_eur is None or prior_eur is None or threshold_eur is None:
+        return None
+    smaller = min(float(curr_eur), float(prior_eur))
+    thr = float(threshold_eur)
+    if thr <= 0:
+        return None
+    if smaller < thr * THRESHOLD_FRAGILITY_RATIO and smaller > thr / THRESHOLD_FRAGILITY_RATIO:
+        return (
+            f"- ⚖️ **Near low-base threshold** ({_fmt_eur(smaller)} vs "
+            f"€{thr/1e6:.0f}M threshold) — classification is fragile to "
+            "small threshold changes; see "
+            "`dev_notes/sensitivity-sweep-2026-05-10.md`."
+        )
+    return None
+
+
+def _section_hs_yoy_movers(
+    cur, flow: int, top_n: int, comparison_scope: str = "eu_27",
+    predictability: dict[str, tuple[str, float, int]] | None = None,
+) -> _Section:
     """Top-N movers by |yoy_pct| for the latest period per group, scoped to
     one of EU-27 / UK / combined. Each scope renders its own section so a
-    journalist scanning the brief sees the three views distinctly."""
+    journalist scanning the brief sees the three views distinctly.
+
+    `predictability` (when provided): per-group YoY-stability badge from
+    `_compute_predictability_per_group`. Surfaced inline next to the group
+    name so a journalist reading the brief sees which group's headline
+    YoY is robust vs noise-dominated.
+    """
+    predictability = predictability or {}
     scope_suffix = _SCOPE_SUBKIND_SUFFIX[comparison_scope]
     flow_suffix = "" if flow == 1 else "_export"
     subkind = f"hs_group_yoy{scope_suffix}{flow_suffix}"
@@ -404,6 +526,7 @@ def _section_hs_yoy_movers(cur, flow: int, top_n: int, comparison_scope: str = "
                  (detail->'totals'->>'yoy_pct_kg')::numeric AS yoy_pct_kg,
                  (detail->'totals'->>'unit_price_pct_change')::numeric AS unit_price_pct,
                  (detail->'totals'->>'low_base')::boolean AS low_base,
+                 (detail->'totals'->>'low_base_threshold_eur')::numeric AS low_base_threshold,
                  detail->'method_query'->'hs_patterns' AS hs_patterns,
                  detail->'method_query'->'partners' AS partners_used
             FROM findings
@@ -427,7 +550,32 @@ def _section_hs_yoy_movers(cur, flow: int, top_n: int, comparison_scope: str = "
     lines.append("")
 
     for r in rows:
-        lines.append(f"### {r['group_name']}")
+        # Phase: per-group YoY-predictability badge from the historical
+        # supersede chain. Suppressed if no T-6 pair exists for this group
+        # (fresh groups + edge cases).
+        pred = predictability.get(r['group_name'])
+        badge_str = ""
+        if pred is not None:
+            badge, _pct, _n = pred
+            badge_str = f" {badge}"
+        lines.append(f"### {r['group_name']}{badge_str}")
+        if pred is not None:
+            badge, pct, n = pred
+            label = (
+                "persistent" if badge == "🟢"
+                else "noisy" if badge == "🟡"
+                else "volatile"
+            )
+            lines.append(
+                f"- *YoY predictability* ({badge} {label}): "
+                f"{int(pct*100)}% of {n} (scope, flow) permutations stayed "
+                f"on the same direction with shift <{int(PREDICTABILITY_SHIFT_PP)}pp "
+                f"vs 6 months ago. "
+                + ("Headline % is robust." if badge == "🟢"
+                   else "Lean on trajectory shape; hedge any % quoted from this group."
+                   if badge == "🔴"
+                   else "Treat the headline % with caution.")
+            )
         # Surface the period the finding actually refers to. For groups where
         # the analyser has stopped emitting findings (e.g. low-base failure),
         # this prevents the brief from claiming a stale period is "latest".
@@ -454,6 +602,14 @@ def _section_hs_yoy_movers(cur, flow: int, top_n: int, comparison_scope: str = "
                 "- ⚠️ **Low-base flag**: prior or current 12mo total below the €50M "
                 "threshold. Verify absolute figures before quoting the percentage."
             )
+        # Phase: threshold-fragility annotation (orthogonal to the low_base
+        # flag — a finding can be flagged AND fragile, or fragile-but-not-
+        # flagged because it's just above the threshold).
+        fragility = _threshold_fragility_annotation(
+            r['current_eur'], r['prior_eur'], r['low_base_threshold'],
+        )
+        if fragility:
+            lines.append(fragility)
         # Pull partner list from the finding's method_query (default new
         # behaviour: CN+HK+MO; legacy CN-only findings are superseded after
         # the v7 method bump but rendering here stays defensive).
@@ -591,6 +747,10 @@ def _section_mirror_gaps(cur) -> _Section:
             detail->'caveat_codes' AS caveat_codes,
             detail->'transshipment_hub'->>'iso2' AS hub_iso2,
             detail->'transshipment_hub'->>'notes' AS hub_notes,
+            (detail->'cif_fob_baseline'->>'baseline_pct')::numeric AS baseline_pct,
+            detail->'cif_fob_baseline'->>'scope' AS baseline_scope,
+            detail->'cif_fob_baseline'->>'source' AS baseline_source,
+            detail->'cif_fob_baseline'->>'source_url' AS baseline_source_url,
             (SELECT to_char(r.period, 'YYYY-MM')
                FROM observations o JOIN releases r ON r.id = o.release_id
               WHERE o.id = f.observation_ids[1]) AS period
@@ -632,6 +792,25 @@ def _section_mirror_gaps(cur) -> _Section:
                 f"- Period: **{r['period']}** | GACC (EUR-converted): {_fmt_eur(r['gacc_eur'])} "
                 f"| Eurostat: {_fmt_eur(r['eurostat_eur'])} | Gap: **{_fmt_pct(r['gap_pct'])}**"
             )
+            # Phase: per-finding CIF/FOB baseline display. The expected
+            # gap is structural (CIF imports vs FOB exports + freight + insurance);
+            # showing the per-country baseline from OECD ITIC plus the excess
+            # over it makes the editorial framing transparent. Falls back
+            # quietly when an older finding doesn't carry the field.
+            if r['baseline_pct'] is not None and r['gap_pct'] is not None:
+                baseline_pct_f = float(r['baseline_pct'])
+                gap_pct_f = float(r['gap_pct'])
+                excess_pp = (abs(gap_pct_f) - baseline_pct_f) * 100
+                scope_label = r['baseline_scope'] or "global"
+                lines.append(
+                    f"- **CIF/FOB baseline**: {baseline_pct_f*100:.2f}% "
+                    f"({scope_label}); excess over baseline = "
+                    f"**{excess_pp:+.1f} pp**"
+                )
+                if r['baseline_source']:
+                    lines.append(
+                        f"  - *Baseline source*: {r['baseline_source'][:120]}"
+                    )
             # Caveats now read from the finding's actual caveat_codes list,
             # so editorial-framing caveats added in Phase 2 (e.g.
             # `transshipment_hub`) surface correctly. Caveats that apply to
@@ -1002,6 +1181,12 @@ def render(top_n: int = DEFAULT_TOP_N) -> str:
         # acting as the audit trail.
         sections.append(_section_llm_narratives(cur))
 
+        # Phase: per-group YoY-predictability badges. Computed once and
+        # passed into each per-scope mover section. Empty dict on a fresh
+        # DB with no T-6 history; the section renderer falls back to no
+        # badge in that case.
+        predictability = _compute_predictability_per_group(cur)
+
         # Per-scope sections (Phase 6.1e). Each scope renders its own
         # YoY top-movers + trajectory sections so a journalist scanning
         # the brief sees the EU-27 / UK / combined views as distinct
@@ -1009,8 +1194,10 @@ def render(top_n: int = DEFAULT_TOP_N) -> str:
         # dropped by the join filter at the bottom.
         for scope in ("eu_27", "uk", "eu_27_plus_uk"):
             for flow in (1, 2):
-                sec = _section_hs_yoy_movers(cur, flow=flow, top_n=top_n,
-                                              comparison_scope=scope)
+                sec = _section_hs_yoy_movers(
+                    cur, flow=flow, top_n=top_n, comparison_scope=scope,
+                    predictability=predictability,
+                )
                 sections.append(sec)
                 release_ids |= sec.release_ids
             sec = _section_trajectories(cur, comparison_scope=scope)
