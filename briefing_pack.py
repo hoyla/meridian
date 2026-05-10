@@ -262,10 +262,24 @@ def _section_llm_narratives(cur) -> _Section:
     return _Section(markdown="\n".join(lines))
 
 
-def _section_hs_yoy_movers(cur, flow: int, top_n: int) -> _Section:
-    """Top-N movers by |yoy_pct| for the latest period per group."""
-    subkind = "hs_group_yoy" if flow == 1 else "hs_group_yoy_export"
-    flow_label = "Imports (CN→EU)" if flow == 1 else "Exports (EU→CN)"
+_SCOPE_LABEL = {
+    "eu_27": "EU-27",
+    "uk": "UK",
+    "eu_27_plus_uk": "EU-27 + UK (combined)",
+}
+_SCOPE_SUBKIND_SUFFIX = {"eu_27": "", "uk": "_uk", "eu_27_plus_uk": "_combined"}
+
+
+def _section_hs_yoy_movers(cur, flow: int, top_n: int, comparison_scope: str = "eu_27") -> _Section:
+    """Top-N movers by |yoy_pct| for the latest period per group, scoped to
+    one of EU-27 / UK / combined. Each scope renders its own section so a
+    journalist scanning the brief sees the three views distinctly."""
+    scope_suffix = _SCOPE_SUBKIND_SUFFIX[comparison_scope]
+    flow_suffix = "" if flow == 1 else "_export"
+    subkind = f"hs_group_yoy{scope_suffix}{flow_suffix}"
+    scope_label = _SCOPE_LABEL[comparison_scope]
+    direction = "Imports (CN→reporter)" if flow == 1 else "Exports (reporter→CN)"
+    flow_label = f"{scope_label} {direction}"
     flow_short = "imports" if flow == 1 else "exports"
     cur.execute(
         """
@@ -297,12 +311,13 @@ def _section_hs_yoy_movers(cur, flow: int, top_n: int) -> _Section:
 
     release_ids: set[int] = set()
     lines: list[str] = []
+    if not rows:
+        # Empty scope — return blank markdown so render() drops the section
+        # rather than printing N empty headers per scope. The default scope
+        # (eu_27) still surfaces a "no findings" header below if needed.
+        return _Section(markdown="")
     lines.append(f"## {flow_label} — top {len(rows)} movers (latest 12mo YoY)")
     lines.append("")
-    if not rows:
-        lines.append("*No findings of this kind yet.*")
-        lines.append("")
-        return _Section(markdown="\n".join(lines))
 
     for r in rows:
         lines.append(f"### {r['group_name']}")
@@ -365,8 +380,13 @@ def _decomposition_label(yoy_eur: Any, yoy_kg: Any) -> str:
     return "volume-driven" if abs(share) > 0.5 else "price-driven"
 
 
-def _section_trajectories(cur) -> _Section:
-    """Trajectory findings grouped by shape — narrative-rich pattern bucket."""
+def _section_trajectories(cur, comparison_scope: str = "eu_27") -> _Section:
+    """Trajectory findings grouped by shape — narrative-rich pattern bucket.
+    Phase 6.1e: scoped to one of EU-27 / UK / combined."""
+    scope_suffix = _SCOPE_SUBKIND_SUFFIX[comparison_scope]
+    scope_label = _SCOPE_LABEL[comparison_scope]
+    subkind_imp = f"hs_group_trajectory{scope_suffix}"
+    subkind_exp = f"hs_group_trajectory{scope_suffix}_export"
     cur.execute(
         """
         SELECT id, subkind,
@@ -380,16 +400,19 @@ def _section_trajectories(cur) -> _Section:
                (detail->'features'->>'last_period')::date AS last_period,
                (detail->'features'->>'low_base_majority')::boolean AS low_base_majority
           FROM findings
-         WHERE subkind IN ('hs_group_trajectory', 'hs_group_trajectory_export')
+         WHERE subkind IN (%s, %s)
            AND superseded_at IS NULL
       ORDER BY detail->>'shape', subkind, detail->'group'->>'name'
-        """
+        """,
+        (subkind_imp, subkind_exp),
     )
     rows = cur.fetchall()
 
     release_ids: set[int] = set()
     lines: list[str] = []
-    lines.append("## Trajectory shapes")
+    if not rows:
+        return _Section(markdown="")
+    lines.append(f"## {scope_label} trajectory shapes")
     lines.append("")
     lines.append(
         "Each HS group's rolling-12mo YoY series classified by shape. "
@@ -733,14 +756,20 @@ def render(top_n: int = DEFAULT_TOP_N) -> str:
         # acting as the audit trail.
         sections.append(_section_llm_narratives(cur))
 
-        for flow in (1, 2):
-            sec = _section_hs_yoy_movers(cur, flow=flow, top_n=top_n)
+        # Per-scope sections (Phase 6.1e). Each scope renders its own
+        # YoY top-movers + trajectory sections so a journalist scanning
+        # the brief sees the EU-27 / UK / combined views as distinct
+        # blocks. Scopes with no findings return empty markdown and are
+        # dropped by the join filter at the bottom.
+        for scope in ("eu_27", "uk", "eu_27_plus_uk"):
+            for flow in (1, 2):
+                sec = _section_hs_yoy_movers(cur, flow=flow, top_n=top_n,
+                                              comparison_scope=scope)
+                sections.append(sec)
+                release_ids |= sec.release_ids
+            sec = _section_trajectories(cur, comparison_scope=scope)
             sections.append(sec)
             release_ids |= sec.release_ids
-
-        sec = _section_trajectories(cur)
-        sections.append(sec)
-        release_ids |= sec.release_ids
 
         sec = _section_mirror_gaps(cur)
         sections.append(sec)

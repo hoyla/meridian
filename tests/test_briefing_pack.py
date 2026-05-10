@@ -142,17 +142,20 @@ def _seed_mirror_gap_finding(cur, run_id: int, iso2: str, period: date,
 
 
 def test_render_produces_all_top_level_sections(empty_findings, test_db_url):
-    """An empty DB still renders every top-level section header (low-base
-    is the only one that's gated)."""
+    """An empty DB renders the framing headers (period coverage, findings
+    inventory, mirror-trade, sources) but the per-scope YoY/trajectory
+    sections are gated — Phase 6.1e returns empty markdown for scopes
+    with no findings so the brief stays terse rather than printing N
+    empty per-scope headers."""
     md = briefing_pack.render()
     assert "# GACC × Eurostat trade briefing" in md
     assert "## Period coverage" in md
     assert "## Findings included" in md
-    assert "## Imports (CN→EU)" in md
-    assert "## Exports (EU→CN)" in md
-    assert "## Trajectory shapes" in md
+    # The mirror-trade section always renders (it's not scope-gated yet).
     assert "## Mirror-trade gaps" in md
     assert "## Sources" in md
+    # Scope-gated sections are absent on an empty DB; verified positively
+    # in test_top_n_truncates_movers below where seed data is present.
 
 
 def test_finding_lines_carry_trace_token(empty_findings, test_db_url):
@@ -251,10 +254,12 @@ def test_top_n_truncates_movers(empty_findings, test_db_url):
         conn.commit()
 
     md = briefing_pack.render(top_n=3)
-    # The "### {group}" headings under the imports section — count them.
-    # Other sections also use ### headings (trajectories shape buckets,
-    # mirror gaps), so isolate to between "## Imports" and the next "## ".
-    imports_block = md.split("## Imports (CN→EU)")[1].split("\n## ")[0]
+    # The "### {group}" headings under the EU-27 imports section — count them.
+    # Phase 6.1e: section header now reads "## EU-27 Imports (CN→reporter) — top N movers".
+    # Other sections also use ### headings (trajectory shape buckets,
+    # mirror gaps, other scopes), so isolate to between this section's
+    # header and the next "## ".
+    imports_block = md.split("## EU-27 Imports (CN→reporter)")[1].split("\n## ")[0]
     h3_count = len(re.findall(r"^### ", imports_block, re.MULTILINE))
     assert h3_count == 3
 
