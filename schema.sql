@@ -28,7 +28,7 @@ CREATE INDEX idx_snapshots_sha ON source_snapshots (content_sha256);
 
 CREATE TABLE releases (
     id                BIGSERIAL PRIMARY KEY,
-    source            TEXT        NOT NULL CHECK (source IN ('gacc', 'eurostat')),
+    source            TEXT        NOT NULL CHECK (source IN ('gacc', 'eurostat', 'hmrc')),
     -- GACC-specific (NULL for Eurostat)
     section_number    INT,
     currency          TEXT,                        -- 'CNY' | 'USD' for GACC
@@ -51,6 +51,9 @@ CREATE UNIQUE INDEX uq_releases_gacc
 CREATE UNIQUE INDEX uq_releases_eurostat
     ON releases (period)
     WHERE source = 'eurostat';
+CREATE UNIQUE INDEX uq_releases_hmrc
+    ON releases (period)
+    WHERE source = 'hmrc';
 CREATE INDEX idx_releases_period ON releases (period DESC);
 CREATE INDEX idx_releases_source ON releases (source, period DESC);
 
@@ -94,6 +97,48 @@ CREATE INDEX idx_eu_raw_analyser ON eurostat_raw_rows
   USING btree (flow, partner, product_nc text_pattern_ops, period)
   INCLUDE (value_eur, quantity_kg, reporter);
 
+-- HMRC OTS (Overseas Trade Statistics) raw rows. Phase 6.1: parallel to
+-- eurostat_raw_rows but for UK-side (reporter=GB) trade. Sourced from
+-- https://api.uktradeinfo.com/OTS via OData. UK uses CN8 codes (matching
+-- Eurostat one-for-one). Native currency is GBP; value_eur is computed at
+-- ingest using the period's GBP/EUR FX rate so analyser queries can sum
+-- across sources without per-row FX lookups. flow_type_id is HMRC's
+-- native code (1=EU Imports, 2=EU Exports, 3=Non-EU Imports, 4=Non-EU
+-- Exports); the normalised flow column collapses imports (1+3) and
+-- exports (2+4) so the analyser can use the same predicate as it does
+-- for eurostat. SuppressionIndex flags rows where Value is suppressed
+-- for confidentiality (small numbers from few traders); analysers should
+-- typically filter SuppressionIndex = 0.
+CREATE TABLE hmrc_raw_rows (
+    id                    BIGSERIAL PRIMARY KEY,
+    scrape_run_id         BIGINT      NOT NULL REFERENCES scrape_runs(id),
+    period                DATE        NOT NULL,
+    reporter              TEXT        NOT NULL DEFAULT 'GB',
+    partner               TEXT        NOT NULL,    -- ISO-2 from CountryCodeAlpha
+    product_nc            TEXT        NOT NULL,    -- Cn8Code, zero-padded 8 chars
+    product_hs6           TEXT,
+    product_hs4           TEXT,
+    product_hs2           TEXT,
+    flow_type_id          SMALLINT    NOT NULL,    -- HMRC native: 1/2/3/4
+    flow                  INT         NOT NULL,    -- normalised: 1=any import, 2=any export
+    suppression_index     SMALLINT    NOT NULL DEFAULT 0,
+    port_id               INTEGER,
+    value_gbp             NUMERIC,
+    value_eur             NUMERIC,                  -- ingest-time conversion via fx_rates
+    net_mass_kg           NUMERIC,
+    suppl_unit            NUMERIC,
+    inserted_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_hmrc_raw_period_partner ON hmrc_raw_rows (period, partner, product_nc);
+CREATE INDEX idx_hmrc_raw_run ON hmrc_raw_rows (scrape_run_id);
+-- Mirror of idx_eu_raw_analyser shape. The hs-group analyser helpers
+-- (Phase 6.0.6) want flow + partner + product_nc-prefix index-only scans;
+-- INCLUDE value_eur + net_mass_kg keeps it covering. value_eur is the
+-- pre-converted column so the analyser sums in EUR directly.
+CREATE INDEX idx_hmrc_raw_analyser ON hmrc_raw_rows
+  USING btree (flow, partner, product_nc text_pattern_ops, period)
+  INCLUDE (value_eur, net_mass_kg, reporter);
+
 CREATE TABLE observations (
     id                  BIGSERIAL PRIMARY KEY,
     release_id          BIGINT      NOT NULL REFERENCES releases(id),
@@ -117,6 +162,7 @@ CREATE TABLE observations (
     -- Provenance + versioning (within a single release)
     source_row          JSONB       NOT NULL,      -- aggregation metadata for Eurostat; raw parsed row for GACC
     eurostat_raw_row_ids BIGINT[],                 -- FK array into eurostat_raw_rows for Eurostat-derived observations
+    hmrc_raw_row_ids     BIGINT[],                 -- FK array into hmrc_raw_rows for HMRC-derived observations
     version_seen        INT         NOT NULL DEFAULT 1,
     inserted_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );

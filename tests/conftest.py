@@ -21,7 +21,8 @@ def test_db_url() -> str:
 def _truncate_all(conn) -> None:
     with conn, conn.cursor() as cur:
         cur.execute(
-            "TRUNCATE TABLE findings, observations, source_snapshots, scrape_runs, releases "
+            "TRUNCATE TABLE findings, observations, source_snapshots, "
+            "eurostat_raw_rows, hmrc_raw_rows, scrape_runs, releases "
             "RESTART IDENTITY CASCADE"
         )
 

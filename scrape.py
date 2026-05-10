@@ -28,7 +28,9 @@ import briefing_pack
 import db
 import eurostat
 import fx
+import hmrc
 import llm_framing
+import lookups
 import parse
 import sheets_export
 
@@ -146,6 +148,68 @@ def scrape_eurostat(
             db.finish_run(run_id, status="failed", error_message=str(e))
 
 
+def scrape_hmrc(
+    period: date,
+    country_ids: tuple[int, ...] | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Fetch one HMRC OTS monthly slice (period × China-and-SARs by default),
+    persist raw rows, aggregate, persist observations.
+
+    Pre-requisite: the period's GBP/EUR FX rate must be in `fx_rates`.
+    Run `python scrape.py --fetch-fx GBP --fx-since 2017-01` once to
+    populate the full ECB history. Without it the conversion to EUR is
+    skipped (value_eur left NULL on raw rows; observations would sum to 0).
+    """
+    if country_ids is None:
+        country_ids = hmrc.DEFAULT_COUNTRY_IDS
+
+    fx = lookups.lookup_fx("GBP", "EUR", period)
+    if fx is None:
+        log.error(
+            "HMRC scrape for %s skipped — no GBP/EUR FX rate in fx_rates "
+            "for that period. Run --fetch-fx GBP first.",
+            period.strftime("%Y-%m"),
+        )
+        return
+    fx_rate = fx.rate
+
+    initial_url = hmrc.ots_query_url(period, country_ids, hmrc.DEFAULT_PAGE_SIZE)
+    log.info("Fetching HMRC OTS for %s (country_ids=%s)", period.strftime("%Y-%m"), country_ids)
+    run_id = db.start_run(initial_url) if not dry_run else None
+    try:
+        response = hmrc.fetch_ots_for_period(period, country_ids=country_ids)
+        raw_rows = list(hmrc.iter_raw_rows(
+            response.content, period, fx_rate_gbp_eur=fx_rate, country_ids=country_ids,
+        ))
+        log.info("Parsed %d HMRC raw rows for %s", len(raw_rows), period.strftime("%Y-%m"))
+
+        if dry_run:
+            obs = list(hmrc.aggregate_to_observations(period, [(None, r) for r in raw_rows]))
+            log.info("Dry run: would aggregate to %d observations", len(obs))
+            return
+
+        # Idempotent re-ingest: clear any prior raw rows for this period
+        # before inserting the fresh fetch. Observations are handled by
+        # upsert_observations' supersede chain.
+        deleted = db.delete_hmrc_raw_rows_for_period(period)
+        if deleted:
+            log.info("Cleared %d stale hmrc_raw_rows for %s before re-insert",
+                     deleted, period.strftime("%Y-%m"))
+        raw_ids = db.bulk_insert_hmrc_raw_rows(run_id, raw_rows)
+        log.info("Inserted %d hmrc_raw_rows", len(raw_ids))
+        observations = list(hmrc.aggregate_to_observations(period, list(zip(raw_ids, raw_rows))))
+        log.info("Aggregated to %d observations", len(observations))
+        release_id = db.find_or_create_hmrc_release(period, initial_url)
+        counts = db.upsert_observations(run_id, release_id, observations)
+        log.info("Persisted: %s", counts)
+        db.finish_run(run_id, status="success", http_status=response.status_code)
+    except Exception as e:
+        log.exception("HMRC scrape failed for %s", period)
+        if run_id is not None:
+            db.finish_run(run_id, status="failed", error_message=str(e))
+
+
 def _parse_period(s: str) -> date:
     """Accept YYYY-MM or YYYYMM; returns the first-of-month anchor date."""
     s = s.strip().replace("-", "")
@@ -171,6 +235,10 @@ def main() -> None:
     p.add_argument("--url", help="Scrape a single GACC URL (index OR release)")
     p.add_argument("--eurostat-period", type=_parse_period, metavar="YYYY-MM",
                    help="Fetch one Eurostat monthly bulk file for the given period")
+    p.add_argument("--hmrc-period", type=_parse_period, metavar="YYYY-MM",
+                   help="Fetch one HMRC OTS slice for the given period (UK trade with "
+                        "non-EU partners CN+HK+MO by default; pre-requires GBP/EUR FX "
+                        "loaded via --fetch-fx GBP)")
     p.add_argument("--partner", action="append", metavar="CC",
                    help="ISO-2 partner country code(s) to filter Eurostat to. "
                         "Default: CN. Repeat for multiple, e.g. --partner CN --partner US")
@@ -338,6 +406,10 @@ def main() -> None:
         hs_prefixes = tuple(args.hs_prefix) if args.hs_prefix else None
         scrape_eurostat(args.eurostat_period, partners=partners,
                         hs_prefixes=hs_prefixes, dry_run=args.dry_run)
+        return
+
+    if args.hmrc_period:
+        scrape_hmrc(args.hmrc_period, dry_run=args.dry_run)
         return
 
     run_scrape(urls=[args.url] if args.url else None, dry_run=args.dry_run)

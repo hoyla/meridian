@@ -131,6 +131,64 @@ def find_or_create_eurostat_release(period: "date", source_url: str) -> int:
         return cur.fetchone()[0]
 
 
+_HMRC_RAW_COLS = (
+    "scrape_run_id", "period", "reporter", "partner",
+    "product_nc", "product_hs6", "product_hs4", "product_hs2",
+    "flow_type_id", "flow", "suppression_index", "port_id",
+    "value_gbp", "value_eur", "net_mass_kg", "suppl_unit",
+)
+
+
+def bulk_insert_hmrc_raw_rows(scrape_run_id: int, raw_rows: list[dict]) -> list[int]:
+    """Insert raw HMRC OTS rows verbatim. Returns the inserted ids in input
+    order so the caller can pair them with their dicts for downstream
+    aggregation. Mirrors bulk_insert_eurostat_raw_rows."""
+    if not raw_rows:
+        return []
+    cols_sql = ", ".join(_HMRC_RAW_COLS)
+    placeholders = "(" + ", ".join(["%s"] * len(_HMRC_RAW_COLS)) + ")"
+    rows_values = []
+    for r in raw_rows:
+        rows_values.append(tuple([scrape_run_id if c == "scrape_run_id" else r.get(c) for c in _HMRC_RAW_COLS]))
+    with transaction() as conn, conn.cursor() as cur:
+        args_str = b",".join(cur.mogrify(placeholders, v) for v in rows_values)
+        cur.execute(
+            f"INSERT INTO hmrc_raw_rows ({cols_sql}) VALUES " + args_str.decode("utf-8") + " RETURNING id"
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
+def delete_hmrc_raw_rows_for_period(period: "date") -> int:
+    """Delete all hmrc_raw_rows for the given period. Used by scrape_hmrc to
+    make re-ingest idempotent: hmrc_raw_rows has no natural-key unique
+    constraint (the same OTS row can legitimately appear in multiple
+    scrape runs), so a re-run without first clearing would double-count
+    on aggregation. The observations table's upsert handles its own
+    idempotency; this only clears the raw layer. Returns the row count."""
+    with transaction() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM hmrc_raw_rows WHERE period = %s", (period,))
+        return cur.rowcount
+
+
+def find_or_create_hmrc_release(period: "date", source_url: str) -> int:
+    """Resolve the HMRC natural key (period) to a release id under source='hmrc'.
+    Same pattern as Eurostat — one release per period."""
+    with transaction() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO releases (source, period, source_url)
+            VALUES ('hmrc', %s, %s)
+            ON CONFLICT (period) WHERE source = 'hmrc'
+            DO UPDATE SET
+                last_seen_at = now(),
+                source_url   = EXCLUDED.source_url
+            RETURNING id
+            """,
+            (period, source_url),
+        )
+        return cur.fetchone()[0]
+
+
 def find_or_create_gacc_release(meta: "ReleaseMetadata", release_kind: str) -> int:
     """Resolve the GACC natural key (section_number, currency, period, release_kind) to
     a release id, creating the row if needed and refreshing display fields that may
@@ -168,7 +226,7 @@ _OBS_INSERT_COLS = (
     "partner_label_raw", "partner_indent", "partner_is_subset",
     "hs_code", "commodity_label",
     "value_amount", "value_currency", "quantity", "quantity_unit",
-    "source_row", "eurostat_raw_row_ids", "version_seen",
+    "source_row", "eurostat_raw_row_ids", "hmrc_raw_row_ids", "version_seen",
 )
 
 
@@ -182,6 +240,7 @@ def _obs_to_insert_tuple(release_id: int, run_id: int, obs: dict, version: int) 
         obs.get("quantity"), obs.get("quantity_unit"),
         json.dumps(obs.get("source_row") or {}),
         obs.get("eurostat_raw_row_ids"),
+        obs.get("hmrc_raw_row_ids"),
         version,
     )
 
