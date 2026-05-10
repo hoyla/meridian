@@ -10,6 +10,131 @@ to understand how the project got here.
 
 ---
 
+## 2026-05-10 (evening) — output-shape refactor and transparency annotations
+
+A focused session on what the journalist actually opens. No new
+analysers; no methodology change; the data layer is unchanged. The
+work re-shapes the output bundle and surfaces methodology safeguards
+where readers can see them.
+
+### Transparency annotations in the findings document and spreadsheet
+
+Three editorial signals that previously sat only in dev_notes
+reports now appear inline next to the findings they qualify:
+
+- **Per-group YoY-predictability badge** (🟢 / 🟡 / 🔴) next to
+  each HS group heading, computed via the same logic as the Phase
+  6.6 backtest (T vs T-6 across all (scope, flow) permutations).
+  ≥67% persistent → 🟢; 33–67% → 🟡; <33% → 🔴. Includes a one-line
+  rationale for 🔴 ("Lean on trajectory shape; hedge any % quoted
+  from this group").
+- **Threshold-fragility annotation** (⚖️) for findings whose
+  smaller-of-(curr, prior) sits within 1.5× the low_base threshold,
+  above OR below. A finding at €48M (low_base) and one at €52M
+  (not low_base) are equally fragile to a small threshold move; the
+  annotation surfaces that without making editorial claims.
+- **Per-finding CIF/FOB baseline display** in the mirror-gap
+  section: the per-(partner) OECD ITIC baseline plus the
+  excess-over-baseline-pp split. Was sitting in `detail` since the
+  ITIC backfill but not surfaced.
+
+Commit [`314962f`](https://github.com/hoyla/gacc/commit/314962f).
+Helpers `is_threshold_fragile()` and `_compute_predictability_per_group()`
+shared between briefing_pack and sheets_export so both render
+paths use the same definition.
+
+### LLM leads split out of the findings document
+
+The "no LLM in the loop" framing on the original brief had become
+inaccurate once the Phase 6.4 lead-scaffold layer landed: leads
+were rendering inside the brief alongside deterministic findings.
+For a NotebookLM-style downstream LLM tool that mixed bundle
+created a telephone-game effect (the tool ends up reasoning over
+another LLM's interpretation, not over the data).
+
+Split into two paired files: brief stays fully deterministic; LLM
+lead scaffolds move into a separate companion document. Both share
+the same finding IDs; cross-references explicit.
+
+Commit [`acb8697`](https://github.com/hoyla/gacc/commit/acb8697).
+Diff section ("Changes since previous brief" → "Changes since
+previous export") now also excludes `narrative_hs_group` since
+those don't appear in the brief.
+
+### Per-export folder convention + scope label
+
+Replaced timestamped flat files (`brief-YYYYMMDD-HHMMSS.md`) with
+per-export folders containing stable filenames:
+
+```
+exports/2026-05-10-1747[-slug]/
+  findings.md
+  leads.md
+  data.xlsx
+```
+
+Pairs are self-evident from the folder; consumers find the bundle
+by convention. Optional `scope_label` parameter (default None)
+slugifies into the folder suffix and surfaces in both docs' headers
+as a "*Scope: …*" line, so a doc shared standalone still announces
+what slice of the data it covers. Currently metadata only — the
+filtering logic is forward work; the naming convention is in place
+so scoped exports can land cleanly when needed.
+
+Commit [`4c3da25`](https://github.com/hoyla/gacc/commit/4c3da25). New
+CLI flags: `--export-dir PATH` and `--export-scope LABEL`.
+
+### Spreadsheet refresh — three-artefact bundle
+
+The spreadsheet had drifted on multiple axes (UK / combined scopes
+absent, no per-country CIF/FOB column, no predictability badge, no
+threshold-fragility flag). Refreshed all eight tabs to match the
+current methodology and added a NEW `predictability_index` tab.
+`briefing_pack.export()` now drops `data.xlsx` into the per-export
+folder by default so all three artefacts share a single DB
+snapshot.
+
+Commit [`c1ed375`](https://github.com/hoyla/gacc/commit/c1ed375).
+Tab roster (8): summary, hs_yoy_imports, hs_yoy_exports,
+trajectories, mirror_gaps, mirror_gap_movers, low_base_review,
+predictability_index. The narrative_hs_group findings are
+intentionally NOT in any tab (same telephone-game argument as the
+findings document).
+
+### Endnote on `finding/N` citations
+
+Both docs now end with the same shared endnote explaining what
+`finding/N` citations mean — what a finding is, the supersede chain
+(so a citation is reproducible even after numbers later move), how
+to look one up today (direct DB query), and pointers to
+`docs/methodology.md` + `docs/architecture.md` for deeper context.
+
+Commit [`4c3da25`](https://github.com/hoyla/gacc/commit/4c3da25).
+
+### "In this export folder" block
+
+Replaced the prose cross-references between findings.md and
+leads.md with a structured block in each, listing all three
+artefacts (with the current one marked "(this document)"). The
+spreadsheet is now visible from the Markdown side too.
+
+Commit [`49e9c64`](https://github.com/hoyla/gacc/commit/49e9c64).
+
+### `brief.md` → `findings.md` rename
+
+The output filename was misleading: the file is comprehensive, not
+brief. Renamed to `findings.md` to match what's actually in it (a
+render of the `findings` table) and to pair cleanly with
+`data.xlsx`. H1 changed from "GACC × Eurostat trade briefing" to
+"GACC × Eurostat trade findings". Module name `briefing_pack.py`
+and CLI flag `--briefing-pack` kept (the *bundle* is still a
+briefing pack — the rename is just the deterministic document
+inside it).
+
+Commit [`73a7f71`](https://github.com/hoyla/gacc/commit/73a7f71).
+
+---
+
 ## 2026-05-10 — Phase 6 closeouts and autonomous methodology block
 
 A long working session that closed Phase 6 except for the

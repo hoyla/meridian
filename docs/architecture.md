@@ -72,13 +72,13 @@ EU-27 (Eurostat) / UK (HMRC) / EU-27 + UK combined.
                                   │
                 ┌─────────────┬─────────────┬─────────────────┐
                 ▼             ▼             ▼                 ▼
-          briefing pack    leads doc    sheets export    LLM framing
-          (markdown,       (markdown,   (.xlsx /         (Ollama →
-           deterministic    LLM-drafted  Google Sheets)   structured
-           only — no LLM    leads,                        JSON, then
-           in the loop)     companion                     another find-
-                            to brief)                     ing in the
-                                                          same chain)
+          findings.md      leads.md     data.xlsx        LLM framing
+          (markdown,       (markdown,   (xlsx, 8 tabs;   (Ollama →
+           deterministic    LLM-drafted  Google Sheets    structured
+           — no LLM in the  leads,       writer stubbed)  JSON, then
+           loop;            companion    Same DB          another find-
+           NotebookLM-      to findings) snapshot;        ing in the
+           ready)                        also LLM-free.   same chain)
 ```
 
 Three layers because each has a distinct concern:
@@ -93,7 +93,7 @@ Three layers because each has a distinct concern:
   is what cross-source queries (mirror-gap) join on.
 - **`findings`** is editorial output: one row per anomaly the
   analyser detected, with a `detail` JSONB blob carrying enough
-  context (window dates, totals, caveat codes, score) for the brief
+  context (window dates, totals, caveat codes, score) for the findings document
   to render without re-querying the underlying observations.
 
 ## Append-plus-supersede chain
@@ -111,13 +111,13 @@ Three things this gives us:
    inserts).
 2. **Revision history.** "EU imports of EV batteries +34% YoY"
    moving to "+18% YoY" because Eurostat revised Feb 2026 leaves a
-   trace; the brief versioning section ("Changes since previous
-   brief") reads it directly.
+   trace; the brief-versioning section ("Changes since previous
+   export") reads it directly.
 3. **Method-version propagation.** Every finding's `value_fields`
    includes the analyser's method tag (e.g.
    `mirror_trade_v5_per_country_cif_fob_baselines`). Bumping the
    method version causes a clean supersede pass on next run, so
-   improvements ripple through the brief without manual cleanup.
+   improvements ripple through the findings document without manual cleanup.
 
 `findings_io.emit_finding` is the canonical write path. Each call
 site declares:
@@ -172,8 +172,8 @@ scrape.py --analyse llm-framing [--llm-model NAME]
 ```
 
 The four hs-group passes are scope-aware: re-run them with
-`--comparison-scope eu_27 / uk / eu_27_plus_uk` to fill the brief's
-three per-scope sections.
+`--comparison-scope eu_27 / uk / eu_27_plus_uk` to fill the findings
+document's three per-scope sections.
 
 ### Export
 
@@ -186,9 +186,9 @@ exports/
     findings.md     ← deterministic; NotebookLM-ready, no LLM in the loop
     leads.md     ← LLM lead scaffold (anomaly summary + picked
                     hypotheses + corroboration steps); cross-
-                    references finding IDs the brief also surfaces
+                    references finding IDs the findings document also surfaces
     data.xlsx    ← 8-tab spreadsheet for data journalists; LLM-free,
-                    same DB snapshot as the brief
+                    same DB snapshot as findings.md
   2026-05-10-1830-ev-batteries-li-ion/   ← future scoped export
     findings.md
     leads.md
@@ -201,13 +201,13 @@ exports have no suffix. Each doc surfaces the scope in its header so
 a doc shared standalone still announces what slice of the data it
 covers.
 
-Each export records a row in `brief_runs` so the next brief can
+Each export records a row in `brief_runs` so the next export can
 compute its "Changes since previous brief" section. The leads file
 isn't versioned in `brief_runs` (it doesn't need a diff yet — add
 one if a journalist asks for "what leads changed?").
 
-Note: `scope_label` is currently metadata only — the brief and leads
-still render the full finding set. Scoped *filtering* (only emit
+Note: `scope_label` is currently metadata only — the findings document
+and leads still render the full finding set. Scoped *filtering* (only emit
 findings for one HS group, only one comparison scope) is forward
 work; the naming convention is in place so scoped exports can land
 cleanly when needed.
@@ -225,7 +225,7 @@ pending service-account credentials.
 | `GACC_TEST_DATABASE_URL` | Test DB for pytest |
 | `GACC_LIVE_DATABASE_URL` | Optional: lets opt-in tests check the live DB |
 | `LLM_BACKEND` | `ollama` (default) or future alternatives |
-| `GACC_PERMALINK_BASE` | If set, brief renders trace tokens as Markdown links to a hosted finding viewer |
+| `GACC_PERMALINK_BASE` | If set, findings.md renders trace tokens as Markdown links to a hosted finding viewer |
 
 ### Schema-table seeds
 
@@ -294,8 +294,8 @@ off.
 
 - **Predict.** Findings describe the past, not the future.
 - **Compute live.** Every analyser pass writes findings to disk;
-  the brief and sheets export read findings, not raw data. So
-  "what does the brief currently say" is always answered without
+  the findings document and spreadsheet read findings, not raw data. So
+  "what does the findings document currently say" is always answered without
   the analyser running.
 - **Auto-publish.** The journalist pulls; the tool doesn't push.
   No webhooks, no Slack postings, no auto-emails — by design,

@@ -156,7 +156,7 @@ flags.
 Every finding lives in the `findings` table with `kind` (always
 `anomaly` or `llm_topline`) and `subkind` (the specific
 classification). All subkinds carry `detail` JSONB with the values
-the brief renders.
+the findings document renders.
 
 ### `mirror_gap` (mirror-trade)
 
@@ -167,7 +167,7 @@ Stores `excess_over_baseline_pct = |gap_pct| - cif_fob_baseline_pct`.
 What's in `detail`: GACC value (raw + EUR-converted), Eurostat
 total + how many CN8 codes contributed, FX rate used, transshipment
 flag if applicable, the CIF/FOB baseline that was applied (and its
-source). Where in the brief: "Mirror-trade gaps" section.
+source). Where in the findings document: "Mirror-trade gaps" section.
 
 ### `mirror_gap_zscore` (mirror-gap-trends)
 
@@ -177,7 +177,7 @@ z-score against the rolling baseline. Emits when |z| ≥ 1.5
 periods.
 
 What's in `detail`: z-score, rolling mean + stdev, current gap_pct,
-baseline composition. Where in the brief: same "Mirror-trade
+baseline composition. Where in the findings document: same "Mirror-trade
 gaps" section, headed by z-score magnitude.
 
 ### `hs_group_yoy` / `hs_group_yoy_export` / `_uk` / `_uk_export` / `_combined` / `_combined_export`
@@ -196,7 +196,7 @@ flow + scope:
 What's in `detail`: window dates, current + prior 12mo EUR + KG
 totals, yoy_pct, yoy_pct_kg, unit_price_pct_change, low_base flag,
 kg_coverage_pct, top contributing CN8 codes, top contributing
-reporter countries. Where in the brief: per-scope "Top movers"
+reporter countries. Where in the findings document: per-scope "Top movers"
 sections.
 
 ### `hs_group_trajectory` (+ same suffixes as yoy)
@@ -208,8 +208,8 @@ endpoint outliers; tolerates gaps via longest-contiguous-run.
 
 What's in `detail`: shape + shape_label, last/max/min YoY,
 n_windows, smoothing_window, seasonal_signal_strength, the
-effective_first/last_period actually used. Where in the brief:
-per-scope "Trajectories" sections, grouped by shape.
+effective_first/last_period actually used. Where in the findings
+document: per-scope "Trajectories" sections, grouped by shape.
 
 ### `narrative_hs_group` (LLM lead-scaffold)
 
@@ -221,7 +221,7 @@ deterministic corroboration steps (looked up from the catalog).
 What's in `detail`: lead_scaffold (the structured payload),
 underlying_finding_ids, model used, full prompt facts. Where:
 in the **companion leads document** (`leads-<timestamp>.md`), NOT
-in the brief itself. The brief is deterministic-only so a
+in the findings document itself. It is deterministic-only so a
 downstream LLM tool (NotebookLM, etc.) is reasoning over the raw
 findings, not over another LLM's interpretation of them.
 
@@ -241,7 +241,7 @@ Each hs-group analyser supports `--comparison-scope`:
 | `uk` | HMRC, partner CN | UK-only post-Brexit trade with China | Guardian-direct UK angles |
 | `eu_27_plus_uk` | both, summed in EUR | "British Isles" envelope | Cross-source sum; carries `cross_source_sum` caveat warning that the two sources differ in methodology |
 
-The three scopes render as three distinct sections in the brief.
+The three scopes render as three distinct sections in the findings document.
 For most stories, pick one scope and stay with it; the combined
 view is for headline framing only.
 
@@ -253,7 +253,7 @@ captured separately under the `uk` scope from HMRC.
 ## 3. Caveats reference
 
 Caveat codes propagate from analysers into `findings.detail.caveat_codes`,
-and the brief renders them inline per-finding (with the universal
+and the findings document renders them inline per-finding (with the universal
 ones suppressed and explained once at the top). Canonical text for
 each code lives in the `caveats` schema table.
 
@@ -422,13 +422,49 @@ HS-pattern LIKE filters in the analysers exclude `'000TOTAL'`
 naturally. Tests in `tests/test_eurostat_scale_reconciliation.py`
 guard against regression.
 
-## 8. What to quote vs hedge vs not quote
+## 8. Transparency annotations in the findings document and spreadsheet
+
+The Phase 6.3 sensitivity sweep and Phase 6.6 backtest produced
+editorial signal that's surfaced *in the findings document and
+spreadsheet themselves*, not just in dev_notes reports. Three
+annotations to look for when scanning:
+
+- **Per-group YoY-predictability badge** (🟢 / 🟡 / 🔴) next to
+  each HS group heading in the findings document, and as a
+  `predictability_badge` + `predictability_pct` column in the
+  spreadsheet. 🟢 = ≥67% of recent (scope, flow) permutations
+  stayed on-direction with shift <5pp at T-6 vs T (quote with
+  confidence); 🟡 = noisy; 🔴 = volatile (lean on the trajectory
+  shape, not the headline percentage). Empty if no T-6 history
+  exists yet (fresh DB).
+- **Threshold-fragility flag** (⚖️ Near low-base threshold in the
+  Markdown, `near_low_base_threshold = TRUE` in the spreadsheet)
+  for findings whose smaller-of-(curr, prior) sits within 1.5×
+  the low_base threshold (above OR below). A finding at €48M
+  (low_base) and one at €52M (not low_base) are equally fragile
+  to a small threshold move; this annotation surfaces that without
+  making editorial claims about which way the classification
+  "should" go.
+- **Per-finding CIF/FOB baseline display** in the mirror-gap
+  section (Markdown: a "**CIF/FOB baseline**: 6.55% (per-partner);
+  excess over baseline = +52.8 pp" line; spreadsheet:
+  `cif_fob_baseline_pct`, `cif_fob_baseline_scope`,
+  `excess_over_baseline_pp` columns). Surfaces the per-country
+  OECD ITIC baseline plus the excess-over-baseline split, so a
+  journalist can see what the structural CIF/FOB component is and
+  what the residual editorial signal is.
+
+The spreadsheet additionally exposes a `predictability_index` tab
+listing every group's badge + persistence-rate, so a data
+journalist can sort/filter on robustness directly.
+
+## 9. What to quote vs hedge vs not quote
 
 A practical rubric:
 
 ### Quote with confidence
-- A YoY finding from a broad chapter group (Electrical 84-85,
-  Steel, Aluminium) at meaningful base (>€100M).
+- A YoY finding for a group with a 🟢 predictability badge and
+  meaningful base (>€100M).
 - A trajectory shape that's `inverse_u_peak`, `u_recovery`, or
   `dip_recovery` — these are narrative-rich and reflect real
   inflections.
@@ -437,9 +473,14 @@ A practical rubric:
   verified).
 
 ### Quote with hedging
+- Any group with a 🟡 (noisy) predictability badge — quote the
+  trajectory shape rather than the headline %.
 - Any finding carrying `low_base_effect`, `low_baseline_n`,
   `low_kg_coverage`, or `partial_window`. Mention the caveat in
   the copy.
+- Any finding flagged ⚖️ near low-base threshold (or
+  `near_low_base_threshold = TRUE` in the spreadsheet) — the
+  classification is fragile to small methodology choices.
 - Any mirror_gap finding for a transshipment-hub partner — the
   gap mostly reflects routing, not direct trade.
 - A YoY % from a niche group with low Phase 6.6 predictability —
@@ -448,6 +489,9 @@ A practical rubric:
   distinct sources.
 
 ### Don't quote without further investigation
+- Any group with a 🔴 (volatile) predictability badge —
+  the headline percentage hasn't held over 6 months; rely on the
+  trajectory shape or skip the group.
 - A YoY % over 100% on a low-base group — almost always a base-effect
   artefact, not a real surge.
 - An LLM-scaffolded hypothesis as the cause — the catalog is

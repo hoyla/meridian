@@ -20,13 +20,15 @@ or more of these:
    year?") and wants the numbers. Surface: SQL behind the Sheets
    export. No LLM.
 2. **Ongoing trend monitoring** — a journalist has known interests
-   and wants to be told when something shifts. Surface: the briefing
-   pack as a recurring file drop, eventually plus a digest channel
+   and wants to be told when something shifts. Surface: the
+   per-export bundle (`findings.md` + `data.xlsx` + `leads.md`) as
+   a recurring folder drop, eventually plus a digest channel
    (Slack/email — not yet built).
 3. **Lead surfacing** — a journalist wants to be shown patterns they
    didn't know to look for. Surface: the LLM framing layer's
-   `narrative_hs_group` findings, plus optionally NotebookLM as a
-   one-shot exploration tool over a briefing pack.
+   `narrative_hs_group` findings (rendered to `leads.md`), plus
+   optionally NotebookLM as a one-shot exploration tool over the
+   `findings.md` document.
 
 This ordering is also the *trust* ordering. Mode 1 is purely
 deterministic and citation-traceable. Mode 2 adds the temporal
