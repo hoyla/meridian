@@ -1,5 +1,5 @@
 -- Migration: idempotency + revision history for findings.
--- Phase 1.1 of reviews/roadmap-2026-05-09.md.
+-- Phase 1.1 of dev_notes/history.md.
 --
 -- Apply with:
 --   psql $DATABASE_URL < migrations/2026-05-09-findings-revision-history.sql

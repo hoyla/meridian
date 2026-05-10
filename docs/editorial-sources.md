@@ -2,7 +2,7 @@
 
 The articles, journalists, and analytical sources that shaped this
 tool's design. Read this to understand *what kind of journalism* it
-serves — the technical architecture (in `roadmap-2026-05-09.md` and
+serves — the technical architecture (in `dev_notes/history.md` and
 `README.md`) makes more sense once you know which sentences a desk
 expects to write at the end of it.
 

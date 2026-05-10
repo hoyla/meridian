@@ -1,6 +1,6 @@
 """Idempotent finding emission with revision history.
 
-Phase 1.1 of `reviews/roadmap-2026-05-09.md`. The four anomaly passes
+Phase 1.1 of `dev_notes/history.md`. The four anomaly passes
 in `anomalies.py` previously did unconditional `INSERT INTO findings`,
 which produced duplicate rows on every re-run. The exporters papered
 over that with `DISTINCT ON` queries, but the LLM framing layer reading

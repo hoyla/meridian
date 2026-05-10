@@ -1,5 +1,5 @@
 -- Migration: add the `multi_partner_sum` caveat row.
--- Phase 2.3 of dev_notes/roadmap-2026-05-09.md.
+-- Phase 2.3 of dev_notes/history.md.
 --
 -- Apply with:
 --   psql $DATABASE_URL < migrations/2026-05-09-multi-partner-caveat.sql

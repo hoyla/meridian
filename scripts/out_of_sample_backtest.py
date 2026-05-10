@@ -147,7 +147,7 @@ def collect_pairs() -> tuple[list[Pair], date, date]:
 def render(out: list[str], pairs: list[Pair], period_t: date, period_t6: date) -> None:
     out.append(f"# Out-of-sample backtest — {date.today().isoformat()}\n")
     out.append(
-        "Phase 6.6 of dev_notes/roadmap-2026-05-09.md. For each "
+        "Phase 6.6 of dev_notes/history.md. For each "
         "`hs_group_yoy*` finding active at the latest anchor period "
         f"**T = {period_t}**, compare against the same (group, subkind) "
         f"finding 6 months earlier at **T-6 = {period_t6}**. Measures "

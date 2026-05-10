@@ -1,6 +1,6 @@
 """LLM lead-scaffold layer over the deterministic findings.
 
-Phase 6.4 of dev_notes/roadmap-2026-05-09.md restructures the original
+Phase 6.4 of dev_notes/history.md restructures the original
 v1 narrative-drafting layer (Phase 3) into a lead-scaffolding layer.
 The earlier shape — "draft a 2-3 sentence top-line per HS group" —
 was journalistically useful but invited the LLM to do editorial work

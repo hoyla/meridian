@@ -209,7 +209,7 @@ def parse_unit_scale(unit: str | None) -> tuple[float | None, str | None]:
       converted value off by potentially orders of magnitude (e.g. a
       release stating "USD 10,000" would be read as 1× when the real
       scale was 10⁴), which is a bug-class error rather than a hedge.
-    Phase 1.2 of dev_notes/roadmap-2026-05-09.md.
+    Phase 1.2 of dev_notes/history.md.
     """
     if not unit:
         return 1.0, None
@@ -744,7 +744,7 @@ with a `low_baseline_n` caveat. The mathematical floor (`min_baseline_n`,
 configurable per call) stays low — you can compute *something* with 3 points
 — but the editorial confidence in that z-score is limited until the baseline
 has at least one full default window (6 months) behind it. Phase 1.4 of
-dev_notes/roadmap-2026-05-09.md."""
+dev_notes/history.md."""
 
 
 def _log_mirror_gap_staleness() -> None:
@@ -1047,7 +1047,7 @@ def _hs_group_per_period_totals(
     The 5th tuple element (`eur_with_kg`) is the value_eur summed only over
     rows where quantity_kg is non-null and > 0. The ratio
     `eur_with_kg / total_eur` over a window is the kg-coverage metric used
-    by the unit-price decomposition (Phase 1.5 of dev_notes/roadmap-2026-05-09.md).
+    by the unit-price decomposition (Phase 1.5 of dev_notes/history.md).
 
     Why this matters: groups dominated by HS codes that report a primary
     supplementary unit other than kg (machine tools by pieces, vehicles by
@@ -1435,7 +1435,7 @@ def detect_hs_group_yoy(
 KG_COVERAGE_DECOMPOSITION_THRESHOLD = 0.80
 """Below this fraction of value_eur backed by an actual kg value, the unit-
 price decomposition is suppressed (NULL in detail.totals + body annotation
-+ low_kg_coverage caveat). Phase 1.5 of dev_notes/roadmap-2026-05-09.md."""
++ low_kg_coverage caveat). Phase 1.5 of dev_notes/history.md."""
 
 
 def _insert_hs_group_yoy_finding(
@@ -1752,7 +1752,7 @@ def _theil_sen_slope(xs: list[float], ys: list[float]) -> float:
     """Theil-Sen slope estimator: median of pairwise slopes.
 
     Used in place of OLS for the trajectory classifier (Phase 1.3 of
-    dev_notes/roadmap-2026-05-09.md). OLS is sensitive to outliers at
+    dev_notes/history.md). OLS is sensitive to outliers at
     the endpoints — a single extreme first or last window can flip the
     accelerating/decelerating classification. Theil-Sen takes the
     median of all pairwise slopes, which gives the same answer as OLS
@@ -1850,7 +1850,7 @@ def _autocorrelation_at_lag(ys: list[float], lag: int) -> float | None:
     captures whether the YoY shape itself oscillates annually — e.g. a
     group whose YoY pattern repeats year-on-year (Christmas surge,
     Lunar-New-Year dip) rather than progressing linearly. Phase 2.5 of
-    dev_notes/roadmap-2026-05-09.md."""
+    dev_notes/history.md."""
     n = len(ys)
     if n < lag + 2:
         return None
@@ -2033,7 +2033,7 @@ def detect_hs_group_trajectories(
     window counts as "low-base" for the low_base_majority feature. Defaults
     to LOW_BASE_THRESHOLD_EUR (€50M); pass a smaller value for niche-
     commodity investigations or a larger one for macro-only analysis.
-    Phase 1.6 of dev_notes/roadmap-2026-05-09.md.
+    Phase 1.6 of dev_notes/history.md.
 
     Returns counts: {'emitted', 'skipped_insufficient_data', 'skipped_no_findings'}.
     """
@@ -2134,7 +2134,7 @@ def _detect_series_gaps(periods: list[date]) -> list[date]:
     or more periods means the trajectory classifier needs to handle the gap
     (Phase 6.0.7: truncate to longest contiguous run rather than skip the
     group entirely; see _longest_contiguous_run). Originally Phase 1.7 of
-    dev_notes/roadmap-2026-05-09.md."""
+    dev_notes/history.md."""
     if len(periods) < 2:
         return []
     sorted_periods = sorted(periods)

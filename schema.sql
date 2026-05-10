@@ -237,7 +237,7 @@ CREATE TABLE caveats (
 -- adds a body annotation flagging that the gap may reflect routing rather
 -- than direct trade. Membership is journalist-editable (each row has an
 -- evidence_url so the editorial basis is queryable). Phase 2.1 of
--- dev_notes/roadmap-2026-05-09.md.
+-- dev_notes/history.md.
 CREATE TABLE transshipment_hubs (
     iso2          TEXT        PRIMARY KEY,
     notes         TEXT,
@@ -252,7 +252,7 @@ CREATE TABLE transshipment_hubs (
 -- default when present. The mirror_gap analyser records both the value used
 -- and the source row in each finding's `detail.cif_fob_baseline` block, so
 -- a journalist can audit the editorial basis. Phase 2.2 of
--- dev_notes/roadmap-2026-05-09.md.
+-- dev_notes/history.md.
 CREATE TABLE cif_fob_baselines (
     id            BIGSERIAL   PRIMARY KEY,
     partner_iso2  TEXT,                            -- NULL = global default; otherwise specific partner
@@ -313,7 +313,7 @@ CREATE TABLE findings (
                         CHECK (editorial_status IN ('open', 'noted', 'investigating', 'published', 'dismissed')),
     editorial_notes     TEXT,
     editorial_updated_at TIMESTAMPTZ,
-    -- Idempotency + revision history (Phase 1.1, see reviews/roadmap-2026-05-09.md):
+    -- Idempotency + revision history (Phase 1.1, see dev_notes/history.md):
     -- Each emitted finding declares a `natural_key_hash` (deterministic hash of
     -- subkind + identity fields, e.g. (hs_group_id, period)) and a `value_signature`
     -- (hash of the meaningful values that would change story-wise if the underlying

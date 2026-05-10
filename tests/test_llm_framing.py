@@ -1,6 +1,6 @@
 """Tests for the LLM lead-scaffold layer.
 
-Phase 6.4 of dev_notes/roadmap-2026-05-09.md restructured the original
+Phase 6.4 of dev_notes/history.md restructured the original
 v1 narrative drafter into a v2 lead scaffolder. The discipline being
 defended:
 

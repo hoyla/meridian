@@ -1,5 +1,5 @@
 -- Migration: add the `low_baseline_n` caveat row.
--- Phase 1.4 of dev_notes/roadmap-2026-05-09.md.
+-- Phase 1.4 of dev_notes/history.md.
 --
 -- Apply with:
 --   psql $DATABASE_URL < migrations/2026-05-09-low-baseline-n-caveat.sql

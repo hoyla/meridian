@@ -1,5 +1,5 @@
 -- Migration: transshipment_hubs + cif_fob_baselines tables.
--- Phase 2.1 + 2.2 of dev_notes/roadmap-2026-05-09.md.
+-- Phase 2.1 + 2.2 of dev_notes/history.md.
 --
 -- Apply with:
 --   psql $DATABASE_URL < migrations/2026-05-09-transshipment-and-cif-fob-tables.sql

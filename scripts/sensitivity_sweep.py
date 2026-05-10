@@ -296,7 +296,7 @@ def main():
     out: list[str] = []
     out.append(f"# Sensitivity sweep — {date.today().isoformat()}\n")
     out.append(
-        "Phase 6.3 of dev_notes/roadmap-2026-05-09.md. For each "
+        "Phase 6.3 of dev_notes/history.md. For each "
         "methodology threshold, replay the classification under variant "
         "values and report which findings are fragile. Pure compute over "
         "the existing active findings — does not touch the findings "

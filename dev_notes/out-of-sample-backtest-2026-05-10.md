@@ -1,6 +1,6 @@
 # Out-of-sample backtest — 2026-05-10
 
-Phase 6.6 of dev_notes/roadmap-2026-05-09.md. For each `hs_group_yoy*` finding active at the latest anchor period **T = 2026-02-01**, compare against the same (group, subkind) finding 6 months earlier at **T-6 = 2025-08-01**. Measures persistence vs mean-reversion in the analyser's output.
+Phase 6.6 of dev_notes/history.md. For each `hs_group_yoy*` finding active at the latest anchor period **T = 2026-02-01**, compare against the same (group, subkind) finding 6 months earlier at **T-6 = 2025-08-01**. Measures persistence vs mean-reversion in the analyser's output.
 
 
 Editorial value: a finding whose T-6 YoY signal aged well (same direction, similar magnitude) is one a journalist can quote with confidence. A finding whose T-6 signal mean-reverted (sign flip, magnitude collapse) was either picking up noise OR the underlying flow has substantively changed. Either way the brief should hedge.

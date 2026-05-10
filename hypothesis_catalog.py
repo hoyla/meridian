@@ -1,6 +1,6 @@
 """Curated catalog of causal hypotheses for China-EU/UK trade anomalies.
 
-Phase 6.4 of dev_notes/roadmap-2026-05-09.md restructures the LLM framing
+Phase 6.4 of dev_notes/history.md restructures the LLM framing
 layer from "draft a top-line narrative" to "scaffold an investigation".
 The LLM's job becomes: pick 2-3 hypotheses from this catalog that are
 consistent with the structured facts, and write a one-line rationale

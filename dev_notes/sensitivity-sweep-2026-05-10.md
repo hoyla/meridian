@@ -1,6 +1,6 @@
 # Sensitivity sweep — 2026-05-10
 
-Phase 6.3 of dev_notes/roadmap-2026-05-09.md. For each methodology threshold, replay the classification under variant values and report which findings are fragile. Pure compute over the existing active findings — does not touch the findings table.
+Phase 6.3 of dev_notes/history.md. For each methodology threshold, replay the classification under variant values and report which findings are fragile. Pure compute over the existing active findings — does not touch the findings table.
 
 
 Editorial value: a finding that flips classification under a small threshold change rests on a methodology choice as much as on the data. Journalists should know which numbers are robust and which are sensitive.

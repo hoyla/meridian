@@ -1,5 +1,5 @@
 -- Migration: add `partial_window` + `cn8_revision` caveat rows.
--- Phase 2.7 + 2.8 of dev_notes/roadmap-2026-05-09.md.
+-- Phase 2.7 + 2.8 of dev_notes/history.md.
 --
 -- Apply with:
 --   psql $DATABASE_URL < migrations/2026-05-09-partial-window-and-cn8-revision-caveats.sql

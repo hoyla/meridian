@@ -1,5 +1,5 @@
 -- Migration: add the `low_kg_coverage` caveat row.
--- Phase 1.5 of dev_notes/roadmap-2026-05-09.md.
+-- Phase 1.5 of dev_notes/history.md.
 --
 -- Apply with:
 --   psql $DATABASE_URL < migrations/2026-05-09-low-kg-coverage-caveat.sql

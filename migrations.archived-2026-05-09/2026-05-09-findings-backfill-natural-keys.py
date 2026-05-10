@@ -1,6 +1,6 @@
 """Backfill natural_key_hash + value_signature on existing findings.
 
-Phase 1.1 of reviews/roadmap-2026-05-09.md. After applying the schema
+Phase 1.1 of dev_notes/history.md. After applying the schema
 migration, the 1245 existing findings have NULL natural_key_hash and
 NULL value_signature — and many groups of them are *de facto*
 duplicates from re-runs of the same analyser pass.

@@ -104,12 +104,15 @@ The two export surfaces share the same underlying data layer: switching between 
 | `lookups.py`       | Country-alias resolution, caveat metadata, FX rate lookups |
 | `anomalies.py`     | Deterministic anomaly detection: 6 anomaly subkinds — `mirror_gap`, `mirror_gap_zscore`, `hs_group_yoy` (+ `_export`), `hs_group_trajectory` (+ `_export`) |
 | `findings_io.py`   | Idempotent `emit_finding()` helper — append-plus-supersede chain. The canonical write path: every analyser call site declares a natural key + value-fields dict, and the helper handles insert / re-confirm / supersede |
-| `llm_framing.py`   | LLM narrative layer over the deterministic findings. v1 generates one `narrative_hs_group` finding per HS group; numeric-verification gate rejects any number not present in the underlying facts. Default backend: Ollama / `qwen3.6:latest`. |
+| `llm_framing.py`   | LLM lead-scaffold layer over the deterministic findings. v2 produces, per HS group, an anomaly summary + 2-3 hypothesis ids picked from `hypothesis_catalog.py` with one-line rationales + deterministic corroboration steps. Numeric-verification gate rejects any number not present in the underlying facts; hypothesis ids must exist in the catalog. Default backend: Ollama / `qwen3.6:latest`. |
+| `hypothesis_catalog.py` | 12 standard causal hypotheses for China-EU/UK trade movements. Each entry carries a description (in the LLM prompt) and corroboration steps (attached deterministically post-pick). |
+| `scripts/`         | One-off analysis scripts (sensitivity sweep, OOS backtest) — not part of the CLI; run directly. |
 | `sheets_export.py` | Export findings to local `.xlsx` (shipped) or Google Sheets (stub, pending service-account creds) |
 | `briefing_pack.py` | Markdown briefing-pack export — NotebookLM-ready. Opens with LLM-drafted top-lines, unfolds into structured deterministic sections, ends with a Sources appendix tracing every finding back to a third-party URL. |
 | `schema.sql`       | Canonical schema (includes lookup-table seeds: hs_groups, country_aliases, caveats, transshipment_hubs, cif_fob_baselines). A fresh setup is `createdb gacc && psql gacc < schema.sql` — no migration replay needed. |
 | `migrations.archived-2026-05-09/` | Historical record of the dev migrations that built up to the current schema. Folded into `schema.sql` on the 2026-05-09 clean-state rebuild; kept for reference but no longer applied. |
-| `dev_notes/`       | In-repo planning artefacts: review documents and the multi-phase roadmap (`roadmap-2026-05-09.md`) — Phases 1, 2 and 3 done; Phase 4 lists parked statistical-depth items. |
+| `dev_notes/`       | In-repo planning artefacts. `roadmap.md` (outstanding work), `history.md` (chronological record of addressed items), open `forward-work-*.md` docs (deferred options), dated analysis artefacts (sensitivity sweep, OOS backtest, CIF/FOB sourcing), and the pre-registered `shock-validation-2026-05-09.md` methodology doc. |
+| `docs/`            | Repo-level documentation: `architecture.md` (system overview), `methodology.md` (analysis-methodology reference), `editorial-sources.md` (the journalism the tool serves). |
 | `exports/`         | Default output directory for generated `.xlsx` and `.md` exports (gitignored) |
 | `tests/`           | pytest, live local Postgres. FakeBackend keeps Ollama out of the suite. |
 

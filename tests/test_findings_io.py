@@ -1,6 +1,6 @@
 """Tests for the idempotent finding-emission helper.
 
-Phase 1.1 of reviews/roadmap-2026-05-09.md. Three behaviours we need
+Phase 1.1 of dev_notes/history.md. Three behaviours we need
 to defend:
 
 1. First emission inserts a new row.
