@@ -2,7 +2,7 @@
 
 Ingest China–EU/UK trade statistics from all three sides of the customs fence — GACC (China), Eurostat Comext (EU-27), and HMRC OTS (UK, post-Brexit) — into a shared schema, cross-compare them to surface mirror-trade gaps and HS-group trends, and present the most journalistically interesting findings as a three-artefact bundle per export folder: a deterministic Markdown findings document (NotebookLM-ready, no LLM in the loop), an 8-tab spreadsheet for data journalists, and a separate companion leads document where an LLM scaffolds investigation starting points per HS group. The findings document and spreadsheet are kept LLM-free so downstream LLM tools reasoning over them see raw findings, not another LLM's interpretation. All three artefacts share a single DB snapshot per export. ECB FX rates are pulled automatically (CNY/EUR for GACC, GBP/EUR for HMRC) so all values are comparable in EUR.
 
-For Guardian journalists. Domain-agnostic by design: HS-group definitions live in a journalist-editable `hs_groups` table, so the same machinery investigates EVs, solar PV, rare earths, pork, or whatever the next desk asks about.
+Domain-agnostic by design: HS-group definitions live in a journalist-editable `hs_groups` table, so the same machinery investigates EVs, solar PV, rare earths, pork, or whatever the news desk asks about.
 
 ## Stack
 
@@ -118,6 +118,8 @@ The two export surfaces share the same underlying data layer: switching between 
 | `docs/`            | Repo-level documentation: `architecture.md` (system overview), `methodology.md` (analysis-methodology reference), `editorial-sources.md` (the journalism the tool serves). |
 | `exports/`         | Default output directory for generated `.xlsx` and `.md` exports (gitignored) |
 | `tests/`           | pytest, live local Postgres. FakeBackend keeps Ollama out of the suite. |
+
+See docs folder for architecture and details about methodology.
 
 ## Design notes
 
