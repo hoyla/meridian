@@ -92,6 +92,17 @@ TRAJECTORY_LOW_BASE_FRACTION = 0.5
 # Soapbox/Merics figures that are themselves CN-only.
 EUROSTAT_PARTNERS_DEFAULT: tuple[str, ...] = ("CN", "HK", "MO")
 
+# EU-27 means EU-27 at all times. Our eurostat_raw_rows table contains
+# UK-reporter (GB) rows for 2017–Q1 2020 because the UK was an EU-28 reporter
+# until Brexit; without filtering, hs-group analyses for those years silently
+# answer "EU-28 incl. UK" while later years answer "EU-27 excl. UK", which
+# breaks any cross-Brexit comparison. The hs-group helpers exclude GB so
+# their "EU" sums are EU-27 across the whole range. The GB rows stay in the
+# DB (audit + future "uk" scope cross-checks) — only the analyser queries
+# filter them out. mirror-trade is unaffected: its single-country and EU-bloc
+# (member-list) queries already scope the reporter set explicitly.
+EU27_EXCLUDE_REPORTERS: tuple[str, ...] = ("GB",)
+
 
 def _conn():
     return psycopg2.connect(os.environ["DATABASE_URL"])
@@ -1005,10 +1016,11 @@ def _hs_group_per_period_totals(
              WHERE flow = %s
                AND partner = ANY(%s)
                AND product_nc LIKE ANY(%s)
+               AND reporter <> ALL(%s)   -- EU-27 excludes UK at all times
           GROUP BY period
           ORDER BY period
             """,
-            (flow, list(partners), patterns),
+            (flow, list(partners), patterns, list(EU27_EXCLUDE_REPORTERS)),
         )
         return [
             (row[0], float(row[1] or 0), float(row[2] or 0),
@@ -1033,11 +1045,12 @@ def _hs_group_top_cn8s(
              WHERE period >= %s AND period <= %s
                AND flow = %s AND partner = ANY(%s)
                AND product_nc LIKE ANY(%s)
+               AND reporter <> ALL(%s)   -- EU-27 excludes UK at all times
           GROUP BY product_nc
           ORDER BY SUM(value_eur) DESC NULLS LAST
              LIMIT %s
             """,
-            (start, end, flow, list(partners), patterns, limit),
+            (start, end, flow, list(partners), patterns, list(EU27_EXCLUDE_REPORTERS), limit),
         )
         return [{"hs_code": r[0], "total_eur": float(r[1] or 0),
                  "total_kg": float(r[2] or 0), "n_raw": int(r[3])}
@@ -1060,11 +1073,12 @@ def _hs_group_top_reporters(
              WHERE period >= %s AND period <= %s
                AND flow = %s AND partner = ANY(%s)
                AND product_nc LIKE ANY(%s)
+               AND reporter <> ALL(%s)   -- EU-27 excludes UK at all times
           GROUP BY reporter
           ORDER BY SUM(value_eur) DESC NULLS LAST
              LIMIT %s
             """,
-            (start, end, flow, list(partners), patterns, limit),
+            (start, end, flow, list(partners), patterns, list(EU27_EXCLUDE_REPORTERS), limit),
         )
         return [{"reporter": r[0], "total_eur": float(r[1] or 0),
                  "total_kg": float(r[2] or 0), "n_raw": int(r[3])}
@@ -1409,7 +1423,7 @@ def _insert_hs_group_yoy_finding(
         caveat_codes.append("multi_partner_sum")
 
     detail = {
-        "method": "hs_group_yoy_v7_multi_partner_default",
+        "method": "hs_group_yoy_v8_excludes_gb_reporter_pre_brexit",
         "method_query": {
             "source": "eurostat_raw_rows", "flow": flow,
             "partners": partner_list,
@@ -2070,7 +2084,7 @@ def _insert_trajectory_finding(
         )
 
     detail = {
-        "method": "hs_group_trajectory_v5_inherits_multi_partner_yoy",
+        "method": "hs_group_trajectory_v6_inherits_eu27_yoy",
         "flow": flow,
         "flow_label": flow_label,
         "group": {"id": group.id, "name": group.name, "hs_patterns": group.hs_patterns},

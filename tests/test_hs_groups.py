@@ -136,6 +136,65 @@ def test_yoy_emits_when_growth_above_threshold(empty_op, test_db_url):
     assert all("total_kg" in c for c in top)
 
 
+def test_yoy_excludes_gb_reporter_at_all_times(empty_op, test_db_url):
+    """EU-27 must mean EU-27 across the whole period range, not EU-28 for
+    pre-Brexit years. Our eurostat_raw_rows has reporter='GB' rows for 2017
+    through Q1 2020 (UK was an EU-28 reporter then); without filtering, the
+    hs-group analysers silently roll UK trade into the EU sum for those years
+    and exclude it from 2021+ — breaking any cross-Brexit comparison. This
+    test seeds the same period range under both DE and GB reporters and
+    verifies only DE contributes to the EU-27 sum."""
+    with psycopg2.connect(test_db_url) as conn:
+        # DE reporter: rises 100 -> 150 (1.2B -> 1.8B, +50% YoY)
+        de_24 = _make_24_months(date(2018, 1, 1), [100.0] * 12 + [150.0] * 12)
+        _seed_eurostat_imports(conn, "85414210", de_24)
+        # GB reporter (would-be UK contribution): flat 200 across the same window.
+        # If included, would shift totals to (1.2+2.4)B -> (1.8+2.4)B and YoY to
+        # ~+16.7%. We assert the EU-27 sum sees DE only (+50%, 1.8B).
+        cur = conn.cursor()
+        for period, _ in de_24:
+            cur.execute(
+                "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'success') RETURNING id",
+                (f"http://example/gb-{period}",),
+            )
+            run = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO eurostat_raw_rows (scrape_run_id, period, reporter, partner, "
+                "                                product_nc, flow, value_eur, value_nac, "
+                "                                quantity_kg, quantity_suppl_unit) "
+                "VALUES (%s, %s, 'GB', 'CN', '85414210', 1, 200, 200, 20, 0)",
+                (run, period),
+            )
+        conn.commit()
+
+    counts = anomalies.detect_hs_group_yoy(
+        group_names=["Solar PV cells & modules"], yoy_threshold_pct=0.10,
+    )
+    assert counts["emitted"] >= 1, f"counts={counts}"
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT detail FROM findings "
+            "WHERE subkind='hs_group_yoy' "
+            "  AND (detail->'totals'->>'partial_window')::boolean = false "
+            "ORDER BY score DESC LIMIT 1"
+        )
+        detail = cur.fetchone()[0]
+
+    # DE-only sums: prior 12 * 100 = 1200, current 12 * 150 = 1800. If GB
+    # were leaking in, both would be inflated by 200*12 = 2400.
+    assert detail["totals"]["current_12mo_eur"] == 1800.0
+    assert detail["totals"]["prior_12mo_eur"] == 1200.0
+    assert abs(detail["totals"]["yoy_pct"] - 0.5) < 1e-9
+    # And the v8 method-version tag is on the finding (cheap-honesty: the
+    # method-name change makes the supersede chain traceable).
+    assert "excludes_gb_reporter" in detail["method"]
+    # Top reporters list should not contain GB either.
+    top_reporters = [r["reporter"] for r in detail["top_reporters_in_current_12mo"]]
+    assert "GB" not in top_reporters
+    assert "DE" in top_reporters
+
+
 def test_yoy_cn_only_override_excludes_hk_mo(empty_op, test_db_url):
     """Mirrors test_yoy_emits_when_growth_above_threshold but with explicit
     eurostat_partners=['CN']. The finding records partner='CN' alone in
