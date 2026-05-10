@@ -140,6 +140,20 @@ def test_verify_numbers_currency_not_sign_flipped_by_decrease_context():
     assert ok is True
 
 
+def test_verify_numbers_ignores_hs_code_references():
+    """Groups whose name embeds an HS code (e.g. 'Antibiotics (HS 2941)')
+    prompt the LLM to write 'HS 2941' or 'HS 292429' into rationales.
+    These are editorial scaffolding, not facts. The verifier strips them
+    before extraction so they don't trigger false-positive failures."""
+    facts = {"imports": {"yoy_pct": 0.342}}
+    ok, _ = llm_framing.verify_numbers(
+        "Imports under HS 2941 rose 34% in the year. The HS 2924 sub-bracket "
+        "performed similarly to HS 292429 historically.",
+        facts,
+    )
+    assert ok is True
+
+
 def test_verify_numbers_walks_nested_facts():
     """Numbers at any depth count as 'available facts'."""
     facts = {

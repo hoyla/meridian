@@ -394,6 +394,13 @@ _TIME_PERIOD_RE = re.compile(
     r"\b\d+(?:[-\s]+)(?:month|year|day|week|quarter|period|window)s?\b",
     re.IGNORECASE,
 )
+# HS-code references: groups whose name embeds an HS code (e.g.
+# "Antibiotics (HS 2941)") prompt the LLM to write that code into the
+# anomaly summary or rationale ("imports under HS 2941..."). The code is
+# editorial scaffolding, not a fact to verify. Strip patterns of the form
+# "HS NNNN" (4-8 digits) before extraction so the verifier doesn't pick
+# up a 4-digit HS code as an unverifiable count.
+_HS_CODE_RE = re.compile(r"\bHS\s*\d{4,8}\b", re.IGNORECASE)
 
 # Words that signal a *decrease* — used for sign-inference around unsigned
 # numbers in LLM prose. Matches verb forms ("decreased", "fell"), noun forms
@@ -445,6 +452,7 @@ def _extract_numbers_from_text(text: str) -> list[tuple[str, float, str]]:
     verification pipeline as false-positive failures."""
     text_for_extraction = _YEAR_RE.sub("YEAR", text)
     text_for_extraction = _TIME_PERIOD_RE.sub("PERIOD", text_for_extraction)
+    text_for_extraction = _HS_CODE_RE.sub("HSCODE", text_for_extraction)
     out: list[tuple[str, float, str]] = []
     for m in _NUMBER_RE.finditer(text_for_extraction):
         raw = m.group(0).strip()
