@@ -186,13 +186,138 @@ def test_yoy_excludes_gb_reporter_at_all_times(empty_op, test_db_url):
     assert detail["totals"]["current_12mo_eur"] == 1800.0
     assert detail["totals"]["prior_12mo_eur"] == 1200.0
     assert abs(detail["totals"]["yoy_pct"] - 0.5) < 1e-9
-    # And the v8 method-version tag is on the finding (cheap-honesty: the
-    # method-name change makes the supersede chain traceable).
-    assert "excludes_gb_reporter" in detail["method"]
+    # Method version evolves; the GB-exclusion behaviour is what matters
+    # and is asserted by the DE-only sums above. Just verify the method
+    # tag is present and recognisable as an hs_group_yoy method.
+    assert detail["method"].startswith("hs_group_yoy_v")
     # Top reporters list should not contain GB either.
     top_reporters = [r["reporter"] for r in detail["top_reporters_in_current_12mo"]]
     assert "GB" not in top_reporters
     assert "DE" in top_reporters
+
+
+def test_yoy_uk_scope_uses_hmrc_rows_and_distinct_subkind(empty_op, test_db_url):
+    """Phase 6.1d: comparison_scope='uk' reads from hmrc_raw_rows (not
+    eurostat_raw_rows). The resulting finding goes under subkind
+    'hs_group_yoy_uk' so EU-27 and UK findings don't supersede each other.
+    Recorded provenance: detail.method_query.sources == ['hmrc'] and
+    method_query.comparison_scope == 'uk'."""
+    with psycopg2.connect(test_db_url) as conn:
+        # Seed HMRC raw rows (24 months) for HS 850760, partner CN.
+        # Prior 12 averaged 100, current 12 averaged 150 → +50% YoY.
+        cur = conn.cursor()
+        prior_curr = [100.0] * 12 + [150.0] * 12
+        for i, val in enumerate(prior_curr):
+            anchor = date(2024, 1, 1)
+            yr, mo = anchor.year, anchor.month + i
+            while mo > 12:
+                yr += 1; mo -= 12
+            period = date(yr, mo, 1)
+            cur.execute(
+                "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'success') RETURNING id",
+                (f"http://example/uk-{period}",),
+            )
+            run = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO hmrc_raw_rows (scrape_run_id, period, reporter, partner, "
+                "                            product_nc, flow_type_id, flow, "
+                "                            suppression_index, value_gbp, value_eur, "
+                "                            net_mass_kg) "
+                "VALUES (%s, %s, 'GB', 'CN', '85076010', 3, 1, 0, %s, %s, %s)",
+                (run, period, val, val, val * 0.1),
+            )
+        conn.commit()
+
+    counts = anomalies.detect_hs_group_yoy(
+        group_names=["EV batteries (Li-ion)"], yoy_threshold_pct=0.10,
+        comparison_scope="uk",
+    )
+    assert counts["emitted"] >= 1, f"counts={counts}"
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        # Filter to the non-partial-window finding (anchor Dec 2025) so the
+        # arithmetic check is on a complete 24-month window. Partial windows
+        # exist on adjacent anchors and would have higher scores.
+        cur.execute(
+            "SELECT subkind, detail FROM findings "
+            "WHERE subkind LIKE 'hs_group_yoy%' "
+            "  AND (detail->'totals'->>'partial_window')::boolean = false "
+            "ORDER BY score DESC LIMIT 1"
+        )
+        subkind, detail = cur.fetchone()
+
+    # Subkind carries the _uk suffix so it doesn't collide with EU-27 findings.
+    assert subkind == "hs_group_yoy_uk"
+    # Provenance: which sources contributed to this finding.
+    assert detail["method_query"]["sources"] == ["hmrc"]
+    assert detail["method_query"]["comparison_scope"] == "uk"
+    # Numbers reflect the HMRC seed (DE-only EUR sums above were a separate test).
+    assert detail["totals"]["current_12mo_eur"] == 1800.0
+    assert detail["totals"]["prior_12mo_eur"] == 1200.0
+
+
+def test_yoy_combined_scope_sums_eurostat_and_hmrc(empty_op, test_db_url):
+    """Phase 6.1d: comparison_scope='eu_27_plus_uk' sums per-period totals
+    across both eurostat_raw_rows and hmrc_raw_rows. Subkind is
+    'hs_group_yoy_combined'; the cross_source_sum caveat fires."""
+    with psycopg2.connect(test_db_url) as conn:
+        # 24 months of Eurostat (DE reporter, partner CN) at €100/mo prior, €150/mo current.
+        prior_12  = [100.0] * 12
+        current_12 = [150.0] * 12
+        _seed_eurostat_imports(
+            conn, "85076010",
+            _make_24_months(date(2024, 1, 1), prior_12 + current_12),
+        )
+        # Same shape from HMRC at half the values: 50/75 GBP, value_eur same numbers
+        # for ease of arithmetic (FX = 1.0 in this seed).
+        cur = conn.cursor()
+        prior_curr = [50.0] * 12 + [75.0] * 12
+        for i, val in enumerate(prior_curr):
+            anchor = date(2024, 1, 1)
+            yr, mo = anchor.year, anchor.month + i
+            while mo > 12:
+                yr += 1; mo -= 12
+            period = date(yr, mo, 1)
+            cur.execute(
+                "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'success') RETURNING id",
+                (f"http://example/uk-combined-{period}",),
+            )
+            run = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO hmrc_raw_rows (scrape_run_id, period, reporter, partner, "
+                "                            product_nc, flow_type_id, flow, "
+                "                            suppression_index, value_gbp, value_eur, "
+                "                            net_mass_kg) "
+                "VALUES (%s, %s, 'GB', 'CN', '85076010', 3, 1, 0, %s, %s, %s)",
+                (run, period, val, val, val * 0.1),
+            )
+        conn.commit()
+
+    counts = anomalies.detect_hs_group_yoy(
+        group_names=["EV batteries (Li-ion)"], yoy_threshold_pct=0.10,
+        comparison_scope="eu_27_plus_uk",
+    )
+    assert counts["emitted"] >= 1, f"counts={counts}"
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT subkind, detail FROM findings "
+            "WHERE subkind LIKE 'hs_group_yoy%' "
+            "  AND (detail->'totals'->>'partial_window')::boolean = false "
+            "ORDER BY score DESC LIMIT 1"
+        )
+        subkind, detail = cur.fetchone()
+
+    assert subkind == "hs_group_yoy_combined"
+    assert sorted(detail["method_query"]["sources"]) == ["eurostat", "hmrc"]
+    assert detail["method_query"]["comparison_scope"] == "eu_27_plus_uk"
+    # Combined totals: EU (1200 prior, 1800 current) + UK (600 prior, 900 current)
+    # = 1800 prior, 2700 current. YoY still +50%.
+    assert detail["totals"]["prior_12mo_eur"] == 1800.0
+    assert detail["totals"]["current_12mo_eur"] == 2700.0
+    assert abs(detail["totals"]["yoy_pct"] - 0.5) < 1e-9
+    # cross_source_sum caveat fires by construction.
+    assert "cross_source_sum" in detail["caveat_codes"]
 
 
 def test_yoy_cn_only_override_excludes_hk_mo(empty_op, test_db_url):

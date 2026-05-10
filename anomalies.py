@@ -103,6 +103,32 @@ EUROSTAT_PARTNERS_DEFAULT: tuple[str, ...] = ("CN", "HK", "MO")
 # (member-list) queries already scope the reporter set explicitly.
 EU27_EXCLUDE_REPORTERS: tuple[str, ...] = ("GB",)
 
+# Comparison scope: which reporter side(s) to sum on the China-trade
+# comparison. Phase 6.1 introduced the UK as a separate ingestable
+# source (HMRC OTS via OData) so analysers can answer three editorially
+# distinct questions:
+# - eu_27: how is EU-27 (excluding UK) trade with China moving?
+# - uk: how is UK-only trade with China moving? (HMRC-side, post-Brexit
+#   the only canonical UK trade source; pre-Brexit also includes UK
+#   transactions reported under reporter=GB in Eurostat — Phase 6.1d
+#   prefers HMRC for both periods for a consistent UK series.)
+# - eu_27_plus_uk: combined view; carries a `cross_source_sum` caveat
+#   because the sources have different threshold rules, suppression
+#   policies, and revision cycles, so direct addition is methodologically
+#   imperfect (close enough editorially when the caveat is surfaced).
+COMPARISON_SCOPE_DEFAULT: str = "eu_27"
+VALID_COMPARISON_SCOPES: tuple[str, ...] = ("eu_27", "uk", "eu_27_plus_uk")
+COMPARISON_SCOPE_SUBKIND_SUFFIX: dict[str, str] = {
+    "eu_27": "",          # backward compat: EU-27 default keeps existing subkind
+    "uk": "_uk",
+    "eu_27_plus_uk": "_combined",
+}
+COMPARISON_SCOPE_SOURCES: dict[str, tuple[str, ...]] = {
+    "eu_27": ("eurostat",),
+    "uk": ("hmrc",),
+    "eu_27_plus_uk": ("eurostat", "hmrc"),
+}
+
 
 def _hs_pattern_or_clause(patterns: list[str]) -> tuple[str, list[str]]:
     """Build `(product_nc LIKE %s OR product_nc LIKE %s ...)` for a pattern list.
@@ -997,6 +1023,7 @@ def _list_hs_groups(group_names: list[str] | None = None) -> list[_HsGroup]:
 def _hs_group_per_period_totals(
     patterns: list[str], flow: int = 1,
     partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS_DEFAULT,
+    source: str = "eurostat",
 ) -> list[tuple[date, float, float, int, float]]:
     """Returns (period, total_eur, total_kg, n_raw_rows, eur_with_kg) per period.
 
@@ -1024,9 +1051,8 @@ def _hs_group_per_period_totals(
     Periods with no matching rows are absent — caller handles gaps.
     """
     like_clause, like_params = _hs_pattern_or_clause(patterns)
-    with _conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"""
+    if source == "eurostat":
+        sql = f"""
             SELECT period,
                    SUM(value_eur)                                            AS total_eur,
                    SUM(quantity_kg)                                          AS total_kg,
@@ -1040,9 +1066,33 @@ def _hs_group_per_period_totals(
                AND reporter <> ALL(%s)   -- EU-27 excludes UK at all times
           GROUP BY period
           ORDER BY period
-            """,
-            (flow, list(partners), *like_params, list(EU27_EXCLUDE_REPORTERS)),
-        )
+            """
+        params = (flow, list(partners), *like_params, list(EU27_EXCLUDE_REPORTERS))
+    elif source == "hmrc":
+        # net_mass_kg is the HMRC equivalent of Eurostat quantity_kg.
+        # SuppressionIndex != 0 means HMRC suppressed the value for
+        # confidentiality; exclude those rows from the sum (already
+        # excluded by the ingest aggregator but raw rows preserve them).
+        sql = f"""
+            SELECT period,
+                   SUM(value_eur)                                            AS total_eur,
+                   SUM(net_mass_kg)                                          AS total_kg,
+                   COUNT(*)                                                  AS n_raw,
+                   SUM(value_eur) FILTER (WHERE net_mass_kg IS NOT NULL
+                                            AND net_mass_kg > 0)             AS eur_with_kg
+              FROM hmrc_raw_rows
+             WHERE flow = %s
+               AND partner = ANY(%s)
+               AND {like_clause}
+               AND suppression_index = 0
+          GROUP BY period
+          ORDER BY period
+            """
+        params = (flow, list(partners), *like_params)
+    else:
+        raise ValueError(f"unknown source {source!r}; expected 'eurostat' or 'hmrc'")
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
         return [
             (row[0], float(row[1] or 0), float(row[2] or 0),
              int(row[3]), float(row[4] or 0))
@@ -1053,12 +1103,12 @@ def _hs_group_per_period_totals(
 def _hs_group_top_cn8s(
     patterns: list[str], start: date, end: date, flow: int = 1, limit: int = 10,
     partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS_DEFAULT,
+    source: str = "eurostat",
 ) -> list[dict]:
     """Top contributing HS-CN8 codes within a group across [start, end]."""
     like_clause, like_params = _hs_pattern_or_clause(patterns)
-    with _conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"""
+    if source == "eurostat":
+        sql = f"""
             SELECT product_nc,
                    SUM(value_eur) AS total_eur,
                    SUM(quantity_kg) AS total_kg,
@@ -1067,13 +1117,32 @@ def _hs_group_top_cn8s(
              WHERE period >= %s AND period <= %s
                AND flow = %s AND partner = ANY(%s)
                AND {like_clause}
-               AND reporter <> ALL(%s)   -- EU-27 excludes UK at all times
+               AND reporter <> ALL(%s)
           GROUP BY product_nc
           ORDER BY SUM(value_eur) DESC NULLS LAST
              LIMIT %s
-            """,
-            (start, end, flow, list(partners), *like_params, list(EU27_EXCLUDE_REPORTERS), limit),
-        )
+            """
+        params = (start, end, flow, list(partners), *like_params, list(EU27_EXCLUDE_REPORTERS), limit)
+    elif source == "hmrc":
+        sql = f"""
+            SELECT product_nc,
+                   SUM(value_eur) AS total_eur,
+                   SUM(net_mass_kg) AS total_kg,
+                   COUNT(*) AS n_raw
+              FROM hmrc_raw_rows
+             WHERE period >= %s AND period <= %s
+               AND flow = %s AND partner = ANY(%s)
+               AND {like_clause}
+               AND suppression_index = 0
+          GROUP BY product_nc
+          ORDER BY SUM(value_eur) DESC NULLS LAST
+             LIMIT %s
+            """
+        params = (start, end, flow, list(partners), *like_params, limit)
+    else:
+        raise ValueError(f"unknown source {source!r}")
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
         return [{"hs_code": r[0], "total_eur": float(r[1] or 0),
                  "total_kg": float(r[2] or 0), "n_raw": int(r[3])}
                 for r in cur.fetchall()]
@@ -1082,12 +1151,14 @@ def _hs_group_top_cn8s(
 def _hs_group_top_reporters(
     patterns: list[str], start: date, end: date, flow: int = 1, limit: int = 10,
     partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS_DEFAULT,
+    source: str = "eurostat",
 ) -> list[dict]:
-    """Top contributing EU reporters within a group across [start, end]."""
+    """Top contributing reporters within a group across [start, end].
+    For source='hmrc' the only reporter is GB, so this returns at most
+    one row but keeps the same shape for downstream consumers."""
     like_clause, like_params = _hs_pattern_or_clause(patterns)
-    with _conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"""
+    if source == "eurostat":
+        sql = f"""
             SELECT reporter,
                    SUM(value_eur) AS total_eur,
                    SUM(quantity_kg) AS total_kg,
@@ -1096,13 +1167,32 @@ def _hs_group_top_reporters(
              WHERE period >= %s AND period <= %s
                AND flow = %s AND partner = ANY(%s)
                AND {like_clause}
-               AND reporter <> ALL(%s)   -- EU-27 excludes UK at all times
+               AND reporter <> ALL(%s)
           GROUP BY reporter
           ORDER BY SUM(value_eur) DESC NULLS LAST
              LIMIT %s
-            """,
-            (start, end, flow, list(partners), *like_params, list(EU27_EXCLUDE_REPORTERS), limit),
-        )
+            """
+        params = (start, end, flow, list(partners), *like_params, list(EU27_EXCLUDE_REPORTERS), limit)
+    elif source == "hmrc":
+        sql = f"""
+            SELECT reporter,
+                   SUM(value_eur) AS total_eur,
+                   SUM(net_mass_kg) AS total_kg,
+                   COUNT(*) AS n_raw
+              FROM hmrc_raw_rows
+             WHERE period >= %s AND period <= %s
+               AND flow = %s AND partner = ANY(%s)
+               AND {like_clause}
+               AND suppression_index = 0
+          GROUP BY reporter
+          ORDER BY SUM(value_eur) DESC NULLS LAST
+             LIMIT %s
+            """
+        params = (start, end, flow, list(partners), *like_params, limit)
+    else:
+        raise ValueError(f"unknown source {source!r}")
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
         return [{"reporter": r[0], "total_eur": float(r[1] or 0),
                  "total_kg": float(r[2] or 0), "n_raw": int(r[3])}
                 for r in cur.fetchall()]
@@ -1120,6 +1210,7 @@ def detect_hs_group_yoy(
     flow: int = 1,
     low_base_threshold_eur: float = LOW_BASE_THRESHOLD_EUR,
     eurostat_partners: list[str] | tuple[str, ...] | None = None,
+    comparison_scope: str = COMPARISON_SCOPE_DEFAULT,
 ) -> dict[str, int]:
     """For each (hs_group, period_t) where 24 months of history exist, compute:
         current_12mo  = sum(value_eur) for periods [t-11 .. t]
@@ -1143,9 +1234,14 @@ def detect_hs_group_yoy(
     """
     if flow not in (1, 2):
         raise ValueError(f"flow must be 1 (import) or 2 (export); got {flow}")
+    if comparison_scope not in VALID_COMPARISON_SCOPES:
+        raise ValueError(
+            f"comparison_scope must be one of {VALID_COMPARISON_SCOPES}; got {comparison_scope!r}"
+        )
     partners: tuple[str, ...] = (
         tuple(eurostat_partners) if eurostat_partners else EUROSTAT_PARTNERS_DEFAULT
     )
+    sources = COMPARISON_SCOPE_SOURCES[comparison_scope]
     counts = {
         "emitted": 0,
         "inserted_new": 0, "confirmed_existing": 0, "superseded": 0,
@@ -1166,7 +1262,22 @@ def detect_hs_group_yoy(
 
     try:
         for group in groups:
-            series = _hs_group_per_period_totals(group.hs_patterns, flow=flow, partners=partners)
+            # Sum per-period totals across the configured comparison sources.
+            # For eu_27_plus_uk we add EU-27 + UK rows per period; per-period
+            # tuple shape (period, eur, kg, n_raw, eur_with_kg) matches the
+            # single-source return type so downstream YoY logic is unchanged.
+            per_period: dict[date, list[float | int]] = {}
+            for src in sources:
+                for (p, eur, kg, n, ek) in _hs_group_per_period_totals(
+                    group.hs_patterns, flow=flow, partners=partners, source=src,
+                ):
+                    if p not in per_period:
+                        per_period[p] = [0.0, 0.0, 0, 0.0]
+                    per_period[p][0] += eur
+                    per_period[p][1] += kg
+                    per_period[p][2] += n
+                    per_period[p][3] += ek
+            series = [(p, *per_period[p]) for p in sorted(per_period)]
             eur_by_period: dict[date, float] = {p: e for p, e, _, _, _ in series}
             kg_by_period:  dict[date, float] = {p: k for p, _, k, _, _ in series}
             n_by_period:   dict[date, int]   = {p: n for p, _, _, n, _ in series}
@@ -1235,12 +1346,37 @@ def detect_hs_group_yoy(
                     counts["skipped_below_threshold"] += 1
                     continue
 
-                top_cn8s = _hs_group_top_cn8s(
-                    group.hs_patterns, start_curr, end_curr, flow=flow, partners=partners,
-                )
-                top_reporters = _hs_group_top_reporters(
-                    group.hs_patterns, start_curr, end_curr, flow=flow, partners=partners,
-                )
+                # For top_cn8s and top_reporters, sum across configured
+                # sources too. Top reporters across scopes: eu_27 yields
+                # EU members; uk yields just GB; combined yields both.
+                top_cn8s_by_code: dict[str, dict] = {}
+                top_reporters_by_code: dict[str, dict] = {}
+                for src in sources:
+                    for c in _hs_group_top_cn8s(
+                        group.hs_patterns, start_curr, end_curr,
+                        flow=flow, partners=partners, source=src,
+                    ):
+                        existing = top_cn8s_by_code.get(c["hs_code"])
+                        if existing is None:
+                            top_cn8s_by_code[c["hs_code"]] = dict(c)
+                        else:
+                            existing["total_eur"] += c["total_eur"]
+                            existing["total_kg"] += c["total_kg"]
+                            existing["n_raw"] += c["n_raw"]
+                    for r in _hs_group_top_reporters(
+                        group.hs_patterns, start_curr, end_curr,
+                        flow=flow, partners=partners, source=src,
+                    ):
+                        existing = top_reporters_by_code.get(r["reporter"])
+                        if existing is None:
+                            top_reporters_by_code[r["reporter"]] = dict(r)
+                        else:
+                            existing["total_eur"] += r["total_eur"]
+                            existing["total_kg"] += r["total_kg"]
+                            existing["n_raw"] += r["n_raw"]
+                top_cn8s = sorted(top_cn8s_by_code.values(), key=lambda c: -c["total_eur"])[:10]
+                top_reporters = sorted(top_reporters_by_code.values(), key=lambda r: -r["total_eur"])[:10]
+
                 low_base = (
                     current_eur < low_base_threshold_eur
                     or prior_eur < low_base_threshold_eur
@@ -1258,6 +1394,7 @@ def detect_hs_group_yoy(
                     missing_curr=missing_curr,
                     missing_prior=missing_prior,
                     partners=partners,
+                    comparison_scope=comparison_scope,
                 )
                 _tally(counts, action)
 
@@ -1310,11 +1447,20 @@ def _insert_hs_group_yoy_finding(
     missing_curr: list[date] | None = None,
     missing_prior: list[date] | None = None,
     partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS_DEFAULT,
+    comparison_scope: str = COMPARISON_SCOPE_DEFAULT,
 ) -> findings_io.EmitAction:
     direction = "up" if yoy_pct_eur > 0 else "down"
     kg_yoy_str = f"{yoy_pct_kg*100:+.1f}%" if yoy_pct_kg is not None else "n/a"
-    flow_label = "EU imports from CN" if flow == 1 else "EU exports to CN"
+    # Reporter-side label depends on scope (editorial framing for the journalist).
+    if comparison_scope == "eu_27":
+        reporter_label = "EU imports from CN" if flow == 1 else "EU exports to CN"
+    elif comparison_scope == "uk":
+        reporter_label = "UK imports from CN" if flow == 1 else "UK exports to CN"
+    else:  # eu_27_plus_uk
+        reporter_label = "EU+UK imports from CN" if flow == 1 else "EU+UK exports to CN"
+    flow_label = reporter_label
     flow_subkind_suffix = "" if flow == 1 else "_export"
+    scope_subkind_suffix = COMPARISON_SCOPE_SUBKIND_SUFFIX[comparison_scope]
     low_base_marker = " ⚠ low-base" if low_base else ""
     # Phase 1.5: only compute and report unit prices when kg coverage is
     # high enough that eur/kg is editorially meaningful. For groups dominated
@@ -1444,11 +1590,20 @@ def _insert_hs_group_yoy_finding(
     partner_list = list(partners)
     if len(partner_list) > 1:
         caveat_codes.append("multi_partner_sum")
+    if comparison_scope == "eu_27_plus_uk":
+        # Cross-source sum: Eurostat (EUR-native) + HMRC (GBP→EUR via period
+        # FX). The two sources have different threshold rules, suppression
+        # policies, and revision cycles; direct addition is a useful editorial
+        # approximation but the journalist should know.
+        caveat_codes.append("cross_source_sum")
 
+    sources_used = list(COMPARISON_SCOPE_SOURCES[comparison_scope])
     detail = {
-        "method": "hs_group_yoy_v8_excludes_gb_reporter_pre_brexit",
+        "method": "hs_group_yoy_v9_comparison_scope",
         "method_query": {
-            "source": "eurostat_raw_rows", "flow": flow,
+            "sources": sources_used,
+            "comparison_scope": comparison_scope,
+            "flow": flow,
             "partners": partner_list,
             "flow_label": flow_label,
             "hs_patterns": group.hs_patterns,
@@ -1500,7 +1655,12 @@ def _insert_hs_group_yoy_finding(
     # Score reflects EUR YoY (the editorial-comparable signal across groups).
     score = abs(yoy_pct_eur)
 
-    subkind = f"hs_group_yoy{flow_subkind_suffix}"  # 'hs_group_yoy' for imports, 'hs_group_yoy_export' for exports
+    # Subkind layout (Phase 6.1d): 'hs_group_yoy{scope_suffix}{flow_suffix}'.
+    # scope_suffix is '' for eu_27 (default, backward-compatible), '_uk', or
+    # '_combined'. flow_suffix is '' for imports (flow=1), '_export' for
+    # flow=2. Examples: hs_group_yoy / hs_group_yoy_export / hs_group_yoy_uk
+    # / hs_group_yoy_uk_export / hs_group_yoy_combined / hs_group_yoy_combined_export.
+    subkind = f"hs_group_yoy{scope_subkind_suffix}{flow_subkind_suffix}"
     current_end_yyyymm = end_curr.strftime("%Y-%m")
     with _conn() as conn, conn.cursor() as cur:
         _, action = findings_io.emit_finding(
@@ -1840,6 +2000,7 @@ def detect_hs_group_trajectories(
     flow: int = 1,
     low_base_threshold_eur: float = LOW_BASE_THRESHOLD_EUR,
     smooth_window: int | None = None,
+    comparison_scope: str = COMPARISON_SCOPE_DEFAULT,
 ) -> dict[str, int]:
     """For each hs_group, classify the rolling-12mo-EUR YoY series across all
     available windows into a trajectory shape. Reads the matching hs_group_yoy
@@ -1861,6 +2022,10 @@ def detect_hs_group_trajectories(
     """
     if flow not in (1, 2):
         raise ValueError(f"flow must be 1 (import) or 2 (export); got {flow}")
+    if comparison_scope not in VALID_COMPARISON_SCOPES:
+        raise ValueError(
+            f"comparison_scope must be one of {VALID_COMPARISON_SCOPES}; got {comparison_scope!r}"
+        )
     counts = {
         "emitted": 0,
         "inserted_new": 0, "confirmed_existing": 0, "superseded": 0,
@@ -1881,7 +2046,7 @@ def detect_hs_group_trajectories(
 
     try:
         for group in groups:
-            series = _fetch_group_yoy_series(group.id, flow=flow)
+            series = _fetch_group_yoy_series(group.id, flow=flow, comparison_scope=comparison_scope)
             if not series:
                 counts["skipped_no_findings"] += 1
                 continue
@@ -1924,7 +2089,10 @@ def detect_hs_group_trajectories(
             features["original_series_length"] = len(series)
             features["effective_series_length"] = len(effective_series)
             features["dropped_periods_due_to_gaps"] = n_dropped
-            action = _insert_trajectory_finding(analysis_run_id, group, effective_series, shape, features, flow=flow)
+            action = _insert_trajectory_finding(
+                analysis_run_id, group, effective_series, shape, features,
+                flow=flow, comparison_scope=comparison_scope,
+            )
             _tally(counts, action)
 
         with _conn() as conn, conn.cursor() as cur:
@@ -1996,13 +2164,19 @@ def _longest_contiguous_run(periods: list[date]) -> tuple[int, int]:
     return (best_start, best_end)
 
 
-def _fetch_group_yoy_series(group_id: int, flow: int = 1) -> list[dict]:
+def _fetch_group_yoy_series(
+    group_id: int, flow: int = 1,
+    comparison_scope: str = COMPARISON_SCOPE_DEFAULT,
+) -> list[dict]:
     """Return [{period, yoy_pct, finding_id, current_eur}] for the given group,
     one row per period (latest finding per period if there are duplicates).
-    flow=1 reads subkind 'hs_group_yoy', flow=2 reads 'hs_group_yoy_export'.
+    Subkind is built from flow + comparison_scope (Phase 6.1d):
+    eu_27/uk/eu_27_plus_uk × import/export → six possible subkinds.
     Filters to active (un-superseded) findings only — trajectory always
     builds on the current revision."""
-    subkind = "hs_group_yoy" if flow == 1 else "hs_group_yoy_export"
+    flow_suffix = "" if flow == 1 else "_export"
+    scope_suffix = COMPARISON_SCOPE_SUBKIND_SUFFIX[comparison_scope]
+    subkind = f"hs_group_yoy{scope_suffix}{flow_suffix}"
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         cur.execute(
             """
@@ -2039,14 +2213,21 @@ def _insert_trajectory_finding(
     shape: str,
     features: dict,
     flow: int = 1,
+    comparison_scope: str = COMPARISON_SCOPE_DEFAULT,
 ) -> findings_io.EmitAction:
     first = series[0]
     last  = series[-1]
     peak  = max(series, key=lambda s: s["yoy_pct"])
     trough = min(series, key=lambda s: s["yoy_pct"])
 
-    flow_label = "EU imports from CN" if flow == 1 else "EU exports to CN"
+    if comparison_scope == "eu_27":
+        flow_label = "EU imports from CN" if flow == 1 else "EU exports to CN"
+    elif comparison_scope == "uk":
+        flow_label = "UK imports from CN" if flow == 1 else "UK exports to CN"
+    else:
+        flow_label = "EU+UK imports from CN" if flow == 1 else "EU+UK exports to CN"
     flow_subkind_suffix = "" if flow == 1 else "_export"
+    scope_subkind_suffix = COMPARISON_SCOPE_SUBKIND_SUFFIX[comparison_scope]
     low_base_marker = " ⚠ low-base" if features.get("low_base_majority") else ""
     title = (
         f"Trajectory ({flow_label}): {group.name} — {SHAPE_LABELS.get(shape, shape)} "
@@ -2152,9 +2333,10 @@ def _insert_trajectory_finding(
         )
 
     detail = {
-        "method": "hs_group_trajectory_v7_longest_contiguous_run",
+        "method": "hs_group_trajectory_v8_comparison_scope",
         "flow": flow,
         "flow_label": flow_label,
+        "comparison_scope": comparison_scope,
         "group": {"id": group.id, "name": group.name, "hs_patterns": group.hs_patterns},
         "shape": shape,
         "shape_label": SHAPE_LABELS.get(shape, shape),
@@ -2179,7 +2361,10 @@ def _insert_trajectory_finding(
     # Score = absolute latest YoY; lets journalists rank by "how much movement is happening now".
     score = abs(last["yoy_pct"])
 
-    subkind = f"hs_group_trajectory{flow_subkind_suffix}"
+    # Subkind: hs_group_trajectory{scope_suffix}{flow_suffix} — same convention
+    # as hs_group_yoy. eu_27 default keeps the bare subkind; uk and combined
+    # get their own subkinds so trajectory findings don't supersede across scopes.
+    subkind = f"hs_group_trajectory{scope_subkind_suffix}{flow_subkind_suffix}"
     with _conn() as conn, conn.cursor() as cur:
         # Trajectory natural key is just (hs_group_id) per flow — there's only
         # one current trajectory per group per flow at any time. New data lands

@@ -268,6 +268,15 @@ def main() -> None:
                         "Pass 'CN' for the narrower direct-China-only view that matches "
                         "Soapbox/Merics single-partner figures. When >1 partner is used, "
                         "findings carry a multi_partner_sum caveat.")
+    p.add_argument("--comparison-scope",
+                   choices=anomalies.VALID_COMPARISON_SCOPES,
+                   default=anomalies.COMPARISON_SCOPE_DEFAULT,
+                   help=f"Which reporter side(s) to sum on the China-trade comparison. "
+                        f"'eu_27' (default): EU-27 from Eurostat (excludes UK at all times). "
+                        f"'uk': UK-only from HMRC (Phase 6.1). "
+                        f"'eu_27_plus_uk': EU-27 + UK summed (carries cross_source_sum caveat). "
+                        f"Applies to hs-group-yoy and hs-group-trajectory. "
+                        f"Pre-requires HMRC ingest for 'uk' and 'eu_27_plus_uk' — see README.")
     p.add_argument("--export-sheet", action="store_true",
                    help="Export findings to a spreadsheet (default: local .xlsx)")
     p.add_argument("--out-format", choices=["xlsx", "sheets"], default="xlsx",
@@ -344,19 +353,20 @@ def main() -> None:
             flow=args.flow,
             low_base_threshold_eur=args.low_base_threshold,
             eurostat_partners=partners,
+            comparison_scope=args.comparison_scope,
         )
-        log.info("HS-group YoY analysis (flow=%d): %s", args.flow, counts)
+        log.info("HS-group YoY analysis (flow=%d, scope=%s): %s",
+                 args.flow, args.comparison_scope, counts)
         return
 
     if args.analyse == "hs-group-trajectory":
-        # No eurostat_partners arg: trajectory reads from active hs_group_yoy
-        # findings, so its partner scope is whatever the most recent yoy run
-        # produced. To narrow trajectory to CN-only, re-run hs-group-yoy with
-        # --eurostat-partners CN first.
+        # Reads from active hs_group_yoy findings matching the scope. Re-run
+        # hs-group-yoy with the matching --comparison-scope first if needed.
         counts = anomalies.detect_hs_group_trajectories(
             group_names=args.hs_group, flow=args.flow,
             low_base_threshold_eur=args.low_base_threshold,
             smooth_window=args.smooth_window,
+            comparison_scope=args.comparison_scope,
         )
         log.info("HS-group trajectory analysis (flow=%d): %s", args.flow, counts)
         return

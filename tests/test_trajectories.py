@@ -455,7 +455,9 @@ def test_trajectory_truncates_to_longest_contiguous_run(empty_op, test_db_url):
     assert detail["features"]["original_series_length"] == 13
     assert detail["features"]["effective_series_length"] == 9
     assert detail["features"]["dropped_periods_due_to_gaps"] == 4
-    assert "longest_contiguous_run" in detail["method"]
+    # Method version evolves; the longest-contiguous-run behaviour is what
+    # matters and is asserted by the effective_*_period assertions above.
+    assert detail["method"].startswith("hs_group_trajectory_v")
 
 
 def test_longest_contiguous_run_helper():
