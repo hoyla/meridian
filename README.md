@@ -1,6 +1,6 @@
 # gacc
 
-Ingest China–EU trade statistics from both sides of the customs fence — GACC (China) and Eurostat Comext (EU) — into a shared schema, cross-compare them to surface mirror-trade gaps and HS-group trends, and present the most journalistically interesting findings as: a spreadsheet for editorial scanning, a Markdown briefing pack (NotebookLM-ready) opening with LLM-drafted top-lines and unfolding into citation-traceable structured detail. ECB FX rates are pulled automatically so all values are comparable in EUR.
+Ingest China–EU/UK trade statistics from all three sides of the customs fence — GACC (China), Eurostat Comext (EU-27), and HMRC OTS (UK, post-Brexit) — into a shared schema, cross-compare them to surface mirror-trade gaps and HS-group trends, and present the most journalistically interesting findings as: a spreadsheet for editorial scanning, a Markdown briefing pack (NotebookLM-ready) opening with LLM-drafted top-lines and unfolding into citation-traceable structured detail. ECB FX rates are pulled automatically (CNY/EUR for GACC, GBP/EUR for HMRC) so all values are comparable in EUR.
 
 For Guardian journalists. Domain-agnostic by design: HS-group definitions live in a journalist-editable `hs_groups` table, so the same machinery investigates EVs, solar PV, rare earths, pork, or whatever the next desk asks about.
 
@@ -39,8 +39,13 @@ python scrape.py --eurostat-period 2026-03 --partner CN --partner HK --partner M
 python scrape.py --eurostat-period 2026-03 --partner US                          # different partner entirely
 python scrape.py --eurostat-period 2026-03 --hs-prefix 87038                     # filter by HS prefix
 
+# HMRC OTS ingest (UK side, post-Brexit canonical source for UK-China trade)
+# Pre-requires GBP/EUR FX loaded (see below). Default partners CN+HK+MO.
+python scrape.py --hmrc-period 2026-02
+
 # FX rates
-python scrape.py --fetch-fx CNY                       # full ECB history
+python scrape.py --fetch-fx CNY                       # full ECB CNY/EUR history
+python scrape.py --fetch-fx GBP --fx-since 2017-01     # GBP/EUR history (pre-req for HMRC ingest)
 python scrape.py --fetch-fx CNY --fx-since 2024-01     # from a given month
 
 # Anomaly detection (over already-ingested data)
@@ -54,8 +59,11 @@ python scrape.py --analyse hs-group-yoy --flow 1              # imports (CN→EU
 python scrape.py --analyse hs-group-yoy --eurostat-partners CN  # CN-only override (default sums CN+HK+MO)
 python scrape.py --analyse hs-group-yoy --hs-group "EV batteries (Li-ion)" --yoy-threshold 0.1
 python scrape.py --analyse hs-group-yoy --low-base-threshold 10000000   # lower €50M low-base floor for niche-commodity work
+python scrape.py --analyse hs-group-yoy --comparison-scope uk           # UK side only (HMRC; Phase 6.1)
+python scrape.py --analyse hs-group-yoy --comparison-scope eu_27_plus_uk  # combined view (cross_source_sum caveat)
 python scrape.py --analyse hs-group-trajectory --flow 1       # rolling YoY shape classifier (inherits from yoy)
 python scrape.py --analyse hs-group-trajectory --smooth-window 1   # disable smoothing for short-term policy effects
+python scrape.py --analyse hs-group-trajectory --comparison-scope uk    # UK trajectories
 python scrape.py --analyse gacc-aggregate-yoy --flow 1         # GACC-only YoY for non-EU partner aggregates (ASEAN, RCEP, Belt&Road, Africa, LatAm, world Total)
 python scrape.py --analyse gacc-aggregate-yoy --flow 2         # same, China imports from each bloc
 
@@ -91,6 +99,7 @@ The two export surfaces share the same underlying data layer: switching between 
 | `parse.py`         | HTML / PDF → structured observations                    |
 | `db.py`            | Postgres access (psycopg2-binary, no ORM)               |
 | `eurostat.py`      | Eurostat Comext bulk-file fetcher (7z download, stream-decompress, filter, aggregate) |
+| `hmrc.py`          | HMRC OTS fetcher via OData REST API (Phase 6.1; UK-side counterpart to eurostat.py; converts GBP→EUR at ingest) |
 | `fx.py`            | ECB monthly-average FX rate fetcher → `fx_rates`        |
 | `lookups.py`       | Country-alias resolution, caveat metadata, FX rate lookups |
 | `anomalies.py`     | Deterministic anomaly detection: 6 anomaly subkinds — `mirror_gap`, `mirror_gap_zscore`, `hs_group_yoy` (+ `_export`), `hs_group_trajectory` (+ `_export`) |
@@ -113,5 +122,6 @@ The two export surfaces share the same underlying data layer: switching between 
 - **Permalink scheme.** Every finding has a stable `finding/{id}` handle. Spreadsheet outputs include a `link` column that emits a Sheets `HYPERLINK` formula resolved at view-time against `GACC_PERMALINK_BASE`; the briefing pack renders the same handle as a Markdown link. When a web UI later exists, set the env var and existing exports light up automatically — no backfill.
 - **The LLM never computes numbers.** `anomalies.py` does the maths; `llm_framing.py` only narrates the deterministic findings. Every number extracted from LLM output is matched against the typed facts within tolerance — sign-aware first, magnitude-only fallback for cross-clause prose ambiguity. Calendar years, time periods and HS codes are pre-stripped (editorial scaffolding, not facts). On verification failure: REJECT the narrative, log a WARNING, never store. Editorial cost: silence on that group when the LLM hallucinates. Editorial benefit: never confidently wrong. (Real example: qwen3.6 cited "China supplies 93% of permanent magnets" recalled from a Lisa O'Carroll article in training data; not in our facts; correctly rejected.)
 - **"Chinese trade" is CN+HK+MO by default.** Eurostat reports trade routed via Hong Kong and Macau under separate partner codes (HK, MO) because those are independent trade jurisdictions. Editorially they are still Chinese trade. All four analysers (mirror-trade, hs-group-yoy, hs-group-trajectory, llm-framing) sum across CN+HK+MO by default; pass `--eurostat-partners CN` to get the narrower direct-China-only view (matches Soapbox/Merics single-partner figures). Default-partner findings carry a `multi_partner_sum` caveat as honest annotation.
+- **Three comparison scopes** (Phase 6.1). `eu_27` (default): EU-27 from Eurostat, excluding UK at all times. `uk`: UK-only from HMRC OTS (Brexit-canonical UK source). `eu_27_plus_uk`: combined sum across both, with a `cross_source_sum` caveat acknowledging the methodological imperfection (different threshold rules, suppression policies, revision cycles between Eurostat and HMRC). Pass `--comparison-scope {eu_27|uk|eu_27_plus_uk}` to `--analyse hs-group-yoy` or `--analyse hs-group-trajectory`. The briefing pack renders one section per scope present in the active findings.
 - **Editorial caveats are first-class data.** Findings carry `caveat_codes` lists — `cif_fob`, `transshipment_hub` (Rotterdam, Antwerp, HK, SG, AE, MX), `multi_partner_sum`, `low_base_effect`, `low_baseline_n`, `low_kg_coverage`, `partial_window`, `cn8_revision`, `llm_drafted`. The briefing pack surfaces them inline; the LLM framing layer hedges its prose accordingly. Each caveat has a row in the `caveats` table with full editorial guidance.
 - **Low-base flagging.** YoY findings whose prior or current 12mo total is below €50M get auto-flagged. The briefing pack and Sheets export both surface a dedicated review section so percentages aren't quoted from tiny denominators without a verifier glance. Threshold is configurable per call (`--low-base-threshold`).
