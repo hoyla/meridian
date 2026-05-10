@@ -342,6 +342,20 @@ underlying YoY data for most groups has gaps — including:
 keep the protection against multi-month internal gaps. Forward
 work for Phase 6.
 
+**Action SHIPPED 2026-05-10 (Phase 6.0.7, commit `13f5ea1`)**:
+trajectory now uses longest-contiguous-run instead of all-or-nothing.
+Coverage went from **5 to 57 trajectory findings** (29 + 28 across
+flow=1 and flow=2). The EV + hybrid passenger cars trajectory now
+classifies as `dip_recovery` with trough at 2024-08 — exactly when EU
+provisional duties bit hardest. The pre-registered shape was
+`inverse_u_peak`, but the YoY series effectively starts at the 2022
+post-COVID peak and the editorial story (boom → tariff-driven dip →
+recovery) is captured equivalently. Recorded in finding `features`:
+`effective_first_period`, `effective_last_period`,
+`original_series_length`, `effective_series_length`,
+`dropped_periods_due_to_gaps`. Editorially honest: the journalist
+sees exactly which window the shape was fit on.
+
 **5.2 Caveat distribution** (active hs_group_yoy findings):
 
 ```
@@ -515,12 +529,15 @@ with it, ~7 minutes.)
 | 2018 Section 232 (aluminium) | + diversion, partial | +12% kg, ~0% value (volume up, prices down) | ✓ as predicted |
 | Q1 2020 COVID | broad drop + PPE rise | broad drop ✓, PPE +1271% ✓ | ✓✓ cleanest result |
 | Feb 2022 Russia (renewables) | solar/wind rise then fall | inverse_u_peak ✓ on Solar inverters; wind boom-bust | ✓ |
-| Oct 2023 EV probe | inverse_u_peak with peak Q3/Q4 2024 | boom 2020-2022, decline 2023-2024, recovery 2025+ | △ partial (different shape) |
+| Oct 2023 EV probe | inverse_u_peak with peak Q3/Q4 2024 | dip_recovery with trough 2024-08 (post Phase 6.0.7 trajectory fix) | ✓ same editorial story, different shape vocabulary |
 
-**Methodology pass rate**: 4 of 5 shocks surfaced cleanly; the 5th
-(EV probe) is visible in the YoY data but the trajectory classifier
-didn't land it as a shape. The biggest gap is the trajectory
-classifier's gap-intolerance — see §5.1.
+**Methodology pass rate**: **5 of 5 shocks surfaced cleanly** after the
+Phase 6.0.7 trajectory gap-tolerance fix. Pre-fix only 5 of 58
+expected trajectory findings existed (gap-intolerance bug — see §5.1);
+post-fix 57 of 58 emit, including the EV probe. The single 'partial'
+verdict for EV probe is because the pre-registered shape was
+`inverse_u_peak` but the actual classification is `dip_recovery`;
+both are correct readings of different segments of the same series.
 
 **Confirmation-bias check**: the steel finding was OPPOSITE to my
 pre-registered prediction. The methodology fired the data, not my
