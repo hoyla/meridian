@@ -1,37 +1,32 @@
-"""LLM narrative layer over the deterministic findings.
+"""LLM lead-scaffold layer over the deterministic findings.
 
-Phase 3 of dev_notes/roadmap-2026-05-09.md. The deterministic findings
-(hs_group_yoy, mirror_gap, etc.) are already structured and citable;
-what this module adds is editorial *framing*: a 2-3 sentence top-line
-per cluster that a desk could quote, drawing on the underlying
-findings + their attached caveats.
+Phase 6.4 of dev_notes/roadmap-2026-05-09.md restructures the original
+v1 narrative-drafting layer (Phase 3) into a lead-scaffolding layer.
+The earlier shape — "draft a 2-3 sentence top-line per HS group" —
+was journalistically useful but invited the LLM to do editorial work
+the data alone couldn't justify. The new shape:
 
-Strict discipline:
+For each HS group with active findings:
 
-1. **The LLM never computes.** It receives a frozen list of typed
-   facts (yoy_pct=+0.342, current_eur=2.69e10, shape='dip_recovery',
-   caveats=['cn8_revision', 'partial_window']). Its job is to narrate
-   them in journalistic English, not to derive new numbers.
+1. **Anomaly summary** — one short factual line (LLM-drafted, fact-verified).
+2. **Selected hypotheses** — 2-3 items picked from a curated catalog of
+   standard causal explanations for China-EU/UK trade movements, each
+   with a one-line LLM-written rationale that cites a specific fact.
+3. **Corroboration steps** — concrete checks a journalist can run to
+   test the hypotheses. Pulled deterministically from the catalog
+   entries the LLM picked. The LLM does NOT invent these.
 
-2. **Every number in the output must appear in the facts.** A
-   `verify_numbers` pass extracts numbers from the LLM output and
-   checks each against the facts list within rounding tolerance. If
-   any extracted number doesn't match, the narrative is REJECTED —
-   not stored, not surfaced. We'd rather be silent than confidently
-   wrong.
+The fact-verification discipline carries through: every number cited
+in the anomaly summary or any rationale must round-trip to a fact
+within tolerance, or the whole lead-scaffold is rejected. Hypothesis
+IDs that aren't in the catalog also cause rejection. Editorial cost:
+silence on that group. Editorial benefit: never confidently wrong;
+journalist gets a starting position, not a finished story.
 
-3. **Caveats propagate.** The narrative finding's `caveat_codes` is
-   the union of caveats on its underlying findings, plus a
-   `llm_drafted` caveat flagging editorial origin.
-
-4. **Idempotent + revision-aware.** Narratives use the same
-   append-plus-supersede chain as deterministic findings (subkind
-   `narrative_hs_group`, natural_key per hs_group_id). Re-running on
-   unchanged underlying data is a no-op; when an underlying finding
-   revises, the narrative regenerates and supersedes the prior one.
-
-v1 scope: HS-group narratives only. Per-partner (mirror_gap clusters)
-and per-period clusters are forward work.
+Method: `llm_topline_v2_lead_scaffold`. The supersede chain handles
+the cutover from v1 — re-running on a DB that has v1 narratives will
+produce v2 leads that supersede them via the same natural key
+(group_id,).
 """
 
 from __future__ import annotations
@@ -47,13 +42,19 @@ import psycopg2
 import psycopg2.extras
 
 import findings_io
+from hypothesis_catalog import (
+    CATALOG_BY_ID,
+    get_catalog_for_prompt,
+    get_catalog_ids,
+    get_corroboration_steps,
+)
 
 log = logging.getLogger(__name__)
 
 DEFAULT_OLLAMA_MODEL = "qwen3.6:latest"
-LLM_FRAMING_SOURCE_URL = "analysis://llm_framing/v1"
+LLM_FRAMING_SOURCE_URL = "analysis://llm_framing/v2"
 
-NARRATIVE_METHOD = "llm_topline_v1_hs_group"
+LEAD_METHOD = "llm_topline_v2_lead_scaffold"
 
 # Tolerance bands for numeric verification. Percentages get a 0.5pp
 # absolute tolerance because LLMs naturally round (+34.2% → "34%").
@@ -61,6 +62,11 @@ NARRATIVE_METHOD = "llm_topline_v1_hs_group"
 # for €26.9B; we accept ±5% relative). Pure integer counts must match exactly.
 PCT_TOLERANCE_ABS = 0.005     # 0.5 percentage points (the value is in fraction form, 0.342 not 34.2)
 CURRENCY_TOLERANCE_REL = 0.05  # 5% relative
+
+# Hard cap on hypotheses per scaffold. The LLM is asked for 2-3; if it
+# returns more we truncate (rather than reject) — the editorial harm of
+# truncation is bounded.
+MAX_HYPOTHESES_PER_LEAD = 3
 
 
 # =============================================================================
@@ -82,9 +88,7 @@ def make_backend(model: str | None = None) -> LLMBackend:
 
 
 class OllamaBackend:
-    """Calls a local Ollama daemon's /api/chat endpoint. The Python `ollama`
-    package is in requirements.txt. We wrap it to give a stable, testable
-    interface.
+    """Calls a local Ollama daemon's /api/chat endpoint with format='json'.
 
     Handles thinking models (Qwen 3.x family, DeepSeek-R1, o1-style): we
     pass `think=False` so the model skips its reasoning channel and writes
@@ -108,9 +112,10 @@ class OllamaBackend:
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
+            "format": "json",      # ollama enforces JSON output for structured response
             "options": {
-                "temperature": 0.2,    # low, but not zero — narrative phrasing
-                "num_predict": 800,    # 2-3 sentences fit easily; headroom for any thinking that slips through
+                "temperature": 0.2,    # low — narrative phrasing in rationales but no creative leaps
+                "num_predict": 1200,   # JSON envelope + 3 hypotheses with rationales fits comfortably
             },
         }
         # `think=False` is supported by recent ollama python lib versions for
@@ -120,7 +125,6 @@ class OllamaBackend:
             response = ollama.chat(think=False, **kwargs)
         except (TypeError, ValueError):
             response = ollama.chat(**kwargs)
-        # The ollama package returns a pydantic Message; access via attr.
         return response.message.content or ""
 
 
@@ -156,7 +160,7 @@ def _conn():
 def _load_hs_group_clusters(group_names: list[str] | None = None) -> list[HsGroupCluster]:
     """Build one HsGroupCluster per hs_group from the latest active findings.
     Skips groups with no underlying findings at all (they have nothing to
-    narrate)."""
+    scaffold)."""
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         if group_names:
             cur.execute(
@@ -204,13 +208,8 @@ def _load_hs_group_clusters(group_names: list[str] | None = None) -> list[HsGrou
 
 
 def _build_facts(cluster: HsGroupCluster) -> dict[str, Any]:
-    """Extract the typed facts the LLM is allowed to use. Each is a (label,
-    value, kind) tuple internally; the returned dict is what we serialise
-    into the prompt and what the verifier checks against.
-
-    Editorial intent: the LLM is told these are the ONLY numbers it may
-    cite. Any deviation gets the narrative rejected at verification time.
-    """
+    """Extract the typed facts the LLM is allowed to use. Same shape as v1 —
+    the verifier uses these as the universe of allowed numbers."""
     facts: dict[str, Any] = {
         "group_name": cluster.group_name,
         "hs_patterns": cluster.hs_patterns,
@@ -269,30 +268,42 @@ def _build_facts(cluster: HsGroupCluster) -> dict[str, Any]:
     return facts
 
 
-SYSTEM_PROMPT = """You are an editorial assistant for Guardian trade journalists.
-You convert structured trade-statistics findings into 2-3 sentence top-lines
-suitable for a copy desk. You are NOT a researcher and you do NOT compute.
+SYSTEM_PROMPT = """You are an editorial research assistant for Guardian trade journalists.
+Your job is to scaffold an investigation, NOT to write a finished story.
+
+For each HS group you receive, you produce a JSON object with three fields:
+
+1. `anomaly_summary`: ONE short sentence stating the unusual movement in plain
+   English. Cite specific numbers from the FACTS block only.
+2. `hypotheses`: a list of 2-3 items, each `{id, rationale}`, where `id` is
+   one of the catalog ids supplied in the prompt (HYPOTHESIS CATALOG section)
+   and `rationale` is a SINGLE sentence (max ~30 words) explaining why this
+   hypothesis fits the facts. Cite at least one specific fact per rationale.
+3. (Corroboration steps are NOT in your output — they are attached
+   deterministically from the catalog after you submit.)
 
 Strict rules — violating any of these gets your output silently rejected:
 
-1. EVERY NUMBER YOU CITE MUST APPEAR IN THE FACTS BLOCK. Do not estimate,
-   round to a different value, or interpolate. If the fact is 0.342, you
-   may write "34%" or "34.2%" — but NOT "35%" or "33%" or "around 30%".
-   If a fact is in fraction form (e.g. 0.342 means 34.2%), convert
-   directly without arithmetic.
-2. PREFER QUALITATIVE PHRASING WHEN A SINGLE NUMBER WOULD BE MISLEADING.
-   "Sharp double-digit growth" is allowed; "+37% YoY" when the fact is
-   +34.2% is not.
-3. If a caveat applies (low_base, partial_window, transshipment_hub,
-   low_kg_coverage, cn8_revision, multi_partner_sum), hedge in your
-   prose. Never quote a percentage from a low_base finding without
-   flagging the small base.
-4. NEVER claim "volume-driven" or "price-driven" when
-   decomposition_suppressed is true.
-5. Output prose only — no bullet lists, no preamble ("Here is the
-   top-line:"), no markdown headings, no HS codes. Just 2-3 sentences.
-6. "Imports" / "exports" are from the EU's perspective: imports = goods
-   coming INTO the EU from China; exports = EU goods going TO China."""
+A. EVERY NUMBER YOU CITE (in the anomaly_summary OR any rationale) MUST APPEAR
+   IN THE FACTS BLOCK. Do not estimate, round to a different value, or
+   interpolate. If the fact is "+34.2%", you may write "34%" or "34.2%" — but
+   NOT "35%" or "around 30%".
+B. EVERY HYPOTHESIS ID YOU PICK MUST APPEAR IN THE CATALOG. Do not invent
+   new ids. Do not modify existing ids.
+C. PICK 2-3 HYPOTHESES, NOT MORE. Pick the ones most clearly supported by
+   the facts. If only one fits, pick one. If none fit (rare, but possible
+   for very flat / featureless groups), return an empty hypotheses list.
+D. If a caveat applies (low_base, partial_window, transshipment_hub,
+   low_kg_coverage, cn8_revision, multi_partner_sum), let it shape your
+   hypothesis selection (e.g. cn8_revision strongly suggests cn8_reclassification).
+   Mention the caveat by name in the relevant rationale when it directly
+   motivates the pick.
+E. NEVER claim "volume-driven" or "price-driven" when decomposition_suppressed
+   is true.
+F. "Imports" / "exports" are from the EU-or-UK reporter's perspective:
+   imports = goods coming INTO the reporter from China; exports = reporter's
+   goods going TO China.
+G. Output VALID JSON ONLY. No markdown, no preamble, no code fences."""
 
 
 _PCT_KEYS = {"yoy_pct", "yoy_pct_kg", "unit_price_pct_change", "last_yoy",
@@ -344,13 +355,17 @@ def _format_eur_for_prompt(v: float) -> str:
 
 def _build_user_prompt(cluster: HsGroupCluster, facts: dict[str, Any]) -> str:
     formatted = _format_facts_for_prompt(facts)
+    catalog = get_catalog_for_prompt()
     return (
         f"Group: {cluster.group_name}\n"
         f"Definition: {cluster.group_description or '—'}\n\n"
-        f"FACTS (these are the only numbers you may cite — quote them directly,\n"
-        f"do not perform arithmetic on them):\n"
+        f"FACTS (the only numbers you may cite):\n"
         f"{json.dumps(formatted, indent=2, default=str)}\n\n"
-        f"Write a 2-3 sentence top-line for the desk. Do NOT cite HS codes."
+        f"HYPOTHESIS CATALOG (pick 2-3 ids that best fit the facts):\n"
+        f"{json.dumps(catalog, indent=2)}\n\n"
+        f"Output a JSON object with exactly these keys: anomaly_summary "
+        f"(string), hypotheses (list of {{id, rationale}}). No other keys, "
+        f"no preamble, no code fences."
     )
 
 
@@ -382,11 +397,7 @@ _TIME_PERIOD_RE = re.compile(
 
 # Words that signal a *decrease* — used for sign-inference around unsigned
 # numbers in LLM prose. Matches verb forms ("decreased", "fell"), noun forms
-# ("decrease", "decline", "drop"), and short adverbs ("down"). We allow the
-# keyword to appear within a 40-char window EITHER side of the number, so
-# all of these phrasings round-trip:
-#   "decreased by 36.8%"  /  "decline of 36.8%"  /  "36.8% drop"  /
-#   "down 36.8%"  /  "36.8% reduction"  /  "fell 36.8%"
+# ("decrease", "decline", "drop"), and short adverbs ("down").
 _DECREASE_KEYWORDS = re.compile(
     r"\b(decreas\w*|declin\w*|fell|fall\w*|dropp?\w*|drop\b|reduc\w*|"
     r"cut\w*|down\b|lost|loss\w*)\b",
@@ -428,12 +439,10 @@ def _extract_numbers_from_text(text: str) -> list[tuple[str, float, str]]:
     Sign inference: when a number is unsigned in the prose but has a
     decrease-keyword in its 40-char context window ("a 36.8% drop", "a
     decrease of 36.8%", "fell 36.8%"), we treat its parsed value as
-    negative so it can match a fact stored as a negative fraction
-    (e.g. yoy_pct=-0.368). Already-signed values pass through unchanged.
+    negative so it can match a fact stored as a negative fraction.
 
-    Calendar years (19xx / 20xx) are pre-stripped from the text so they
-    don't accidentally enter the verification pipeline (a year 'matched'
-    against a fact would always fail, generating false positives)."""
+    Calendar years (19xx / 20xx) are pre-stripped so they don't enter the
+    verification pipeline as false-positive failures."""
     text_for_extraction = _YEAR_RE.sub("YEAR", text)
     text_for_extraction = _TIME_PERIOD_RE.sub("PERIOD", text_for_extraction)
     out: list[tuple[str, float, str]] = []
@@ -445,33 +454,23 @@ def _extract_numbers_from_text(text: str) -> list[tuple[str, float, str]]:
             n = float(num_str)
         except ValueError:
             continue
-        # Apply sign inference ONLY to percentages, not to currency values.
-        # A currency value is a stock — "exports fell to €441M" leaves the
-        # €441M positive; the negative is in the percentage of decline that
-        # produced it. Sign-flipping a stock by directional verbs in the
-        # surrounding prose is the wrong semantic.
+        # Sign inference applies to percentages only — currency stocks
+        # ("fell to €441M") leave the magnitude positive.
         is_pct = unit == "%"
         if is_pct and not (num_str.startswith("+") or num_str.startswith("-")):
             if _has_decrease_context(text_for_extraction, m.start(), m.end()):
                 n = -n
         if unit == "%":
-            # Convert "+34%" or "34%" to fraction 0.34 to match facts representation.
             out.append((raw, n / 100.0, "pct"))
         elif unit in ("b", "bn", "billion"):
-            # "€27B" or "€27 billion" → 27e9 EUR
             out.append((raw, n * 1e9, "currency"))
         elif unit in ("m", "million"):
             out.append((raw, n * 1e6, "currency"))
         elif unit in ("k", "thousand"):
             out.append((raw, n * 1e3, "currency"))
         elif unit == "kg":
-            # kg figures are facts-side numbers too (yoy_pct_kg etc.).
-            # Treat as raw count; verifier will compare directly to facts.
             out.append((raw, n, "count"))
         else:
-            # No unit — count. Calendar years were already substituted
-            # to "YEAR" in the pre-processed text, so they don't reach
-            # this branch.
             out.append((raw, n, "count"))
     return out
 
@@ -510,14 +509,11 @@ def _find_closest_fact(
     """Return (match, path, fact_value) for the closest fact within tolerance.
     Match=False if no fact is within tolerance for this kind.
 
-    For percentages we try sign-aware match first (the cleaner signal), then
-    fall back to a magnitude-only match. The fallback exists because LLM
-    prose ambiguity (cross-clause confusion like "+69.2% increase ... 20.7%
-    drop in unit prices" makes context-window sign inference flip "+69.2%"
-    incorrectly) produces false-negatives that aren't editorial errors. If
-    the LLM is fundamentally direction-wrong (says "+37%" when fact is
-    "-36.8%"), the magnitude-only fallback still catches the hallucination
-    because nothing matches."""
+    For percentages we try sign-aware match first, then fall back to a
+    magnitude-only match. The fallback rescues cross-clause prose ambiguity
+    where context-window sign inference flips wrongly. A fundamentally
+    direction-wrong claim (says "+37%" when fact is "-36.8%") still fails
+    because nothing matches at any sign within tolerance."""
     if not facts:
         return False, None, None
     best_path: str | None = None
@@ -525,11 +521,9 @@ def _find_closest_fact(
     best_dist: float = float("inf")
     for path, fact_val in facts:
         if kind == "pct":
-            # Sign-aware first.
             dist = abs(value - fact_val)
             within = dist <= PCT_TOLERANCE_ABS
         elif kind == "currency":
-            # ±5% relative
             if fact_val == 0:
                 within = value == 0
                 dist = abs(value - fact_val)
@@ -537,7 +531,6 @@ def _find_closest_fact(
                 dist = abs(value - fact_val) / max(abs(fact_val), 1.0)
                 within = dist <= CURRENCY_TOLERANCE_REL
         else:  # count
-            # Exact-match for integers; tolerate ±0.5 for floats.
             dist = abs(value - fact_val)
             within = dist <= 0.5
         if within and dist < best_dist:
@@ -546,7 +539,6 @@ def _find_closest_fact(
             best_val = fact_val
     if best_path is not None:
         return True, best_path, best_val
-    # Percentage magnitude-only fallback.
     if kind == "pct":
         for path, fact_val in facts:
             dist = abs(abs(value) - abs(fact_val))
@@ -556,7 +548,6 @@ def _find_closest_fact(
                 best_val = fact_val
         if best_path is not None:
             return True, best_path, best_val
-    # No match — record the absolute closest for the failure report.
     closest_path: str | None = None
     closest_val: float | None = None
     closest_dist: float = float("inf")
@@ -570,21 +561,148 @@ def _find_closest_fact(
 
 
 # =============================================================================
+# JSON parsing + lead-scaffold validation
+# =============================================================================
+
+
+@dataclass
+class LeadScaffoldRejection:
+    reason: str
+    detail: str = ""
+
+
+@dataclass
+class LeadScaffold:
+    anomaly_summary: str
+    hypotheses: list[dict]               # [{id, label, rationale}]
+    corroboration_steps: list[str]       # derived deterministically from hypothesis ids
+
+
+def _parse_lead_scaffold_json(raw: str) -> dict | LeadScaffoldRejection:
+    """Parse the LLM's JSON output, tolerating a leading/trailing code fence."""
+    s = raw.strip()
+    # Strip ```json ... ``` or ``` ... ``` fences if the model added them
+    # despite the prompt asking it not to.
+    if s.startswith("```"):
+        # Remove first fence line
+        first_newline = s.find("\n")
+        if first_newline != -1:
+            s = s[first_newline + 1 :]
+        if s.endswith("```"):
+            s = s[: -3]
+        s = s.strip()
+    try:
+        obj = json.loads(s)
+    except json.JSONDecodeError as e:
+        return LeadScaffoldRejection(reason="json_parse_error", detail=str(e))
+    if not isinstance(obj, dict):
+        return LeadScaffoldRejection(reason="json_not_object", detail=type(obj).__name__)
+    return obj
+
+
+def _validate_lead_scaffold(
+    raw_obj: dict, facts: dict[str, Any],
+) -> LeadScaffold | LeadScaffoldRejection:
+    """Validate the parsed LLM output, returning a structured LeadScaffold or
+    a typed rejection. Validation steps:
+
+    1. Required keys present (anomaly_summary str, hypotheses list).
+    2. Hypothesis ids all in catalog.
+    3. Anomaly summary numerically verified.
+    4. Each rationale numerically verified.
+    5. Cap hypotheses at MAX_HYPOTHESES_PER_LEAD (truncate, not reject).
+
+    The verifier accepts an empty hypotheses list (rare but valid for
+    featureless groups). It does NOT accept a missing or non-string
+    anomaly_summary."""
+    summary = raw_obj.get("anomaly_summary")
+    if not isinstance(summary, str) or not summary.strip():
+        return LeadScaffoldRejection(reason="missing_anomaly_summary")
+    hyps_in = raw_obj.get("hypotheses")
+    if not isinstance(hyps_in, list):
+        return LeadScaffoldRejection(reason="hypotheses_not_list")
+
+    catalog_ids = set(get_catalog_ids())
+    validated: list[dict] = []
+    for item in hyps_in[:MAX_HYPOTHESES_PER_LEAD]:
+        if not isinstance(item, dict):
+            return LeadScaffoldRejection(reason="hypothesis_item_not_object")
+        hid = item.get("id")
+        rationale = item.get("rationale", "")
+        if not isinstance(hid, str) or hid not in catalog_ids:
+            return LeadScaffoldRejection(
+                reason="unknown_hypothesis_id", detail=str(hid),
+            )
+        if not isinstance(rationale, str):
+            return LeadScaffoldRejection(reason="rationale_not_string", detail=hid)
+        # Verify any numbers in the rationale
+        ok, failures = verify_numbers(rationale, facts)
+        if not ok:
+            return LeadScaffoldRejection(
+                reason="rationale_failed_verification",
+                detail=f"{hid}: {failures[0].raw_text} (parsed {failures[0].parsed_value:.4f})",
+            )
+        validated.append({
+            "id": hid,
+            "label": CATALOG_BY_ID[hid]["label"],
+            "rationale": rationale.strip(),
+        })
+
+    # Verify numbers in the anomaly summary
+    ok, failures = verify_numbers(summary, facts)
+    if not ok:
+        return LeadScaffoldRejection(
+            reason="anomaly_summary_failed_verification",
+            detail=f"{failures[0].raw_text} (parsed {failures[0].parsed_value:.4f})",
+        )
+
+    return LeadScaffold(
+        anomaly_summary=summary.strip(),
+        hypotheses=validated,
+        corroboration_steps=get_corroboration_steps([h["id"] for h in validated]),
+    )
+
+
+def render_lead_scaffold_as_body(scaffold: LeadScaffold) -> str:
+    """Render the structured scaffold to the markdown body that gets stored
+    in `findings.body`. Briefing pack consumes detail.lead_scaffold directly
+    for richer rendering; this body is the audit-friendly plain-text form."""
+    lines: list[str] = []
+    lines.append(f"**Anomaly:** {scaffold.anomaly_summary}")
+    lines.append("")
+    if scaffold.hypotheses:
+        lines.append("**Possible causes:**")
+        for h in scaffold.hypotheses:
+            lines.append(f"- *{h['label']}* — {h['rationale']}")
+        lines.append("")
+    if scaffold.corroboration_steps:
+        lines.append("**Corroboration steps:**")
+        for s in scaffold.corroboration_steps:
+            lines.append(f"- {s}")
+    return "\n".join(lines).strip()
+
+
+# =============================================================================
 # Persistence
 # =============================================================================
 
 
-def _persist_narrative(
+def _persist_lead(
     cur, *, scrape_run_id: int, cluster: HsGroupCluster,
-    narrative_text: str, facts: dict[str, Any], model_used: str,
+    scaffold: LeadScaffold, facts: dict[str, Any], model_used: str,
 ) -> tuple[int, findings_io.EmitAction]:
+    body = render_lead_scaffold_as_body(scaffold)
     detail = {
-        "method": NARRATIVE_METHOD,
+        "method": LEAD_METHOD,
         "model": model_used,
         "cluster_kind": "hs_group",
         "group": {"id": cluster.group_id, "name": cluster.group_name,
                   "hs_patterns": cluster.hs_patterns},
-        "narrative_text": narrative_text,
+        "lead_scaffold": {
+            "anomaly_summary": scaffold.anomaly_summary,
+            "hypotheses": scaffold.hypotheses,
+            "corroboration_steps": scaffold.corroboration_steps,
+        },
         "facts_used": facts,
         "underlying_finding_ids": sorted(cluster.underlying_finding_ids),
         "caveat_codes": sorted(cluster.caveat_codes | {"llm_drafted"}),
@@ -595,19 +713,21 @@ def _persist_narrative(
         kind="llm_topline",
         subkind="narrative_hs_group",
         natural_key=(cluster.group_id,),
-        # Including the narrative text in value_fields means the supersede
-        # chain captures any prose change, not just numeric/source change.
-        # That's intentional: a regenerated narrative IS a revision.
+        # Including the scaffold contents in value_fields means the supersede
+        # chain captures any change to the picked hypotheses or rationales,
+        # not just the anomaly summary. A regenerated scaffold IS a revision.
         value_fields={
-            "method": NARRATIVE_METHOD,
+            "method": LEAD_METHOD,
             "model": model_used,
-            "narrative_text": narrative_text,
+            "anomaly_summary": scaffold.anomaly_summary,
+            "hypothesis_ids": [h["id"] for h in scaffold.hypotheses],
+            "rationales": [h["rationale"] for h in scaffold.hypotheses],
             "underlying_finding_ids": sorted(cluster.underlying_finding_ids),
         },
         hs_group_ids=[cluster.group_id],
-        score=None,  # narratives don't sort by magnitude
-        title=f"Top-line: {cluster.group_name}",
-        body=narrative_text,
+        score=None,
+        title=f"Lead: {cluster.group_name}",
+        body=body,
         detail=detail,
     )
 
@@ -622,8 +742,8 @@ def detect_llm_framings(
     backend: LLMBackend | None = None,
     model: str | None = None,
 ) -> dict[str, int]:
-    """Generate one narrative per HS group (per cluster), persist as
-    `narrative_hs_group` findings.
+    """Generate one lead-scaffold per HS group, persist as `narrative_hs_group`
+    findings (subkind unchanged so the supersede chain catches v1→v2 cleanly).
 
     Returns counts: {emitted, inserted_new, confirmed_existing, superseded,
                      skipped_no_findings, skipped_unverified,
@@ -641,7 +761,7 @@ def detect_llm_framings(
 
     clusters = _load_hs_group_clusters(group_names)
     if not clusters:
-        log.info("No clusters with active findings; nothing to narrate.")
+        log.info("No clusters with active findings; nothing to scaffold.")
         return counts
 
     model_used = getattr(backend, "model", "unknown")
@@ -657,28 +777,34 @@ def detect_llm_framings(
             facts = _build_facts(cluster)
             user_prompt = _build_user_prompt(cluster, facts)
             try:
-                narrative = backend.generate(SYSTEM_PROMPT, user_prompt).strip()
-            except Exception as e:
+                raw_output = backend.generate(SYSTEM_PROMPT, user_prompt).strip()
+            except Exception:
                 log.exception("LLM error for group %r", cluster.group_name)
                 counts["skipped_llm_error"] += 1
                 continue
 
-            ok, failures = verify_numbers(narrative, facts)
-            if not ok:
+            parsed = _parse_lead_scaffold_json(raw_output)
+            if isinstance(parsed, LeadScaffoldRejection):
                 log.warning(
-                    "Numeric verification FAILED for %r: %d unmatched numbers. "
-                    "Sample: %r → closest fact %s=%s (parsed %.4f). Skipping.",
-                    cluster.group_name, len(failures),
-                    failures[0].raw_text, failures[0].closest_fact_path,
-                    failures[0].closest_fact_value, failures[0].parsed_value,
+                    "Lead-scaffold parse rejected for %r: %s (%s)",
+                    cluster.group_name, parsed.reason, parsed.detail,
+                )
+                counts["skipped_unverified"] += 1
+                continue
+
+            scaffold = _validate_lead_scaffold(parsed, facts)
+            if isinstance(scaffold, LeadScaffoldRejection):
+                log.warning(
+                    "Lead-scaffold validation rejected for %r: %s (%s)",
+                    cluster.group_name, scaffold.reason, scaffold.detail,
                 )
                 counts["skipped_unverified"] += 1
                 continue
 
             with _conn() as conn2, conn2.cursor() as cur2:
-                _, action = _persist_narrative(
+                _, action = _persist_lead(
                     cur2, scrape_run_id=analysis_run_id, cluster=cluster,
-                    narrative_text=narrative, facts=facts, model_used=model_used,
+                    scaffold=scaffold, facts=facts, model_used=model_used,
                 )
                 conn2.commit()
             _tally_action(counts, action)

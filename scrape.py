@@ -254,8 +254,9 @@ def main() -> None:
                    choices=["mirror-trade", "mirror-gap-trends", "hs-group-yoy",
                             "hs-group-trajectory", "gacc-aggregate-yoy", "llm-framing"],
                    help="Run a deterministic anomaly pass over already-ingested data, "
-                        "or 'llm-framing' to generate narrative top-lines per hs-group "
-                        "(consumes existing deterministic findings)")
+                        "or 'llm-framing' to generate per-hs-group lead scaffolds "
+                        "(anomaly summary + 2-3 picked hypotheses + corroboration steps; "
+                        "consumes existing deterministic findings)")
     p.add_argument("--llm-model", metavar="NAME", default=None,
                    help=f"Ollama model name for --analyse llm-framing. Default: "
                         f"{llm_framing.DEFAULT_OLLAMA_MODEL}")

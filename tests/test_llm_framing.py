@@ -1,19 +1,21 @@
-"""Tests for the LLM framing layer.
+"""Tests for the LLM lead-scaffold layer.
 
-Phase 3 of dev_notes/roadmap-2026-05-09.md. The discipline being defended
-across these tests:
+Phase 6.4 of dev_notes/roadmap-2026-05-09.md restructured the original
+v1 narrative drafter into a v2 lead scaffolder. The discipline being
+defended:
 
-1. The LLM never computes — facts are pre-extracted and verified.
-2. Every number in the output must round-trip to a fact within tolerance,
-   or the narrative is rejected (skipped_unverified).
-3. Narratives use the same append-plus-supersede chain as deterministic
+1. The LLM never computes — facts are pre-extracted; numbers are verified.
+2. Every number cited (in anomaly_summary OR any rationale) must round-trip
+   to a fact within tolerance, or the lead is rejected.
+3. Every hypothesis id picked must exist in the curated catalog, or the
+   lead is rejected.
+4. Corroboration steps are sourced deterministically from the catalog —
+   the LLM doesn't invent them.
+5. Leads use the same append-plus-supersede chain as deterministic
    findings, idempotent on re-run with unchanged sources.
-4. The briefing pack surfaces narratives ABOVE the deterministic mover
-   sections, with a section that's suppressed when no narratives exist
-   (so journalists who haven't run framing still get a clean brief).
 
-Tests use a FakeBackend that returns canned output so the suite never
-calls Ollama. Live integration is exercised separately via the CLI smoke.
+Tests use a FakeBackend that returns canned JSON so the suite never calls
+Ollama. Live integration is exercised separately via the CLI smoke.
 """
 
 import json
@@ -22,6 +24,7 @@ from datetime import date
 import psycopg2
 import pytest
 
+import hypothesis_catalog
 import llm_framing
 
 
@@ -49,14 +52,22 @@ class FakeBackend:
         return self.response
 
 
+def _scaffold_json(anomaly_summary: str, hypotheses: list[dict]) -> str:
+    """Convenience: build the JSON payload the LLM is supposed to emit."""
+    return json.dumps({
+        "anomaly_summary": anomaly_summary,
+        "hypotheses": hypotheses,
+    })
+
+
 # ---------------------------------------------------------------------------
-# Pure-function tests: numeric verification
+# Pure-function tests: numeric verification (unchanged from v1)
 # ---------------------------------------------------------------------------
 
 
 def test_verify_numbers_accepts_text_with_no_numbers():
     """Abstaining from quoting numbers is fine — the LLM can write
-    qualitative narrative and pass verification."""
+    qualitative text and pass verification."""
     facts = {"imports": {"yoy_pct": 0.34}}
     ok, failures = llm_framing.verify_numbers(
         "EU demand for Chinese components remains strong, with a clear post-COVID rebound.",
@@ -111,13 +122,8 @@ def test_verify_numbers_ignores_calendar_years():
 
 
 def test_verify_numbers_pct_magnitude_fallback_for_cross_clause_ambiguity():
-    """Phase 3: 'a 69.2% increase in volume that offset a 20.7% drop in
-    unit prices' — the verifier's context-window sign inference might mis-
-    flip 69.2% because 'drop' is in window. The magnitude-only fallback
-    rescues this case, accepting +69.2% even when prose context suggests
-    negative. The fallback only fires after sign-aware match has failed,
-    so a fundamentally direction-wrong claim ('+37%' when fact is -36.8%')
-    still fails (nothing matches at any sign)."""
+    """Cross-clause ambiguity ('a 69.2% increase that offset a 20.7% drop')
+    rescued by the magnitude-only fallback."""
     facts = {
         "imports": {"yoy_pct_kg": 0.692, "unit_price_pct_change": -0.207},
     }
@@ -127,8 +133,7 @@ def test_verify_numbers_pct_magnitude_fallback_for_cross_clause_ambiguity():
 
 
 def test_verify_numbers_currency_not_sign_flipped_by_decrease_context():
-    """Currency values are stocks; 'fell to €441.6M' leaves €441.6M positive.
-    Only percentages take signs from movement verbs."""
+    """Currency stocks aren't sign-flipped by movement verbs."""
     facts = {"exports": {"current_12mo_eur": 441_600_000.0}}
     text = "Exports fell to €441.6 million."
     ok, _ = llm_framing.verify_numbers(text, facts)
@@ -136,8 +141,7 @@ def test_verify_numbers_currency_not_sign_flipped_by_decrease_context():
 
 
 def test_verify_numbers_walks_nested_facts():
-    """The fact-collection helper recurses through nested dicts/lists.
-    Numbers at any depth count as 'available facts'."""
+    """Numbers at any depth count as 'available facts'."""
     facts = {
         "imports": {"yoy_pct": 0.342},
         "trajectory_imports": {
@@ -146,7 +150,6 @@ def test_verify_numbers_walks_nested_facts():
             "max_yoy": 0.48,
         },
     }
-    # 48% is in trajectory_imports.max_yoy — should verify.
     ok, _ = llm_framing.verify_numbers(
         "Imports peaked at 48% YoY before easing to 34%.", facts,
     )
@@ -154,7 +157,186 @@ def test_verify_numbers_walks_nested_facts():
 
 
 # ---------------------------------------------------------------------------
-# Cluster building
+# Catalog tests
+# ---------------------------------------------------------------------------
+
+
+def test_catalog_ids_are_unique():
+    """Catalog entries must have distinct ids; lookup by id assumes uniqueness."""
+    ids = hypothesis_catalog.get_catalog_ids()
+    assert len(ids) == len(set(ids))
+
+
+def test_catalog_for_prompt_excludes_corroboration_steps():
+    """Corroboration steps are attached deterministically post-hoc, not picked
+    by the LLM. Excluding them from the prompt prevents the LLM from
+    rephrasing them as creative output."""
+    catalog = hypothesis_catalog.get_catalog_for_prompt()
+    for entry in catalog:
+        assert "corroboration_steps" not in entry
+        assert set(entry.keys()) == {"id", "label", "description"}
+
+
+def test_get_corroboration_steps_unions_picks_in_catalog_order():
+    """Steps from all picked hypotheses, deduplicated, in the order they
+    appear in the catalog."""
+    picked = ["base_effect", "tariff_preloading"]
+    steps = hypothesis_catalog.get_corroboration_steps(picked)
+    # Catalog order: tariff_preloading appears before base_effect, so
+    # tariff_preloading's steps come first regardless of pick order.
+    expected_first = hypothesis_catalog.CATALOG_BY_ID["tariff_preloading"]["corroboration_steps"][0]
+    assert steps[0] == expected_first
+    # All steps from both hypotheses are present
+    expected_total = (
+        len(hypothesis_catalog.CATALOG_BY_ID["tariff_preloading"]["corroboration_steps"]) +
+        len(hypothesis_catalog.CATALOG_BY_ID["base_effect"]["corroboration_steps"])
+    )
+    assert len(steps) == expected_total
+
+
+def test_get_corroboration_steps_ignores_unknown_ids():
+    """Unknown ids are skipped (validation should have rejected them earlier)."""
+    steps = hypothesis_catalog.get_corroboration_steps(["totally_made_up_id"])
+    assert steps == []
+
+
+# ---------------------------------------------------------------------------
+# Lead-scaffold parsing + validation
+# ---------------------------------------------------------------------------
+
+
+def test_parse_lead_scaffold_strips_code_fence():
+    """LLMs sometimes wrap JSON in a markdown code fence despite being told
+    not to. The parser tolerates it."""
+    raw = '```json\n{"anomaly_summary": "x", "hypotheses": []}\n```'
+    obj = llm_framing._parse_lead_scaffold_json(raw)
+    assert isinstance(obj, dict)
+    assert obj["anomaly_summary"] == "x"
+
+
+def test_parse_lead_scaffold_rejects_invalid_json():
+    raw = "not actually json {"
+    result = llm_framing._parse_lead_scaffold_json(raw)
+    assert isinstance(result, llm_framing.LeadScaffoldRejection)
+    assert result.reason == "json_parse_error"
+
+
+def test_validate_lead_scaffold_accepts_valid_payload():
+    facts = {"imports": {"yoy_pct": 0.342, "current_12mo_eur": 2.69e10}}
+    obj = {
+        "anomaly_summary": "Imports rose 34% to €27B.",
+        "hypotheses": [
+            {"id": "tariff_preloading",
+             "rationale": "The 34% YoY surge is consistent with importers pulling forward shipments."},
+            {"id": "capacity_expansion_china",
+             "rationale": "Sustained 34% growth suggests structural rather than one-off demand."},
+        ],
+    }
+    result = llm_framing._validate_lead_scaffold(obj, facts)
+    assert isinstance(result, llm_framing.LeadScaffold)
+    assert result.anomaly_summary == "Imports rose 34% to €27B."
+    assert len(result.hypotheses) == 2
+    assert result.hypotheses[0]["label"] == "Tariff pre-loading"  # attached from catalog
+    assert result.corroboration_steps  # deterministically derived
+
+
+def test_validate_lead_scaffold_rejects_unknown_hypothesis_id():
+    facts = {"imports": {"yoy_pct": 0.342}}
+    obj = {
+        "anomaly_summary": "Imports rose 34%.",
+        "hypotheses": [
+            {"id": "tariff_preloading", "rationale": "Imports rose 34%."},
+            {"id": "wholly_invented_id", "rationale": "Imports rose 34%."},
+        ],
+    }
+    result = llm_framing._validate_lead_scaffold(obj, facts)
+    assert isinstance(result, llm_framing.LeadScaffoldRejection)
+    assert result.reason == "unknown_hypothesis_id"
+
+
+def test_validate_lead_scaffold_rejects_invented_number_in_rationale():
+    """A hallucinated number in a rationale fails verification, same as in the
+    anomaly_summary. Editorial discipline must be uniform."""
+    facts = {"imports": {"yoy_pct": 0.342}}
+    obj = {
+        "anomaly_summary": "Imports rose 34%.",
+        "hypotheses": [
+            {"id": "tariff_preloading",
+             "rationale": "An 87% surge is consistent with pre-loading."},  # 87% not in facts
+        ],
+    }
+    result = llm_framing._validate_lead_scaffold(obj, facts)
+    assert isinstance(result, llm_framing.LeadScaffoldRejection)
+    assert result.reason == "rationale_failed_verification"
+
+
+def test_validate_lead_scaffold_rejects_invented_number_in_anomaly_summary():
+    facts = {"imports": {"yoy_pct": 0.342}}
+    obj = {
+        "anomaly_summary": "Imports rose 87%.",  # not in facts
+        "hypotheses": [],
+    }
+    result = llm_framing._validate_lead_scaffold(obj, facts)
+    assert isinstance(result, llm_framing.LeadScaffoldRejection)
+    assert result.reason == "anomaly_summary_failed_verification"
+
+
+def test_validate_lead_scaffold_caps_hypotheses_at_three():
+    """If the LLM ignores the 'pick 2-3' instruction and returns 5, we
+    truncate to 3 rather than reject — editorial harm is bounded."""
+    facts = {"imports": {"yoy_pct": 0.342}}
+    obj = {
+        "anomaly_summary": "Imports rose 34%.",
+        "hypotheses": [
+            {"id": "tariff_preloading", "rationale": "Imports rose 34%."},
+            {"id": "capacity_expansion_china", "rationale": "Imports rose 34%."},
+            {"id": "eu_demand_pull", "rationale": "Imports rose 34%."},
+            {"id": "energy_transition", "rationale": "Imports rose 34%."},
+            {"id": "currency_effect", "rationale": "Imports rose 34%."},
+        ],
+    }
+    result = llm_framing._validate_lead_scaffold(obj, facts)
+    assert isinstance(result, llm_framing.LeadScaffold)
+    assert len(result.hypotheses) == 3
+    assert [h["id"] for h in result.hypotheses] == [
+        "tariff_preloading", "capacity_expansion_china", "eu_demand_pull",
+    ]
+
+
+def test_validate_lead_scaffold_accepts_empty_hypotheses_list():
+    """Featureless groups can legitimately have nothing to scaffold beyond a
+    summary. Empty hypotheses list is allowed."""
+    facts = {"imports": {"yoy_pct": 0.001}}  # essentially flat
+    obj = {
+        "anomaly_summary": "Imports broadly flat year-on-year.",
+        "hypotheses": [],
+    }
+    result = llm_framing._validate_lead_scaffold(obj, facts)
+    assert isinstance(result, llm_framing.LeadScaffold)
+    assert result.hypotheses == []
+    assert result.corroboration_steps == []
+
+
+def test_render_lead_scaffold_as_body_includes_all_three_parts():
+    scaffold = llm_framing.LeadScaffold(
+        anomaly_summary="Imports rose 34%.",
+        hypotheses=[
+            {"id": "tariff_preloading", "label": "Tariff pre-loading",
+             "rationale": "Surge consistent with pull-forward."},
+        ],
+        corroboration_steps=["Check DG TRADE register."],
+    )
+    body = llm_framing.render_lead_scaffold_as_body(scaffold)
+    assert "**Anomaly:**" in body
+    assert "Imports rose 34%." in body
+    assert "**Possible causes:**" in body
+    assert "Tariff pre-loading" in body
+    assert "**Corroboration steps:**" in body
+    assert "Check DG TRADE register." in body
+
+
+# ---------------------------------------------------------------------------
+# Cluster building (unchanged from v1)
 # ---------------------------------------------------------------------------
 
 
@@ -173,8 +355,7 @@ def _seed_yoy(conn, *, group_id: int, subkind: str, period: date,
               yoy_pct: float, current_eur: float = 1e9, prior_eur: float = 0.7e9,
               caveats: list[str] | None = None):
     """Insert a minimal hs_group_yoy* finding so the cluster builder can pick
-    it up. Bypasses findings_io because the test is exercising the cluster
-    side, not the emit side."""
+    it up."""
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO scrape_runs (source_url, status) VALUES "
@@ -207,10 +388,9 @@ def _seed_yoy(conn, *, group_id: int, subkind: str, period: date,
 
 
 def test_load_clusters_skips_groups_with_no_findings(empty_op, test_db_url):
-    """A group with no underlying findings is not narrated — there's
+    """A group with no underlying findings is not scaffolded — there's
     nothing to say."""
     clusters = llm_framing._load_hs_group_clusters()
-    # No findings exist; clusters list should be empty.
     assert clusters == []
 
 
@@ -218,8 +398,6 @@ def test_load_clusters_unions_caveats_across_underlying(empty_op, test_db_url):
     """Cluster.caveat_codes should be the union across both flows + both
     trajectory + yoy."""
     with psycopg2.connect(test_db_url) as conn:
-        # Group 1 (EV batteries): seed yoy import with cn8_revision; yoy
-        # export with low_base.
         _seed_yoy(conn, group_id=1, subkind="hs_group_yoy",
                   period=date(2026, 2, 1), yoy_pct=0.342,
                   caveats=["cif_fob", "cn8_revision"])
@@ -242,18 +420,23 @@ def test_load_clusters_unions_caveats_across_underlying(empty_op, test_db_url):
 # ---------------------------------------------------------------------------
 
 
-def test_end_to_end_persists_verified_narrative(empty_op, test_db_url):
-    """A FakeBackend returning a numerically-verifiable narrative produces
-    a kind='llm_topline' finding with the right shape."""
+def test_end_to_end_persists_verified_lead_scaffold(empty_op, test_db_url):
+    """A FakeBackend returning a numerically-verifiable scaffold produces
+    a kind='llm_topline' finding with the v2 lead_scaffold detail shape."""
     with psycopg2.connect(test_db_url) as conn:
         _seed_yoy(conn, group_id=1, subkind="hs_group_yoy",
                   period=date(2026, 2, 1), yoy_pct=0.342,
                   current_eur=2.69e10, prior_eur=2.0e10)
 
-    backend = FakeBackend(
-        response="EU imports of Chinese EV batteries rose 34% in the year to "
-                 "February 2026, totalling €27B."
-    )
+    backend = FakeBackend(response=_scaffold_json(
+        "Imports of Chinese EV batteries rose 34% to €27B in the year to February 2026.",
+        [
+            {"id": "energy_transition",
+             "rationale": "EU battery demand has surged with the auto-sector EV ramp."},
+            {"id": "capacity_expansion_china",
+             "rationale": "The 34% increase is consistent with Chinese cell-capacity expansion."},
+        ],
+    ))
     counts = llm_framing.detect_llm_framings(
         group_names=["EV batteries (Li-ion)"], backend=backend,
     )
@@ -268,25 +451,32 @@ def test_end_to_end_persists_verified_narrative(empty_op, test_db_url):
         kind, subkind, body, detail = cur.fetchone()
     assert kind == "llm_topline"
     assert subkind == "narrative_hs_group"
-    assert "34%" in body
+    assert "**Anomaly:**" in body
+    assert "Tariff pre-loading" not in body  # we picked energy_transition + capacity_expansion
+    assert "Energy-transition demand surge" in body or "Chinese capacity expansion" in body
+    assert "**Corroboration steps:**" in body
+    assert detail["method"] == llm_framing.LEAD_METHOD
+    scaffold = detail["lead_scaffold"]
+    assert len(scaffold["hypotheses"]) == 2
+    assert {h["id"] for h in scaffold["hypotheses"]} == {
+        "energy_transition", "capacity_expansion_china",
+    }
+    assert scaffold["corroboration_steps"]
     assert "llm_drafted" in detail["caveat_codes"]
-    assert detail["model"] == "fake-model"
-    assert detail["underlying_finding_ids"]
 
 
 def test_end_to_end_rejects_invented_number(empty_op, test_db_url):
-    """If the LLM hallucinates a figure, the narrative is REJECTED — not
-    persisted, tallied under skipped_unverified. Editorial cost: silence
-    on that group. Editorial benefit: never confidently wrong."""
+    """If the LLM hallucinates a figure in the anomaly summary, the lead is
+    rejected and tallied under skipped_unverified."""
     with psycopg2.connect(test_db_url) as conn:
         _seed_yoy(conn, group_id=1, subkind="hs_group_yoy",
                   period=date(2026, 2, 1), yoy_pct=0.342,
                   current_eur=2.69e10, prior_eur=2.0e10)
 
-    # The LLM claims +60% which is NOT in the facts (yoy_pct=0.342).
-    backend = FakeBackend(
-        response="EU imports of Chinese EV batteries rose 60% in the year."
-    )
+    backend = FakeBackend(response=_scaffold_json(
+        "Imports rose 60% in the year.",  # 60% not in facts
+        [{"id": "tariff_preloading", "rationale": "Surge fits pre-loading."}],
+    ))
     counts = llm_framing.detect_llm_framings(
         group_names=["EV batteries (Li-ion)"], backend=backend,
     )
@@ -297,16 +487,37 @@ def test_end_to_end_rejects_invented_number(empty_op, test_db_url):
         assert cur.fetchone()[0] == 0
 
 
-def test_end_to_end_idempotent_on_rerun(empty_op, test_db_url):
-    """Re-running with an unchanged underlying finding set is a no-op at
-    the row level (last_confirmed_at bumps, no new rows). Same as for
-    deterministic findings — narratives use the same supersede chain."""
+def test_end_to_end_rejects_unknown_hypothesis_id(empty_op, test_db_url):
+    """A hypothesis id outside the catalog gets the lead rejected."""
     with psycopg2.connect(test_db_url) as conn:
         _seed_yoy(conn, group_id=1, subkind="hs_group_yoy",
                   period=date(2026, 2, 1), yoy_pct=0.342,
                   current_eur=2.69e10, prior_eur=2.0e10)
 
-    backend = FakeBackend(response="EU imports rose 34% in 2026.")
+    backend = FakeBackend(response=_scaffold_json(
+        "Imports rose 34%.",
+        [{"id": "made_up_hypothesis_not_in_catalog",
+          "rationale": "Imports rose 34%."}],
+    ))
+    counts = llm_framing.detect_llm_framings(
+        group_names=["EV batteries (Li-ion)"], backend=backend,
+    )
+    assert counts["skipped_unverified"] == 1
+    assert counts["inserted_new"] == 0
+
+
+def test_end_to_end_idempotent_on_rerun(empty_op, test_db_url):
+    """Re-running with an unchanged underlying finding set is a no-op at
+    the row level (last_confirmed_at bumps, no new rows)."""
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_yoy(conn, group_id=1, subkind="hs_group_yoy",
+                  period=date(2026, 2, 1), yoy_pct=0.342,
+                  current_eur=2.69e10, prior_eur=2.0e10)
+
+    backend = FakeBackend(response=_scaffold_json(
+        "Imports rose 34%.",
+        [{"id": "tariff_preloading", "rationale": "Imports rose 34%."}],
+    ))
     first = llm_framing.detect_llm_framings(
         group_names=["EV batteries (Li-ion)"], backend=backend,
     )
@@ -321,24 +532,30 @@ def test_end_to_end_idempotent_on_rerun(empty_op, test_db_url):
         assert cur.fetchone()[0] == 1
 
 
-def test_end_to_end_supersedes_when_narrative_text_changes(empty_op, test_db_url):
-    """If the LLM produces a new narrative on re-run (different prose, same
-    underlying data), the new row is inserted and the old is superseded."""
+def test_end_to_end_supersedes_when_picked_hypotheses_change(empty_op, test_db_url):
+    """If the LLM picks different hypotheses on re-run (different scaffold,
+    same underlying data), the new row supersedes the old."""
     with psycopg2.connect(test_db_url) as conn:
         _seed_yoy(conn, group_id=1, subkind="hs_group_yoy",
                   period=date(2026, 2, 1), yoy_pct=0.342,
                   current_eur=2.69e10, prior_eur=2.0e10)
 
-    backend1 = FakeBackend(response="EU imports rose 34% in 2026.")
+    backend1 = FakeBackend(response=_scaffold_json(
+        "Imports rose 34%.",
+        [{"id": "tariff_preloading", "rationale": "Imports rose 34%."}],
+    ))
     llm_framing.detect_llm_framings(
         group_names=["EV batteries (Li-ion)"], backend=backend1,
     )
-    backend2 = FakeBackend(response="The 34% jump in EU imports continued through February 2026.")
+    backend2 = FakeBackend(response=_scaffold_json(
+        "Imports rose 34%.",
+        [{"id": "energy_transition", "rationale": "EV-driven demand surge."}],
+    ))
     counts = llm_framing.detect_llm_framings(
         group_names=["EV batteries (Li-ion)"], backend=backend2,
     )
     assert counts["superseded"] == 1
-    assert counts["inserted_new"] == 0  # the new row is the supersede
+    assert counts["inserted_new"] == 0
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT COUNT(*) FILTER (WHERE superseded_at IS NULL) AS active, "
