@@ -103,6 +103,17 @@ EUROSTAT_PARTNERS_DEFAULT: tuple[str, ...] = ("CN", "HK", "MO")
 # (member-list) queries already scope the reporter set explicitly.
 EU27_EXCLUDE_REPORTERS: tuple[str, ...] = ("GB",)
 
+# Eurostat bulk-file aggregate row code. Eurostat ships, per
+# (reporter, period, partner, flow, stat_procedure), a `product_nc='000TOTAL'`
+# row that sums the per-CN8-detail rows for the same slice. Naïve
+# `SUM(value_eur) FROM eurostat_raw_rows` would add detail + total = ~2x.
+# All analyser queries below apply HS-pattern LIKE filters (e.g. '8507%')
+# that don't match '000TOTAL' so they're unaffected, but ANY ad-hoc
+# direct sum (sanity checks, validation scripts) MUST exclude it. See
+# `dev_notes/forward-work-eurostat-aggregate-scale.md` for the full
+# investigation.
+EUROSTAT_AGGREGATE_PRODUCT_NC: str = "000TOTAL"
+
 # Comparison scope: which reporter side(s) to sum on the China-trade
 # comparison. Phase 6.1 introduced the UK as a separate ingestable
 # source (HMRC OTS via OData) so analysers can answer three editorially

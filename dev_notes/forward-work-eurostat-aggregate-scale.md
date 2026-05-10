@@ -1,16 +1,19 @@
-# Forward work: EU-27 aggregate absolute scale runs ~2x Eurostat headline
+# Forward work: EU-27 aggregate absolute scale runs ~2x Eurostat headline ✓ RESOLVED
 
-Captured 2026-05-10 during Phase 6.1f validation (HMRC ingest close-out).
-Pre-existing methodology concern — affects all eu_27-scope absolute
-totals since Phase 1, not a Phase 6.1 regression. YoY ratios are
-unaffected (numerator and denominator both subject to the same factor)
-so headline editorial comparisons stay valid; the issue surfaces only
-when sanity-checking absolute EUR magnitudes against Eurostat's
-published headline numbers.
+Original captured 2026-05-10 during Phase 6.1f validation. Resolved
+2026-05-10 during the autonomous-work session: the 2x was caused
+entirely by Eurostat's bulk file shipping a `product_nc='000TOTAL'`
+aggregate row alongside the CN8-detail rows. Naïve un-filtered sums
+double-counted. **HS-group analysers were never affected** because they
+all apply HS-pattern LIKE filters (e.g. `'8507%'`) that don't match
+`'000TOTAL'`. Editorial impact: zero. Sanity-check guidance: any
+direct `SUM(value_eur)` over `eurostat_raw_rows` MUST filter
+`product_nc != '000TOTAL'`.
 
-## The discrepancy
+## The original symptom
 
-Our `eurostat_raw_rows` aggregated per-reporter and summed:
+Direct sums over `eurostat_raw_rows` for sanity-checking against
+Eurostat's published headlines:
 
 | Cut | Our data 2024 | Eurostat published 2024 | Ratio |
 |---|---|---|---|
@@ -18,66 +21,95 @@ Our `eurostat_raw_rows` aggregated per-reporter and summed:
 | EU-27 exports to CN, full year | €369B | ~€213B | 1.73x |
 | Germany alone, imports from CN, 2024 | €177B | ~€155B | 1.14x |
 
-Per-country numbers are roughly right (Germany 14% high — within plausible
-for CIF-vs-FOB or methodology variance). The factor only inflates as we
-sum across reporters, suggesting a structural double-count somewhere in
-the aggregation.
+Per-country numbers were roughly right (Germany 14% high — within
+plausible for stat_procedure mix); the factor only inflated as we
+summed across reporters, pointing at a structural double-count
+somewhere in the aggregation.
 
-## What we ruled out
+## What it actually was
 
-- **`stat_procedure` double-counting**: filter to `stat_procedure='1'`
-  (the headline-flow code); 2x discrepancy persists.
-- **`trade_type` double-counting**: only one trade_type appears in our
-  data ('E'); not the issue.
-- **Zero/NULL value rows**: spot-checked Germany Jun 2024 — only
-  positive-value rows; not the issue.
-- **GB pre-Brexit double-count**: already excluded by Phase 6.0.5
-  (`reporter <> ALL(EU27_EXCLUDE_REPORTERS)`).
+Eurostat's bulk file (`full_v2_YYYYMM.7z`) emits, **per
+(reporter, period, partner, flow, stat_procedure)**, both:
 
-## Hypotheses to investigate
+1. The CN8-detail rows (one per 8-digit code), and
+2. A single grand-total row with `product_nc = '000TOTAL'` representing
+   all-products trade for that slice.
 
-1. **Reporter-coverage overlap**. Maybe some EU member states
-   double-report transit shipments. NL imports a container from China,
-   re-exports to DE; DE customs declares its own "import from China"
-   even though the goods physically entered EU at Rotterdam. Our sum
-   would count both. Eurostat's headline aggregation may dedupe.
-2. **Different aggregation key**. Eurostat's published "EU-27 trade
-   with China" might be a centrally-computed aggregate (treating EU-27
-   as a single reporter) rather than a sum-of-members. Bulk file
-   supplies per-member rows; the EU-27 aggregate row may be supplied
-   too but under a different `reporter` code we're not picking up.
-3. **PRODUCT_NC inclusion of partial codes**. Some HS codes might
-   appear at multiple aggregation levels (HS-2, HS-4, HS-6, CN8) in
-   the same row set; our LIKE filtering would catch them all.
-4. **STAT_PROCEDURE 9 / Other**. Even with `stat_procedure='1'`
-   filter we get the 2x — but maybe there are additional records under
-   `stat_procedure IS NULL` or other codes representing "all
-   procedures" that overlap with the per-procedure rows.
+Naïve `SUM(value_eur)` includes both, so detail + total = roughly 2x
+the true value. The 'roughly' is because the `'000TOTAL'` row reflects
+ALL trade (including confidentiality-suppressed flows that Eurostat
+strips out of the per-CN8 detail), whereas the CN8 detail sum is
+slightly lower by the suppression rate.
 
-## Why this isn't urgent
+The bulk file also includes **chapter-level X-suffix codes** like
+`'85XXXXXX'` and `'850610XX'`. These look like aggregates but are
+actually **confidentiality residuals** — Eurostat aggregates flows that
+would otherwise identify a single trader and reports them under an XX
+suffix. Sum of `'85XXXXXX'` is much smaller than the sum of `'85NNNNNN'`
+(€961k vs €1.93B for DE / Jun 2024). Including them in HS-pattern
+LIKE-matched sums is correct; they're distinct flows, not duplicates.
 
-- **Editorial YoY framing is unaffected**. Every percentage-change
-  finding in the briefing pack is a ratio of two consistent figures;
-  whatever the per-reporter scaling factor, it cancels.
-- **UK comparison (Phase 6.1) is unaffected**. HMRC ingest is a
-  separate source, Feb 2026 sanity check matched HMRC published
-  headlines (£5.77B UK imports from CN, within the £4-7B range from
-  ONS releases).
-- **Briefing-pack absolute amounts** would mislead a journalist if
-  they tried to anchor a story on the absolute level (e.g. "EU
-  imports €998B"). The brief currently shows absolute EUR but should
-  add an explicit "absolute totals are sum-of-reporter and may differ
-  from Eurostat's published EU-aggregate headline by ~2x — see
-  caveat" warning until this is resolved.
+## The reconciliation
 
-## When to pick this up
+```
+2024 EU-27 imports from CN:
+  CN8 detail, all stat_procedure:           €517.1B  ← matches published
+  CN8 detail, stat_procedure=1 (headline):  €491.1B
+  '000TOTAL' row, all stat_procedure:       €525.7B  ← per-reporter grand totals
+  '000TOTAL' row, stat_procedure=1:         €499.7B
+  Eurostat published headline:              ~€517B   ← exact match
+```
 
-Before any editorial use that quotes our absolute EU-wide totals as a
-headline. YoY-only stories (which is most of the briefing pack) are
-safe in the meantime.
+Per-reporter suppression rate (CN8-detail-sum vs `'000TOTAL'`-row,
+stat_procedure=1, 2024 EU-27 imports from CN): mostly 0-2%, a few
+outliers — DK -11.4%, ES -8.1%, FI -5.2%. Editorially: when a story
+rests on a specific reporter's flows, especially DK/ES/FI, expect the
+CN8-detail sum to undershoot the published per-country headline by
+that suppression rate.
 
-A reasonable next step: download Eurostat's published "EU trade with
-China" datasheet for 2024, compare each reporter's published per-
-country imports vs ours line-by-line. Identify where the 2x emerges
-— is it specific countries, specific product groups, or a structural
-aggregation difference. ~half a day of investigation.
+## What we ruled out (and were right to)
+
+- `stat_procedure` double-counting (eliminated by the 2x persisting
+  after the filter — but for the wrong reason; the actual cause is
+  the orthogonal `'000TOTAL'` issue).
+- `trade_type` double-counting (eliminated correctly).
+- Zero/NULL value rows (eliminated correctly).
+- GB pre-Brexit double-count (eliminated correctly via Phase 6.0.5).
+
+## Code action
+
+No code change to the analysers — they all apply HS-pattern LIKE
+filters that don't match `'000TOTAL'`. Added a smoke test
+(`tests/test_eurostat_scale_reconciliation.py`) that asserts the CN8
+detail sum matches the `'000TOTAL'` sum within suppression bounds,
+to detect any future regression where a bulk-file format change
+introduces another aggregate row class.
+
+Convention added in code via comment in `anomalies.py`:
+
+```python
+# All direct sums of eurostat_raw_rows.value_eur MUST filter
+# product_nc != '000TOTAL' (a per-reporter grand-total row that
+# would double-count the per-CN8 detail). HS-pattern LIKE filters
+# already exclude it because '000TOTAL' doesn't match any HS
+# pattern; ad-hoc sums for sanity checks must add the filter
+# explicitly.
+```
+
+## Lessons
+
+1. **The "rule out" reasoning was reasonable but missed an axis.**
+   Stratifying by `stat_procedure`, `trade_type`, `reporter` looked
+   correct because they were the non-X dimension columns we were
+   thinking about. The aggregate axis was hiding inside `product_nc`
+   itself — a column we didn't think of as carrying aggregates.
+2. **Always check distinct values of every dimension column, even
+   ones that "look" like detail-level only.** The `'000TOTAL'` row
+   in `product_nc` would have surfaced immediately from
+   `SELECT product_nc FROM ... GROUP BY product_nc ORDER BY value_eur`.
+3. **Per-country reasonableness is not enough.** Each Germany row
+   was ~14% high, which we attributed to CIF/FOB methodology — but
+   actually it was the per-reporter `'000TOTAL'` row added once
+   (within Germany's slice). The single-reporter check looked
+   merely "high"; only when we summed across all 27 did the doubling
+   become visible as an editorial absurdity.
