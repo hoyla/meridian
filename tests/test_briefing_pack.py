@@ -283,10 +283,33 @@ def test_permalink_base_changes_trace_token_to_link(
 
 
 def test_export_writes_to_disk(empty_findings, test_db_url, tmp_path):
-    out = briefing_pack.export(out_path=str(tmp_path / "brief.md"))
-    assert out.endswith("brief.md")
-    content = (tmp_path / "brief.md").read_text()
-    assert content.startswith("# GACC × Eurostat trade briefing")
+    """export() writes both the brief and the companion leads file."""
+    brief_path, leads_path = briefing_pack.export(
+        out_path=str(tmp_path / "brief.md"),
+        leads_path=str(tmp_path / "leads.md"),
+    )
+    assert brief_path.endswith("brief.md")
+    assert leads_path.endswith("leads.md")
+    brief_content = (tmp_path / "brief.md").read_text()
+    leads_content = (tmp_path / "leads.md").read_text()
+    assert brief_content.startswith("# GACC × Eurostat trade briefing")
+    assert leads_content.startswith("# GACC × Eurostat trade — investigation leads")
+    # On an empty DB the leads file gracefully announces the absence of
+    # findings rather than rendering a confusing blank doc.
+    assert "No active `narrative_hs_group` findings" in leads_content
+
+
+def test_export_default_leads_path_mirrors_brief_timestamp(
+    empty_findings, test_db_url, tmp_path,
+):
+    """If no leads_path is given, default to leads-<same-stem>.md
+    alongside the brief — paired by timestamp so they're easy to find
+    together."""
+    brief_path, leads_path = briefing_pack.export(
+        out_path=str(tmp_path / "briefing-20260510-120000.md"),
+    )
+    assert brief_path.endswith("briefing-20260510-120000.md")
+    assert leads_path.endswith("leads-20260510-120000.md")
 
 
 def test_diff_section_empty_on_first_brief(empty_findings, test_db_url):
@@ -367,7 +390,11 @@ def test_export_records_brief_run(empty_findings, test_db_url, tmp_path):
     briefing_pack.render()  # render alone doesn't record
     assert _count_brief_runs(test_db_url) == n_before
 
-    briefing_pack.export(out_path=str(tmp_path / "brief.md"), top_n=5)
+    briefing_pack.export(
+        out_path=str(tmp_path / "brief.md"),
+        leads_path=str(tmp_path / "leads.md"),
+        top_n=5,
+    )
     assert _count_brief_runs(test_db_url) == n_before + 1
 
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
@@ -405,10 +432,10 @@ def test_universal_caveats_section_renders_with_definitions(empty_findings, test
 def test_universal_caveats_suppressed_inline_in_finding_lines(empty_findings, test_db_url):
     """A finding with universal caveats in its detail.caveat_codes should
     not show those caveats inline in the rendered output (they're explained
-    once at the top instead). This test seeds an hs_group_yoy finding with
-    a mix of universal + non-universal caveats and asserts the universal
-    ones don't reach the per-finding caveat display in the LLM-leads section
-    (which renders detail.caveat_codes)."""
+    once at the top instead). This test seeds a narrative_hs_group finding
+    with a mix of universal + non-universal caveats and asserts the
+    universal ones don't reach the per-finding caveat display in the
+    rendered leads doc (which is now separate from the brief)."""
     with psycopg2.connect(test_db_url) as conn:
         cur = conn.cursor()
         run = _seed_run(cur)
@@ -442,18 +469,21 @@ def test_universal_caveats_suppressed_inline_in_finding_lines(empty_findings, te
         )
         conn.commit()
 
-    md = briefing_pack.render()
-    # The Investigation leads section's per-finding caveat line shows
+    leads = briefing_pack.render_leads()
+    # The Investigation leads document's per-finding caveat line shows
     # surviving caveats only.
-    assert "Caveats from underlying findings:" in md
+    assert "Caveats from underlying findings:" in leads
     # Find that line and check it doesn't include the universal codes.
     inline_caveat_line = next(
-        line for line in md.splitlines()
+        line for line in leads.splitlines()
         if line.startswith("*Caveats from underlying findings:")
     )
     assert "low_kg_coverage" in inline_caveat_line
     assert "cif_fob" not in inline_caveat_line
     assert "currency_timing" not in inline_caveat_line
+    # Leads no longer appear in the brief itself.
+    md = briefing_pack.render()
+    assert "Caveats from underlying findings:" not in md
 
 
 def test_threshold_fragility_annotation_helper():

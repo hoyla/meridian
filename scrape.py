@@ -417,8 +417,11 @@ def main() -> None:
         return
 
     if args.briefing_pack:
-        out = briefing_pack.export(out_path=args.briefing_out, top_n=args.briefing_top_n)
-        log.info("Wrote briefing pack to %s", out)
+        brief_path, leads_path = briefing_pack.export(
+            out_path=args.briefing_out, top_n=args.briefing_top_n,
+        )
+        log.info("Wrote briefing pack to %s", brief_path)
+        log.info("Wrote investigation leads to %s", leads_path)
         return
 
     if args.fetch_fx:

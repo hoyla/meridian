@@ -1,6 +1,6 @@
 # gacc
 
-Ingest China–EU/UK trade statistics from all three sides of the customs fence — GACC (China), Eurostat Comext (EU-27), and HMRC OTS (UK, post-Brexit) — into a shared schema, cross-compare them to surface mirror-trade gaps and HS-group trends, and present the most journalistically interesting findings as: a spreadsheet for editorial scanning, a Markdown briefing pack (NotebookLM-ready) opening with LLM-drafted top-lines and unfolding into citation-traceable structured detail. ECB FX rates are pulled automatically (CNY/EUR for GACC, GBP/EUR for HMRC) so all values are comparable in EUR.
+Ingest China–EU/UK trade statistics from all three sides of the customs fence — GACC (China), Eurostat Comext (EU-27), and HMRC OTS (UK, post-Brexit) — into a shared schema, cross-compare them to surface mirror-trade gaps and HS-group trends, and present the most journalistically interesting findings as: a spreadsheet for editorial scanning, a deterministic Markdown briefing pack (NotebookLM-ready, no LLM in the loop), and a separate companion leads document where an LLM scaffolds investigation starting points (anomaly summary + picked hypotheses + corroboration steps) per HS group. The two are kept apart so any downstream LLM tool reasoning over the brief is reasoning over raw findings, not over another LLM's interpretation. ECB FX rates are pulled automatically (CNY/EUR for GACC, GBP/EUR for HMRC) so all values are comparable in EUR.
 
 For Guardian journalists. Domain-agnostic by design: HS-group definitions live in a journalist-editable `hs_groups` table, so the same machinery investigates EVs, solar PV, rare earths, pork, or whatever the next desk asks about.
 
@@ -82,8 +82,8 @@ python scrape.py --export-sheet                               # local .xlsx, 7 s
 python scrape.py --export-sheet --out-path exports/custom.xlsx
 python scrape.py --export-sheet --out-format sheets --spreadsheet-id <ID>   # Google Sheets (pending creds)
 
-# Markdown briefing pack (narrative reading; NotebookLM-ready)
-python scrape.py --briefing-pack                              # ./exports/briefing-{timestamp}.md
+# Markdown briefing pack (deterministic, NotebookLM-ready) + companion leads file
+python scrape.py --briefing-pack                              # ./exports/briefing-{ts}.md + leads-{ts}.md
 python scrape.py --briefing-pack --briefing-top-n 20          # 20 movers per flow direction
 python scrape.py --briefing-pack --briefing-out exports/today.md
 ```
@@ -108,7 +108,7 @@ The two export surfaces share the same underlying data layer: switching between 
 | `hypothesis_catalog.py` | 12 standard causal hypotheses for China-EU/UK trade movements. Each entry carries a description (in the LLM prompt) and corroboration steps (attached deterministically post-pick). |
 | `scripts/`         | One-off analysis scripts (sensitivity sweep, OOS backtest) — not part of the CLI; run directly. |
 | `sheets_export.py` | Export findings to local `.xlsx` (shipped) or Google Sheets (stub, pending service-account creds) |
-| `briefing_pack.py` | Markdown briefing-pack export — NotebookLM-ready. Opens with LLM-drafted top-lines, unfolds into structured deterministic sections, ends with a Sources appendix tracing every finding back to a third-party URL. |
+| `briefing_pack.py` | Two-file Markdown export. The brief (`briefing-<ts>.md`) is fully deterministic — NotebookLM-ready, no LLM in the loop. The companion leads doc (`leads-<ts>.md`) is the LLM lead-scaffold output (anomaly summaries + picked hypotheses + corroboration steps), kept separate so a downstream LLM tool reasoning over the brief is reasoning over raw findings, not over another LLM's interpretation. |
 | `schema.sql`       | Canonical schema (includes lookup-table seeds: hs_groups, country_aliases, caveats, transshipment_hubs, cif_fob_baselines). A fresh setup is `createdb gacc && psql gacc < schema.sql` — no migration replay needed. |
 | `migrations.archived-2026-05-09/` | Historical record of the dev migrations that built up to the current schema. Folded into `schema.sql` on the 2026-05-09 clean-state rebuild; kept for reference but no longer applied. |
 | `dev_notes/`       | In-repo planning artefacts. `roadmap.md` (outstanding work), `history.md` (chronological record of addressed items), open `forward-work-*.md` docs (deferred options), dated analysis artefacts (sensitivity sweep, OOS backtest, CIF/FOB sourcing), and the pre-registered `shock-validation-2026-05-09.md` methodology doc. |

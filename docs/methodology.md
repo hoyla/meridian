@@ -219,9 +219,11 @@ the curated catalog (each with a one-line rationale), and
 deterministic corroboration steps (looked up from the catalog).
 
 What's in `detail`: lead_scaffold (the structured payload),
-underlying_finding_ids, model used, full prompt facts. Where in
-the brief: "Investigation leads" section, sits ABOVE the
-deterministic mover sections.
+underlying_finding_ids, model used, full prompt facts. Where:
+in the **companion leads document** (`leads-<timestamp>.md`), NOT
+in the brief itself. The brief is deterministic-only so a
+downstream LLM tool (NotebookLM, etc.) is reasoning over the raw
+findings, not over another LLM's interpretation of them.
 
 ### `gacc_aggregate_yoy` / `gacc_aggregate_yoy_import`
 

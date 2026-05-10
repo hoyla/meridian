@@ -70,15 +70,15 @@ EU-27 (Eurostat) / UK (HMRC) / EU-27 + UK combined.
                 │  • append-plus-supersede chain           │
                 └──────────────────────────────────────────┘
                                   │
-                ┌─────────────┬───┴────────────┐
-                ▼             ▼                ▼
-          briefing pack    sheets export    LLM framing
-          (markdown)       (.xlsx /         (Ollama →
-                            Google Sheets)   structured
-                                              JSON, then
-                                              another find-
-                                              ing in the
-                                              same chain)
+                ┌─────────────┬─────────────┬─────────────────┐
+                ▼             ▼             ▼                 ▼
+          briefing pack    leads doc    sheets export    LLM framing
+          (markdown,       (markdown,   (.xlsx /         (Ollama →
+           deterministic    LLM-drafted  Google Sheets)   structured
+           only — no LLM    leads,                        JSON, then
+           in the loop)     companion                     another find-
+                            to brief)                     ing in the
+                                                          same chain)
 ```
 
 Three layers because each has a distinct concern:
@@ -177,11 +177,20 @@ three per-scope sections.
 
 ### Export
 
-The brief is rendered programmatically (no CLI flag yet —
-journalists invoke `briefing_pack.export()`). Output goes to
-`exports/briefing-<timestamp>.md`. Each export records a row in
-`brief_runs` so the next brief can compute its "Changes since
-previous brief" section.
+`briefing_pack.export()` writes two paired files per call:
+
+- `exports/briefing-<timestamp>.md` — the deterministic brief.
+  No LLM in the loop; safe to feed to NotebookLM or any
+  downstream LLM tool without a telephone-game effect.
+- `exports/leads-<timestamp>.md` — the LLM lead-scaffold
+  companion document. Per-HS-group anomaly summary + 2-3 picked
+  hypotheses + corroboration steps. Cross-references finding
+  IDs that the brief also surfaces.
+
+Each export records a row in `brief_runs` so the next brief can
+compute its "Changes since previous brief" section. The leads
+file isn't versioned in `brief_runs` (it doesn't need a diff yet
+— add one if a journalist asks for "what leads changed?").
 
 Sheets export ships local `.xlsx`; Google Sheets writer is stubbed
 pending service-account credentials.
@@ -253,7 +262,7 @@ What fails (and how the tool degrades) if each is unreachable:
 | Eurostat bulk file server | New-period Eurostat ingest | Existing periods unaffected; trajectories shrink at the leading edge |
 | `api.uktradeinfo.com` | HMRC OData ingest | UK scope's findings age; eu_27 + eu_27_plus_uk unaffected |
 | ECB SDMX | FX rate refresh | New CNY/GBP→EUR conversions can't run; cached rates work |
-| Ollama daemon (`localhost:11434`) | LLM lead-scaffold pass | Brief renders deterministic-only sections; no narrative leads |
+| Ollama daemon (`localhost:11434`) | LLM lead-scaffold pass | Leads file empty / stale; brief is unaffected (no LLM in the loop) |
 | OECD SDMX | (One-off) refreshing CIF/FOB baselines | Existing per-country baselines stay; new-year refresh waits |
 
 The CLI handles each failure as a normal logged error rather than

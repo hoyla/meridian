@@ -194,16 +194,16 @@ def _section_headline(cur) -> _Section:
     lines.append(f"# GACC × Eurostat trade briefing")
     lines.append(f"*Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} from the `findings` table.*")
     lines.append("")
-    lines.append("This pack is a deterministic render of the underlying findings: every section reads ")
-    lines.append("from the `findings` table without re-computing. Most findings are deterministic anomaly ")
-    lines.append("detections (mirror gaps, YoY movers, trajectory shapes). The **Investigation leads** ")
-    lines.append("section near the top is the exception: those findings carry an LLM-drafted anomaly ")
-    lines.append("summary and one-line rationales, with hypothesis ids picked from a curated catalog and ")
-    lines.append("corroboration steps attached deterministically post-pick. Every number an LLM cites is ")
-    lines.append("verified against the underlying findings before storage; failures are silently rejected ")
-    lines.append("rather than published. Each finding line ends with a citation token (e.g. `finding/123`) — ")
-    lines.append("a stable handle into the project's database. A **Sources** appendix at the end lists ")
-    lines.append("every third-party URL the brief rests on, with fetch timestamps.")
+    lines.append("This pack is a deterministic render of the underlying findings — no LLM in the loop. ")
+    lines.append("Each finding line ends with a citation token (e.g. `finding/123`) which is a stable handle ")
+    lines.append("into the project's database. A **Sources** appendix at the end lists every third-party ")
+    lines.append("URL the brief rests on, with fetch timestamps.")
+    lines.append("")
+    lines.append("**Investigation leads** sit in a separate companion document (`leads-<timestamp>.md`) ")
+    lines.append("generated alongside this brief. The leads use an LLM to scaffold a starting position ")
+    lines.append("per HS group (anomaly summary, picked hypotheses from a curated catalog, corroboration ")
+    lines.append("steps). They're kept out of this brief so a downstream LLM tool (NotebookLM, etc.) is ")
+    lines.append("reasoning over the raw findings here, not over another LLM's interpretation of them.")
     lines.append("")
     lines.append("## Scope notes")
     lines.append("")
@@ -1053,12 +1053,15 @@ def _section_diff_since_last_brief(cur) -> _Section:
     if prev_at is None:
         return _Section(markdown="")
 
-    # New active findings since previous brief.
+    # New active findings since previous brief. Excludes narrative_hs_group
+    # — LLM lead-scaffold findings live in the companion leads file, not the
+    # brief, so the brief's diff should reflect deterministic changes only.
     cur.execute(
         """
         SELECT subkind, COUNT(*) AS n
           FROM findings
          WHERE created_at > %s AND superseded_at IS NULL
+           AND subkind <> 'narrative_hs_group'
       GROUP BY subkind ORDER BY subkind
         """,
         (prev_at,),
@@ -1078,6 +1081,7 @@ def _section_diff_since_last_brief(cur) -> _Section:
           FROM findings old
           JOIN findings new ON old.superseded_by_finding_id = new.id
          WHERE old.superseded_at > %s
+           AND old.subkind <> 'narrative_hs_group'
            AND old.detail->'totals'->>'yoy_pct' IS NOT NULL
            AND new.detail->'totals'->>'yoy_pct' IS NOT NULL
         """,
@@ -1179,13 +1183,14 @@ def render(top_n: int = DEFAULT_TOP_N) -> str:
         # Phase 6.8: 'what changed since the previous brief' section sits
         # immediately after the header so a journalist scanning the brief
         # sees the deltas first. Returns empty on first-ever brief.
+        # Excludes narrative_hs_group findings — those live in the
+        # companion leads file, not the brief.
         sections.append(_section_diff_since_last_brief(cur))
 
-        # Phase 3 integration: LLM-drafted narratives sit ABOVE the
-        # deterministic mover sections — they're the editorial framing
-        # the journalist scans first, with the structured sections below
-        # acting as the audit trail.
-        sections.append(_section_llm_narratives(cur))
+        # LLM lead-scaffold findings render to a separate leads file
+        # (render_leads / export_leads). The brief itself is LLM-free
+        # so a downstream LLM tool (NotebookLM, etc.) is reasoning over
+        # the raw findings, not over another LLM's interpretation.
 
         # Phase: per-group YoY-predictability badges. Computed once and
         # passed into each per-scope mover section. Empty dict on a fresh
@@ -1223,18 +1228,106 @@ def render(top_n: int = DEFAULT_TOP_N) -> str:
     return "\n".join(s.markdown for s in sections if s.markdown).rstrip() + "\n"
 
 
-def export(out_path: str | None = None, top_n: int = DEFAULT_TOP_N) -> str:
-    """Write the briefing pack to disk. Returns the final path. Records the
-    run in `brief_runs` so the next brief can compute "what changed since"
+def render_leads() -> str:
+    """Render the LLM lead-scaffold companion document. Standalone — does
+    not depend on the brief — but cross-references finding IDs that the
+    brief also surfaces. Lives in its own document so a downstream LLM
+    tool (NotebookLM, etc.) can choose to consume the deterministic
+    brief, the leads, both, or neither, without one being baked into the
+    other."""
+    lines: list[str] = []
+    lines.append("# GACC × Eurostat trade — investigation leads")
+    lines.append(
+        f"*Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} from "
+        "active `narrative_hs_group` findings.*"
+    )
+    lines.append("")
+    lines.append(
+        "Companion document to the deterministic briefing pack. Each lead "
+        "below is an LLM-scaffolded starting position for one HS group: a "
+        "one-sentence anomaly summary, 2–3 hypotheses picked from a "
+        "curated catalog of standard causes for China-EU/UK trade "
+        "movements, and concrete corroboration steps to test them. The "
+        "LLM does NOT compute, draft prose, or invent hypotheses outside "
+        "the catalog. Every number cited is verified against the "
+        "underlying findings before storage; failures are silently "
+        "rejected rather than published."
+    )
+    lines.append("")
+    lines.append(
+        "**This document is intentionally separate from the brief** so a "
+        "downstream LLM tool (NotebookLM, Claude, etc.) reasoning over "
+        "the brief is reasoning over the raw findings, not over another "
+        "LLM's interpretation of them. Use the leads as starting "
+        "positions for investigation; verify against the brief or the "
+        "underlying database."
+    )
+    lines.append("")
+    lines.append(
+        "Each lead carries an `llm_drafted` caveat plus the union of "
+        "caveats on its underlying findings; underlying caveats "
+        "(low_base, partial_window, transshipment_hub, cn8_revision, "
+        "low_kg_coverage, etc.) propagate from the source findings. "
+        "Trace ids point to the lead finding itself; the underlying "
+        "deterministic findings are listed alongside so you can walk the "
+        "chain."
+    )
+    lines.append("")
+
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        section = _section_llm_narratives(cur)
+
+    if not section.markdown:
+        lines.append(
+            "_No active `narrative_hs_group` findings — run "
+            "`scrape.py --analyse llm-framing` to generate leads._"
+        )
+        lines.append("")
+    else:
+        # _section_llm_narratives starts with its own "## Investigation
+        # leads" header + intro paragraph; strip those (we provide the
+        # framing here) and keep the per-group blocks.
+        body = section.markdown
+        marker = "### "
+        idx = body.find(marker)
+        if idx > 0:
+            body = body[idx:]
+        lines.append(body)
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def export(
+    out_path: str | None = None,
+    top_n: int = DEFAULT_TOP_N,
+    leads_path: str | None = None,
+) -> tuple[str, str]:
+    """Write the briefing pack AND the companion leads file to disk.
+    Returns (brief_path, leads_path). Records the brief run in
+    `brief_runs` so the next brief can compute "what changed since"
     (Phase 6.8). render() is called for the markdown but doesn't record —
     record only on disk-writing exports so test/preview renders don't
-    pollute the run log."""
+    pollute the run log.
+    """
     if out_path is None:
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         out_path = f"./exports/briefing-{ts}.md"
+    if leads_path is None:
+        # Default: same timestamp as the brief, leads-<ts>.md alongside.
+        brief_dir = Path(out_path).parent
+        brief_stem = Path(out_path).stem  # e.g. briefing-20260510-173240
+        suffix = brief_stem.replace("briefing-", "leads-", 1)
+        leads_path = str(brief_dir / f"{suffix}.md")
+
     p = Path(out_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(render(top_n=top_n))
     _record_brief_run(out_path=str(p), top_n=top_n)
     log.info("Wrote briefing pack to %s", p)
-    return str(p)
+
+    lp = Path(leads_path)
+    lp.parent.mkdir(parents=True, exist_ok=True)
+    lp.write_text(render_leads())
+    log.info("Wrote investigation leads to %s", lp)
+
+    return str(p), str(lp)
