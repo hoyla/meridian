@@ -65,17 +65,32 @@ def scrape_index(url: str, release_kind: str, dry_run: bool = False) -> None:
     discovered = api_client.discover_release_urls(response.content, url)
     log.info("Discovered %d release links from %s", len(discovered), url)
     for rel in discovered:
-        scrape_release(rel["url"], release_kind=release_kind, dry_run=dry_run)
+        expected_period = None
+        if rel.get("year") and rel.get("month"):
+            expected_period = date(rel["year"], rel["month"], 1)
+        scrape_release(
+            rel["url"], release_kind=release_kind, dry_run=dry_run,
+            expected_currency=rel.get("currency"),
+            expected_period=expected_period,
+        )
 
 
-def scrape_release(url: str, release_kind: str = "preliminary", dry_run: bool = False) -> None:
+def scrape_release(
+    url: str, release_kind: str = "preliminary", dry_run: bool = False,
+    *, expected_currency: str | None = None,
+    expected_period: date | None = None,
+) -> None:
     log.info("Fetching release %s", url)
     run_id = db.start_run(url) if not dry_run else None
     try:
         response = api_client.fetch(url)
         if not dry_run:
             db.save_snapshot(run_id, response)
-        result = parse.parse_response(response)
+        result = parse.parse_response(
+            response,
+            expected_currency=expected_currency,
+            expected_period=expected_period,
+        )
         meta = result.metadata
         log.info(
             "Parsed %d observations from section %d (%s, %s)",

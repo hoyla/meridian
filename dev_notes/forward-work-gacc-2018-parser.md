@@ -1,110 +1,117 @@
-# Forward work: 2018 GACC release parser
+# Forward work: 2018 GACC release parser — IMAGE-ONLY BLOCKER
 
-Captured 2026-05-09 during the clean-state rebuild (Phase 5.4). The Eurostat
-backfill went all the way to 2017-01; the GACC backfill stops at 2019-01
-because **2018-era GACC release pages use a sufficiently different title
-format that the current parser fails on every release that year**. This is
-fixable but the work was non-trivial enough that we shipped without it.
+Status updated 2026-05-10 during Phase 6.7. The original scope of this
+doc was "fix the title-parser regex so 2018 section-4 release pages
+parse cleanly". That work is **DONE** in Phase 6.7's commit, but it
+did NOT recover the underlying data because the **2018 section-4
+release pages are image-only** (`<div class="atcl-cnt"><img
+src='\Excel\4-RMB.png'/></div>`) — they embed PNG screenshots of an
+Excel table rather than parseable HTML. 2019 onwards has proper
+`<table>` elements.
 
-## The symptom
+## What shipped in Phase 6.7
 
-When `scrape.py` walks `preliminary2018.html` and tries each section-4
-release URL, every page raises:
+The parser now handles all three 2018 title-format quirks the
+original doc identified, plus a fourth that surfaced during this
+phase's investigation:
+
+1. **Alternative wording**: "China's Total Value of Imports and
+   Exports by Major Country (Region)" alongside the modern
+   "China's Total Export & Import Values by Country/Region".
+2. **Trailing period after month abbreviation**: "Jan." accepted
+   as well as "Jan".
+3. **Missing `(in CCY)` suffix on the page title**: caller passes
+   `expected_currency` from the discovery side; parser uses it as
+   a fallback when the title doesn't supply one.
+4. **(NEW)** **Missing date entirely**: some 2018 section-4 release
+   pages reuse the bulletin-row title verbatim with no month/year
+   appended at all (Jul 2018: "China's Total Export & Import Values
+   by Country/Region (in CNY)"). A fallback regex matches the
+   no-date shape; caller passes `expected_period` from the
+   discovery side; parser uses it.
+
+Plumbing: `discover_release_urls` already captured both currency and
+year/month per `DiscoveredRelease`. `scrape_release` now passes both
+through to `parse.parse_response` → `parse_html` → `extract_metadata`
+as `expected_currency` and `expected_period`. Pages with the standard
+date-bearing title still take the title's values (the discovery-side
+fallbacks only fire when the title can't supply them).
+
+Tests cover all four format variants plus a fixture-driven check of
+the actual archived Jan 2018 page from `tests/fixtures/`.
+
+## What blocks 2018 mirror-trade ingestion
+
+Title parsing succeeds for all 24 section-4 URLs (12 CNY + 12 USD)
+on the 2018 index. But every body parse fails with:
 
 ```
-ValueError: Unrecognised release title:
-"China's Total Value of Imports and Exports by Major Country (Region), Jan. 2018"
+ValueError: Section 4 page http://...html has no table inside .atcl-cnt
 ```
 
-The `try/except` in `scrape_release` catches this and logs it as a
-`status='failed'` scrape_run; ingestion continues to the next URL. So the
-script finishes cleanly but the DB has zero 2018 GACC releases.
+Because the body is a single `<img>` tag pointing to an Excel-rendered
+PNG (filenames like `4-RMB.png`, `4-USD.png`). The data exists, but
+it's pixels, not numbers.
 
-## Why the parser misses
+I checked whether the source Excel files are reachable:
 
-The 2018 release-page title has FOUR divergences from the modern
-(2019+) format the regex in `parse._RELEASE_TITLE_RE` was tuned against:
+- `http://english.customs.gov.cn/Excel/4-RMB.png` → **200 OK** (the rendered image)
+- `http://english.customs.gov.cn/Excel/4-RMB.xlsx` → **404 Not Found**
 
-| Aspect | 2019+ format | 2018 format |
-|---|---|---|
-| Wording | `"China's Total Export & Import Values by Country/Region"` | `"China's Total Value of Imports and Exports by Major Country (Region)"` |
-| Section prefix | `(4)` (handled by 2026-05-09 fix) | absent (handled by 2026-05-09 fix) |
-| Month | `"Mar 2026"` or `"March 2026"` | `"Jan. 2018"` (trailing period) |
-| Currency | `"(in CNY)"` suffix on every page | **absent entirely** |
+So the rendered image is the only public artefact.
 
-The 2026-05-09 fix made the `(N)` prefix optional and added RMB → CNY
-normalisation, both for the 2018 monthly summary section (section 1)
-which uses `"China's Total Export & Import Values, July 2018 (in CNY)"`.
-Section-4 in 2018 uses an entirely different wording (`"Total Value of
-Imports and Exports by Major Country (Region)"` instead of `"Total
-Export & Import Values by Country/Region"`) and the month-with-period
-form (`"Jan."`), and most critically **omits the `(in CNY|USD)` suffix
-on the page title even though the parent index-page bulletin row labels
-the link as CNY or USD**.
+## Options to recover 2018 GACC mirror-trade
 
-## What it would take to fix
+In rough order of cost:
 
-Three changes layered:
+1. **OCR the PNGs**. ~24 files (12 months × 2 currencies). Tabular
+   numeric OCR with a quality engine (Textract, Tabula-OCR, or
+   open-source equivalents) is plausible but accuracy on Chinese-
+   sourced English-rendered tables is variable. Editorial risk:
+   one number wrong per page is a story-killer. Would need a
+   verification step (cross-totals against published headlines).
 
-1. **Relax the regex**: accept the alternative description wording;
-   accept the month-with-trailing-period form; make the `(in CCY)`
-   suffix optional.
+2. **Find the underlying Excel via another GACC URL pattern**. The
+   image filename `4-RMB.png` suggests a deterministic naming
+   scheme — there might be `Excel/2018/Jan/4-RMB.xlsx` somewhere on
+   the server. Worth a few exploratory curls if a 2018 mirror-trade
+   story becomes editorially load-bearing.
 
-2. **Plumb currency through**. `discover_release_urls` in `api_client.py`
-   already captures the currency from the bulletin title in the index
-   page (section row tagged `(in CNY)` vs `(in USD)`). It returns a
-   `DiscoveredRelease` with `currency` set. But that gets discarded —
-   `scrape_release` is called with just the URL, and `parse_response`
-   re-extracts everything from the page itself. To make currency
-   inference robust to titles that omit it, pass the discovered
-   currency through:
+3. **Use a different source for 2018 mirror-trade**.
+   - **Eurostat** already covers 2017+ on the EU import side
+     (Phase 5 backfill).
+   - **HMRC** already covers 2017+ on the UK side (Phase 6.1).
+   - The EU/UK side can compute YoY without GACC. What we lose is
+     the *mirror gap* — the comparison between what China says it
+     exported to the EU and what the EU says it imported from
+     China. That comparison is the editorial value of GACC.
+   - For 2018 specifically, the Section 232 (US steel/aluminium)
+     tariff story is one we'd want to mirror-check, but the gap is
+     primarily a CIF/FOB plus transshipment artefact at that scale,
+     not a smoking-gun discrepancy. So the editorial cost of
+     missing 2018 mirror-gaps is bounded.
 
-   - `scrape_release(url, release_kind, *, discovered_currency: str | None = None, ...)`
-   - `parse_response(response, *, expected_currency: str | None = None)`
-   - `extract_metadata(soup, url, *, expected_currency: str | None = None)`
+4. **Accept the 2018 mirror-trade gap**. The EU-side and UK-side
+   data fully cover 2018; only the cross-source comparison is
+   missing. For most stories this is acceptable — the 2018
+   Section 232 validation in `shock-validation-2026-05-09.md`
+   already runs on the Eurostat side without needing GACC.
 
-   Then `extract_metadata` uses `m.group("currency") or expected_currency`
-   when assigning `currency`. The discovered currency is the source of
-   truth; the title becomes a confirmation when present.
+## Recommendation
 
-3. **Add coverage**: a 2018-format fixture in `tests/fixtures/` and a
-   test that confirms a section-4 release with the divergent title
-   parses to `(section=4, period=2018-01-01, currency=CNY)`.
+Defer until a journalist needs a 2018 mirror-gap specifically.
+Option 1 (OCR) is the only path to the data and it's a ~half-day
+investment with editorial risk that needs verification. Option 2
+(find the Excel) is worth ~30 minutes of exploration if/when this
+becomes the bottleneck.
 
-## Why we didn't ship it
+The parser fixes shipped in Phase 6.7 mean we're ready to ingest
+the moment the data becomes reachable in machine-readable form.
 
-Time-box: the Phase 5 rebuild was already a multi-hour pipeline, and
-the work to plumb `discovered_currency` through three function call
-sites with a covering test is ~30-60 minutes of focused dev. The
-editorial value of the missing year is bounded:
+## Why the original doc misjudged the scope
 
-- **Mirror-trade for 2018 needs it.** Without 2018 GACC, the
-  mirror-trade analyser produces zero comparisons for 2018 even though
-  Eurostat has 2018 data. So 2018 mirror-gap findings are absent. The
-  Section 232 tariff validation (Phase 5.6) for 2018 has only the
-  Eurostat-side YoY/trajectory signal, not the mirror-gap signal.
-
-- **Hs-group analyses are unaffected.** They read from
-  `eurostat_raw_rows`, not GACC. The 2017-01 → 2026-02 Eurostat
-  backfill is complete; YoY anchors from 2018-12 onwards have full
-  24-month windows.
-
-So 2018 mirror-trade is the only editorial loss. Not zero, but not
-load-bearing for the current investigations.
-
-## How to pick this up
-
-1. Read this doc.
-2. Curl one 2018 section-4 URL to see the actual HTML structure (title +
-   pub-date + unit) — paths in the log:
-   `http://english.customs.gov.cn/Statics/851cff3d-297f-4cf3-a500-5241199cc957.html`
-   was the first one that failed in our 2026-05-09 run.
-3. Save that HTML to `tests/fixtures/release_section4_by_country_jan2018_cny.html`.
-4. Add a failing test in `tests/test_parse.py` covering the 2018 format.
-5. Implement the three changes above. Aim to keep the
-   `expected_currency` plumbing optional so 2019+ behaviour is
-   unchanged.
-6. Re-run `python scrape.py --url http://english.customs.gov.cn/statics/report/preliminary2018.html`
-   to backfill 2018 only (idempotent — won't touch existing 2019+ data).
-7. Re-run `python scrape.py --analyse mirror-trade` to extend the
-   mirror-trade findings into 2018.
+The original forward-work doc was written in Phase 5.4 based on the
+title-format failures only — the body-parse failure surfaced only
+when the title fixes were in place. A useful general lesson:
+"unrecognised release title" hides downstream parser failures
+because the script never reaches the body parser at all.

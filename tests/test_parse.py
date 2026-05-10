@@ -128,6 +128,105 @@ def test_metadata_handles_2018_historical_formats():
         assert meta.period == expected_period, f"{title!r}: period"
 
 
+def test_metadata_handles_2018_section4_alternate_wording():
+    """Phase 6.7: a deeper class of 2018 historical format. Section-4 release
+    pages from early 2018 use:
+    (a) entirely different description wording: 'Total Value of Imports and
+        Exports by Major Country (Region)' vs the modern
+        'Total Export & Import Values by Country/Region';
+    (b) month abbreviation with a trailing period ('Jan.' not 'Jan');
+    (c) NO '(in CCY)' suffix on the page title at all (the currency tag
+        lives only on the parent index page's bulletin row).
+
+    The parser must (1) match on the alternative wording, (2) accept the
+    trailing period after the month, (3) accept the absent currency suffix
+    when the caller has supplied an `expected_currency` from the
+    DiscoveredRelease metadata. Section is inferred as 4 from the
+    'by Major Country' wording.
+    """
+    from bs4 import BeautifulSoup
+    from parse import extract_metadata
+
+    title = "China's Total Value of Imports and Exports by Major Country (Region), Jan. 2018"
+    html = f"""
+    <html><body>
+      <div class="atcl-ttl">{title}</div>
+      <div class="atcl-date">03/08/2018</div>
+    </body></html>
+    """
+    meta = extract_metadata(
+        BeautifulSoup(html, "lxml"), "http://example/x.html",
+        expected_currency="CNY",
+    )
+    assert meta.section_number == 4
+    assert meta.currency == "CNY"
+    assert meta.period == date(2018, 1, 1)
+
+
+def test_metadata_handles_2018_section4_no_date_in_title():
+    """Phase 6.7 (extension): some 2018 section-4 release pages reuse the
+    bulletin-row title verbatim with no date in the page title at all
+    (Jul 2018 CNY: 'China's Total Export & Import Values by Country/Region
+    (in CNY)'). The parser falls back to the discovery-supplied
+    `expected_period` in that case."""
+    from bs4 import BeautifulSoup
+    from parse import extract_metadata
+
+    title = "China's Total Export & Import Values by Country/Region (in CNY)"
+    html = f"""
+    <html><body>
+      <div class="atcl-ttl">{title}</div>
+      <div class="atcl-date">08/08/2018</div>
+    </body></html>
+    """
+    meta = extract_metadata(
+        BeautifulSoup(html, "lxml"), "http://example/x.html",
+        expected_currency="CNY",
+        expected_period=date(2018, 7, 1),
+    )
+    assert meta.section_number == 4
+    assert meta.currency == "CNY"
+    assert meta.period == date(2018, 7, 1)
+
+
+def test_metadata_no_date_title_fails_without_expected_period():
+    """Without `expected_period` the no-date title can't be resolved — the
+    parser raises a clear error rather than silently making up a date."""
+    from bs4 import BeautifulSoup
+    from parse import extract_metadata
+
+    title = "China's Total Export & Import Values by Country/Region (in CNY)"
+    html = f'<html><body><div class="atcl-ttl">{title}</div></body></html>'
+    try:
+        extract_metadata(
+            BeautifulSoup(html, "lxml"), "http://example/x.html",
+            expected_currency="CNY",
+        )
+    except ValueError as e:
+        assert "omits date" in str(e)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_metadata_2018_section4_against_real_fixture():
+    """Round-trip the actual archived 2018 release page (saved as a fixture
+    under tests/fixtures/) — proves the parser handles the real HTML, not
+    just a hand-crafted title string."""
+    from bs4 import BeautifulSoup
+    from parse import extract_metadata
+
+    fixture = FIXTURES / "release_section4_by_country_jan2018_cny.html"
+    soup = BeautifulSoup(fixture.read_bytes(), "lxml")
+    meta = extract_metadata(
+        soup, "http://english.customs.gov.cn/Statics/851cff3d-297f-4cf3-a500-5241199cc957.html",
+        expected_currency="CNY",
+    )
+    assert meta.section_number == 4
+    assert meta.currency == "CNY"
+    assert meta.period == date(2018, 1, 1)
+    assert meta.publication_date == date(2018, 8, 3)
+
+
 def test_metadata_extraction():
     soup = BeautifulSoup(_load_section4(), "lxml")
     meta = extract_metadata(soup, SECTION4_URL)

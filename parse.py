@@ -30,22 +30,47 @@ _MONTH_ABBREVS = {
 #         "(2) China's Total Export & Import Values by Trade Mode, August 2018 (Only August, in CNY)"
 #         (parenthetical includes "Only August" prefix on some 2018 monthly releases)
 #   2018: also uses "in RMB" variant (treat as synonym for CNY)
-# Months: GACC inconsistently uses 3-letter abbreviation or full name in the title.
+#   2018 (early-year section 4): "China's Total Value of Imports and Exports by
+#         Major Country (Region), Jan. 2018"
+#         — entirely different wording, month-with-trailing-period, AND no
+#         "(in CCY)" suffix at all. The parent index page's bulletin row
+#         carries the currency; callers pass it as `expected_currency`.
+# Months: GACC inconsistently uses 3-letter abbreviation or full name in the
+# title; 2018 also uses the abbreviation followed by a period ("Jan.").
 _RELEASE_TITLE_RE = re.compile(
-    r"^(?:\((?P<section>\d+)\)\s*)?(?P<description>.+?),\s*"
+    r"^\s*(?:\((?P<section>\d+)\)\s*)?(?P<description>.+?),\s*"
     r"(?P<month>Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
     r"Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
-    r"Nov(?:ember)?|Dec(?:ember)?)\s*"
-    r"(?P<year>\d{4})\s*\((?:Only\s+\w+,\s*)?in\s*(?P<currency>CNY|USD|RMB)\)\s*$"
+    r"Nov(?:ember)?|Dec(?:ember)?)\.?\s*"
+    r"(?P<year>\d{4})\s*"
+    r"(?:\((?:Only\s+\w+\.?,\s*)?in\s*(?P<currency>CNY|USD|RMB)\)\s*)?$"
+)
+
+# Some 2018 section-4 release pages reuse the bulletin-row title verbatim
+# with no date in the page title at all (e.g.
+# "China's Total Export & Import Values by Country/Region (in CNY)" for the
+# Jul 2018 release). The discovery side captures the period; we accept it
+# as `expected_period` and use this fallback regex to confirm the title is
+# the bulletin-row shape (description + currency suffix only) rather than
+# something genuinely unrecognised.
+_RELEASE_TITLE_NODATE_RE = re.compile(
+    r"^\s*(?:\((?P<section>\d+)\)\s*)?(?P<description>.+?)\s*"
+    r"\(in\s*(?P<currency>CNY|USD|RMB)\)\s*$"
 )
 
 
 def _infer_section_from_description(description: str) -> int:
     """Used when the title lacks a leading "(N)" prefix (2018 historical format).
     Returns the section number to assign based on the description prose.
-    Section 1 is the catch-all default since it has no descriptive suffix."""
+    Section 1 is the catch-all default since it has no descriptive suffix.
+
+    Section 4 has two seen wordings:
+    - 2019+: "...by Country/Region"
+    - 2018:  "...by Major Country (Region)"
+    Both contain "country" or "region" so the existing match catches them.
+    """
     d = description.lower()
-    if "by country" in d or "by region" in d:
+    if "by country" in d or "by region" in d or "by major country" in d:
         return 4
     if "by trade mode" in d:
         return 2
@@ -90,16 +115,28 @@ class ParseResult:
     observations: list[ParsedObservation]
 
 
-def parse_response(response: FetchResult) -> ParseResult:
+def parse_response(
+    response: FetchResult, *, expected_currency: str | None = None,
+    expected_period: date | None = None,
+) -> ParseResult:
     ct = (response.content_type or "").lower()
     if "pdf" in ct or response.url.lower().endswith(".pdf"):
         return parse_pdf(response.content)
-    return parse_html(response.content, response.url)
+    return parse_html(
+        response.content, response.url,
+        expected_currency=expected_currency, expected_period=expected_period,
+    )
 
 
-def parse_html(html: bytes, url: str) -> ParseResult:
+def parse_html(
+    html: bytes, url: str, *, expected_currency: str | None = None,
+    expected_period: date | None = None,
+) -> ParseResult:
     soup = BeautifulSoup(html, "lxml")
-    meta = extract_metadata(soup, url)
+    meta = extract_metadata(
+        soup, url,
+        expected_currency=expected_currency, expected_period=expected_period,
+    )
     if meta.section_number == 4:
         return ParseResult(metadata=meta, observations=_parse_section_4_by_country(soup, meta))
     raise NotImplementedError(
@@ -111,16 +148,40 @@ def parse_pdf(pdf_bytes: bytes) -> ParseResult:
     raise NotImplementedError("Implement once we've inspected a real GACC PDF")
 
 
-def extract_metadata(soup: BeautifulSoup, url: str) -> ReleaseMetadata:
+def extract_metadata(
+    soup: BeautifulSoup, url: str, *, expected_currency: str | None = None,
+    expected_period: date | None = None,
+) -> ReleaseMetadata:
+    """Extract release metadata from the page HTML.
+
+    `expected_currency` and `expected_period` are values captured at discovery
+    time from the parent index page (the bulletin row's `(in CCY)` tag and
+    the link's month-label respectively). They are used as fallbacks for
+    early-2018 release pages whose own title omits the currency suffix
+    and/or the date entirely. Page-title values, when present, take
+    precedence — the discovery-side fallbacks are only consulted when the
+    title can't supply them.
+    """
     title_el = soup.find("div", class_="atcl-ttl")
     if title_el is None:
         raise ValueError(f"Release page {url} missing .atcl-ttl")
     title = title_el.get_text(strip=True)
     m = _RELEASE_TITLE_RE.match(title)
-    if not m:
-        raise ValueError(f"Unrecognised release title: {title!r}")
-
-    period = date(int(m.group("year")), _MONTH_ABBREVS[m.group("month")[:3]], 1)
+    period: date | None = None
+    if m:
+        period = date(int(m.group("year")), _MONTH_ABBREVS[m.group("month")[:3]], 1)
+    else:
+        # Fall back to the no-date bulletin-row format (some 2018 pages
+        # reuse the bulletin title verbatim with no date appended).
+        m = _RELEASE_TITLE_NODATE_RE.match(title)
+        if not m:
+            raise ValueError(f"Unrecognised release title: {title!r}")
+        if expected_period is None:
+            raise ValueError(
+                f"Release title {title!r} omits date and caller "
+                f"supplied no expected_period"
+            )
+        period = expected_period
 
     pub_date: date | None = None
     pub_date_el = soup.find("div", class_="atcl-date")
@@ -159,8 +220,18 @@ def extract_metadata(soup: BeautifulSoup, url: str) -> ReleaseMetadata:
     section = int(section_str) if section_str else _infer_section_from_description(description)
     # GACC uses RMB and CNY interchangeably in titles (RMB appears in some 2018
     # releases). They're the same currency — normalise to CNY so the dimensional
-    # key in releases matches across years.
+    # key in releases matches across years. Early-2018 section-4 release pages
+    # omit the currency tag entirely; in that case we fall back to the
+    # `expected_currency` captured at discovery time from the parent index
+    # page's bulletin row, raising if neither source supplies one.
     currency = m.group("currency")
+    if currency is None:
+        if expected_currency is None:
+            raise ValueError(
+                f"Release title {title!r} omits currency tag and caller "
+                f"supplied no expected_currency"
+            )
+        currency = expected_currency
     if currency == "RMB":
         currency = "CNY"
 
