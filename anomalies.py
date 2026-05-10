@@ -1885,32 +1885,46 @@ def detect_hs_group_trajectories(
             if not series:
                 counts["skipped_no_findings"] += 1
                 continue
-            # Phase 1.7: refuse to classify trajectories on a discontinuous
-            # series. A "rising_decelerating" shape fitted across a 6-month
-            # gap isn't honest — the smoothing and slope estimators assume
-            # continuous monthly observation. Better to surface the gap
-            # than label a partial series.
-            missing_periods = _detect_series_gaps([s["period"] for s in series])
-            if missing_periods:
+            # Phase 6.0.7: prior behaviour was to refuse to classify on any
+            # series with a gap. That was too strict — most groups have at
+            # least one missing month somewhere across the 8+ year backfill
+            # (a publication-lag gap, a single-month YoY skip from
+            # `skipped_zero_prior`, etc.), so trajectory was producing
+            # ~5/58 expected findings. Replace with longest-contiguous-run:
+            # find the longest unbroken stretch and classify on that. Honest
+            # because we record exactly what window the shape was fitted to,
+            # in `features.effective_first_period` and
+            # `features.effective_last_period`. The min-windows safeguard
+            # below still rejects too-short remnants.
+            full_periods = [s["period"] for s in series]
+            run_start, run_end = _longest_contiguous_run(full_periods)
+            effective_series = series[run_start:run_end + 1]
+            n_dropped = len(series) - len(effective_series)
+            if n_dropped > 0:
                 log.info(
-                    "Trajectory skipped for group %r (flow=%d): YoY series has %d "
-                    "missing periods between %s and %s. Re-run hs-group-yoy on the "
-                    "underlying data first.",
-                    group.name, flow, len(missing_periods),
+                    "Trajectory truncated for group %r (flow=%d): YoY series had %d "
+                    "missing periods between %s and %s; classifying on the longest "
+                    "contiguous run %s → %s (%d windows kept, %d dropped).",
+                    group.name, flow, len(full_periods) - len(effective_series),
                     series[0]["period"], series[-1]["period"],
+                    effective_series[0]["period"], effective_series[-1]["period"],
+                    len(effective_series), n_dropped,
                 )
-                counts["skipped_incomplete_series"] += 1
-                continue
-            yoys = [s["yoy_pct"] for s in series]
+            yoys = [s["yoy_pct"] for s in effective_series]
             shape, features = _classify_trajectory(yoys, smooth_window=smooth_window)
             if shape == "insufficient_data":
                 counts["skipped_insufficient_data"] += 1
                 continue
-            n_low_base = sum(1 for s in series if s["current_eur"] < low_base_threshold_eur)
+            n_low_base = sum(1 for s in effective_series if s["current_eur"] < low_base_threshold_eur)
             features["n_low_base_windows"] = n_low_base
             features["low_base_threshold_eur"] = low_base_threshold_eur
-            features["low_base_majority"] = (n_low_base / len(series)) >= TRAJECTORY_LOW_BASE_FRACTION
-            action = _insert_trajectory_finding(analysis_run_id, group, series, shape, features, flow=flow)
+            features["low_base_majority"] = (n_low_base / len(effective_series)) >= TRAJECTORY_LOW_BASE_FRACTION
+            features["effective_first_period"] = effective_series[0]["period"].isoformat()
+            features["effective_last_period"] = effective_series[-1]["period"].isoformat()
+            features["original_series_length"] = len(series)
+            features["effective_series_length"] = len(effective_series)
+            features["dropped_periods_due_to_gaps"] = n_dropped
+            action = _insert_trajectory_finding(analysis_run_id, group, effective_series, shape, features, flow=flow)
             _tally(counts, action)
 
         with _conn() as conn, conn.cursor() as cur:
@@ -1932,8 +1946,10 @@ def detect_hs_group_trajectories(
 def _detect_series_gaps(periods: list[date]) -> list[date]:
     """Return the list of months missing from `periods` (sorted ascending).
     A continuous monthly series should have no gaps; a returned list of one
-    or more periods means the trajectory classifier should refuse to fit.
-    Phase 1.7 of dev_notes/roadmap-2026-05-09.md."""
+    or more periods means the trajectory classifier needs to handle the gap
+    (Phase 6.0.7: truncate to longest contiguous run rather than skip the
+    group entirely; see _longest_contiguous_run). Originally Phase 1.7 of
+    dev_notes/roadmap-2026-05-09.md."""
     if len(periods) < 2:
         return []
     sorted_periods = sorted(periods)
@@ -1949,6 +1965,35 @@ def _detect_series_gaps(periods: list[date]) -> list[date]:
         if p not in present:
             missing.append(p)
     return missing
+
+
+def _longest_contiguous_run(periods: list[date]) -> tuple[int, int]:
+    """For a sorted list of monthly `periods`, return (start_idx, end_idx)
+    INCLUSIVE — the slice spanning the longest contiguous stretch of
+    consecutive months. Used by the trajectory classifier so it can fit
+    on the longest unbroken sub-series rather than refusing to fit when
+    any gap exists. For a series with no gaps, returns (0, len-1).
+    Phase 6.0.7."""
+    if not periods:
+        return (0, -1)
+    sorted_periods = sorted(periods)
+    # Walk through the series; reset the run when a gap is found; track
+    # the longest run seen so far.
+    best_start = 0
+    best_end = 0
+    cur_start = 0
+    for i in range(1, len(sorted_periods)):
+        prev = sorted_periods[i - 1]
+        expected = date(prev.year + 1, 1, 1) if prev.month == 12 else date(prev.year, prev.month + 1, 1)
+        if sorted_periods[i] != expected:
+            # Gap: previous run ended at i-1; start a new one at i.
+            if (i - 1) - cur_start > best_end - best_start:
+                best_start, best_end = cur_start, i - 1
+            cur_start = i
+    # Final run.
+    if (len(sorted_periods) - 1) - cur_start > best_end - best_start:
+        best_start, best_end = cur_start, len(sorted_periods) - 1
+    return (best_start, best_end)
 
 
 def _fetch_group_yoy_series(group_id: int, flow: int = 1) -> list[dict]:
@@ -2107,7 +2152,7 @@ def _insert_trajectory_finding(
         )
 
     detail = {
-        "method": "hs_group_trajectory_v6_inherits_eu27_yoy",
+        "method": "hs_group_trajectory_v7_longest_contiguous_run",
         "flow": flow,
         "flow_label": flow_label,
         "group": {"id": group.id, "name": group.name, "hs_patterns": group.hs_patterns},

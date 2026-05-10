@@ -411,34 +411,102 @@ def test_trajectory_u_recovery_integration(empty_op, test_db_url):
     assert "cross_zero_idx" in detail["features"]
 
 
-def test_trajectory_skips_incomplete_series(empty_op, test_db_url):
-    """Phase 1.7: when the underlying YoY series has a missing month, the
-    classifier refuses to fit a trajectory and tallies under
-    skipped_incomplete_series. Editorially, smoothing and slope estimators
-    assume continuous monthly data — fitting a shape across a gap would
-    mislead."""
-    # 12 months but with Apr 2025 missing — a 1-month gap is enough to skip.
+def test_trajectory_truncates_to_longest_contiguous_run(empty_op, test_db_url):
+    """Phase 6.0.7: when the underlying YoY series has a gap, the classifier
+    no longer skips entirely — it truncates to the longest contiguous run
+    and fits the shape on that. Editorially honest because the chosen
+    window is recorded in features.effective_first_period /
+    effective_last_period. Replaces the prior all-or-nothing behaviour
+    which was producing only ~5/58 expected trajectory findings on real
+    data."""
+    # 14 periods, gap of 1 month after period 4. Longest run = the
+    # 10-period suffix (Aug 2024 → May 2025), which exceeds
+    # TRAJECTORY_MIN_WINDOWS = 6 so the trajectory should emit.
     series = [
-        (date(2024, 12, 1), 0.10),
-        (date(2025, 1, 1), 0.12),
-        (date(2025, 2, 1), 0.14),
-        (date(2025, 3, 1), 0.16),
-        # MISSING: 2025-04
-        (date(2025, 5, 1), 0.20),
-        (date(2025, 6, 1), 0.22),
-        (date(2025, 7, 1), 0.24),
-        (date(2025, 8, 1), 0.26),
+        (date(2024, 4, 1), 0.05),
+        (date(2024, 5, 1), 0.06),
+        (date(2024, 6, 1), 0.07),
+        (date(2024, 7, 1), 0.08),
+        # MISSING: 2024-08
+        (date(2024, 9, 1), 0.10),
+        (date(2024, 10, 1), 0.12),
+        (date(2024, 11, 1), 0.14),
+        (date(2024, 12, 1), 0.16),
+        (date(2025, 1, 1), 0.18),
+        (date(2025, 2, 1), 0.20),
+        (date(2025, 3, 1), 0.22),
+        (date(2025, 4, 1), 0.24),
+        (date(2025, 5, 1), 0.26),
     ]
     with psycopg2.connect(test_db_url) as conn:
         _seed_yoy_findings(conn, group_id=4, periods_and_yoys=series)
 
     counts = anomalies.detect_hs_group_trajectories(group_names=["Wind turbine components"])
-    assert counts["skipped_incomplete_series"] == 1
-    assert counts["emitted"] == 0
+    assert counts["emitted"] == 1, f"counts={counts}"
+    assert counts["skipped_incomplete_series"] == 0  # legacy counter never increments now
 
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM findings WHERE subkind = 'hs_group_trajectory'")
-        assert cur.fetchone()[0] == 0
+        cur.execute("SELECT detail FROM findings WHERE subkind = 'hs_group_trajectory'")
+        detail = cur.fetchone()[0]
+
+    # The shape fit on the truncated series, with provenance recorded.
+    assert detail["features"]["effective_first_period"] == "2024-09-01"
+    assert detail["features"]["effective_last_period"] == "2025-05-01"
+    assert detail["features"]["original_series_length"] == 13
+    assert detail["features"]["effective_series_length"] == 9
+    assert detail["features"]["dropped_periods_due_to_gaps"] == 4
+    assert "longest_contiguous_run" in detail["method"]
+
+
+def test_longest_contiguous_run_helper():
+    """Pure-function test for the contiguous-run picker. Walks edge cases:
+    no gaps, one gap, multiple gaps, ties (first wins), trivial inputs."""
+    # No gaps → entire series.
+    assert anomalies._longest_contiguous_run([
+        date(2025, 1, 1), date(2025, 2, 1), date(2025, 3, 1),
+    ]) == (0, 2)
+    # One gap, longer suffix wins.
+    assert anomalies._longest_contiguous_run([
+        date(2025, 1, 1), date(2025, 2, 1),
+        # gap 2025-03
+        date(2025, 4, 1), date(2025, 5, 1), date(2025, 6, 1),
+    ]) == (2, 4)
+    # Two gaps, middle run is longest.
+    assert anomalies._longest_contiguous_run([
+        date(2025, 1, 1),
+        # gap
+        date(2025, 3, 1), date(2025, 4, 1), date(2025, 5, 1), date(2025, 6, 1),
+        # gap
+        date(2025, 8, 1),
+    ]) == (1, 4)
+    # Tie: first run wins (existing semantics — strict > comparison).
+    assert anomalies._longest_contiguous_run([
+        date(2025, 1, 1), date(2025, 2, 1),
+        # gap
+        date(2025, 4, 1), date(2025, 5, 1),
+    ]) == (0, 1)
+    # Trivial inputs.
+    assert anomalies._longest_contiguous_run([]) == (0, -1)
+    assert anomalies._longest_contiguous_run([date(2025, 1, 1)]) == (0, 0)
+
+
+def test_trajectory_skips_when_longest_run_too_short(empty_op, test_db_url):
+    """Defence: if even the longest contiguous run is shorter than
+    TRAJECTORY_MIN_WINDOWS = 6, the classifier still skips (now under
+    the 'skipped_insufficient_data' counter). Stops the new behaviour
+    fitting on tiny remnants."""
+    # Two short runs, each 3 periods long — neither reaches min-windows.
+    series = [
+        (date(2024, 1, 1), 0.10), (date(2024, 2, 1), 0.12), (date(2024, 3, 1), 0.14),
+        # gap
+        (date(2024, 6, 1), 0.20), (date(2024, 7, 1), 0.22), (date(2024, 8, 1), 0.24),
+    ]
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_yoy_findings(conn, group_id=4, periods_and_yoys=series)
+
+    counts = anomalies.detect_hs_group_trajectories(group_names=["Wind turbine components"])
+    assert counts["emitted"] == 0
+    assert counts["skipped_insufficient_data"] == 1
 
 
 def test_detect_series_gaps_helper():
