@@ -83,9 +83,10 @@ python scrape.py --export-sheet --out-path exports/custom.xlsx
 python scrape.py --export-sheet --out-format sheets --spreadsheet-id <ID>   # Google Sheets (pending creds)
 
 # Markdown briefing pack (deterministic, NotebookLM-ready) + companion leads file
-python scrape.py --briefing-pack                              # ./exports/briefing-{ts}.md + leads-{ts}.md
+python scrape.py --briefing-pack                              # ./exports/YYYY-MM-DD-HHMM/{brief.md, leads.md}
 python scrape.py --briefing-pack --briefing-top-n 20          # 20 movers per flow direction
-python scrape.py --briefing-pack --briefing-out exports/today.md
+python scrape.py --briefing-pack --export-dir exports/today   # explicit output folder
+python scrape.py --briefing-pack --export-scope "EV batteries (Li-ion)"  # adds slug to folder + scope line in docs
 ```
 
 The two export surfaces share the same underlying data layer: switching between them — or adding a new one — is a thin render shim, not a re-ingest.

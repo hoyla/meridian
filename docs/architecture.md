@@ -177,20 +177,37 @@ three per-scope sections.
 
 ### Export
 
-`briefing_pack.export()` writes two paired files per call:
+`briefing_pack.export()` writes a paired brief + leads doc per call,
+into a per-export folder for easy pairing:
 
-- `exports/briefing-<timestamp>.md` — the deterministic brief.
-  No LLM in the loop; safe to feed to NotebookLM or any
-  downstream LLM tool without a telephone-game effect.
-- `exports/leads-<timestamp>.md` — the LLM lead-scaffold
-  companion document. Per-HS-group anomaly summary + 2-3 picked
-  hypotheses + corroboration steps. Cross-references finding
-  IDs that the brief also surfaces.
+```
+exports/
+  2026-05-10-1747/
+    brief.md   ← deterministic; NotebookLM-ready, no LLM in the loop
+    leads.md   ← LLM lead scaffold (anomaly summary + picked hypotheses
+                  + corroboration steps); cross-references finding IDs
+                  the brief also surfaces
+  2026-05-10-1830-ev-batteries-li-ion/   ← future scoped export
+    brief.md
+    leads.md
+```
+
+Folder name pattern: `YYYY-MM-DD-HHMM[-slug]/`. The optional slug comes
+from `scope_label` (slugified to kebab-case) when set; full-brief
+exports have no suffix. Each doc surfaces the scope in its header so
+a doc shared standalone still announces what slice of the data it
+covers.
 
 Each export records a row in `brief_runs` so the next brief can
-compute its "Changes since previous brief" section. The leads
-file isn't versioned in `brief_runs` (it doesn't need a diff yet
-— add one if a journalist asks for "what leads changed?").
+compute its "Changes since previous brief" section. The leads file
+isn't versioned in `brief_runs` (it doesn't need a diff yet — add
+one if a journalist asks for "what leads changed?").
+
+Note: `scope_label` is currently metadata only — the brief and leads
+still render the full finding set. Scoped *filtering* (only emit
+findings for one HS group, only one comparison scope) is forward
+work; the naming convention is in place so scoped exports can land
+cleanly when needed.
 
 Sheets export ships local `.xlsx`; Google Sheets writer is stubbed
 pending service-account credentials.

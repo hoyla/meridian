@@ -302,11 +302,17 @@ def main() -> None:
     p.add_argument("--spreadsheet-id", metavar="ID",
                    help="Google Sheets spreadsheet ID (for --out-format sheets)")
     p.add_argument("--briefing-pack", action="store_true",
-                   help="Export findings to a Markdown briefing pack (NotebookLM-ready). "
-                        "Default output: ./exports/briefing-{timestamp}.md")
-    p.add_argument("--briefing-out", metavar="PATH",
-                   help="Output file path for the briefing pack (default: "
-                        "./exports/briefing-{timestamp}.md)")
+                   help="Export findings as a paired briefing pack + leads "
+                        "doc (NotebookLM-ready). Default output: "
+                        "./exports/YYYY-MM-DD-HHMM[-slug]/{brief.md, leads.md}")
+    p.add_argument("--export-dir", metavar="PATH",
+                   help="Output folder for the briefing pack + leads "
+                        "(default: ./exports/YYYY-MM-DD-HHMM[-slug]/)")
+    p.add_argument("--export-scope", metavar="LABEL",
+                   help="Optional human-readable scope label (e.g. "
+                        "'EV batteries (Li-ion)' or 'UK only'). Slugified "
+                        "into the folder suffix and surfaced in the "
+                        "headers of both the brief and the leads doc.")
     p.add_argument("--briefing-top-n", type=int, default=briefing_pack.DEFAULT_TOP_N, metavar="N",
                    help=f"Top N hs_group_yoy movers per flow direction "
                         f"(default: {briefing_pack.DEFAULT_TOP_N})")
@@ -418,7 +424,9 @@ def main() -> None:
 
     if args.briefing_pack:
         brief_path, leads_path = briefing_pack.export(
-            out_path=args.briefing_out, top_n=args.briefing_top_n,
+            out_dir=args.export_dir,
+            scope_label=args.export_scope,
+            top_n=args.briefing_top_n,
         )
         log.info("Wrote briefing pack to %s", brief_path)
         log.info("Wrote investigation leads to %s", leads_path)

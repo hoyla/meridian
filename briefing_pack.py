@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -174,7 +175,9 @@ def _release_ids_for_observations(cur, obs_ids: list[int]) -> set[int]:
 # =============================================================================
 
 
-def _section_headline(cur) -> _Section:
+def _section_headline(
+    cur, companion_filename: str | None = None, scope_label: str | None = None,
+) -> _Section:
     """Top-of-pack scene-setting: schema version, period coverage, finding counts."""
     cur.execute(
         "SELECT source, MIN(period) AS lo, MAX(period) AS hi, COUNT(*) AS n "
@@ -193,13 +196,19 @@ def _section_headline(cur) -> _Section:
     lines: list[str] = []
     lines.append(f"# GACC × Eurostat trade briefing")
     lines.append(f"*Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} from the `findings` table.*")
+    if scope_label:
+        lines.append(f"*Scope: **{scope_label}**.*")
     lines.append("")
     lines.append("This pack is a deterministic render of the underlying findings — no LLM in the loop. ")
     lines.append("Each finding line ends with a citation token (e.g. `finding/123`) which is a stable handle ")
     lines.append("into the project's database. A **Sources** appendix at the end lists every third-party ")
     lines.append("URL the brief rests on, with fetch timestamps.")
     lines.append("")
-    lines.append("**Investigation leads** sit in a separate companion document (`leads-<timestamp>.md`) ")
+    if companion_filename:
+        leads_ref = f"`{companion_filename}` in this folder"
+    else:
+        leads_ref = "`leads.md` in the same export folder"
+    lines.append(f"**Investigation leads** sit in a separate companion document ({leads_ref}), ")
     lines.append("generated alongside this brief. The leads use an LLM to scaffold a starting position ")
     lines.append("per HS group (anomaly summary, picked hypotheses from a curated catalog, corroboration ")
     lines.append("steps). They're kept out of this brief so a downstream LLM tool (NotebookLM, etc.) is ")
@@ -1156,6 +1165,77 @@ def _section_diff_since_last_brief(cur) -> _Section:
     return _Section(markdown="\n".join(lines))
 
 
+def _section_about_findings() -> _Section:
+    """Endnote explaining what `finding/N` citation tokens mean and how
+    to look one up. Identical text in both the brief and the leads doc
+    (called from both `render()` and `render_leads()`).
+
+    Kept terse here because the deeper data-model + per-subkind detail
+    lives in `docs/architecture.md` and `docs/methodology.md`. This
+    endnote is just the bridge from a cited number to those docs.
+    """
+    lines: list[str] = []
+    lines.append("---")
+    lines.append("")
+    lines.append("## About the `finding/N` citations")
+    lines.append("")
+    lines.append(
+        "Every claim in this document ends with a citation token like "
+        "`finding/12345`. Each refers to a row in the project's `findings` "
+        "table — one per detected anomaly, carrying a JSONB `detail` "
+        "blob with the totals, window dates, observation IDs, caveat "
+        "codes, and method version that produced the claim."
+    )
+    lines.append("")
+    lines.append("**Subkinds you'll see cited:**")
+    lines.append("")
+    lines.append(
+        "- `mirror_gap`, `mirror_gap_zscore` — China-vs-EU/UK customs "
+        "comparison and z-score movers."
+    )
+    lines.append(
+        "- `hs_group_yoy*` — rolling 12-month YoY for an HS group, "
+        "scoped to one of `eu_27` / `uk` / `eu_27_plus_uk`. Suffixes "
+        "encode flow + scope (e.g. `_uk_export`)."
+    )
+    lines.append(
+        "- `hs_group_trajectory*` — 24-month shape classification for "
+        "the same series (12-shape vocabulary)."
+    )
+    lines.append(
+        "- `narrative_hs_group` — LLM-scaffolded leads (companion "
+        "doc only). Catalogued in `docs/methodology.md` §1."
+    )
+    lines.append("")
+    lines.append(
+        "**Stability across revisions.** A citation always points at "
+        "a *specific* row. When the analyser re-runs and concludes a "
+        "different value, it inserts a new row and stamps the old one "
+        "with `superseded_at` + `superseded_by_finding_id`. So "
+        "`finding/12345` remains a reproducible reference to the exact "
+        "claim made in this document, even after the underlying numbers "
+        "later move."
+    )
+    lines.append("")
+    lines.append(
+        "**Looking one up today.** Direct DB query: "
+        "`SELECT * FROM findings WHERE id = 12345;` against the project's "
+        "Postgres instance. A hosted finding viewer is on the roadmap "
+        "(set `GACC_PERMALINK_BASE` to render citations as Markdown "
+        "links instead of bare tokens once it exists)."
+    )
+    lines.append("")
+    lines.append(
+        "**For deeper context**, see "
+        "[`docs/methodology.md`](../docs/methodology.md) (what each "
+        "subkind measures and when to quote it) and "
+        "[`docs/architecture.md`](../docs/architecture.md) (the full "
+        "raw_rows → observations → findings data flow)."
+    )
+    lines.append("")
+    return _Section(markdown="\n".join(lines))
+
+
 def _record_brief_run(out_path: str | None, top_n: int) -> None:
     """Insert a row into brief_runs after a successful brief generation.
     Called by export() — render() doesn't write since callers may render
@@ -1167,12 +1247,37 @@ def _record_brief_run(out_path: str | None, top_n: int) -> None:
         )
 
 
-def render(top_n: int = DEFAULT_TOP_N) -> str:
-    """Render the full briefing pack as a single Markdown string."""
+def _slugify_scope(label: str) -> str:
+    """Convert a human scope label into a kebab-case folder suffix.
+    Idempotent on already-slug strings; collapses any non-alphanumeric
+    runs to a single dash; strips leading/trailing dashes."""
+    s = label.lower().strip()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-")
+
+
+def render(
+    top_n: int = DEFAULT_TOP_N,
+    companion_filename: str | None = None,
+    scope_label: str | None = None,
+) -> str:
+    """Render the full briefing pack as a single Markdown string.
+
+    `companion_filename` (when provided): the basename of the paired
+    leads document. The headline paragraph cites it directly so a reader
+    can find the LLM-scaffolded leads alongside. Set automatically by
+    `export()`; pass None for ad-hoc renders that have no paired file.
+
+    `scope_label` (when provided): a human-readable scope description
+    surfaced in the headline so a brief shared standalone still
+    announces what slice of the data it covers (None = full brief).
+    """
     sections: list[_Section] = []
     release_ids: set[int] = set()
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-        sections.append(_section_headline(cur))
+        sections.append(_section_headline(
+            cur, companion_filename=companion_filename, scope_label=scope_label,
+        ))
 
         # Phase 6.2: universal-caveat explainer right after the headline so
         # a reader knows up-front which methodological caveats apply to
@@ -1224,23 +1329,45 @@ def render(top_n: int = DEFAULT_TOP_N) -> str:
         release_ids |= sec.release_ids
 
         sections.append(_section_sources_appendix(cur, release_ids))
+        sections.append(_section_about_findings())
 
     return "\n".join(s.markdown for s in sections if s.markdown).rstrip() + "\n"
 
 
-def render_leads() -> str:
+def render_leads(
+    companion_filename: str | None = None,
+    scope_label: str | None = None,
+) -> str:
     """Render the LLM lead-scaffold companion document. Standalone — does
     not depend on the brief — but cross-references finding IDs that the
     brief also surfaces. Lives in its own document so a downstream LLM
     tool (NotebookLM, etc.) can choose to consume the deterministic
     brief, the leads, both, or neither, without one being baked into the
-    other."""
+    other.
+
+    `companion_filename` (when provided): the basename of the paired
+    brief document, cited near the top so a reader can find the
+    deterministic context. Set automatically by `export()`; pass None
+    for ad-hoc renders.
+
+    `scope_label` (when provided): a human-readable scope description
+    surfaced in the header so a leads doc shared standalone still
+    announces what slice of the data it covers.
+    """
     lines: list[str] = []
     lines.append("# GACC × Eurostat trade — investigation leads")
     lines.append(
         f"*Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} from "
         "active `narrative_hs_group` findings.*"
     )
+    if scope_label:
+        lines.append(f"*Scope: **{scope_label}**.*")
+    if companion_filename:
+        lines.append(
+            f"*Companion to: `{companion_filename}` (in this folder, "
+            "generated together; cite the brief for the deterministic "
+            "context).*"
+        )
     lines.append("")
     lines.append(
         "Companion document to the deterministic briefing pack. Each lead "
@@ -1294,40 +1421,82 @@ def render_leads() -> str:
             body = body[idx:]
         lines.append(body)
 
+    # Endnote on what `finding/N` citations mean — same text as the brief's
+    # endnote so a journalist coming to either doc gets the same orientation.
+    lines.append("")
+    lines.append(_section_about_findings().markdown)
+
     return "\n".join(lines).rstrip() + "\n"
 
 
 def export(
-    out_path: str | None = None,
+    out_dir: str | None = None,
+    scope_label: str | None = None,
     top_n: int = DEFAULT_TOP_N,
+    out_path: str | None = None,
     leads_path: str | None = None,
 ) -> tuple[str, str]:
     """Write the briefing pack AND the companion leads file to disk.
-    Returns (brief_path, leads_path). Records the brief run in
-    `brief_runs` so the next brief can compute "what changed since"
-    (Phase 6.8). render() is called for the markdown but doesn't record —
-    record only on disk-writing exports so test/preview renders don't
-    pollute the run log.
-    """
-    if out_path is None:
-        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        out_path = f"./exports/briefing-{ts}.md"
-    if leads_path is None:
-        # Default: same timestamp as the brief, leads-<ts>.md alongside.
-        brief_dir = Path(out_path).parent
-        brief_stem = Path(out_path).stem  # e.g. briefing-20260510-173240
-        suffix = brief_stem.replace("briefing-", "leads-", 1)
-        leads_path = str(brief_dir / f"{suffix}.md")
+    Returns (brief_path, leads_path).
 
-    p = Path(out_path)
+    Default behaviour: create `./exports/YYYY-MM-DD-HHMM[-slug]/` and
+    write `brief.md` + `leads.md` inside it. Pairs are self-evident from
+    the folder; consumers find the pair by convention.
+
+    `scope_label` (optional, human-readable): when set, slugified into a
+    folder suffix (e.g. "EV batteries (Li-ion)" → `-ev-batteries-li-ion`)
+    AND surfaced inside both docs' headers so a brief shared standalone
+    still announces its scope. Note: the scope_label is currently
+    metadata only; the brief/leads still render the full finding set.
+    Scoped *filtering* (only emit findings for one HS group, only one
+    comparison scope) is a separate future change — having the naming
+    convention in place now means scoped exports can land cleanly.
+
+    `out_dir` (optional): override the default folder path.
+
+    `out_path` / `leads_path` (legacy escape hatch): explicit per-file
+    paths, both required if either is given. Skips folder creation.
+    Use the folder approach by default — these are kept only for
+    callers (e.g. tests) that want explicit control.
+
+    Records the brief run in `brief_runs` so the next brief can compute
+    "what changed since" (Phase 6.8). render() is called for the
+    markdown but doesn't record — record only on disk-writing exports
+    so test/preview renders don't pollute the run log.
+    """
+    if out_path is not None or leads_path is not None:
+        # Legacy explicit-paths mode. Both must be given.
+        if out_path is None or leads_path is None:
+            raise ValueError(
+                "If using explicit out_path / leads_path, pass both."
+            )
+        p = Path(out_path)
+        lp = Path(leads_path)
+    else:
+        if out_dir is None:
+            ts = datetime.now().strftime("%Y-%m-%d-%H%M")
+            slug = f"-{_slugify_scope(scope_label)}" if scope_label else ""
+            out_dir = f"./exports/{ts}{slug}"
+        d = Path(out_dir)
+        p = d / "brief.md"
+        lp = d / "leads.md"
+
+    # Each render gets the OTHER doc's basename as its companion citation.
+    brief_basename = p.name
+    leads_basename = lp.name
+
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(render(top_n=top_n))
+    p.write_text(render(
+        top_n=top_n, companion_filename=leads_basename,
+        scope_label=scope_label,
+    ))
     _record_brief_run(out_path=str(p), top_n=top_n)
     log.info("Wrote briefing pack to %s", p)
 
-    lp = Path(leads_path)
     lp.parent.mkdir(parents=True, exist_ok=True)
-    lp.write_text(render_leads())
+    lp.write_text(render_leads(
+        companion_filename=brief_basename, scope_label=scope_label,
+    ))
     log.info("Wrote investigation leads to %s", lp)
 
     return str(p), str(lp)
