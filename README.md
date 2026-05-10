@@ -84,7 +84,7 @@ python scrape.py --export-sheet --out-path exports/custom.xlsx
 python scrape.py --export-sheet --out-format sheets --spreadsheet-id <ID>   # Google Sheets (pending creds)
 
 # Three-artefact bundle: deterministic brief + LLM leads + data spreadsheet
-python scrape.py --briefing-pack                              # ./exports/YYYY-MM-DD-HHMM/{brief.md, leads.md, data.xlsx}
+python scrape.py --briefing-pack                              # ./exports/YYYY-MM-DD-HHMM/{findings.md, leads.md, data.xlsx}
 python scrape.py --briefing-pack --briefing-top-n 20          # 20 movers per flow direction
 python scrape.py --briefing-pack --export-dir exports/today   # explicit output folder
 python scrape.py --briefing-pack --export-scope "EV batteries (Li-ion)"  # adds slug to folder + scope line in docs
@@ -110,7 +110,7 @@ The two export surfaces share the same underlying data layer: switching between 
 | `hypothesis_catalog.py` | 12 standard causal hypotheses for China-EU/UK trade movements. Each entry carries a description (in the LLM prompt) and corroboration steps (attached deterministically post-pick). |
 | `scripts/`         | One-off analysis scripts (sensitivity sweep, OOS backtest) — not part of the CLI; run directly. |
 | `sheets_export.py` | Export findings to local `.xlsx` (shipped) or Google Sheets (stub, pending service-account creds) |
-| `briefing_pack.py` | Three-artefact export bundle into `./exports/YYYY-MM-DD-HHMM[-slug]/`. `brief.md` is the deterministic NotebookLM-ready brief (no LLM in the loop). `leads.md` is the LLM lead-scaffold companion (anomaly summaries + picked hypotheses + corroboration steps), kept separate so downstream LLM tools reasoning over the brief see raw findings, not another LLM's interpretation. `data.xlsx` is the 8-tab spreadsheet for data journalists. All three share a single DB snapshot. |
+| `briefing_pack.py` | Three-artefact export bundle into `./exports/YYYY-MM-DD-HHMM[-slug]/`. `findings.md` is the deterministic NotebookLM-ready brief (no LLM in the loop). `leads.md` is the LLM lead-scaffold companion (anomaly summaries + picked hypotheses + corroboration steps), kept separate so downstream LLM tools reasoning over the brief see raw findings, not another LLM's interpretation. `data.xlsx` is the 8-tab spreadsheet for data journalists. All three share a single DB snapshot. |
 | `sheets_export.py` | 8-tab spreadsheet exporter (xlsx local; Google Sheets writer stubbed pending creds). Tabs: summary (wide, all scopes), hs_yoy_imports/exports (long with scope column), trajectories, mirror_gaps (with per-country CIF/FOB baseline + excess-pp), mirror_gap_movers, low_base_review, predictability_index. Intentionally LLM-free for the same telephone-game reason as the brief. |
 | `schema.sql`       | Canonical schema (includes lookup-table seeds: hs_groups, country_aliases, caveats, transshipment_hubs, cif_fob_baselines). A fresh setup is `createdb gacc && psql gacc < schema.sql` — no migration replay needed. |
 | `migrations.archived-2026-05-09/` | Historical record of the dev migrations that built up to the current schema. Folded into `schema.sql` on the 2026-05-09 clean-state rebuild; kept for reference but no longer applied. |

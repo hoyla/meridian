@@ -304,7 +304,7 @@ def main() -> None:
     p.add_argument("--briefing-pack", action="store_true",
                    help="Export findings as a paired briefing pack + leads "
                         "doc (NotebookLM-ready). Default output: "
-                        "./exports/YYYY-MM-DD-HHMM[-slug]/{brief.md, leads.md}")
+                        "./exports/YYYY-MM-DD-HHMM[-slug]/{findings.md, leads.md}")
     p.add_argument("--export-dir", metavar="PATH",
                    help="Output folder for the briefing pack + leads "
                         "(default: ./exports/YYYY-MM-DD-HHMM[-slug]/)")

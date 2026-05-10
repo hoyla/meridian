@@ -288,7 +288,7 @@ def test_briefing_pack_export_also_writes_data_xlsx(
     test_db_url, tmp_path, monkeypatch,
 ):
     """When briefing_pack.export() runs, it should drop a data.xlsx into
-    the same per-export folder as brief.md + leads.md so all three
+    the same per-export folder as findings.md + leads.md so all three
     artefacts share a single DB snapshot."""
     monkeypatch.setenv("DATABASE_URL", test_db_url)
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
@@ -301,7 +301,7 @@ def test_briefing_pack_export_also_writes_data_xlsx(
         out_dir=str(tmp_path / "20260510-1200"),
     )
     folder = Path(brief_path).parent
-    assert (folder / "brief.md").exists()
+    assert (folder / "findings.md").exists()
     assert (folder / "leads.md").exists()
     assert (folder / "data.xlsx").exists()
 

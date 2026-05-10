@@ -194,25 +194,26 @@ def _section_headline(
     counts = cur.fetchall()
 
     lines: list[str] = []
-    lines.append(f"# GACC × Eurostat trade briefing")
+    lines.append(f"# GACC × Eurostat trade findings")
     lines.append(f"*Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} from the `findings` table.*")
     if scope_label:
         lines.append(f"*Scope: **{scope_label}**.*")
     lines.append("")
-    lines.append("This pack is a deterministic render of the underlying findings — no LLM in the loop. ")
+    lines.append("This document is a deterministic render of the underlying findings — no LLM in the loop. ")
     lines.append("Each finding line ends with a citation token (e.g. `finding/123`) which is a stable handle ")
     lines.append("into the project's database. A **Sources** appendix at the end lists every third-party ")
-    lines.append("URL the brief rests on, with fetch timestamps.")
+    lines.append("URL the findings rest on, with fetch timestamps.")
     lines.append("")
     if companion_filename:
         leads_ref = f"`{companion_filename}` in this folder"
     else:
         leads_ref = "`leads.md` in the same export folder"
     lines.append(f"**Investigation leads** sit in a separate companion document ({leads_ref}), ")
-    lines.append("generated alongside this brief. The leads use an LLM to scaffold a starting position ")
-    lines.append("per HS group (anomaly summary, picked hypotheses from a curated catalog, corroboration ")
-    lines.append("steps). They're kept out of this brief so a downstream LLM tool (NotebookLM, etc.) is ")
-    lines.append("reasoning over the raw findings here, not over another LLM's interpretation of them.")
+    lines.append("generated alongside this findings document. The leads use an LLM to scaffold a starting ")
+    lines.append("position per HS group (anomaly summary, picked hypotheses from a curated catalog, ")
+    lines.append("corroboration steps). They're kept out of the findings here so a downstream LLM tool ")
+    lines.append("(NotebookLM, etc.) is reasoning over the raw findings, not over another LLM's ")
+    lines.append("interpretation of them.")
     lines.append("")
     lines.append("## Scope notes")
     lines.append("")
@@ -1126,13 +1127,14 @@ def _section_diff_since_last_brief(cur) -> _Section:
         return _Section(markdown="")
 
     lines: list[str] = []
-    lines.append(f"## Changes since the previous brief")
+    lines.append(f"## Changes since the previous export")
     lines.append("")
     lines.append(
-        f"*Previous brief generated {prev_at:%Y-%m-%d %H:%M %Z}. The lists below "
-        f"reflect findings that have been added or whose value has materially "
-        f"shifted since then. New findings without a comparable predecessor — "
-        f"e.g. a new HS group, a new period anchor — appear under \"New findings\".*"
+        f"*Previous findings export generated {prev_at:%Y-%m-%d %H:%M %Z}. The "
+        f"lists below reflect findings that have been added or whose value has "
+        f"materially shifted since then. New findings without a comparable "
+        f"predecessor — e.g. a new HS group, a new period anchor — appear "
+        f"under \"New findings\".*"
     )
     lines.append("")
 
@@ -1142,7 +1144,7 @@ def _section_diff_since_last_brief(cur) -> _Section:
         lines.append(f"### Material YoY shifts ({len(significant)})")
         lines.append("")
         lines.append(
-            "*A shift > 5 percentage points between the previous brief's value "
+            "*A shift > 5 percentage points between the previous export's value "
             "and the current value. Direction flips (growth ↔ decline) are "
             "highlighted with 🔄.*"
         )
@@ -1375,15 +1377,15 @@ def render_leads(
     if companion_filename:
         lines.append(
             f"*Companion to: `{companion_filename}` (in this folder, "
-            "generated together; cite the brief for the deterministic "
-            "context).*"
+            "generated together; cite the findings document for the "
+            "deterministic context).*"
         )
     lines.append("")
     lines.append(
-        "Companion document to the deterministic briefing pack. Each lead "
-        "below is an LLM-scaffolded starting position for one HS group: a "
-        "one-sentence anomaly summary, 2–3 hypotheses picked from a "
-        "curated catalog of standard causes for China-EU/UK trade "
+        "Companion document to the deterministic findings document. Each "
+        "lead below is an LLM-scaffolded starting position for one HS "
+        "group: a one-sentence anomaly summary, 2–3 hypotheses picked "
+        "from a curated catalog of standard causes for China-EU/UK trade "
         "movements, and concrete corroboration steps to test them. The "
         "LLM does NOT compute, draft prose, or invent hypotheses outside "
         "the catalog. Every number cited is verified against the "
@@ -1392,12 +1394,12 @@ def render_leads(
     )
     lines.append("")
     lines.append(
-        "**This document is intentionally separate from the brief** so a "
-        "downstream LLM tool (NotebookLM, Claude, etc.) reasoning over "
-        "the brief is reasoning over the raw findings, not over another "
-        "LLM's interpretation of them. Use the leads as starting "
-        "positions for investigation; verify against the brief or the "
-        "underlying database."
+        "**This document is intentionally separate from the findings** "
+        "so a downstream LLM tool (NotebookLM, Claude, etc.) reasoning "
+        "over the findings is reasoning over the raw data, not over "
+        "another LLM's interpretation of it. Use the leads as starting "
+        "positions for investigation; verify against the findings "
+        "document or the underlying database."
     )
     lines.append("")
     lines.append(
@@ -1447,12 +1449,12 @@ def export(
     leads_path: str | None = None,
     spreadsheet: bool | None = None,
 ) -> tuple[str, str]:
-    """Write the briefing pack AND the companion leads file to disk.
-    Returns (brief_path, leads_path).
+    """Write the findings document AND the companion leads file to disk.
+    Returns (findings_path, leads_path).
 
     Default behaviour: create `./exports/YYYY-MM-DD-HHMM[-slug]/` and
-    write `brief.md` + `leads.md` inside it. Pairs are self-evident from
-    the folder; consumers find the pair by convention.
+    write `findings.md` + `leads.md` inside it. Pairs are self-evident
+    from the folder; consumers find the pair by convention.
 
     `scope_label` (optional, human-readable): when set, slugified into a
     folder suffix (e.g. "EV batteries (Li-ion)" → `-ev-batteries-li-ion`)
@@ -1471,14 +1473,14 @@ def export(
     callers (e.g. tests) that want explicit control.
 
     `spreadsheet`: also write `data.xlsx` into the export folder so
-    all three artefacts (brief / leads / spreadsheet) share a single
-    DB snapshot. A data journalist opens data.xlsx; an editorial
-    journalist opens brief.md; everyone is working from the same point
-    in time. Default depends on mode: folder mode → True (spreadsheet
-    is part of the user-facing bundle); legacy explicit-paths mode →
-    False (callers using explicit paths are typically tests / preview
-    / programmatic use that don't need the bundle). Pass explicitly
-    to override either default.
+    all three artefacts (findings / leads / spreadsheet) share a
+    single DB snapshot. A data journalist opens data.xlsx; an editorial
+    journalist opens findings.md; everyone is working from the same
+    point in time. Default depends on mode: folder mode → True
+    (spreadsheet is part of the user-facing bundle); legacy explicit-
+    paths mode → False (callers using explicit paths are typically
+    tests / preview / programmatic use that don't need the bundle).
+    Pass explicitly to override either default.
 
     Records the brief run in `brief_runs` so the next brief can compute
     "what changed since" (Phase 6.8). render() is called for the
@@ -1501,7 +1503,7 @@ def export(
             slug = f"-{_slugify_scope(scope_label)}" if scope_label else ""
             out_dir = f"./exports/{ts}{slug}"
         d = Path(out_dir)
-        p = d / "brief.md"
+        p = d / "findings.md"
         lp = d / "leads.md"
         if spreadsheet is None:
             spreadsheet = True  # bundle is the default user-facing mode

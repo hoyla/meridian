@@ -10,7 +10,7 @@ The shape is identical between the two destinations: switching from XLSX to
 Sheets is a one-line change of writer, no rebuild of the data layer.
 
 By default, `briefing_pack.export()` invokes this module to drop a
-`data.xlsx` into the per-export folder alongside `brief.md` + `leads.md` —
+`data.xlsx` into the per-export folder alongside `findings.md` + `leads.md` —
 all three artefacts share a single DB snapshot. Standalone CLI usage
 (`scrape.py --export-sheet`) is still supported for spreadsheet-only runs.
 
