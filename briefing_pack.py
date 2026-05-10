@@ -743,12 +743,145 @@ def _section_sources_appendix(cur, release_ids: set[int]) -> _Section:
 # =============================================================================
 
 
+def _section_diff_since_last_brief(cur) -> _Section:
+    """Phase 6.8: render 'what changed since the previous brief'.
+    Reads brief_runs to find the most recent prior generated_at;
+    queries findings created or superseded since then. Returns empty
+    markdown if there's no previous brief (first-ever run on a fresh
+    DB) or if nothing materially changed.
+
+    Editorial threshold: a YoY shift of > 5pp is "material"; a
+    direction flip is highlighted separately. New findings are listed
+    by subkind count rather than per-row to keep the section terse —
+    the journalist can drill into the per-finding sections below
+    once they know what's new."""
+    cur.execute("SELECT MAX(generated_at) FROM brief_runs")
+    row = cur.fetchone()
+    prev_at = row[0] if row else None
+    if prev_at is None:
+        return _Section(markdown="")
+
+    # New active findings since previous brief.
+    cur.execute(
+        """
+        SELECT subkind, COUNT(*) AS n
+          FROM findings
+         WHERE created_at > %s AND superseded_at IS NULL
+      GROUP BY subkind ORDER BY subkind
+        """,
+        (prev_at,),
+    )
+    new_by_subkind = list(cur.fetchall())
+
+    # Findings superseded since previous brief — pair the old (superseded)
+    # row with its new replacement so we can compute the YoY shift.
+    cur.execute(
+        """
+        SELECT
+            old.id AS old_id, new.id AS new_id, old.subkind,
+            old.detail->'group'->>'name' AS group_name,
+            old.detail->'windows'->>'current_end' AS window_end,
+            (old.detail->'totals'->>'yoy_pct')::numeric AS old_yoy,
+            (new.detail->'totals'->>'yoy_pct')::numeric AS new_yoy
+          FROM findings old
+          JOIN findings new ON old.superseded_by_finding_id = new.id
+         WHERE old.superseded_at > %s
+           AND old.detail->'totals'->>'yoy_pct' IS NOT NULL
+           AND new.detail->'totals'->>'yoy_pct' IS NOT NULL
+        """,
+        (prev_at,),
+    )
+    significant = []
+    for r in cur.fetchall():
+        old_yoy = float(r["old_yoy"])
+        new_yoy = float(r["new_yoy"])
+        if abs(new_yoy - old_yoy) > 0.05:  # > 5pp shift = material
+            significant.append({
+                "subkind": r["subkind"],
+                "group_name": r["group_name"],
+                "window_end": r["window_end"],
+                "old_yoy": old_yoy,
+                "new_yoy": new_yoy,
+                "direction_flipped": (old_yoy * new_yoy < 0),
+                "shift_pp": (new_yoy - old_yoy) * 100,
+                "new_finding_id": r["new_id"],
+            })
+
+    if not new_by_subkind and not significant:
+        return _Section(markdown="")
+
+    lines: list[str] = []
+    lines.append(f"## Changes since the previous brief")
+    lines.append("")
+    lines.append(
+        f"*Previous brief generated {prev_at:%Y-%m-%d %H:%M %Z}. The lists below "
+        f"reflect findings that have been added or whose value has materially "
+        f"shifted since then. New findings without a comparable predecessor — "
+        f"e.g. a new HS group, a new period anchor — appear under \"New findings\".*"
+    )
+    lines.append("")
+
+    if significant:
+        # Direction flips first, then size of shift.
+        significant.sort(key=lambda s: (-int(s["direction_flipped"]), -abs(s["shift_pp"])))
+        lines.append(f"### Material YoY shifts ({len(significant)})")
+        lines.append("")
+        lines.append(
+            "*A shift > 5 percentage points between the previous brief's value "
+            "and the current value. Direction flips (growth ↔ decline) are "
+            "highlighted with 🔄.*"
+        )
+        lines.append("")
+        for s in significant[:30]:  # cap to top 30 — supersede chain is queryable
+            flip = " 🔄 **direction flip**" if s["direction_flipped"] else ""
+            lines.append(
+                f"- **{s['group_name']}** — `{s['subkind']}`, "
+                f"window ending {s['window_end']}: "
+                f"{s['old_yoy']*100:+.1f}% → {s['new_yoy']*100:+.1f}% "
+                f"({s['shift_pp']:+.1f}pp){flip}. "
+                f"Trace: `{_trace_token(s['new_finding_id'])}`"
+            )
+        if len(significant) > 30:
+            lines.append("")
+            lines.append(
+                f"*…and {len(significant) - 30} more material shifts; "
+                f"query the supersede chain for the full set.*"
+            )
+        lines.append("")
+
+    if new_by_subkind:
+        total_new = sum(n for _, n in new_by_subkind)
+        lines.append(f"### New findings ({total_new})")
+        lines.append("")
+        for subkind, n in new_by_subkind:
+            lines.append(f"- {n} new `{subkind}`")
+        lines.append("")
+
+    return _Section(markdown="\n".join(lines))
+
+
+def _record_brief_run(out_path: str | None, top_n: int) -> None:
+    """Insert a row into brief_runs after a successful brief generation.
+    Called by export() — render() doesn't write since callers may render
+    for non-archival purposes (preview, test)."""
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO brief_runs (output_path, top_n) VALUES (%s, %s)",
+            (out_path, top_n),
+        )
+
+
 def render(top_n: int = DEFAULT_TOP_N) -> str:
     """Render the full briefing pack as a single Markdown string."""
     sections: list[_Section] = []
     release_ids: set[int] = set()
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         sections.append(_section_headline(cur))
+
+        # Phase 6.8: 'what changed since the previous brief' section sits
+        # immediately after the header so a journalist scanning the brief
+        # sees the deltas first. Returns empty on first-ever brief.
+        sections.append(_section_diff_since_last_brief(cur))
 
         # Phase 3 integration: LLM-drafted narratives sit ABOVE the
         # deterministic mover sections — they're the editorial framing
@@ -785,12 +918,17 @@ def render(top_n: int = DEFAULT_TOP_N) -> str:
 
 
 def export(out_path: str | None = None, top_n: int = DEFAULT_TOP_N) -> str:
-    """Write the briefing pack to disk. Returns the final path."""
+    """Write the briefing pack to disk. Returns the final path. Records the
+    run in `brief_runs` so the next brief can compute "what changed since"
+    (Phase 6.8). render() is called for the markdown but doesn't record —
+    record only on disk-writing exports so test/preview renders don't
+    pollute the run log."""
     if out_path is None:
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         out_path = f"./exports/briefing-{ts}.md"
     p = Path(out_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(render(top_n=top_n))
+    _record_brief_run(out_path=str(p), top_n=top_n)
     log.info("Wrote briefing pack to %s", p)
     return str(p)

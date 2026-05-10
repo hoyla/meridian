@@ -289,6 +289,100 @@ def test_export_writes_to_disk(empty_findings, test_db_url, tmp_path):
     assert content.startswith("# GACC × Eurostat trade briefing")
 
 
+def test_diff_section_empty_on_first_brief(empty_findings, test_db_url):
+    """Phase 6.8: a fresh DB with no prior brief_runs row produces no
+    'Changes since the previous brief' section. The brief still renders;
+    the section just doesn't appear."""
+    md = briefing_pack.render()
+    assert "## Changes since the previous brief" not in md
+
+
+def test_diff_section_lists_material_yoy_shifts(empty_findings, test_db_url):
+    """Phase 6.8: when a previous brief exists and findings have been
+    superseded since, the diff section lists material YoY shifts (>5pp)
+    with the old vs new values, and flags direction flips with 🔄."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+
+        # Seed an old finding and supersede it BEFORE the brief_runs marker
+        # — this should NOT appear in the diff.
+        old_unrelated_id = _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)",
+                                                 yoy_pct=0.10)
+        new_unrelated_id = _seed_hs_yoy_finding(cur, run, "Solar PV cells & modules",
+                                                 yoy_pct=0.20)
+        cur.execute(
+            "UPDATE findings SET superseded_at = now() - interval '1 hour', "
+            "                    superseded_by_finding_id = %s WHERE id = %s",
+            (new_unrelated_id, old_unrelated_id),
+        )
+
+        # Mark the prior brief reference point. Explicit past timestamp:
+        # in a single transaction, postgres `now()` returns the transaction
+        # start, so the marker would otherwise have the same timestamp as
+        # the subsequent findings and the strict `created_at > prev_at`
+        # filter would miss them. In production each brief is its own
+        # transaction so this is purely a test-setup concern.
+        cur.execute(
+            "INSERT INTO brief_runs (generated_at, output_path, top_n) "
+            "VALUES (now() - interval '1 second', '/tmp/prev.md', 10)"
+        )
+
+        # Seed a new active finding AFTER the marker — should appear under
+        # "New findings".
+        _seed_hs_yoy_finding(cur, run, "Steel (broad)", yoy_pct=0.15)
+
+        # Seed an old finding superseded AFTER the marker with > 5pp shift
+        # AND a direction flip — should appear under "Material YoY shifts"
+        # with the 🔄 flag.
+        old_id = _seed_hs_yoy_finding(cur, run, "Aluminium (broad)",
+                                      yoy_pct=0.12)
+        new_id = _seed_hs_yoy_finding(cur, run, "Aluminium (broad)",
+                                      yoy_pct=-0.08)
+        # Mark the old as superseded by the new, AFTER the brief_runs marker.
+        cur.execute(
+            "UPDATE findings SET superseded_at = now(), "
+            "                    superseded_by_finding_id = %s WHERE id = %s",
+            (new_id, old_id),
+        )
+        conn.commit()
+
+    md = briefing_pack.render()
+    assert "## Changes since the previous brief" in md
+    assert "### Material YoY shifts" in md
+    assert "Aluminium (broad)" in md
+    # The Aluminium shift is 12% → -8% = 20pp swing AND a direction flip.
+    assert "🔄" in md
+    # New findings header lists the post-marker insertions.
+    assert "### New findings" in md
+    # The pre-marker supersede should NOT show up.
+    assert "Solar PV cells & modules" not in md.split("## ")[1]  # rough containment
+
+
+def test_export_records_brief_run(empty_findings, test_db_url, tmp_path):
+    """Phase 6.8: export() inserts a brief_runs row so the next brief's
+    diff section has a reference point. render() does NOT record (used by
+    test/preview without polluting history)."""
+    n_before = _count_brief_runs(test_db_url)
+    briefing_pack.render()  # render alone doesn't record
+    assert _count_brief_runs(test_db_url) == n_before
+
+    briefing_pack.export(out_path=str(tmp_path / "brief.md"), top_n=5)
+    assert _count_brief_runs(test_db_url) == n_before + 1
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT output_path, top_n FROM brief_runs ORDER BY id DESC LIMIT 1")
+        path, top_n = cur.fetchone()
+    assert path == str(tmp_path / "brief.md")
+    assert top_n == 5
+
+
+def _count_brief_runs(test_db_url) -> int:
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM brief_runs")
+        return cur.fetchone()[0]
+
+
 def test_construct_chinese_source_url():
     """The Chinese-language equivalent is constructed by host substitution
     (`english.customs.gov.cn` → `www.customs.gov.cn`); the Statics/<UUID>.html
