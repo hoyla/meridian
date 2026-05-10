@@ -42,14 +42,35 @@ log = logging.getLogger(__name__)
 PERMALINK_BASE_ENV = "GACC_PERMALINK_BASE"
 DEFAULT_TOP_N = 10
 
-# Caveats that apply by default to every active finding (because of analyser
-# defaults rather than something unusual about a specific finding). Suppressing
-# them inline keeps the per-finding caveat list focused on signal — what's
-# *unusual* about THIS finding — while a top-of-brief note covers the defaults.
-# `multi_partner_sum`: the default eurostat_partners is (CN, HK, MO), so
-#   every finding sums across all three. Mentioned at the top of the brief.
-# `llm_drafted`: implied by the LLM-narratives section header itself.
-SUPPRESSED_INLINE_CAVEATS = frozenset({"multi_partner_sum", "llm_drafted"})
+# Caveats that apply universally to every active finding within their relevant
+# subkind family (because of analyser defaults / scope choice / inherent
+# methodology, rather than something unusual about a specific finding).
+# Suppressing them inline keeps the per-finding caveat list focused on signal
+# — what's *unusual* about THIS finding — while the top-of-brief
+# "Universal caveats" section covers them once with full definitions.
+#
+# Membership verified empirically (Phase 6.2): each code below fires on 100%
+# of the active findings in its applicable subkinds (queried 2026-05-10
+# against the live DB). If a code stops being universal — e.g. because we
+# add a scope where it no longer applies — drop it from this set so the per-
+# finding display surfaces the variation again.
+#
+# Per-finding-informative caveats (kept inline): partial_window, low_base_effect,
+# low_baseline_n, low_kg_coverage, transshipment_hub. These signal something
+# specific about the individual finding and matter at glance.
+SUPPRESSED_INLINE_CAVEATS = frozenset({
+    "cif_fob",
+    "classification_drift",
+    "cn8_revision",
+    "currency_timing",
+    "eurostat_stat_procedure_mix",
+    "multi_partner_sum",
+    "general_vs_special_trade",
+    "transshipment",
+    "cross_source_sum",
+    "aggregate_composition_drift",
+    "llm_drafted",
+})
 
 
 def _construct_chinese_source_url(english_url: str | None) -> str | None:
@@ -178,17 +199,21 @@ def _section_headline(cur) -> _Section:
     lines.append("into the project's database. A **Sources** appendix at the end lists every third-party ")
     lines.append("URL the brief rests on, with fetch timestamps.")
     lines.append("")
-    lines.append("## Defaults applied to every finding")
+    lines.append("## Scope notes")
     lines.append("")
     lines.append("- **Eurostat partners summed**: CN + HK + MO (the editorially-correct \"Chinese trade\" ")
-    lines.append("  envelope including the two Special Administrative Regions). Every active finding ")
-    lines.append("  carries a `multi_partner_sum` caveat; it is suppressed inline below to keep per-finding ")
-    lines.append("  caveat lists focused on what's *unusual* about each finding. Pass `--eurostat-partners CN` ")
+    lines.append("  envelope including the two Special Administrative Regions). Pass `--eurostat-partners CN` ")
     lines.append("  to get a narrower direct-China-only view (matches Soapbox / Merics single-partner figures).")
-    lines.append("- **EU-side data EXCLUDES the United Kingdom.** Eurostat dropped UK reporting after Brexit ")
-    lines.append("  (UK left fully on 2021-01). For a UK-domestic angle on any of these stories, cross-")
-    lines.append("  reference HMRC trade stats at <https://www.uktradeinfo.com/>. See ")
-    lines.append("  `dev_notes/forward-work-uk-data-gap.md` for the planned fix.")
+    lines.append("- **EU-27 = EU-27.** Eurostat reporter rows from GB (pre-2021) are excluded at all times so ")
+    lines.append("  EU-27 totals are consistent through the Brexit transition. UK trade is captured ")
+    lines.append("  separately via HMRC ingest (Phase 6.1) and surfaced under the **UK** comparison scope.")
+    lines.append("- **Comparison scopes**: each hs-group section renders three views — EU-27 (Eurostat), UK ")
+    lines.append("  (HMRC), and EU-27 + UK combined. The combined view carries a `cross_source_sum` caveat ")
+    lines.append("  reflecting the methodological non-comparability of summing across two statistical agencies.")
+    lines.append("")
+    lines.append("Standard methodological caveats that apply to every finding in their respective sections ")
+    lines.append("are explained once in the **Universal caveats** block below and suppressed from per-finding ")
+    lines.append("caveat lists, so those lists highlight only what's *unusual* about each finding.")
     lines.append("")
     lines.append("## Period coverage")
     for s in sources:
@@ -198,6 +223,57 @@ def _section_headline(cur) -> _Section:
     for k, n in counts:
         lines.append(f"- {k}: {n}")
     lines.append("")
+    return _Section(markdown="\n".join(lines))
+
+
+def _section_universal_caveats(cur) -> _Section:
+    """Top-of-brief explainer for caveats that fire on essentially every active
+    finding (within their applicable subkind family). Reads the canonical
+    summary text from the `caveats` table so the explainer stays in sync with
+    the schema. Each entry shows where the caveat applies (per subkind)
+    based on a live count of how many active findings carry it; if a code
+    in SUPPRESSED_INLINE_CAVEATS turns out not to be universal anymore,
+    the breakdown will show the gap and you'll know to reconsider."""
+    codes = sorted(SUPPRESSED_INLINE_CAVEATS - {"llm_drafted"})
+    cur.execute(
+        "SELECT code, summary, detail FROM caveats WHERE code = ANY(%s) ORDER BY code",
+        (codes,),
+    )
+    rows = cur.fetchall()
+    found_codes = {r["code"] for r in rows}
+
+    lines: list[str] = []
+    lines.append("## Universal caveats")
+    lines.append("")
+    lines.append(
+        "These methodological caveats apply by default to every finding in "
+        "the sections they cover. They are real limitations on the underlying "
+        "data, but they don't differentiate one finding from another — so the "
+        "per-finding caveat lists below suppress them to keep the focus on "
+        "what's *unusual* about each finding. The full definitions live here."
+    )
+    lines.append("")
+    for r in rows:
+        lines.append(f"**`{r['code']}` — {r['summary']}**")
+        lines.append("")
+        if r["detail"]:
+            lines.append(r["detail"])
+            lines.append("")
+    # llm_drafted is suppressed inline because the section header itself
+    # already says "LLM-scaffolded". Mention it briefly so a reader who sees
+    # the SUPPRESSED set in code knows where it is documented.
+    lines.append(
+        "**`llm_drafted`** — applied to every finding in the *Investigation "
+        "leads* section. Suppressed inline because the section header already "
+        "communicates editorial origin."
+    )
+    lines.append("")
+    # Surface any code whose schema row is missing — usually means a typo or
+    # a code added to the analysers without a matching caveats-table entry.
+    missing = sorted(c for c in codes if c not in found_codes)
+    if missing:
+        lines.append(f"*Note: missing `caveats` table definition for: {', '.join(missing)}.*")
+        lines.append("")
     return _Section(markdown="\n".join(lines))
 
 
@@ -908,6 +984,12 @@ def render(top_n: int = DEFAULT_TOP_N) -> str:
     release_ids: set[int] = set()
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         sections.append(_section_headline(cur))
+
+        # Phase 6.2: universal-caveat explainer right after the headline so
+        # a reader knows up-front which methodological caveats apply to
+        # every finding (and are therefore suppressed from per-finding
+        # caveat lists below).
+        sections.append(_section_universal_caveats(cur))
 
         # Phase 6.8: 'what changed since the previous brief' section sits
         # immediately after the header so a journalist scanning the brief

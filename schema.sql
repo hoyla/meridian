@@ -512,7 +512,16 @@ INSERT INTO caveats (code, summary, detail, applies_to) VALUES
   ('cn8_revision',
    'YoY window spans a Eurostat CN8 nomenclature revision boundary',
    'Eurostat revises the Combined Nomenclature (CN8) annually, effective each January. When a 24-month YoY window spans a calendar-year boundary (which is true for most of them) the LIKE patterns this analyser uses may capture a subtly different commodity scope pre- and post-revision. Most revisions are minor — a code split, a new sub-heading, a description change — but for stories that rest on a precise YoY figure for a specific HS-CN8 code, verify the code definition didn''t change at the year boundary. A full concordance table is roadmap Phase 4 work; this caveat is the cheap-honesty interim flag.',
-   ARRAY['hs_group_yoy', 'hs_group_yoy_export']);
+   ARRAY['hs_group_yoy', 'hs_group_yoy_export']),
+  ('aggregate_composition_drift',
+   'Z-score baseline composition may drift across the rolling window',
+   'mirror_gap_zscore findings compare the latest period''s gap against a rolling baseline of prior periods for the same partner. The baseline''s underlying HS-mix and partner-bloc composition may itself drift over the baseline window — a gap that looks anomalous against the baseline mean might partly reflect a slow compositional shift in what was being traded, not an inflection in the latest period alone. The |z| value remains mathematically correct; the editorial weight should account for whether the trade-mix in the baseline window is a like-for-like comparator for the latest point.',
+   ARRAY['mirror_gap_zscore']),
+  ('cross_source_sum',
+   'Combined-scope total sums Eurostat (EUR-native) and HMRC (GBP→EUR via period FX)',
+   'Findings emitted under comparison_scope=eu_27_plus_uk add the EU-27 total (sourced from Eurostat, native EUR) to the UK total (sourced from HMRC, GBP converted to EUR using the ECB monthly average for each period). The two sources differ on threshold rules (HMRC suppresses small flows), revision cycles (Eurostat revises later than HMRC), and methodology (e.g. CIF vs FOB treatment, partner-attribution rules for transit goods). The combined number is a useful editorial approximation of "Chinese trade with the British Isles" but is not a like-for-like aggregate from a single statistical agency. Single-scope EU-27 (Eurostat) or UK (HMRC) findings remain the methodologically clean comparators.',
+   ARRAY['hs_group_yoy_combined', 'hs_group_yoy_combined_export',
+         'hs_group_trajectory_combined', 'hs_group_trajectory_combined_export']);
 
 -- Phase 2.1: known transshipment hubs. Each row should carry an evidence_url
 -- documenting the editorial basis. These are starting points — journalists

@@ -383,6 +383,79 @@ def _count_brief_runs(test_db_url) -> int:
         return cur.fetchone()[0]
 
 
+def test_universal_caveats_section_renders_with_definitions(empty_findings, test_db_url):
+    """Phase 6.2: the Universal caveats section reads canonical summary +
+    detail text from the `caveats` schema table for each code in
+    SUPPRESSED_INLINE_CAVEATS, so the explainer stays in sync with the
+    schema. The section appears even on an empty DB (the caveats table is
+    seeded by schema.sql)."""
+    md = briefing_pack.render()
+    assert "## Universal caveats" in md
+    # Spot-check the presence of code headings — these are codes seeded in
+    # schema.sql, so they exist on any fresh schema-applied DB.
+    assert "`cif_fob`" in md
+    assert "`cn8_revision`" in md
+    assert "`multi_partner_sum`" in md
+    # The detail text from the caveats table propagates through:
+    assert "CIF" in md and "FOB" in md
+    # llm_drafted gets a special-case mention even though it has no schema row.
+    assert "`llm_drafted`" in md
+
+
+def test_universal_caveats_suppressed_inline_in_finding_lines(empty_findings, test_db_url):
+    """A finding with universal caveats in its detail.caveat_codes should
+    not show those caveats inline in the rendered output (they're explained
+    once at the top instead). This test seeds an hs_group_yoy finding with
+    a mix of universal + non-universal caveats and asserts the universal
+    ones don't reach the per-finding caveat display in the LLM-leads section
+    (which renders detail.caveat_codes)."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        # Seed an llm_topline finding so the LLM-leads section actually
+        # renders inline caveats.
+        cur.execute("SELECT id FROM hs_groups WHERE name = %s", ("EV batteries (Li-ion)",))
+        hg_id = cur.fetchone()[0]
+        detail = {
+            "method": "llm_topline_v2_lead_scaffold",
+            "model": "fake",
+            "group": {"id": hg_id, "name": "EV batteries (Li-ion)",
+                      "hs_patterns": ["8507%"]},
+            "lead_scaffold": {
+                "anomaly_summary": "Test anomaly.",
+                "hypotheses": [],
+                "corroboration_steps": [],
+            },
+            "underlying_finding_ids": [],
+            # Mix: cif_fob + currency_timing are universal; low_kg_coverage
+            # is per-finding-informative (kept inline).
+            "caveat_codes": ["cif_fob", "currency_timing", "low_kg_coverage"],
+        }
+        cur.execute(
+            """
+            INSERT INTO findings (scrape_run_id, kind, subkind, hs_group_ids,
+                                  natural_key_hash, value_signature, title, body, detail)
+            VALUES (%s, 'llm_topline', 'narrative_hs_group', %s,
+                    'nk-test', 'sig-test', 'Lead: test', 'b', %s::jsonb)
+            """,
+            (run, [hg_id], json.dumps(detail)),
+        )
+        conn.commit()
+
+    md = briefing_pack.render()
+    # The Investigation leads section's per-finding caveat line shows
+    # surviving caveats only.
+    assert "Caveats from underlying findings:" in md
+    # Find that line and check it doesn't include the universal codes.
+    inline_caveat_line = next(
+        line for line in md.splitlines()
+        if line.startswith("*Caveats from underlying findings:")
+    )
+    assert "low_kg_coverage" in inline_caveat_line
+    assert "cif_fob" not in inline_caveat_line
+    assert "currency_timing" not in inline_caveat_line
+
+
 def test_construct_chinese_source_url():
     """The Chinese-language equivalent is constructed by host substitution
     (`english.customs.gov.cn` → `www.customs.gov.cn`); the Statics/<UUID>.html
