@@ -140,6 +140,19 @@ def test_verify_numbers_currency_not_sign_flipped_by_decrease_context():
     assert ok is True
 
 
+def test_verify_numbers_ignores_geo_labels_like_eu27():
+    """When rule G requires the LLM to write 'EU-27 imports from China',
+    the bare '27' in 'EU-27' should NOT reach number extraction. Same
+    for G7 / G20 / EU-15. Editorial scaffolding, not a fact to verify."""
+    facts = {"imports": {"yoy_pct": 0.342}}
+    ok, _ = llm_framing.verify_numbers(
+        "EU-27 imports from China rose 34% while G7 demand stayed flat. "
+        "EU-15 saw similar gains.",
+        facts,
+    )
+    assert ok is True
+
+
 def test_verify_numbers_ignores_hs_code_references():
     """Groups whose name embeds an HS code (e.g. 'Antibiotics (HS 2941)')
     prompt the LLM to write 'HS 2941' or 'HS 292429' into rationales.
@@ -329,6 +342,33 @@ def test_validate_lead_scaffold_accepts_empty_hypotheses_list():
     assert isinstance(result, llm_framing.LeadScaffold)
     assert result.hypotheses == []
     assert result.corroboration_steps == []
+
+
+def test_user_prompt_carries_explicit_perspective_preamble():
+    """The user prompt must explicitly tell the LLM that 'imports' and
+    'exports' are from the EU-27 perspective and require it to name the
+    parties in any direction reference. A journalist reading the
+    anomaly summary should never see bare 'imports rose' — it should
+    always be 'EU-27 imports from China rose'."""
+    cluster = llm_framing.HsGroupCluster(
+        group_id=1, group_name="Test group", group_description="x",
+        hs_patterns=["8507%"],
+    )
+    facts = {"imports": {"yoy_pct": 0.30}}
+    prompt = llm_framing._build_user_prompt(cluster, facts)
+    # Perspective preamble names both directions explicitly
+    assert "EU-27 imports from China" in prompt
+    assert "EU-27 exports to China" in prompt
+    # Forbids bare direction references
+    assert "imports rose" in prompt or "imports fell" in prompt  # rule example
+
+
+def test_system_prompt_requires_explicit_party_naming():
+    """Rule G in SYSTEM_PROMPT enforces explicit party naming. Catches
+    accidental rule-removal in future edits."""
+    assert "ALWAYS NAME THE PARTIES EXPLICITLY" in llm_framing.SYSTEM_PROMPT
+    assert "EU-27 imports from China" in llm_framing.SYSTEM_PROMPT
+    assert "EU-27 exports to China" in llm_framing.SYSTEM_PROMPT
 
 
 def test_render_lead_scaffold_as_body_includes_all_three_parts():

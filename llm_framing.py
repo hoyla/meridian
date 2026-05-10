@@ -300,10 +300,15 @@ D. If a caveat applies (low_base, partial_window, transshipment_hub,
    motivates the pick.
 E. NEVER claim "volume-driven" or "price-driven" when decomposition_suppressed
    is true.
-F. "Imports" / "exports" are from the EU-or-UK reporter's perspective:
-   imports = goods coming INTO the reporter from China; exports = reporter's
-   goods going TO China.
-G. Output VALID JSON ONLY. No markdown, no preamble, no code fences."""
+F. "Imports" / "exports" in the FACTS block are from the EU-27 reporter's
+   perspective: `imports` = goods coming INTO the EU-27 from China;
+   `exports` = EU-27 goods going TO China.
+G. ALWAYS NAME THE PARTIES EXPLICITLY in any direction reference. Don't
+   write "imports rose" — write "EU-27 imports from China rose". Don't
+   write "exports collapsed" — write "EU-27 exports to China collapsed".
+   This applies to the anomaly_summary AND every rationale. A journalist
+   reading the lead doesn't share your context; spell it out.
+H. Output VALID JSON ONLY. No markdown, no preamble, no code fences."""
 
 
 _PCT_KEYS = {"yoy_pct", "yoy_pct_kg", "unit_price_pct_change", "last_yoy",
@@ -359,6 +364,15 @@ def _build_user_prompt(cluster: HsGroupCluster, facts: dict[str, Any]) -> str:
     return (
         f"Group: {cluster.group_name}\n"
         f"Definition: {cluster.group_description or '—'}\n\n"
+        f"PERSPECTIVE — all numbers below are EU-27 trade with China "
+        f"(Eurostat-side, partners CN+HK+MO summed). When you cite a "
+        f"figure in the anomaly_summary or any rationale, ALWAYS name "
+        f"the parties explicitly:\n"
+        f"  - `imports` → write \"EU-27 imports from China\"\n"
+        f"  - `exports` → write \"EU-27 exports to China\"\n"
+        f"  - `trajectory_imports` / `trajectory_exports` → same convention\n"
+        f"Never write bare \"imports rose\" or \"exports fell\" — a "
+        f"journalist reading the lead doesn't share your context.\n\n"
         f"FACTS (the only numbers you may cite):\n"
         f"{json.dumps(formatted, indent=2, default=str)}\n\n"
         f"HYPOTHESIS CATALOG (pick 2-3 ids that best fit the facts):\n"
@@ -401,6 +415,13 @@ _TIME_PERIOD_RE = re.compile(
 # "HS NNNN" (4-8 digits) before extraction so the verifier doesn't pick
 # up a 4-digit HS code as an unverifiable count.
 _HS_CODE_RE = re.compile(r"\bHS\s*\d{4,8}\b", re.IGNORECASE)
+# Geo-economic labels: when the prompt requires the LLM to write
+# "EU-27 imports from China" (rule G), the bare "27" in "EU-27" reaches
+# number extraction as an unverifiable count. Strip "EU-NN" / "G7" /
+# "G20" / "G-7" style labels before extraction. Required after Phase 6.4
+# evening rule-G addition; without it, every other lead would falsely
+# fail verification.
+_GEO_LABEL_RE = re.compile(r"\b(?:EU-?\d{1,3}|G-?\d{1,3})\b")
 
 # Words that signal a *decrease* — used for sign-inference around unsigned
 # numbers in LLM prose. Matches verb forms ("decreased", "fell"), noun forms
@@ -453,6 +474,7 @@ def _extract_numbers_from_text(text: str) -> list[tuple[str, float, str]]:
     text_for_extraction = _YEAR_RE.sub("YEAR", text)
     text_for_extraction = _TIME_PERIOD_RE.sub("PERIOD", text_for_extraction)
     text_for_extraction = _HS_CODE_RE.sub("HSCODE", text_for_extraction)
+    text_for_extraction = _GEO_LABEL_RE.sub("GEOLABEL", text_for_extraction)
     out: list[tuple[str, float, str]] = []
     for m in _NUMBER_RE.finditer(text_for_extraction):
         raw = m.group(0).strip()
