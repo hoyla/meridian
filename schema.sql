@@ -83,6 +83,16 @@ CREATE TABLE eurostat_raw_rows (
 );
 CREATE INDEX idx_eu_raw_period_partner ON eurostat_raw_rows (period, partner, reporter, product_nc);
 CREATE INDEX idx_eu_raw_run ON eurostat_raw_rows (scrape_run_id);
+-- Covering index for the hs-group analyser helpers in anomalies.py. The
+-- column order matches the WHERE clauses (flow first, then partner, then
+-- prefix-LIKE on product_nc via text_pattern_ops, then period for range
+-- queries); INCLUDE columns turn the per-anchor aggregations into
+-- index-only scans (no heap visits). See _hs_pattern_or_clause in
+-- anomalies.py for the matching SQL-shape requirement (multi-pattern
+-- OR rather than LIKE ANY, which the planner refuses to push down).
+CREATE INDEX idx_eu_raw_analyser ON eurostat_raw_rows
+  USING btree (flow, partner, product_nc text_pattern_ops, period)
+  INCLUDE (value_eur, quantity_kg, reporter);
 
 CREATE TABLE observations (
     id                  BIGSERIAL PRIMARY KEY,

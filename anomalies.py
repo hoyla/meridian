@@ -104,6 +104,26 @@ EUROSTAT_PARTNERS_DEFAULT: tuple[str, ...] = ("CN", "HK", "MO")
 EU27_EXCLUDE_REPORTERS: tuple[str, ...] = ("GB",)
 
 
+def _hs_pattern_or_clause(patterns: list[str]) -> tuple[str, list[str]]:
+    """Build `(product_nc LIKE %s OR product_nc LIKE %s ...)` for a pattern list.
+
+    Why not `product_nc LIKE ANY(%s)`: PostgreSQL doesn't push down
+    multi-pattern LIKE ANY through the text_pattern_ops btree index;
+    instead it falls back to a Parallel Seq Scan over the full table
+    (~800ms per call vs ~3ms with the index). Rewriting the predicate
+    as separate ORed LIKEs lets the planner build a Bitmap OR of index
+    scans, which is what the idx_eu_raw_analyser index was designed for.
+
+    Returns (sql_fragment, params_for_query) — params get spliced into
+    the call site's parameter tuple in order. An empty pattern list
+    returns FALSE so the caller's surrounding query degenerates to no
+    rows rather than a SQL error."""
+    if not patterns:
+        return ("FALSE", [])
+    fragment = "(" + " OR ".join(["product_nc LIKE %s"] * len(patterns)) + ")"
+    return (fragment, list(patterns))
+
+
 def _conn():
     return psycopg2.connect(os.environ["DATABASE_URL"])
 
@@ -1003,9 +1023,10 @@ def _hs_group_per_period_totals(
 
     Periods with no matching rows are absent — caller handles gaps.
     """
+    like_clause, like_params = _hs_pattern_or_clause(patterns)
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT period,
                    SUM(value_eur)                                            AS total_eur,
                    SUM(quantity_kg)                                          AS total_kg,
@@ -1015,12 +1036,12 @@ def _hs_group_per_period_totals(
               FROM eurostat_raw_rows
              WHERE flow = %s
                AND partner = ANY(%s)
-               AND product_nc LIKE ANY(%s)
+               AND {like_clause}
                AND reporter <> ALL(%s)   -- EU-27 excludes UK at all times
           GROUP BY period
           ORDER BY period
             """,
-            (flow, list(partners), patterns, list(EU27_EXCLUDE_REPORTERS)),
+            (flow, list(partners), *like_params, list(EU27_EXCLUDE_REPORTERS)),
         )
         return [
             (row[0], float(row[1] or 0), float(row[2] or 0),
@@ -1034,9 +1055,10 @@ def _hs_group_top_cn8s(
     partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS_DEFAULT,
 ) -> list[dict]:
     """Top contributing HS-CN8 codes within a group across [start, end]."""
+    like_clause, like_params = _hs_pattern_or_clause(patterns)
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT product_nc,
                    SUM(value_eur) AS total_eur,
                    SUM(quantity_kg) AS total_kg,
@@ -1044,13 +1066,13 @@ def _hs_group_top_cn8s(
               FROM eurostat_raw_rows
              WHERE period >= %s AND period <= %s
                AND flow = %s AND partner = ANY(%s)
-               AND product_nc LIKE ANY(%s)
+               AND {like_clause}
                AND reporter <> ALL(%s)   -- EU-27 excludes UK at all times
           GROUP BY product_nc
           ORDER BY SUM(value_eur) DESC NULLS LAST
              LIMIT %s
             """,
-            (start, end, flow, list(partners), patterns, list(EU27_EXCLUDE_REPORTERS), limit),
+            (start, end, flow, list(partners), *like_params, list(EU27_EXCLUDE_REPORTERS), limit),
         )
         return [{"hs_code": r[0], "total_eur": float(r[1] or 0),
                  "total_kg": float(r[2] or 0), "n_raw": int(r[3])}
@@ -1062,9 +1084,10 @@ def _hs_group_top_reporters(
     partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS_DEFAULT,
 ) -> list[dict]:
     """Top contributing EU reporters within a group across [start, end]."""
+    like_clause, like_params = _hs_pattern_or_clause(patterns)
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT reporter,
                    SUM(value_eur) AS total_eur,
                    SUM(quantity_kg) AS total_kg,
@@ -1072,13 +1095,13 @@ def _hs_group_top_reporters(
               FROM eurostat_raw_rows
              WHERE period >= %s AND period <= %s
                AND flow = %s AND partner = ANY(%s)
-               AND product_nc LIKE ANY(%s)
+               AND {like_clause}
                AND reporter <> ALL(%s)   -- EU-27 excludes UK at all times
           GROUP BY reporter
           ORDER BY SUM(value_eur) DESC NULLS LAST
              LIMIT %s
             """,
-            (start, end, flow, list(partners), patterns, list(EU27_EXCLUDE_REPORTERS), limit),
+            (start, end, flow, list(partners), *like_params, list(EU27_EXCLUDE_REPORTERS), limit),
         )
         return [{"reporter": r[0], "total_eur": float(r[1] or 0),
                  "total_kg": float(r[2] or 0), "n_raw": int(r[3])}
