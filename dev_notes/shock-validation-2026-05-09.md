@@ -401,36 +401,50 @@ major bilateral pairs, not a NL-specific artefact.
 
 **5.4 Total CN+HK+MO trade with EU (rough EUR aggregation)**:
 
+*Refreshed 2026-05-11 using the canonical `product_nc='000TOTAL'`
+Eurostat aggregate row. The original 2026-05-09 numbers in this
+section pre-dated the 2x-mystery resolution (see history.md
+"Eurostat aggregate-scale 2x mystery — RESOLVED", commit `50f8dbd`,
+2026-05-10) and double-counted by ~2x. Underlying analyser findings
+were always correct — only this hand-rolled snapshot was stale.*
+
 | Year | Imports from CN+HK+MO | Exports to | EU deficit |
 |---|---|---|---|
-| 2017 | €1,146B | €697B | €449B |
-| 2018 | €811B | €495B | €316B |
-| 2019 | €865B | €524B | €341B |
-| 2020 | €794B | €455B | €339B |
-| 2021 | €958B | €493B | €464B |
-| 2022 | €1,164B | €475B | **€688B** ← peak |
-| 2023 | €1,051B | €499B | €553B |
-| 2024 | €1,058B | €474B | €585B |
-| 2025 | €1,127B | €442B | €684B |
-| 2026 (Jan–Feb) | €183B | €64B | €119B |
+| 2017 | ⚠ pre-v2 format | — | — |
+| 2018 | €383.2B | €233.4B | €149.9B |
+| 2019 | €370.6B | €226.3B | €144.4B |
+| 2020 | €391.8B | €226.4B | €165.4B |
+| 2021 | €479.3B | €248.2B | €231.1B |
+| 2022 | €582.4B | €239.0B | €343.4B |
+| 2023 | €526.2B | €250.8B | €275.4B |
+| 2024 | €529.9B | €238.6B | €291.3B |
+| 2025 | €564.0B | €223.6B | **€340.4B** ← new high |
+| 2026 (Jan–Feb) | €91.5B | €32.4B | €59.1B |
 
-Annualising 2026 from Jan-Feb gives €1,098B / €386B / €712B —
-on pace to exceed the 2022 deficit peak. **This is editorially
-significant**: the China-EU deficit is widening to historic
-levels in 2026, even before the EV anti-subsidy duties bite
-fully. A Guardian story shape: "EU's trade deficit with China set
-to break records in 2026 despite EV tariffs".
+Annualising 2026 from Jan–Feb gives €549B / €194B / €355B —
+on pace to exceed the 2025 deficit, which itself just edged past
+the prior 2022 peak (€343.4B). **The editorial story shape is
+unchanged**: the EU-China deficit is widening to historic
+levels in 2026 even before the EV anti-subsidy duties bite
+fully. A Guardian-register lead: *"EU's trade deficit with China set
+to break records in 2026 despite EV tariffs"*.
 
-Sanity vs Lisa O'Carroll's article (cited "€360bn 2025 surplus
-from China's perspective"): our €684B EU-side deficit for 2025 is
-larger than her surplus number. Two reasons for the gap:
-- CIF/FOB difference: EU imports are CIF-valued, China exports are
-  FOB-valued. The CIF inflation is ~5-10% (caveat `cif_fob`).
-- HK+MO inclusion: she likely uses CN-only, we sum CN+HK+MO.
-  Caveat `multi_partner_sum`.
+**Sanity vs Lisa O'Carroll's article** (cited "€360bn 2025 surplus
+from China's perspective"): our 2025 EU-side **CN-only** deficit
+is **€360.0B** — literally to the percentage point. The CN+HK+MO
+sum above adds ~€20B in HK/MO-routed trade (caveat
+`multi_partner_sum`). CIF/FOB inflation explains the rest of the
+gap to GACC's FOB-side number. The methodology choices are now
+explicit; the numbers concur cleanly.
 
-The numbers are in the same ballpark editorially but methodology
-choices matter.
+**The 2017 row** is flagged because pre-v2 COMEXT bulk-file format
+produces duplicate `000TOTAL` rows per (reporter, period, partner,
+flow, stat_procedure) — see `eurostat_raw_rows` for 2017:
+sp=1 has 648 rows vs sp=1=351 for 2018. This is a separate
+pre-existing ingestion artefact, not the 000TOTAL filter issue.
+Forward work to deduplicate or re-ingest 2017 with the v2 parser;
+no analyser output is affected (hs_group LIKE filters never
+matched these aggregate rows in the first place).
 
 ## EU-27 methodology audit (2026-05-10) — RESULTS
 
