@@ -10,6 +10,102 @@ to understand how the project got here.
 
 ---
 
+## 2026-05-11 (late evening) — bug fixes surfaced by the first periodic-run
+
+The first end-to-end periodic-run cycle surfaced three real bugs.
+Pre-release, with no journalist depending on existing data, we went
+destructive: code fix + delete affected rows + re-emit cleanly. No
+audit chain preserved for the buggy data — it had no editorial value.
+
+### Bug 1 — `nk_gacc_aggregate_yoy` natural-key collision (Africa silently overwritten)
+
+The natural key was `(aggregate_kind, current_end_yyyymm)`. Two
+aggregates share `aggregate_kind='region'` — **Africa** and
+**Latin America**. So every analyser run, Africa's row would be
+superseded by Latin America's (alphabetically later) or vice
+versa, depending on iteration order. The supersede chain showed
+this as 160+ paired entries with opposite-sign YoYs at the same
+period.
+
+Pre-fix DB state: **228 superseded Africa rows, 0 active Africa
+rows**. Africa GACC aggregate data was completely invisible in
+active findings — overwritten by LatAm on every run.
+
+Fix: added `alias_id` (the stable `country_aliases.id`) to the
+natural key in
+[`findings_io.nk_gacc_aggregate_yoy`](../findings_io.py).
+Updated the call site in
+[`anomalies.py`](../anomalies.py). Method version bumped
+`gacc_aggregate_yoy_v2_loose_partial_window` →
+`gacc_aggregate_yoy_v3_per_alias_natural_key`.
+
+Cleanup: `DELETE FROM findings WHERE subkind LIKE
+'gacc_aggregate_yoy%'` (684 rows: 342 active LatAm-stomping +
+342 historically-superseded Africa). Re-ran the analyser. New
+state: 114 active findings each for Africa, LatAm, ASEAN, Total
+(456 total across both flows). Africa is editorially visible
+again.
+
+Regression test added (`test_gacc_aggregate_yoy_distinguishes_aggregates_of_same_kind`):
+seeds Africa + LatAm with distinct values, asserts both produce
+their own active findings post-analyser.
+
+### Bug 2 — Tier 1 diff shows "None" for aggregate findings
+
+`_section_diff_since_last_brief` read `detail.group.name` to
+label each superseded finding. `gacc_aggregate_yoy*` findings
+store their label under `detail.aggregate.raw_label` (because
+they're aggregate-keyed, not hs-group-keyed). So every aggregate
+row showed literal "None" as the group name.
+
+Fix: `COALESCE(detail.group.name, detail.aggregate.raw_label)`
+in the diff query. One-line change in
+[`briefing_pack.py`](../briefing_pack.py).
+
+### Bug 3 — `USD1 Million` unit-string regex mismatch
+
+`_UNIT_RE` required whitespace between the ISO-4217 currency
+code and the multiplier digit:
+`^([A-Z]{3})(?:\s+(\d+...))?...`. GACC release pages use BOTH
+formats:
+
+```
+CNY 100 Million   ← has space, matched
+USD1 Million      ← no space, REFUSED — silently dropped half the GACC dataset
+```
+
+The unit parser's docstring explicitly says it returns
+`(None, None)` for unrecognised forms — and the analyser logs
+ERROR + skips the row. So USD-side GACC data has been silently
+dropped from the gacc_aggregate analyser. (CNY-side was always
+preferred when both present; USD was the fallback path.)
+
+Fix: `\s+` → `\s*` in the currency/multiplier separator.
+Two test cases added to `test_unit_scale_parses_known_forms`
+covering `'USD1 Million'` and `'CNY100 Million'`.
+
+After the regex fix the analyser only logs a separate INFO
+message (no FX rate for USD/EUR on 2025-06-01) — a real but
+pre-existing data-coverage gap, not a parser bug. Loading USD/EUR
+FX rates is forward work.
+
+### Sanity audit
+
+Ran a query over the whole `findings` table looking for any
+(subkind, natural_key_hash) tuple with more than one active row.
+**No collisions** — the gacc_aggregate fix was the only one
+hiding. All other natural keys are correctly per-instance.
+
+### Tests + state
+
+203 passing tests (+ 3 in the new regression cases). Live DB has
+456 active gacc_aggregate findings (was 342 before, with Africa
+missing). No method-version-bumped findings under broken keys
+remain. Findings table is a clean baseline for the first real
+periodic-run cycle when the next Eurostat release lands.
+
+---
+
 ## 2026-05-11 (evening) — periodic-run pipeline (Phase 6.9)
 
 The "what's new since last time" loop that was Phase 6.8 sketched out

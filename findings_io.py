@@ -232,11 +232,29 @@ def nk_hs_group_trajectory(hs_group_id: int) -> tuple[int]:
     return (hs_group_id,)
 
 
-def nk_gacc_aggregate_yoy(aggregate_kind: str, current_end_yyyymm: str) -> tuple[str, str]:
-    """A gacc_aggregate_yoy finding is identified by (aggregate_kind, window-end).
-    aggregate_kind is e.g. 'asean', 'rcep', 'belt_road', 'region', 'world'.
-    The flow direction (China-side export vs import) is encoded in the subkind
-    (`gacc_aggregate_yoy` vs `gacc_aggregate_yoy_import`). The aggregate label
-    string itself isn't part of the key — kind is the editorial identity, the
-    label may shift over time (e.g. "Belt and Road Routes" wording changes)."""
-    return (aggregate_kind, current_end_yyyymm)
+def nk_gacc_aggregate_yoy(
+    alias_id: int,
+    aggregate_kind: str,
+    current_end_yyyymm: str,
+) -> tuple[str, str, str]:
+    """A gacc_aggregate_yoy finding is identified by (alias_id, aggregate_kind,
+    window-end). alias_id is the stable identity of the aggregate in
+    country_aliases (e.g. Africa = 27, Latin America = 26 — both
+    aggregate_kind='region'). aggregate_kind is the editorial bucket
+    ('asean', 'rcep', 'belt_road', 'region', 'world'); it remains in the
+    key for readability when the supersede chain is queried directly.
+
+    The flow direction (China-side export vs import) is encoded in the
+    subkind (`gacc_aggregate_yoy` vs `gacc_aggregate_yoy_import`). The
+    aggregate label string itself isn't part of the key — labels may shift
+    over time (e.g. "Belt and Road Routes" wording changes); alias_id is
+    the stable identifier.
+
+    **Historical note (2026-05-11)**: prior versions of this function used
+    (aggregate_kind, current_end) only, which silently collapsed Africa and
+    Latin America (both kind='region') into a single finding stream — the
+    two aggregates supersedeing each other on every analyser run, with
+    LatAm always "winning" (alphabetically later). Adding alias_id fixes
+    that. See history.md.
+    """
+    return (str(alias_id), aggregate_kind, current_end_yyyymm)

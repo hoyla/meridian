@@ -1163,11 +1163,19 @@ def _section_diff_since_last_brief(cur) -> _Section:
 
     # Findings superseded since previous brief — pair the old (superseded)
     # row with its new replacement so we can compute the YoY shift.
+    # hs_group_* findings store the label in detail.group.name; gacc_aggregate_*
+    # findings store it under detail.aggregate.raw_label (the aggregate label
+    # like "Africa" / "ASEAN" / "Total"). COALESCE so the diff section
+    # renders a real name for either family rather than the literal "None"
+    # that older versions of this query produced for aggregate subkinds.
     cur.execute(
         """
         SELECT
             old.id AS old_id, new.id AS new_id, old.subkind,
-            old.detail->'group'->>'name' AS group_name,
+            COALESCE(
+                old.detail->'group'->>'name',
+                old.detail->'aggregate'->>'raw_label'
+            ) AS group_name,
             old.detail->'windows'->>'current_end' AS window_end,
             (old.detail->'totals'->>'yoy_pct')::numeric AS old_yoy,
             (new.detail->'totals'->>'yoy_pct')::numeric AS new_yoy

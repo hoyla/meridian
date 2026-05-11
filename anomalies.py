@@ -194,7 +194,11 @@ class _MirrorGapResult:
     aggregate_sources: list[str] | None = None
 
 
-_UNIT_RE = re.compile(r"^([A-Z]{3})(?:\s+(\d+(?:[.,]\d+)?))?(?:\s+(Thousand|Million|Billion))?\s*$")
+# Whitespace between the ISO-4217 currency code and the multiplier number is
+# optional: GACC uses both "CNY 100 Million" and "USD1 Million" (no space)
+# in production release pages. Without the `\s*` (vs `\s+`), every USD-side
+# release silently failed the unit parse — half the GACC dataset.
+_UNIT_RE = re.compile(r"^([A-Z]{3})(?:\s*(\d+(?:[.,]\d+)?))?(?:\s+(Thousand|Million|Billion))?\s*$")
 
 
 def parse_unit_scale(unit: str | None) -> tuple[float | None, str | None]:
@@ -2704,7 +2708,7 @@ def _insert_gacc_aggregate_yoy_finding(
         )
 
     detail = {
-        "method": "gacc_aggregate_yoy_v2_loose_partial_window",
+        "method": "gacc_aggregate_yoy_v3_per_alias_natural_key",
         "method_query": {
             "source": "observations (source=gacc)",
             "flow": flow,
@@ -2748,7 +2752,7 @@ def _insert_gacc_aggregate_yoy_finding(
             kind="anomaly",
             subkind=subkind,
             natural_key=findings_io.nk_gacc_aggregate_yoy(
-                agg["aggregate_kind"], current_end_yyyymm,
+                agg["alias_id"], agg["aggregate_kind"], current_end_yyyymm,
             ),
             value_fields={
                 "method": detail["method"],

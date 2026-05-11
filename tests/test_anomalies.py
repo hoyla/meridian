@@ -113,6 +113,11 @@ def test_unit_scale_parses_known_forms():
     # Numeric-only multipliers are still recognised (currency required, but no
     # scale-word needed).
     assert anomalies.parse_unit_scale("USD 10000") == (10000.0, "USD")
+    # No-space variant — GACC uses 'USD1 Million' (no space between ISO code
+    # and the multiplier digit) for USD-side release pages. Half the live
+    # GACC dataset uses this form, so the regex must accept it.
+    assert anomalies.parse_unit_scale("USD1 Million") == (1e6, "USD")
+    assert anomalies.parse_unit_scale("CNY100 Million") == (1e8, "CNY")
 
 
 def test_unit_scale_unrecognised_returns_none_not_silent_fallback(caplog):
@@ -832,16 +837,29 @@ def _seed_gacc_aggregate_24mo(
     cur = conn.cursor()
     for i, val in enumerate(monthlies):
         period = _add_months(anchor_period, -23 + i)
+        # If a release for this (section, currency, period, kind) already
+        # exists from a prior seed call (e.g. seeding a second aggregate
+        # under the same kind to test natural-key distinctness), reuse it
+        # rather than failing the uq_releases_gacc constraint.
         cur.execute(
-            """
-            INSERT INTO releases (source, section_number, currency, period, release_kind,
-                                  source_url, unit, title, description)
-            VALUES ('gacc', 4, 'CNY', %s, 'preliminary', %s, 'CNY 100 Million', 't', 'd')
-            RETURNING id
-            """,
-            (period, f"http://example/gacc-agg-{period.isoformat()}.html"),
+            "SELECT id FROM releases WHERE source='gacc' AND section_number=4 "
+            "AND currency='CNY' AND period=%s AND release_kind='preliminary'",
+            (period,),
         )
-        rel_id = cur.fetchone()[0]
+        existing = cur.fetchone()
+        if existing:
+            rel_id = existing[0]
+        else:
+            cur.execute(
+                """
+                INSERT INTO releases (source, section_number, currency, period, release_kind,
+                                      source_url, unit, title, description)
+                VALUES ('gacc', 4, 'CNY', %s, 'preliminary', %s, 'CNY 100 Million', 't', 'd')
+                RETURNING id
+                """,
+                (period, f"http://example/gacc-agg-{period.isoformat()}.html"),
+            )
+            rel_id = cur.fetchone()[0]
         cur.execute(
             "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'success') RETURNING id",
             (f"http://example/gacc-agg-{period.isoformat()}.html",),
@@ -856,7 +874,8 @@ def _seed_gacc_aggregate_24mo(
         cur.execute(
             "INSERT INTO fx_rates (currency_from, currency_to, rate_date, rate, rate_source, "
             "                      rate_source_url, notes) "
-            "VALUES ('CNY', 'EUR', %s, 0.125, 'test', 'http://example/fx', 't')",
+            "VALUES ('CNY', 'EUR', %s, 0.125, 'test', 'http://example/fx', 't') "
+            "ON CONFLICT (currency_from, currency_to, rate_date, rate_source) DO NOTHING",
             (period,),
         )
     conn.commit()
@@ -911,7 +930,58 @@ def test_gacc_aggregate_yoy_emits_finding_for_asean(empty_op_tables, test_db_url
     assert detail["aggregate"]["raw_label"] == "ASEAN"
     # No multi_partner_sum — this analyser doesn't sum Eurostat partners.
     assert "multi_partner_sum" not in detail["caveat_codes"]
-    assert detail["method"] == "gacc_aggregate_yoy_v2_loose_partial_window"
+    assert detail["method"] == "gacc_aggregate_yoy_v3_per_alias_natural_key"
+
+
+def test_gacc_aggregate_yoy_distinguishes_aggregates_of_same_kind(
+    empty_op_tables, test_db_url,
+):
+    """Regression: two aggregates that share aggregate_kind='region'
+    (Africa and Latin America) must produce distinct findings rather
+    than supersedeing each other.
+
+    Prior to 2026-05-11 the natural key was just (aggregate_kind,
+    current_end), which silently collapsed Africa and LatAm into a single
+    finding stream. The fix added alias_id to the natural key. This test
+    locks in the behaviour: two finding rows, two distinct labels."""
+    anchor = date(2025, 12, 1)
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_gacc_aggregate_24mo(
+            conn, "Africa", anchor,
+            prior_monthly=[800.0] * 12,
+            current_monthly=[1000.0] * 12,
+        )
+        _seed_gacc_aggregate_24mo(
+            conn, "Latin America", anchor,
+            prior_monthly=[500.0] * 12,
+            current_monthly=[1200.0] * 12,
+        )
+
+    anomalies.detect_gacc_aggregate_yoy(
+        flow="export", aggregate_kinds=["region"], yoy_threshold_pct=0.0,
+    )
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT detail->'aggregate'->>'raw_label' AS agg,
+                   (detail->'totals'->>'yoy_pct')::numeric AS yoy,
+                   superseded_at
+              FROM findings
+             WHERE subkind = 'gacc_aggregate_yoy'
+               AND (detail->'totals'->>'partial_window')::boolean = false
+            """
+        )
+        rows = list(cur.fetchall())
+
+    active = [r for r in rows if r[2] is None]
+    assert len(active) == 2, f"expected 2 active findings, got {active}"
+    by_label = {r[0]: float(r[1]) for r in active}
+    assert "Africa" in by_label
+    assert "Latin America" in by_label
+    # Africa: 800 → 1000 = +25%. LatAm: 500 → 1200 = +140%.
+    assert abs(by_label["Africa"] - 0.25) < 1e-9
+    assert abs(by_label["Latin America"] - 1.40) < 1e-9
 
 
 def test_gacc_aggregate_yoy_skips_when_no_history(empty_op_tables, test_db_url):
