@@ -264,19 +264,19 @@ def _section_reader_guide() -> _Section:
     per-finding detail). The supersede chain in the DB powers tier 1; the
     `data.xlsx` companion is the same data as tier 3 in sortable form."""
     lines: list[str] = []
-    lines.append("## How to read this brief")
+    lines.append("## How to read this findings document")
     lines.append("")
     lines.append(
         "Three sections, descending in newness and ascending in completeness. "
-        "Read them in order if it's your first brief; skip to **Tier 1** if you "
-        "read the previous one."
+        "Read them in order if this is your first findings export; skip "
+        "straight to **Tier 1** if you read the previous one."
     )
     lines.append("")
     lines.append(
         "1. **Tier 1 — What's new this cycle.** Additions, revisions, "
-        "direction-flips, and threshold-crossings since the previous brief. "
-        "The actually-news part. A regular subscriber reads this and probably "
-        "stops here unless something needs drilling into."
+        "direction-flips, and threshold-crossings since the previous findings "
+        "export. The actually-news part. A regular subscriber reads this and "
+        "probably stops here unless something needs drilling into."
     )
     lines.append(
         "2. **Tier 2 — Current state of play.** A compact one-paragraph-per-"
@@ -1129,21 +1129,22 @@ def _section_diff_since_last_brief(cur) -> _Section:
     row = cur.fetchone()
     prev_at = row[0] if row else None
     if prev_at is None:
-        # First-ever brief: nothing to compare against. Still emit the tier
-        # header so the document structure is consistent across cycles, and
-        # tell the reader explicitly that this is the baseline.
-        first_brief_lines = [
+        # First-ever findings export: nothing to compare against. Still emit
+        # the tier header so the document structure is consistent across
+        # cycles, and tell the reader explicitly that this is the baseline.
+        first_export_lines = [
             "---",
             "",
             "## Tier 1 — What's new this cycle",
             "",
-            "*This is the **first brief** generated against this DB — there is "
-            "no previous export to diff against. The picture below in "
-            "**Tier 2 — Current state of play** is your baseline; subsequent "
-            "briefs will surface here what changed since this one.*",
+            "*This is the **first findings export** generated against this DB "
+            "— there is no previous export to diff against. The picture below "
+            "in **Tier 2 — Current state of play** is your baseline; "
+            "subsequent exports will surface here what changed since this "
+            "one.*",
             "",
         ]
-        return _Section(markdown="\n".join(first_brief_lines))
+        return _Section(markdown="\n".join(first_export_lines))
 
     # New active findings since previous brief. Excludes narrative_hs_group
     # — LLM lead-scaffold findings live in the companion leads file, not the
@@ -1202,7 +1203,7 @@ def _section_diff_since_last_brief(cur) -> _Section:
     lines.append("")
     if not new_by_subkind and not significant:
         lines.append(
-            f"*Previous brief generated {prev_at:%Y-%m-%d %H:%M %Z}. "
+            f"*Previous findings export generated {prev_at:%Y-%m-%d %H:%M %Z}. "
             f"**Nothing material has changed since then** — no new findings, "
             f"no YoY shifts > 5pp, no direction flips. The Tier 2 summary "
             f"below is still the current picture.*"
@@ -1211,7 +1212,7 @@ def _section_diff_since_last_brief(cur) -> _Section:
         return _Section(markdown="\n".join(lines))
 
     lines.append(
-        f"*Previous brief generated {prev_at:%Y-%m-%d %H:%M %Z}. "
+        f"*Previous findings export generated {prev_at:%Y-%m-%d %H:%M %Z}. "
         f"The lists below reflect findings that have been added or whose "
         f"value has materially shifted since then. New findings without a "
         f"comparable predecessor — e.g. a new HS group, a new period anchor — "
@@ -1370,8 +1371,8 @@ def _section_state_of_play(
     lines.append("")
     lines.append(
         "*This section is the picture between cycles. Items that have moved "
-        "materially since the previous brief appear in Tier 1 above; this "
-        "tier shows where every active finding stands right now.*"
+        "materially since the previous findings export appear in Tier 1 "
+        "above; this tier shows where every active finding stands right now.*"
     )
     lines.append("")
 
