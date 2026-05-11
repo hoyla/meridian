@@ -134,6 +134,19 @@ def test_yoy_emits_when_growth_above_threshold(empty_op, test_db_url):
     top = detail["top_cn8_codes_in_current_12mo"]
     assert any(c["hs_code"] == "85414210" for c in top)
     assert all("total_kg" in c for c in top)
+    # Phase 6.10: single-month and 2-month-cumulative YoY views populated.
+    # Both periods exist in the seed (uniform €100 → €150 across all 24
+    # months), so both single-month and 2mo cumulative YoY = +50%.
+    sm = detail["totals"]["single_month"]
+    assert sm is not None
+    assert sm["current_eur"] == 150.0
+    assert sm["prior_eur"] == 100.0
+    assert abs(sm["yoy_pct"] - 0.5) < 1e-9
+    t2 = detail["totals"]["two_month_cumulative"]
+    assert t2 is not None
+    assert t2["current_eur"] == 300.0  # 150 + 150
+    assert t2["prior_eur"] == 200.0   # 100 + 100
+    assert abs(t2["yoy_pct"] - 0.5) < 1e-9
 
 
 def test_yoy_excludes_gb_reporter_at_all_times(empty_op, test_db_url):

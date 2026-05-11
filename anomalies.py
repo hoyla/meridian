@@ -1361,6 +1361,58 @@ def detect_hs_group_yoy(
                 yoy_pct_eur = (current_eur - prior_eur) / abs(prior_eur)
                 yoy_pct_kg  = ((current_kg - prior_kg) / abs(prior_kg)) if prior_kg else None
 
+                # Single-month and 2-month-cumulative YoY (Phase 6.10).
+                # Soapbox routinely quotes "Feb 2026 vs Feb 2025" or
+                # "Jan-Feb 2026 vs Jan-Feb 2025" — single-period operators
+                # rather than 12mo rolling. Compute them here so each
+                # hs_group_yoy finding carries both views; the brief / xlsx
+                # can render either depending on editorial register.
+                #
+                # end_prior is exactly 12 months before end_curr (set by the
+                # 12mo window math above). So single-month YoY is
+                # eur_by_period[end_curr] vs eur_by_period[end_prior];
+                # 2-month-cumulative YoY is the last two months of each
+                # window. Either becomes None if its period is missing —
+                # we don't impute.
+                def _yoy_or_none(c: float, p: float) -> float | None:
+                    return ((c - p) / abs(p)) if (p is not None and p != 0) else None
+
+                sm_curr_eur = eur_by_period.get(end_curr)
+                sm_prior_eur = eur_by_period.get(end_prior)
+                sm_curr_kg = kg_by_period.get(end_curr)
+                sm_prior_kg = kg_by_period.get(end_prior)
+                single_month: dict[str, Any] = {
+                    "current_period": end_curr.isoformat(),
+                    "prior_period": end_prior.isoformat(),
+                    "current_eur": sm_curr_eur,
+                    "prior_eur": sm_prior_eur,
+                    "current_kg": sm_curr_kg,
+                    "prior_kg": sm_prior_kg,
+                    "yoy_pct": _yoy_or_none(sm_curr_eur, sm_prior_eur),
+                    "yoy_pct_kg": _yoy_or_none(sm_curr_kg, sm_prior_kg),
+                }
+
+                # 2-month cumulative: end_curr + the month before, vs
+                # end_prior + the month before that. want_curr[-2:] is the
+                # last two months in the current window by construction;
+                # likewise want_prior[-2:].
+                last2_curr = want_curr[-2:] if len(want_curr) >= 2 else []
+                last2_prior = want_prior[-2:] if len(want_prior) >= 2 else []
+                t2_curr_eur = sum(eur_by_period.get(p, 0) for p in last2_curr) if last2_curr else None
+                t2_prior_eur = sum(eur_by_period.get(p, 0) for p in last2_prior) if last2_prior else None
+                t2_curr_kg = sum(kg_by_period.get(p, 0) for p in last2_curr) if last2_curr else None
+                t2_prior_kg = sum(kg_by_period.get(p, 0) for p in last2_prior) if last2_prior else None
+                two_month_cumulative: dict[str, Any] = {
+                    "current_periods": [p.isoformat() for p in last2_curr],
+                    "prior_periods": [p.isoformat() for p in last2_prior],
+                    "current_eur": t2_curr_eur,
+                    "prior_eur": t2_prior_eur,
+                    "current_kg": t2_curr_kg,
+                    "prior_kg": t2_prior_kg,
+                    "yoy_pct": _yoy_or_none(t2_curr_eur, t2_prior_eur),
+                    "yoy_pct_kg": _yoy_or_none(t2_curr_kg, t2_prior_kg),
+                }
+
                 # Keep the threshold gating on the EUR YoY (the editorial-relevance
                 # signal). Even if kg YoY is small, big EUR moves matter.
                 if abs(yoy_pct_eur) < yoy_threshold_pct:
@@ -1416,6 +1468,8 @@ def detect_hs_group_yoy(
                     missing_prior=missing_prior,
                     partners=partners,
                     comparison_scope=comparison_scope,
+                    single_month=single_month,
+                    two_month_cumulative=two_month_cumulative,
                 )
                 _tally(counts, action)
 
@@ -1469,6 +1523,8 @@ def _insert_hs_group_yoy_finding(
     missing_prior: list[date] | None = None,
     partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS_DEFAULT,
     comparison_scope: str = COMPARISON_SCOPE_DEFAULT,
+    single_month: dict[str, Any] | None = None,
+    two_month_cumulative: dict[str, Any] | None = None,
 ) -> findings_io.EmitAction:
     direction = "up" if yoy_pct_eur > 0 else "down"
     kg_yoy_str = f"{yoy_pct_kg*100:+.1f}%" if yoy_pct_kg is not None else "n/a"
@@ -1620,7 +1676,7 @@ def _insert_hs_group_yoy_finding(
 
     sources_used = list(COMPARISON_SCOPE_SOURCES[comparison_scope])
     detail = {
-        "method": "hs_group_yoy_v9_comparison_scope",
+        "method": "hs_group_yoy_v10_single_month_and_two_month_cumulative",
         "method_query": {
             "sources": sources_used,
             "comparison_scope": comparison_scope,
@@ -1661,6 +1717,14 @@ def _insert_hs_group_yoy_finding(
             "missing_months_prior": [d.isoformat() for d in (missing_prior or [])],
             "n_months_used_current": 12 - len(missing_curr or []),
             "n_months_used_prior": 12 - len(missing_prior or []),
+            # Phase 6.10: single-month and 2-month-cumulative YoY views,
+            # for editorial registers that quote a single recent month
+            # (Soapbox: "Feb 2026 EU-CN exports -16.2% YoY") or the latest
+            # 2-month cumulative (Soapbox: "Jan-Feb 2026 -11% YoY") rather
+            # than the 12mo rolling default. Either yoy_pct is None when
+            # the underlying period is missing — we don't impute.
+            "single_month": single_month,
+            "two_month_cumulative": two_month_cumulative,
         },
         "monthly_series": [
             {"period": p.isoformat(), "value_eur": e, "quantity_kg": k,

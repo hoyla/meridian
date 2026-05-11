@@ -279,10 +279,16 @@ def _section_reader_guide() -> _Section:
         "probably stops here unless something needs drilling into."
     )
     lines.append(
-        "2. **Tier 2 — Current state of play.** A compact one-paragraph-per-"
-        "HS-group summary of where every active finding stands today. The "
-        "persistent picture between cycles. Skim to orient yourself; most of "
-        "this re-renders identically cycle to cycle."
+        "2. **Tier 2 — Current state of play.** A compact summary of where "
+        "every active finding stands today — one block per HS group for "
+        "the EU-CN deep-dive view, then one block per GACC partner aggregate "
+        "(ASEAN / Africa / Latin America / world Total) for the bloc-level "
+        "context view. Each row carries **two YoY operators**: the 12-month "
+        "rolling figure (stable, smooths seasonality) and, where the data "
+        "supports it, the **latest-month** figure (acceleration signal — "
+        "matches Soapbox / Lisa register). The persistent picture between "
+        "cycles. Skim to orient yourself; most of this re-renders "
+        "identically cycle to cycle."
     )
     lines.append(
         "3. **Tier 3 — Full detail by HS group.** Per-finding breakdown with "
@@ -1279,7 +1285,10 @@ def _section_state_of_play(
 
     # Latest hs_group_yoy* finding per (group, subkind). DISTINCT ON pulls
     # the newest current_end per (group, subkind) pair — same pattern as
-    # _section_hs_yoy_movers.
+    # _section_hs_yoy_movers. Also pulls the Phase 6.10 single-month YoY
+    # from the new detail.totals.single_month block; that's null for any
+    # finding still on method v9 or earlier (older row), in which case the
+    # render simply omits the single-month figure rather than failing.
     cur.execute(
         """
         WITH latest AS (
@@ -1292,7 +1301,9 @@ def _section_state_of_play(
                  (detail->'totals'->>'yoy_pct_kg')::numeric AS yoy_pct_kg,
                  (detail->'totals'->>'current_12mo_eur')::numeric AS cur_eur,
                  (detail->'totals'->>'low_base')::boolean AS low_base,
-                 (detail->'totals'->>'partial_window')::boolean AS partial_window
+                 (detail->'totals'->>'partial_window')::boolean AS partial_window,
+                 (detail->'totals'->'single_month'->>'yoy_pct')::numeric AS sm_yoy_pct,
+                 (detail->'totals'->'single_month'->>'yoy_pct_kg')::numeric AS sm_yoy_pct_kg
             FROM findings
            WHERE subkind LIKE 'hs_group_yoy%%' AND superseded_at IS NULL
         ORDER BY detail->'group'->>'name', subkind,
@@ -1344,9 +1355,22 @@ def _section_state_of_play(
         yoy_k_str = f" (kg {yoy_k:+.1f}%)" if yoy_k is not None else ""
         eur_str = _fmt_eur(cur_eur)
         traj_str = f" Trajectory: `{traj_label}`." if traj_label else ""
+        # Phase 6.10: surface the single-month YoY (latest period vs same
+        # month a year earlier) next to the 12mo rolling figure when the
+        # finding carries it. The Soapbox / Lisa register often quotes the
+        # single-month figure directly; the journalist seeing both at a
+        # glance can pick the cadence that matches the story they're
+        # writing.
+        sm_yoy_pct = row["sm_yoy_pct"]
+        sm_str = ""
+        if sm_yoy_pct is not None:
+            sm_v = float(sm_yoy_pct) * 100
+            sm_k_raw = row["sm_yoy_pct_kg"]
+            sm_k_str = f" (kg {float(sm_k_raw)*100:+.1f}%)" if sm_k_raw is not None else ""
+            sm_str = f" Latest month: {sm_v:+.1f}%{sm_k_str}."
         return (
             f"  - **{label}**: {yoy_v_str}{yoy_k_str} to {eur_str} (12mo to "
-            f"{row['current_end']}).{traj_str}{flags_str} "
+            f"{row['current_end']}).{sm_str}{traj_str}{flags_str} "
             f"{_trace_token(row['id'])}"
         )
 
@@ -1408,6 +1432,99 @@ def _section_state_of_play(
             any_emitted = True
         if not any_emitted:
             lines.append("  - *(no active findings)*")
+        lines.append("")
+
+    return _Section(markdown="\n".join(lines))
+
+
+def _section_state_of_play_aggregates(cur) -> _Section:
+    """Tier 2 sibling — compact summary of GACC non-EU-bloc aggregate
+    YoY findings (ASEAN, RCEP, Belt & Road, Latin America, Africa,
+    world Total). Parallel structure to `_section_state_of_play` but
+    one block per aggregate label rather than per HS group.
+
+    Editorially this is the "China's trade with the rest of the world"
+    view that contextualises the EU-CN deep-dive. Soapbox routinely
+    cites these aggregates alongside EU-CN figures; without this
+    section a journalist reading the export sees only EU-CN coverage
+    and has to query the DB directly for the bloc context.
+
+    Findings come from gacc_aggregate_yoy (China-side exports) and
+    gacc_aggregate_yoy_import (China-side imports). The aggregate
+    label sits under detail.aggregate.raw_label (NOT detail.group.name
+    — gacc_aggregate is keyed by aggregate, not HS group)."""
+    cur.execute(
+        """
+        WITH latest AS (
+          SELECT DISTINCT ON (detail->'aggregate'->>'raw_label', subkind)
+                 id,
+                 detail->'aggregate'->>'raw_label' AS agg_label,
+                 detail->'aggregate'->>'kind' AS agg_kind,
+                 subkind,
+                 (detail->'windows'->>'current_end')::date AS current_end,
+                 (detail->'totals'->>'yoy_pct')::numeric AS yoy_pct,
+                 (detail->'totals'->>'current_12mo_eur')::numeric AS cur_eur,
+                 (detail->'totals'->>'partial_window')::boolean AS partial_window
+            FROM findings
+           WHERE subkind LIKE 'gacc_aggregate_yoy%%' AND superseded_at IS NULL
+        ORDER BY detail->'aggregate'->>'raw_label', subkind,
+                 (detail->'windows'->>'current_end')::date DESC, id DESC
+        )
+        SELECT * FROM latest ORDER BY agg_label, subkind
+        """
+    )
+    rows = list(cur.fetchall())
+
+    lines: list[str] = []
+    lines.append("## Tier 2 — Current state of play: GACC partner aggregates")
+    lines.append("")
+    lines.append(
+        "China-side YoY for the non-EU-bloc partner aggregates GACC "
+        "publishes — ASEAN, RCEP, Belt & Road, Africa, Latin America, "
+        "world Total. The flow direction is from China's perspective: "
+        "**Exports** = China sells; **Imports** = China buys. Context "
+        "for the EU-CN per-HS-group view below — Soapbox routinely "
+        "quotes these aggregates alongside EU-CN figures."
+    )
+    lines.append("")
+
+    if not rows:
+        lines.append("*No active gacc_aggregate_yoy findings to render.*")
+        lines.append("")
+        return _Section(markdown="\n".join(lines))
+
+    # Index by aggregate label → {subkind: row}. Each aggregate gets
+    # one heading; under it, one bullet per flow direction.
+    by_agg: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        by_agg.setdefault(r["agg_label"], {})[r["subkind"]] = r
+
+    SCOPE_ORDER = [
+        ("gacc_aggregate_yoy", "Exports (China → aggregate)"),
+        ("gacc_aggregate_yoy_import", "Imports (aggregate → China)"),
+    ]
+
+    for agg_label in sorted(by_agg.keys()):
+        by_sk = by_agg[agg_label]
+        # Show the kind alongside the label so a reader knows whether they're
+        # looking at ASEAN (asean), Latin America (region), etc. Helpful when
+        # two aggregates share the kind label.
+        any_row = next(iter(by_sk.values()))
+        kind = any_row["agg_kind"] or ""
+        kind_str = f" *({kind})*" if kind else ""
+        lines.append(f"### {agg_label}{kind_str}")
+        lines.append("")
+        for sk, label in SCOPE_ORDER:
+            r = by_sk.get(sk)
+            if not r:
+                continue
+            yoy_v = float(r["yoy_pct"]) * 100 if r["yoy_pct"] is not None else None
+            yoy_str = f"{yoy_v:+.1f}%" if yoy_v is not None else "n/a"
+            partial = " — partial window" if r["partial_window"] else ""
+            lines.append(
+                f"  - **{label}**: {yoy_str} YoY to {_fmt_eur(r['cur_eur'])} "
+                f"(12mo to {r['current_end']}).{partial} {_trace_token(r['id'])}"
+            )
         lines.append("")
 
     return _Section(markdown="\n".join(lines))
@@ -1615,7 +1732,12 @@ def render(
         sections.append(_section_diff_since_last_brief(cur))
 
         # ----- Tier 2: current state of play (compact summary) -----
+        # Per-HS-group block first (the EU-CN deep-dive view), then the
+        # partner-aggregate block (the bloc-level context view). A reader
+        # scanning Tier 2 sees per-group detail first, then sees the
+        # surrounding aggregates to contextualise.
         sections.append(_section_state_of_play(cur, predictability))
+        sections.append(_section_state_of_play_aggregates(cur))
 
         # ----- Tier 3: full per-finding detail by HS group -----
         # The opener emits the `## Tier 3` heading + `---`. The detail
