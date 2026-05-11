@@ -7,29 +7,28 @@ the original Phase 1–6 plan, look at the git log around
 
 ## Near-term (likely next session)
 
-### Periodic analyser runs (infrastructure)
+### Set up the Routine + start collecting cycles
 
-The single most-requested follow-on. Today's findings all have
-`created_at = today` because of the Phase 5 clean-state rebuild
-plus iterative method-version bumps. The supersede chain isn't
-yet a historical record of "what we said last month".
+Periodic-run **pipeline** shipped 2026-05-11 (Phase 6.9 — see
+`history.md` and [`periodic-runs-design-2026-05-11.md`](periodic-runs-design-2026-05-11.md)).
+What remains is the Layer-2 / Layer-3 wiring:
 
-A monthly cron (or GitHub Action) that re-runs the analyser
-pipeline after each Eurostat release would unlock:
-
-- The trajectory-shape backtest (currently sketched but flagged
-  forward in `out-of-sample-backtest-2026-05-10.md`).
-- Honest "Changes since previous brief" diffs (Phase 6.8 ships
-  the section but it currently reflects same-day method-bump
-  churn rather than data revisions).
-- Editorial framing of which findings are stable across
-  Eurostat's actual revision cycle vs which mean-revert.
-
-Sketch: GitHub Action triggered monthly on the 1st, runs
-`scrape.py --eurostat-period $(date)`, then chained `--analyse`
-calls for each (scope, flow), then `--analyse llm-framing`, then
-brief regeneration. Output committed to a branch; PR opened for
-review.
+- **Create the Claude Code Routine** with the prompt template in
+  the design doc. Daily fire at 07:00 UTC. The Routine fetches the
+  next Eurostat period (best-effort, exits cleanly on 404), then
+  invokes `python scrape.py --periodic-run`. The pipeline is
+  idempotent so a daily fire is harmless between Eurostat releases.
+- **Watch the first 2–3 real cycles land.** Tier 1 currently shows
+  same-day method-bump churn (everything created today); after the
+  first real Eurostat-release cycle, it'll show the actual data
+  diff. Validate that the diff reads usefully editorially.
+- **Decide on delivery vector** (Layer 3) once we've seen what a
+  real cycle looks like in Lisa's hands. Don't pre-pick
+  email/Slack/Drive.
+- **Migrate Luke's environment** from laptop to desktop. Steps in
+  the design doc § "Migration: laptop → desktop". Routines are
+  account-bound; the pipeline is portable via `git clone` +
+  `pg_dump | pg_restore`.
 
 ## Coverage extension (surfaced by the 2026-05-11 Soapbox validation pass)
 

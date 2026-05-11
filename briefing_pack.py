@@ -1498,14 +1498,62 @@ def _section_about_findings() -> _Section:
     return _Section(markdown="\n".join(lines))
 
 
-def _record_brief_run(out_path: str | None, top_n: int) -> None:
-    """Insert a row into brief_runs after a successful brief generation.
-    Called by export() — render() doesn't write since callers may render
-    for non-archival purposes (preview, test)."""
+def latest_eurostat_period() -> date | None:
+    """Return the most recent Eurostat release period in the DB, or None
+    if no Eurostat data is ingested. Used by the periodic-run orchestrator
+    to decide whether a new findings export is warranted and to stamp the
+    new brief_runs row with the data freshness it reflects."""
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO brief_runs (output_path, top_n) VALUES (%s, %s)",
-            (out_path, top_n),
+            "SELECT MAX(period) FROM releases WHERE source = 'eurostat'"
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def latest_recorded_data_period(trigger: str | None = None) -> date | None:
+    """Return the data_period of the most recently-recorded findings export,
+    optionally filtered to a specific trigger ('manual' or 'periodic_run').
+    Returns None if there are no recorded exports with a populated
+    data_period. Used by the periodic-run orchestrator for idempotency:
+    if the latest Eurostat data is no fresher than the most recent
+    periodic-run output, there is nothing new to publish."""
+    with _conn() as conn, conn.cursor() as cur:
+        if trigger is None:
+            cur.execute(
+                "SELECT MAX(data_period) FROM brief_runs "
+                "WHERE data_period IS NOT NULL"
+            )
+        else:
+            cur.execute(
+                "SELECT MAX(data_period) FROM brief_runs "
+                "WHERE data_period IS NOT NULL AND trigger = %s",
+                (trigger,),
+            )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def _record_brief_run(
+    out_path: str | None,
+    top_n: int,
+    data_period: date | None = None,
+    trigger: str = "manual",
+) -> None:
+    """Insert a row into brief_runs after a successful findings export.
+    Called by export() — render() doesn't write since callers may render
+    for non-archival purposes (preview, test).
+
+    `data_period` stamps the export with the freshness of the underlying
+    Eurostat data; the periodic-run orchestrator uses it for idempotency
+    checks. `trigger` distinguishes manual ad-hoc renders from periodic-run
+    cycle outputs — only the latter advance the global subscriber cycle.
+    """
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO brief_runs (output_path, top_n, data_period, trigger) "
+            "VALUES (%s, %s, %s, %s)",
+            (out_path, top_n, data_period, trigger),
         )
 
 
@@ -1712,6 +1760,7 @@ def export(
     out_path: str | None = None,
     leads_path: str | None = None,
     spreadsheet: bool | None = None,
+    trigger: str = "manual",
 ) -> tuple[str, str]:
     """Write the findings document AND the companion leads file to disk.
     Returns (findings_path, leads_path).
@@ -1781,7 +1830,12 @@ def export(
         top_n=top_n, companion_filename=leads_basename,
         scope_label=scope_label,
     ))
-    _record_brief_run(out_path=str(p), top_n=top_n)
+    _record_brief_run(
+        out_path=str(p),
+        top_n=top_n,
+        data_period=latest_eurostat_period(),
+        trigger=trigger,
+    )
     log.info("Wrote briefing pack to %s", p)
 
     lp.parent.mkdir(parents=True, exist_ok=True)

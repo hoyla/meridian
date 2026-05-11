@@ -32,6 +32,7 @@ import hmrc
 import llm_framing
 import lookups
 import parse
+import periodic
 import sheets_export
 
 load_dotenv()
@@ -341,7 +342,44 @@ def main() -> None:
     p.add_argument("--z-threshold", type=float, default=1.5, metavar="Z",
                    help="Minimum |z| to emit a trend finding (default: 1.5)")
     p.add_argument("--dry-run", action="store_true", help="Fetch + parse but don't write to DB")
+    p.add_argument(
+        "--periodic-run", action="store_true",
+        help=(
+            "Run the full periodic-cycle pipeline: re-run all analysers "
+            "across scope/flow combos, re-run llm-framing, and write a new "
+            "findings export bundle (trigger='periodic_run'). Idempotent: "
+            "exits cleanly with a no-op message if the latest Eurostat "
+            "period in the DB has already been published by an earlier "
+            "periodic-run cycle. Pass --force to override."
+        ),
+    )
+    p.add_argument(
+        "--force", action="store_true",
+        help="With --periodic-run: skip the idempotency check and re-run "
+             "regardless of whether the current Eurostat period has "
+             "already been published.",
+    )
+    p.add_argument(
+        "--skip-llm", action="store_true",
+        help="With --periodic-run: skip the llm-framing step. Useful "
+             "when Ollama is unavailable or for fast iterations.",
+    )
     args = p.parse_args()
+
+    if args.periodic_run:
+        result = periodic.run_periodic(
+            force=args.force,
+            out_dir=args.export_dir,
+            top_n=args.briefing_top_n,
+            llm_model=args.llm_model,
+            skip_llm=args.skip_llm,
+        )
+        log.info("periodic-run: %s", result.reason)
+        # Print the findings path to stdout (separate from log) so a wrapper
+        # (Claude Code routine, GHA, cron) can capture it for delivery.
+        # Empty string on no-op so the wrapper can branch on `if path:`.
+        print(result.findings_path or "")
+        return
 
     if args.analyse == "mirror-trade":
         partners = (

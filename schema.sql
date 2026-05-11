@@ -578,18 +578,31 @@ INSERT INTO cif_fob_baselines (partner_iso2, baseline_pct, source, source_url, n
    'https://unctad.org/topic/transport-and-trade-logistics/review-of-maritime-transport',
    'Global default. Per-partner rows override; route-specific UNCTAD figures (CN→DE container vs. CN→landlocked-EU) are deferred to Phase 4 of the roadmap when we need the granularity for a specific investigation.');
 
--- Phase 6.8: brief generation log. Each row records one
--- briefing_pack.export() call so the next brief can compute "what changed
--- since the previous brief" by querying findings created/superseded after
+-- Phase 6.8: findings-export generation log. Each row records one
+-- briefing_pack.export() call so the next export can compute "what changed
+-- since the previous one" by querying findings created/superseded after
 -- the previous row's generated_at. Editorially this lets a journalist
--- scanning the brief see at a glance which findings have moved since
+-- scanning the document see at a glance which findings have moved since
 -- they last looked.
+-- (Table name retained from when the document was called "brief"; the
+-- module is briefing_pack.py and the bundle is still a "briefing pack",
+-- but the reader-facing document is `findings.md`.)
+--
+-- Phase 6.9 (periodic runs): `data_period` records the latest Eurostat
+-- release period the export reflects, so the periodic-run orchestrator
+-- can skip re-running when nothing fresher has been ingested. `trigger`
+-- distinguishes manual (ad-hoc) renders from periodic-run cycle outputs;
+-- only the latter participate in the global sequence a regular subscriber
+-- follows. On-demand renders for new users are 'manual' and don't
+-- advance the cycle (see dev_notes/periodic-runs-design-2026-05-11.md).
 CREATE TABLE brief_runs (
     id              BIGSERIAL PRIMARY KEY,
     generated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     output_path     TEXT,
     top_n           INT,
-    notes           TEXT
+    notes           TEXT,
+    data_period     DATE,
+    trigger         TEXT NOT NULL DEFAULT 'manual'
 );
 CREATE INDEX idx_brief_runs_generated_at ON brief_runs (generated_at DESC);
 

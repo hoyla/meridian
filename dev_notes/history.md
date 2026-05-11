@@ -10,6 +10,111 @@ to understand how the project got here.
 
 ---
 
+## 2026-05-11 (evening) — periodic-run pipeline (Phase 6.9)
+
+The "what's new since last time" loop that was Phase 6.8 sketched out
+plus the deployment-agnostic orchestration the roadmap had as its #1
+near-term item. Shipped as a three-layer separation: pipeline (CLI),
+scheduler (pluggable: Claude Code Routine today, hosted cron later),
+delivery (manual today).
+
+### Three-tier findings document structure
+
+Commit [`abd07ec`](https://github.com/hoyla/gacc/commit/abd07ec) (with
+wording follow-up [`c85bfb6`](https://github.com/hoyla/gacc/commit/c85bfb6)).
+Background reasoning: a findings export at time T+1 mostly repeats one
+at time T — every 12mo-rolling window shifts by a month but most YoY
+values barely move. Rendering a full snapshot every cycle is
+repetitive. The fix is to structure the document so a regular reader
+gets a small "what's new" lead, while a new joiner still gets the
+orienting compact summary plus the full detail.
+
+Three explicit tiers in `findings.md`:
+
+- **Tier 1 — What's new this cycle**. The diff against the previous
+  export (was "Changes since the previous export"; same content, now
+  prominently labelled and at the top under a horizontal-rule
+  divider). Includes a "first findings export" baseline message and a
+  "nothing material has changed" message so the tier is always
+  rendered, even on no-op cycles.
+- **Tier 2 — Current state of play** (new). One block per HS group;
+  inside, one compact line per (scope, flow) with latest 12mo YoY
+  (value + kg), current 12mo EUR, trajectory shape, low-base /
+  partial-window flags, and the `finding/N` trace token.
+  Predictability badges inline. The persistent picture between cycles.
+- **Tier 3 — Full detail by HS group**. The existing per-scope mover
+  sections, trajectory shape buckets, mirror gaps, low-base review —
+  unchanged in content but with section headings demoted from `##` to
+  `###` (and per-group `###` to `####`) so they nest under the Tier 3
+  parent.
+
+A reader's-guide section right after the headline names the three
+tiers so it's obvious which section serves which mode of use.
+
+### Schema: `brief_runs` gains `data_period` + `trigger`
+
+Live DB ALTERed and `schema.sql` updated. Both columns are required
+infrastructure for the idempotency logic:
+
+- `data_period DATE` — the most recent Eurostat `releases.period` at
+  the time of the render. Stamped onto every `brief_runs` row.
+- `trigger TEXT NOT NULL DEFAULT 'manual'` — distinguishes manual
+  ad-hoc renders from periodic-run cycle outputs. Only the latter
+  participate in the global subscriber-facing cycle.
+
+The table name `brief_runs` is retained from the pre-rename era (per
+the `brief.md → findings.md` decision in commit `73a7f71` — module
+and table internals stay, only reader-facing prose changes).
+
+### New `periodic.py` module + `--periodic-run` CLI
+
+`periodic.run_periodic()` is the deployment-agnostic pipeline
+entrypoint. It:
+
+1. Idempotency-checks: compares `latest_eurostat_period()` against
+   `latest_recorded_data_period(trigger='periodic_run')`. Exits
+   cleanly with a no-op if the latter is no older than the former
+   (unless `--force`).
+2. Re-runs every analyser kind across all scope/flow combos
+   (`mirror_trade`, `mirror_gap_trends`, six `hs_group_yoy*`, six
+   `hs_group_trajectory*`, two `gacc_aggregate_yoy*`,
+   `llm_framing`). Each is per-row idempotent via the supersede
+   chain.
+3. Generates the bundled findings export with
+   `trigger='periodic_run'`.
+
+CLI: `python scrape.py --periodic-run [--force] [--skip-llm]
+[--export-dir PATH]`. Prints the absolute path of the new
+`findings.md` to stdout (empty string on no-op) so a scheduler
+wrapper can branch on it.
+
+The orchestrator is deliberately non-fetching — it operates on
+whatever is in the DB. The scheduler is expected to invoke
+`python scrape.py --eurostat-period YYYY-MM` separately before
+the periodic-run call. Keeps network failure (fetch) and analyser
+failure as distinct concerns.
+
+5 unit tests in `tests/test_periodic.py` cover the helper
+functions and the two no-op paths (empty DB; already-published).
+196 + 5 = 201 tests pass.
+
+### Three-layer deployment design
+
+Captured in [`periodic-runs-design-2026-05-11.md`](periodic-runs-design-2026-05-11.md).
+Key idea: the pipeline (Layer 1, this repo), the scheduler (Layer
+2, Routine / cron / GHA — pluggable), and the delivery channel
+(Layer 3, manual / email / Slack — pluggable) are three independent
+concerns. Layer 1 is built; Layers 2 and 3 are wrappers around it.
+Migration from "Claude Code Routine on Luke's laptop" to "hosted
+cron on AWS" later is a wrapper swap, not a code change.
+
+Routine prompt for v1 (laptop / desktop, manual delivery to Lisa)
+is in the design doc.
+
+Commit [`(this commit)`].
+
+---
+
 ## 2026-05-11 — Soapbox validation pass + two follow-up hs_groups
 
 A peer-comparison audit modelled on the shock-validation discipline
