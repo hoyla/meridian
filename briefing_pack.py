@@ -1761,6 +1761,7 @@ def export(
     leads_path: str | None = None,
     spreadsheet: bool | None = None,
     trigger: str = "manual",
+    record: bool = True,
 ) -> tuple[str, str]:
     """Write the findings document AND the companion leads file to disk.
     Returns (findings_path, leads_path).
@@ -1799,6 +1800,12 @@ def export(
     "what changed since" (Phase 6.8). render() is called for the
     markdown but doesn't record — record only on disk-writing exports
     so test/preview renders don't pollute the run log.
+
+    `record=False` produces the bundle without inserting a `brief_runs`
+    row — useful for test / preview / on-demand exports that should not
+    advance any cycle and should not appear in the "Tier 1 — what's new
+    since the previous export" baseline. The bundle itself is still
+    written normally; only the audit row is skipped.
     """
     if out_path is not None or leads_path is not None:
         # Legacy explicit-paths mode. Both must be given.
@@ -1830,12 +1837,18 @@ def export(
         top_n=top_n, companion_filename=leads_basename,
         scope_label=scope_label,
     ))
-    _record_brief_run(
-        out_path=str(p),
-        top_n=top_n,
-        data_period=latest_eurostat_period(),
-        trigger=trigger,
-    )
+    if record:
+        _record_brief_run(
+            out_path=str(p),
+            top_n=top_n,
+            data_period=latest_eurostat_period(),
+            trigger=trigger,
+        )
+    else:
+        log.info(
+            "Skipping brief_runs insert (record=False) — this export is "
+            "unsequenced and will not appear in the cycle history."
+        )
     log.info("Wrote briefing pack to %s", p)
 
     lp.parent.mkdir(parents=True, exist_ok=True)

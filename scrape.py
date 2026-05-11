@@ -364,6 +364,17 @@ def main() -> None:
         help="With --periodic-run: skip the llm-framing step. Useful "
              "when Ollama is unavailable or for fast iterations.",
     )
+    p.add_argument(
+        "--no-record", action="store_true",
+        help=(
+            "With --briefing-pack: produce the export bundle without "
+            "inserting a brief_runs row. The export is 'unsequenced' — it "
+            "does not advance any cycle and does not become the baseline "
+            "for the next export's Tier 1 'what's new' section. Use for "
+            "test, preview, or on-demand renders. Has no effect on "
+            "--periodic-run (which always records)."
+        ),
+    )
     args = p.parse_args()
 
     if args.periodic_run:
@@ -465,6 +476,7 @@ def main() -> None:
             out_dir=args.export_dir,
             scope_label=args.export_scope,
             top_n=args.briefing_top_n,
+            record=not args.no_record,
         )
         log.info("Wrote briefing pack to %s", brief_path)
         log.info("Wrote investigation leads to %s", leads_path)

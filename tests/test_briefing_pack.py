@@ -494,6 +494,21 @@ def test_export_records_brief_run(empty_findings, test_db_url, tmp_path):
     assert top_n == 5
 
 
+def test_export_with_record_false_skips_brief_runs(empty_findings, test_db_url, tmp_path):
+    """The unsequenced-export path: `record=False` produces the bundle
+    without inserting a brief_runs row. Useful for test/preview/on-demand
+    renders that shouldn't pollute the cycle history or become the
+    baseline for the next export's Tier 1 "what's new" section. Exposed
+    via the CLI as `--no-record`."""
+    n_before = _count_brief_runs(test_db_url)
+    briefing_pack.export(
+        out_dir=str(tmp_path / "20260510-1200"),
+        top_n=5,
+        record=False,
+    )
+    assert _count_brief_runs(test_db_url) == n_before
+
+
 def _count_brief_runs(test_db_url) -> int:
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM brief_runs")
