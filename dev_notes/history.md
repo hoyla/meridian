@@ -10,6 +10,118 @@ to understand how the project got here.
 
 ---
 
+## 2026-05-11 — Soapbox validation pass + two follow-up hs_groups
+
+A peer-comparison audit modelled on the shock-validation discipline
+(predict, then look). Output: [`soapbox-validation-2026-05-11.md`](soapbox-validation-2026-05-11.md).
+
+### Stage A — pre-registration
+
+Picked 10 Soapbox Trade articles spanning 2024-06 → 2026-05 (recent
+~10 plus topic-matched back-catalogue), extracted 50 testable claims
+with their natural-key tuples (`hs_group`, `current_end`, `flow`,
+`scope`, `partners`), and pre-registered Expected magnitudes under
+both `CN`-only (Soapbox convention) and `CN+HK+MO` (our default).
+17 idea-generation claims (categories not in our hs_groups) flagged
+with provisional HS codes for future hs_group proposals.
+
+### Stage B — comparison
+
+Ran the validation against the live DB the same day. Headline:
+
+- **57% clean concur** on testable claims (within ±5pp on YoY, ±10%
+  on EUR levels).
+- **80% directional concur** if grading on direction + order of
+  magnitude.
+- Strongest single-paragraph result: A3.1, A3.2, A3.3 — three EXACT
+  single-month YoY matches in one article (Soapbox Apr 20: EU
+  exports to CN Feb 2026 −16.2%, EU imports +2.2%, Jan −5.1% /
+  Jan-Feb −11%; ours: −16.2% / +2.2% / −5.1% / −11.0%).
+- Other clean concurs: pork exports to China (−10/−11%),
+  finished-car exports (−41.6% vs −43%), motor-vehicle-parts
+  exports to CN (€-2.03B vs −€2.01B), 2025 BEV imports
+  (−45.6% vs −43%), HK imports +7% vs +9%.
+- **Gap surfaced**: every aggregate Soapbox quotes (EU-CN imports,
+  exports, deficit at single-month + annual cadence) reproduces
+  cleanly from raw rows but **doesn't surface as a named finding** —
+  `gacc_aggregate_yoy` excludes `eu_bloc` by design (see
+  [`anomalies.py:2435`](../anomalies.py) — "mirror-trade handles EU"),
+  and there's no Eurostat-side aggregate analyser at all.
+
+### Stage B follow-up #3 — pork+offal + NdFeB sub-CN8
+
+Acted on the cheapest forward-work items the same afternoon. Two
+new hs_groups added in [`schema.sql`](../schema.sql) and the live
+DB, commit [`91354b3`](https://github.com/hoyla/gacc/commit/91354b3):
+
+- **id=33 Pork offal (HS 0206 swine)** — patterns
+  `020630% / 020641% / 020649%`, `created_by='seed:soapbox_validation'`.
+  Soapbox cites pork meat and offal separately (A6.5: "meat -11%,
+  offal -3%"); before this commit only meat was a named finding.
+  New `hs_group_yoy_export` at 2025-12 reads **−2.9% kg** (Soapbox:
+  −3% — within ±0.1pp).
+- **id=34 Sintered NdFeB magnets (CN8 85051110)** — patterns
+  `85051110%`, same `created_by`. Narrower than the broad HS-8505
+  Permanent magnets group. Broad-chapter kg YoY at 2026-02 was
+  +1.4%; the NdFeB sub-code alone is **+7.9%** at 12mo rolling
+  (single-period Jan-Feb +18% matches Soapbox to the pp, but
+  needs a single-month-YoY operator the tool doesn't yet emit).
+  **Closes the Phase 3 LLM hallucination loop**: qwen3.6 previously
+  invented "China supplies 93% of permanent magnets" from training
+  data because no NdFeB-specific typed facts were in the prompt;
+  the verifier correctly rejected it. With the new sub-group, the
+  next `--analyse llm-framing` run produces a verified narrative
+  drawing on typed facts (+7.9% kg, −6.0% unit prices,
+  `u_recovery` trajectory) without reaching into training data.
+  0 verification rejections on the same-day run.
+
+356 new findings emitted across 6 scope×flow combos
+(`hs_group_yoy*`, `hs_group_trajectory*`, `narrative_hs_group`).
+No existing findings superseded, no method versions bumped — pure
+coverage extension. Tests: 196 passed.
+
+### Stage B follow-up #6 — §5.4 snapshot refresh
+
+Commit [`38940ce`](https://github.com/hoyla/gacc/commit/38940ce).
+The annual aggregate table in
+[`shock-validation-2026-05-09.md:404-415`](shock-validation-2026-05-09.md)
+pre-dated the 2026-05-10 `000TOTAL`-mystery resolution (commit
+`50f8dbd`) and double-counted by ~2x. Refreshed using the canonical
+`product_nc='000TOTAL'` aggregate row. **Sanity-check vs Lisa
+O'Carroll's "€360bn 2025 surplus" cite**: our refreshed CN-only
+2025 EU-side deficit reads **€360.0B — to the percentage point**.
+The HK/MO inclusion adds ~€20B (multi_partner_sum caveat); the
+CIF/FOB inflation explains the rest of the gap to GACC's FOB
+USD-equivalent figure. Numbers now concur cleanly with the
+methodology choices explicit.
+
+### Pre-existing artefact surfaced (forward-work)
+
+While refreshing §5.4, surfaced that **2017 has duplicate `000TOTAL`
+rows** from the pre-v2 COMEXT bulk-file format (per-stat_procedure
+`000TOTAL` counts: sp=1 has 648 rows for 2017 vs 351 for 2018).
+This is independent of the 000TOTAL filter rule and predates
+today's work. Flagged in the refreshed §5.4 table; no analyser
+output affected (HS LIKE filters never matched aggregate rows).
+Forward work to dedupe or re-ingest 2017.
+
+### What's now closed vs still open
+
+**Closed by this session:** Soapbox-validation forward-work #3
+(pork+offal split into two groups), #6 (§5.4 snapshot refresh),
+and the partial half of #2 (NdFeB sub-CN8 added; MPPT, graphite,
+rare-earth narrow remain).
+
+**Still open** (now in [`roadmap.md`](roadmap.md)): periodic
+analyser runs (#1 on the roadmap, single biggest unlock); the
+remaining sub-CN8 groups (MPPT 85044084, graphite 250410,
+rare-earth narrow); single-month YoY operator; `eu_bloc`
+aggregate analyser (design discussion needed — explicit exclusion
+in `anomalies.py:2435`); per-reporter rollup; GACC sec 5/6
+ingest; 2017 pre-v2-format dedup.
+
+---
+
 ## 2026-05-10 (evening) — output-shape refactor and transparency annotations
 
 A focused session on what the journalist actually opens. No new

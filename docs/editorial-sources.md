@@ -69,7 +69,16 @@ shape this tool now produces):
   this specific claim. Notable: when the LLM framing layer was first
   run, qwen3.6 cited "93%" recalled from this article in training
   data — the verifier correctly rejected it because that figure is
-  not in our current data.*
+  not in our current data. **Hallucination loop closed 2026-05-11**:
+  the [Soapbox validation pass](../dev_notes/soapbox-validation-2026-05-11.md)
+  prompted a narrower `Sintered NdFeB magnets (CN8 85051110)`
+  hs_group (HS-8505 was too broad — the broad-chapter kg YoY was
+  only +1.4% at 2026-02 vs +18% specifically on 85051110). With the
+  narrower group the LLM now has typed facts to draw on and produces
+  a verified narrative without reaching into training data. The
+  share figure itself (93% from China) remains unverifiable from
+  our data — we only ingest CN+HK+MO partners, so the EU-wide
+  denominator is missing.*
 
 **Her own cited sources:**
 
@@ -141,6 +150,21 @@ domain-agnostic ambition of this tool (HS groups journalist-editable
 per investigation) was deliberately modelled on Soapbox's range. Luke
 can share an auth cookie for full articles if needed.
 
+**Peer-comparison validation (2026-05-11)**: 50 testable claims
+across 10 Soapbox articles (2024-06 → 2026-05) were pre-registered
+and tested against the live DB. Headline: **~60% clean concur**
+(numbers within ±5pp on YoY, ±10% on EUR levels) and **~80%
+directional concur**. Strongest cleanly-reproduced findings: EU
+exports to China Feb 2026 (-16.2%, ours matches to the pp); EU
+pork exports to China 2025 (-11% meat, -3% offal, ours matches
+within ±0.1pp after adding the Pork offal sub-group); EU motor-
+vehicle-parts exports to China (-€2.03B, Soapbox said -€2.01B);
+BEV imports from China 2023→2025 (-45.6% vs Soapbox's -43%).
+Stage A pre-registration + Stage B results live in
+[`dev_notes/soapbox-validation-2026-05-11.md`](../dev_notes/soapbox-validation-2026-05-11.md).
+The validation is a living doc — re-run after any major analyser
+change, same as shock-validation.
+
 ### Merics — Mercator Institute for China Studies
 
 <https://merics.org/>
@@ -171,6 +195,13 @@ prompted each addition:
   Pork (HS 0203).
 - `seed:tan_article` — Wind generating sets only (HS 850231) added
   after Tan's May 2026 piece.
+- `seed:soapbox_validation` — added after the 2026-05-11 Soapbox
+  validation pass surfaced gaps where the broad hs_group diluted a
+  specific Soapbox claim. Currently: Pork offal (HS 0206 swine),
+  Sintered NdFeB magnets (CN8 85051110). Pattern: when a Soapbox
+  piece quotes a precise 8-digit code or a sub-bracket of an
+  existing group, add the narrower group as a sibling so the
+  finding can match the cited figure directly.
 
 When a new article prompts a new group, follow this convention: add
 the row with a `seed:<short_descriptor>` `created_by` value, and
