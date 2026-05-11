@@ -104,6 +104,39 @@ missing). No method-version-bumped findings under broken keys
 remain. Findings table is a clean baseline for the first real
 periodic-run cycle when the next Eurostat release lands.
 
+### Follow-up sweep: FX coverage + Natural graphite + state-of-play check
+
+After the three bug fixes landed:
+
+- **USD/EUR FX rates fetched** (`scrape.py --fetch-fx USD --fx-since 2017-01`):
+  112 monthly rates inserted (2017-01 → 2026-04). Re-ran
+  gacc-aggregate-yoy: 232 emitted per flow (up from 228 before
+  the FX load), confirming 4 anchors per flow were previously
+  being skipped on USD/EUR conversion. Still get an INFO log
+  for one 2025-06-01 'Total' row — separate data quality issue
+  worth chasing if anyone reaches into the GACC USD-side feed
+  again. Live DB now has 464 active gacc_aggregate findings.
+- **Natural graphite (HS 250410)** added as a new hs_group
+  (id=35, `seed:soapbox_validation`). Closes the third remaining
+  Soapbox-validation sub-CN8 group recommendation (MPPT will land
+  when 2026-01-onward has enough history; rare-earth narrow needs
+  CN8-code research before adding). EU-27 imports 12mo to 2026-02:
+  **-45% value, -27.8% kg** (low base €30.7M). Editorial direction
+  matches Soapbox A2.3 ("EU graphite imports from CN fell 22%
+  Jan-Feb 2026"); precise single-month figure still needs the
+  single-month-YoY operator (open forward work).
+- **State-of-play render verified post-fix**: regenerated
+  findings.md with `--briefing-pack --no-record`. Tier 1 now
+  shows only the expected 456 new gacc_aggregate findings (no
+  spurious paired supersedes); Tier 2 / Tier 3 unchanged. Tier 1
+  diff label rendering ready to surface real names for any future
+  aggregate supersedes (the COALESCE was the load-bearing fix).
+- **Gap surfaced for forward work**: gacc_aggregate_yoy* findings
+  are NOT currently rendered in Tier 2 or Tier 3 sections (only
+  Tier 1 picks them up when they change). A dedicated state-of-
+  play block for non-EU bloc aggregates (ASEAN, Latin America,
+  Africa, Total) belongs in Tier 2 alongside the hs_group blocks.
+
 ---
 
 ## 2026-05-11 (evening) — periodic-run pipeline (Phase 6.9)

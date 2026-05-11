@@ -30,6 +30,22 @@ What remains is the Layer-2 / Layer-3 wiring:
   account-bound; the pipeline is portable via `git clone` +
   `pg_dump | pg_restore`.
 
+### gacc_aggregate findings missing from Tier 2 / Tier 3 brief sections
+
+Discovered 2026-05-11 evening sweep. The new gacc_aggregate_yoy*
+analyser writes findings (now 464 active after the USD/EUR FX
+load + Africa restore), but the brief renderer only surfaces
+them via Tier 1 (the diff). Tier 2 ("current state of play")
+and Tier 3 ("full detail by HS group") iterate hs_group_yoy*
+subkinds only, so a journalist reading a fresh brief sees no
+view of China's trade with ASEAN / LatAm / Africa / Total.
+
+Fix: add a `_section_state_of_play_aggregates` block to Tier 2
+(parallel structure to `_section_state_of_play`, but one block
+per aggregate label rather than per HS group) and surface
+aggregate trends alongside the existing per-group rows. Small
+addition; the data is already in the DB.
+
 ## Coverage extension (surfaced by the 2026-05-11 Soapbox validation pass)
 
 Items the Soapbox validation surfaced as real gaps but not on
@@ -45,8 +61,10 @@ shipped 2026-05-11. Three Soapbox-grade sub-groups remain:
 
 - **MPPT inverters (CN8 85044084)** — separate code only from 1
   Jan 2026 so very limited history (will skip until ~mid-2026).
-- **Natural graphite (HS 250410)** — full history available;
-  CN export-controlled since late 2023, regularly cited.
+- ~~**Natural graphite (HS 250410)**~~ **DONE 2026-05-11**: id=35,
+  `seed:soapbox_validation`. EU-27 12mo to 2026-02: -45% value /
+  -27.8% kg (low_base). Single-period Jan-Feb -22% Soapbox figure
+  still needs the single-month YoY operator.
 - **Rare-earth narrow** (specific 8-digit codes inside HS 284690
   for yttrium / dysprosium / terbium oxides — the narrow buckets
   that became separately reportable from 2023).

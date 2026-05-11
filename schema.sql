@@ -472,7 +472,16 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
   -- finding independently closes that LLM-hallucination loop.
   ('Sintered NdFeB magnets (CN8 85051110)',
    'CN8 85051110 — sintered neodymium-iron-boron permanent magnets. Narrower than "Permanent magnets" (HS 8505 broad). Critical input for EV traction motors, wind-turbine generators, robotics, advanced electronics. China supplies the dominant share of extra-EU imports.',
-   ARRAY['85051110%'], 'seed:soapbox_validation');
+   ARRAY['85051110%'], 'seed:soapbox_validation'),
+  -- Added after the Soapbox validation pass (dev_notes/soapbox-validation-2026-05-11.md, A2.3).
+  -- Natural graphite in powder/flake form (HS 250410) has been under
+  -- China export-licence control since late 2023 on dual-use grounds.
+  -- Soapbox 2026-04-27: "EU imports of natural graphite from China fell
+  -- 22% in early 2026" — directly testable. HS 250490 (other graphite,
+  -- mostly bulk/lump) is a much smaller flow and editorially separate.
+  ('Natural graphite (HS 250410)',
+   'CN8 250410 — natural graphite in powder or flake form. Under China export-licence control since late 2023 on dual-use grounds; supply concentration and policy direction are recurring Soapbox / Reuters / FT story material. Narrower than chapter-level HS 2504 (which also includes lump and other forms).',
+   ARRAY['250410%'], 'seed:soapbox_validation');
 
 -- Caveats journalists should weigh when reading cross-source findings.
 INSERT INTO caveats (code, summary, detail, applies_to) VALUES

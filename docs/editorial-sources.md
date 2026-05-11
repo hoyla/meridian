@@ -198,7 +198,7 @@ prompted each addition:
 - `seed:soapbox_validation` — added after the 2026-05-11 Soapbox
   validation pass surfaced gaps where the broad hs_group diluted a
   specific Soapbox claim. Currently: Pork offal (HS 0206 swine),
-  Sintered NdFeB magnets (CN8 85051110). Pattern: when a Soapbox
+  Sintered NdFeB magnets (CN8 85051110), Natural graphite (HS 250410). Pattern: when a Soapbox
   piece quotes a precise 8-digit code or a sub-bracket of an
   existing group, add the narrower group as a sibling so the
   finding can match the cited figure directly.
