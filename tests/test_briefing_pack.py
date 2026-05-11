@@ -255,14 +255,14 @@ def test_top_n_truncates_movers(empty_findings, test_db_url):
         conn.commit()
 
     md = briefing_pack.render(top_n=3)
-    # The "### {group}" headings under the EU-27 imports section — count them.
-    # Phase 6.1e: section header now reads "## EU-27 Imports (CN→reporter) — top N movers".
-    # Other sections also use ### headings (trajectory shape buckets,
-    # mirror gaps, other scopes), so isolate to between this section's
-    # header and the next "## ".
-    imports_block = md.split("## EU-27 Imports (CN→reporter)")[1].split("\n## ")[0]
-    h3_count = len(re.findall(r"^### ", imports_block, re.MULTILINE))
-    assert h3_count == 3
+    # The "#### {group}" headings under the EU-27 imports section — count them.
+    # Tiered restructure (2026-05-11): the section heading itself was demoted
+    # from "## EU-27 Imports..." to "### EU-27 Imports..." so it sits under
+    # the Tier 3 "## Full detail" parent; per-group sub-headings were
+    # correspondingly demoted from "### {group}" to "#### {group}".
+    imports_block = md.split("### EU-27 Imports (CN→reporter)")[1].split("\n### ")[0]
+    h4_count = len(re.findall(r"^#### ", imports_block, re.MULTILINE))
+    assert h4_count == 3
 
 
 def test_permalink_base_changes_trace_token_to_link(
@@ -461,7 +461,8 @@ def test_diff_section_lists_material_yoy_shifts(empty_findings, test_db_url):
         conn.commit()
 
     md = briefing_pack.render()
-    assert "## Changes since the previous export" in md
+    # Tiered restructure (2026-05-11): the diff section is Tier 1.
+    assert "## Tier 1 — What's new this cycle" in md
     assert "### Material YoY shifts" in md
     assert "Aluminium (broad)" in md
     # The Aluminium shift is 12% → -8% = 20pp swing AND a direction flip.

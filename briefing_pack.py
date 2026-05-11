@@ -254,6 +254,52 @@ def _section_headline(
     return _Section(markdown="\n".join(lines))
 
 
+def _section_reader_guide() -> _Section:
+    """Three-tier reader's guide. Sits right after the headline so a reader
+    knows what they're looking at and where to dive in before they meet the
+    universal-caveats wall.
+
+    The three tiers are also reflected in the headings below so the document
+    is navigable: Tier 1 (lead), Tier 2 (compact summary), Tier 3 (full
+    per-finding detail). The supersede chain in the DB powers tier 1; the
+    `data.xlsx` companion is the same data as tier 3 in sortable form."""
+    lines: list[str] = []
+    lines.append("## How to read this brief")
+    lines.append("")
+    lines.append(
+        "Three sections, descending in newness and ascending in completeness. "
+        "Read them in order if it's your first brief; skip to **Tier 1** if you "
+        "read the previous one."
+    )
+    lines.append("")
+    lines.append(
+        "1. **Tier 1 — What's new this cycle.** Additions, revisions, "
+        "direction-flips, and threshold-crossings since the previous brief. "
+        "The actually-news part. A regular subscriber reads this and probably "
+        "stops here unless something needs drilling into."
+    )
+    lines.append(
+        "2. **Tier 2 — Current state of play.** A compact one-paragraph-per-"
+        "HS-group summary of where every active finding stands today. The "
+        "persistent picture between cycles. Skim to orient yourself; most of "
+        "this re-renders identically cycle to cycle."
+    )
+    lines.append(
+        "3. **Tier 3 — Full detail by HS group.** Per-finding breakdown with "
+        "caveats, top reporters, top CN8 contributors, monthly trajectory series. "
+        "Drill in when you need to source a specific number or quote with "
+        "confidence. The same data is available in sortable/filterable form "
+        "in the `data.xlsx` companion."
+    )
+    lines.append("")
+    lines.append(
+        "*Each tier is delimited by a horizontal rule (`---`) and a `## Tier N` "
+        "heading so it's easy to scan to where you want to land.*"
+    )
+    lines.append("")
+    return _Section(markdown="\n".join(lines))
+
+
 def _section_universal_caveats(cur) -> _Section:
     """Top-of-brief explainer for caveats that fire on essentially every active
     finding (within their applicable subkind family). Reads the canonical
@@ -584,7 +630,7 @@ def _section_hs_yoy_movers(
         # rather than printing N empty headers per scope. The default scope
         # (eu_27) still surfaces a "no findings" header below if needed.
         return _Section(markdown="")
-    lines.append(f"## {flow_label} — top {len(rows)} movers (latest 12mo YoY)")
+    lines.append(f"### {flow_label} — top {len(rows)} movers (latest 12mo YoY)")
     lines.append("")
 
     for r in rows:
@@ -596,7 +642,7 @@ def _section_hs_yoy_movers(
         if pred is not None:
             badge, _pct, _n = pred
             badge_str = f" {badge}"
-        lines.append(f"### {r['group_name']}{badge_str}")
+        lines.append(f"#### {r['group_name']}{badge_str}")
         if pred is not None:
             badge, pct, n = pred
             label = (
@@ -713,7 +759,7 @@ def _section_trajectories(cur, comparison_scope: str = "eu_27") -> _Section:
     lines: list[str] = []
     if not rows:
         return _Section(markdown="")
-    lines.append(f"## {scope_label} trajectory shapes")
+    lines.append(f"### {scope_label} trajectory shapes")
     lines.append("")
     lines.append(
         "Each HS group's rolling-12mo YoY series classified by shape. "
@@ -744,7 +790,7 @@ def _section_trajectories(cur, comparison_scope: str = "eu_27") -> _Section:
             continue
         seen_shapes.add(shape)
         shape_label = by_shape[shape][0]['shape_label'] or shape
-        lines.append(f"### {shape} — *{shape_label}*")
+        lines.append(f"#### {shape} — *{shape_label}*")
         for r in by_shape[shape]:
             flow = "imports" if r['subkind'] == 'hs_group_trajectory' else "exports"
             low_base_marker = " ⚠️ low-base" if r['low_base_majority'] else ""
@@ -804,7 +850,7 @@ def _section_mirror_gaps(cur) -> _Section:
 
     release_ids: set[int] = set()
     lines: list[str] = []
-    lines.append("## Mirror-trade gaps (latest per partner)")
+    lines.append("### Mirror-trade gaps (latest per partner)")
     lines.append("")
     lines.append(
         "Mirror-gap = (Eurostat — GACC_EUR_converted) / Eurostat. The *expected* "
@@ -825,7 +871,7 @@ def _section_mirror_gaps(cur) -> _Section:
         for r in gap_rows_sorted:
             label = r['gacc_label'] or r['iso2']
             agg = " *(aggregate)*" if r['is_aggregate'] else ""
-            lines.append(f"### {r['iso2']} — {label}{agg}")
+            lines.append(f"#### {r['iso2']} — {label}{agg}")
             lines.append(
                 f"- Period: **{r['period']}** | GACC (EUR-converted): {_fmt_eur(r['gacc_eur'])} "
                 f"| Eurostat: {_fmt_eur(r['eurostat_eur'])} | Gap: **{_fmt_pct(r['gap_pct'])}**"
@@ -886,7 +932,7 @@ def _section_mirror_gaps(cur) -> _Section:
         """
     )
     movers = cur.fetchall()
-    lines.append("### Mirror-gap movers (top 10 by |z|)")
+    lines.append("#### Mirror-gap movers (top 10 by |z|)")
     lines.append("")
     lines.append(
         "Each row: a partner whose gap shifted notably vs that partner's own rolling "
@@ -934,7 +980,7 @@ def _section_low_base(cur) -> _Section:
         # Suppress the section entirely when there's nothing to review.
         return _Section(markdown="")
 
-    lines.append("## Low-base review queue")
+    lines.append("### Low-base review queue")
     lines.append("")
     lines.append(
         f"{len(rows)} findings rest on a denominator below the low-base threshold "
@@ -1083,7 +1129,21 @@ def _section_diff_since_last_brief(cur) -> _Section:
     row = cur.fetchone()
     prev_at = row[0] if row else None
     if prev_at is None:
-        return _Section(markdown="")
+        # First-ever brief: nothing to compare against. Still emit the tier
+        # header so the document structure is consistent across cycles, and
+        # tell the reader explicitly that this is the baseline.
+        first_brief_lines = [
+            "---",
+            "",
+            "## Tier 1 — What's new this cycle",
+            "",
+            "*This is the **first brief** generated against this DB — there is "
+            "no previous export to diff against. The picture below in "
+            "**Tier 2 — Current state of play** is your baseline; subsequent "
+            "briefs will surface here what changed since this one.*",
+            "",
+        ]
+        return _Section(markdown="\n".join(first_brief_lines))
 
     # New active findings since previous brief. Excludes narrative_hs_group
     # — LLM lead-scaffold findings live in the companion leads file, not the
@@ -1135,18 +1195,27 @@ def _section_diff_since_last_brief(cur) -> _Section:
                 "new_finding_id": r["new_id"],
             })
 
-    if not new_by_subkind and not significant:
-        return _Section(markdown="")
-
     lines: list[str] = []
-    lines.append(f"## Changes since the previous export")
+    lines.append("---")
     lines.append("")
+    lines.append("## Tier 1 — What's new this cycle")
+    lines.append("")
+    if not new_by_subkind and not significant:
+        lines.append(
+            f"*Previous brief generated {prev_at:%Y-%m-%d %H:%M %Z}. "
+            f"**Nothing material has changed since then** — no new findings, "
+            f"no YoY shifts > 5pp, no direction flips. The Tier 2 summary "
+            f"below is still the current picture.*"
+        )
+        lines.append("")
+        return _Section(markdown="\n".join(lines))
+
     lines.append(
-        f"*Previous findings export generated {prev_at:%Y-%m-%d %H:%M %Z}. The "
-        f"lists below reflect findings that have been added or whose value has "
-        f"materially shifted since then. New findings without a comparable "
-        f"predecessor — e.g. a new HS group, a new period anchor — appear "
-        f"under \"New findings\".*"
+        f"*Previous brief generated {prev_at:%Y-%m-%d %H:%M %Z}. "
+        f"The lists below reflect findings that have been added or whose "
+        f"value has materially shifted since then. New findings without a "
+        f"comparable predecessor — e.g. a new HS group, a new period anchor — "
+        f"appear under \"New findings\".*"
     )
     lines.append("")
 
@@ -1186,6 +1255,174 @@ def _section_diff_since_last_brief(cur) -> _Section:
             lines.append(f"- {n} new `{subkind}`")
         lines.append("")
 
+    return _Section(markdown="\n".join(lines))
+
+
+def _section_state_of_play(
+    cur, predictability: dict[str, tuple[str, float, int]] | None = None,
+) -> _Section:
+    """Tier 2 — compact one-block-per-HS-group summary of where every
+    active finding stands today. Intentionally short: imports headline,
+    exports headline, trajectory shape (if any), per group. The detail
+    sections below in Tier 3 are the source for the same numbers; this
+    section is for orientation, not citation."""
+    predictability = predictability or {}
+
+    # Latest hs_group_yoy* finding per (group, subkind). DISTINCT ON pulls
+    # the newest current_end per (group, subkind) pair — same pattern as
+    # _section_hs_yoy_movers.
+    cur.execute(
+        """
+        WITH latest AS (
+          SELECT DISTINCT ON (detail->'group'->>'name', subkind)
+                 id,
+                 detail->'group'->>'name' AS group_name,
+                 subkind,
+                 (detail->'windows'->>'current_end')::date AS current_end,
+                 (detail->'totals'->>'yoy_pct')::numeric AS yoy_pct,
+                 (detail->'totals'->>'yoy_pct_kg')::numeric AS yoy_pct_kg,
+                 (detail->'totals'->>'current_12mo_eur')::numeric AS cur_eur,
+                 (detail->'totals'->>'low_base')::boolean AS low_base,
+                 (detail->'totals'->>'partial_window')::boolean AS partial_window
+            FROM findings
+           WHERE subkind LIKE 'hs_group_yoy%%' AND superseded_at IS NULL
+        ORDER BY detail->'group'->>'name', subkind,
+                 (detail->'windows'->>'current_end')::date DESC, id DESC
+        )
+        SELECT * FROM latest ORDER BY group_name, subkind
+        """
+    )
+    yoy_rows = list(cur.fetchall())
+
+    # Latest trajectory per (group, subkind).
+    cur.execute(
+        """
+        SELECT DISTINCT ON (detail->'group'->>'name', subkind)
+               detail->'group'->>'name' AS group_name,
+               subkind,
+               detail->>'shape' AS shape,
+               detail->>'shape_label' AS shape_label
+          FROM findings
+         WHERE subkind LIKE 'hs_group_trajectory%%' AND superseded_at IS NULL
+      ORDER BY detail->'group'->>'name', subkind, id DESC
+        """
+    )
+    traj_rows = list(cur.fetchall())
+    # Index trajectories: traj_by_group[group][subkind] -> shape_label
+    traj_by_group: dict[str, dict[str, str]] = {}
+    for r in traj_rows:
+        traj_by_group.setdefault(r["group_name"], {})[r["subkind"]] = (
+            r["shape_label"] or r["shape"] or "—"
+        )
+
+    # Index yoy: yoy_by_group[group][subkind] -> row
+    yoy_by_group: dict[str, dict[str, Any]] = {}
+    for r in yoy_rows:
+        yoy_by_group.setdefault(r["group_name"], {})[r["subkind"]] = r
+
+    def _fmt_yoy_line(label: str, row: Any, traj_label: str | None) -> str:
+        """One-line per (scope, flow) summary inside a group block."""
+        yoy_v = float(row["yoy_pct"]) * 100 if row["yoy_pct"] is not None else None
+        yoy_k = float(row["yoy_pct_kg"]) * 100 if row["yoy_pct_kg"] is not None else None
+        cur_eur = row["cur_eur"]
+        flags: list[str] = []
+        if row["low_base"]:
+            flags.append("⚠ low base")
+        if row["partial_window"]:
+            flags.append("partial window")
+        flags_str = (" — " + ", ".join(flags)) if flags else ""
+        yoy_v_str = f"{yoy_v:+.1f}%" if yoy_v is not None else "n/a"
+        yoy_k_str = f" (kg {yoy_k:+.1f}%)" if yoy_k is not None else ""
+        eur_str = _fmt_eur(cur_eur)
+        traj_str = f" Trajectory: `{traj_label}`." if traj_label else ""
+        return (
+            f"  - **{label}**: {yoy_v_str}{yoy_k_str} to {eur_str} (12mo to "
+            f"{row['current_end']}).{traj_str}{flags_str} "
+            f"{_trace_token(row['id'])}"
+        )
+
+    # Render order: each group section, then within it group lines by
+    # (flow, scope). Imports first (the more common editorial direction),
+    # then exports.
+    SCOPE_ORDER = [
+        # (subkind_yoy, subkind_trajectory, display_label, flow_direction)
+        ("hs_group_yoy", "hs_group_trajectory", "EU-27 imports (CN→reporter)", 1),
+        ("hs_group_yoy_uk", "hs_group_trajectory_uk", "UK imports (CN→reporter)", 1),
+        ("hs_group_yoy_combined", "hs_group_trajectory_combined", "EU-27+UK imports (combined)", 1),
+        ("hs_group_yoy_export", "hs_group_trajectory_export", "EU-27 exports (reporter→CN)", 2),
+        ("hs_group_yoy_uk_export", "hs_group_trajectory_uk_export", "UK exports (reporter→CN)", 2),
+        ("hs_group_yoy_combined_export", "hs_group_trajectory_combined_export", "EU-27+UK exports (combined)", 2),
+    ]
+
+    lines: list[str] = []
+    lines.append("---")
+    lines.append("")
+    lines.append("## Tier 2 — Current state of play")
+    lines.append("")
+    lines.append(
+        "One block per HS group. Each row inside is a (scope, flow) "
+        "compact summary: latest 12mo YoY (value, and kg in parens), current "
+        "12mo total in EUR, trajectory shape if classified, and the "
+        "`finding/N` token you can use to find the same row in the spreadsheet "
+        "or the detail tier below. Predictability badges (🟢/🟡/🔴) sit next "
+        "to the group name where the historical pair exists."
+    )
+    lines.append("")
+    lines.append(
+        "*This section is the picture between cycles. Items that have moved "
+        "materially since the previous brief appear in Tier 1 above; this "
+        "tier shows where every active finding stands right now.*"
+    )
+    lines.append("")
+
+    if not yoy_by_group:
+        lines.append("*No active hs_group YoY findings to render.*")
+        lines.append("")
+        return _Section(markdown="\n".join(lines))
+
+    for group_name in sorted(yoy_by_group.keys()):
+        by_subkind = yoy_by_group[group_name]
+        traj = traj_by_group.get(group_name, {})
+
+        pred = predictability.get(group_name)
+        badge_str = f" {pred[0]}" if pred is not None else ""
+        lines.append(f"### {group_name}{badge_str}")
+        lines.append("")
+
+        any_emitted = False
+        for sk_yoy, sk_traj, label, _flow in SCOPE_ORDER:
+            r = by_subkind.get(sk_yoy)
+            if not r:
+                continue
+            traj_label = traj.get(sk_traj)
+            lines.append(_fmt_yoy_line(label, r, traj_label))
+            any_emitted = True
+        if not any_emitted:
+            lines.append("  - *(no active findings)*")
+        lines.append("")
+
+    return _Section(markdown="\n".join(lines))
+
+
+def _section_detail_opener() -> _Section:
+    """Tier 3 — opener heading for the per-finding detail blocks. The
+    detail itself is rendered by the existing _section_hs_yoy_movers /
+    _section_trajectories / _section_mirror_gaps / _section_low_base
+    functions, all of which use ### headings so they sit naturally under
+    this ## opener."""
+    lines: list[str] = []
+    lines.append("---")
+    lines.append("")
+    lines.append("## Tier 3 — Full detail by HS group")
+    lines.append("")
+    lines.append(
+        "Per-finding detail for the top movers in each scope-and-flow "
+        "combination, plus trajectory shape buckets, mirror gaps, and "
+        "low-base reviews. Drill in here when you need a citable number, "
+        "per-reporter contribution detail, or the per-finding caveat list. "
+        "The same content is in `data.xlsx` if you'd rather sort and filter."
+    )
+    lines.append("")
     return _Section(markdown="\n".join(lines))
 
 
@@ -1299,39 +1536,38 @@ def render(
     sections: list[_Section] = []
     release_ids: set[int] = set()
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        # ----- Front matter: title, reader's guide, scope/caveat setup -----
         sections.append(_section_headline(
             cur, companion_filename=companion_filename, scope_label=scope_label,
         ))
-
-        # Phase 6.2: universal-caveat explainer right after the headline so
-        # a reader knows up-front which methodological caveats apply to
-        # every finding (and are therefore suppressed from per-finding
-        # caveat lists below).
+        sections.append(_section_reader_guide())
         sections.append(_section_universal_caveats(cur))
 
-        # Phase 6.8: 'what changed since the previous brief' section sits
-        # immediately after the header so a journalist scanning the brief
-        # sees the deltas first. Returns empty on first-ever brief.
-        # Excludes narrative_hs_group findings — those live in the
-        # companion leads file, not the brief.
-        sections.append(_section_diff_since_last_brief(cur))
-
-        # LLM lead-scaffold findings render to a separate leads file
-        # (render_leads / export_leads). The brief itself is LLM-free
-        # so a downstream LLM tool (NotebookLM, etc.) is reasoning over
-        # the raw findings, not over another LLM's interpretation.
-
         # Phase: per-group YoY-predictability badges. Computed once and
-        # passed into each per-scope mover section. Empty dict on a fresh
-        # DB with no T-6 history; the section renderer falls back to no
-        # badge in that case.
+        # passed into the state-of-play section and each per-scope mover
+        # section. Empty dict on a fresh DB with no T-6 history; the
+        # section renderer falls back to no badge in that case.
         predictability = _compute_predictability_per_group(cur)
 
-        # Per-scope sections (Phase 6.1e). Each scope renders its own
-        # YoY top-movers + trajectory sections so a journalist scanning
-        # the brief sees the EU-27 / UK / combined views as distinct
-        # blocks. Scopes with no findings return empty markdown and are
-        # dropped by the join filter at the bottom.
+        # ----- Tier 1: what's new this cycle (the diff) -----
+        # Excludes narrative_hs_group findings — those live in the companion
+        # leads file, not the brief. The function emits its own `## Tier 1`
+        # heading + the `---` separator above it. Empty case (first-ever brief
+        # or nothing material changed) still emits the heading with a
+        # baseline-explainer paragraph.
+        sections.append(_section_diff_since_last_brief(cur))
+
+        # ----- Tier 2: current state of play (compact summary) -----
+        sections.append(_section_state_of_play(cur, predictability))
+
+        # ----- Tier 3: full per-finding detail by HS group -----
+        # The opener emits the `## Tier 3` heading + `---`. The detail
+        # sections below all use `###` headings so they sit under the
+        # Tier 3 parent. Per-scope blocks (Phase 6.1e): each scope renders
+        # its own YoY top-movers + trajectory sections so EU-27 / UK /
+        # combined views are distinct sub-blocks. Scopes with no findings
+        # return empty markdown and are dropped by the join filter.
+        sections.append(_section_detail_opener())
         for scope in ("eu_27", "uk", "eu_27_plus_uk"):
             for flow in (1, 2):
                 sec = _section_hs_yoy_movers(
@@ -1352,6 +1588,9 @@ def render(
         sections.append(sec)
         release_ids |= sec.release_ids
 
+        # ----- Endmatter: source citations + about-findings endnote.
+        # Outside the tier structure — these are reference material that
+        # applies to the whole document, not part of the editorial flow.
         sections.append(_section_sources_appendix(cur, release_ids))
         sections.append(_section_about_findings())
 
