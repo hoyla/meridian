@@ -7,44 +7,32 @@ the original Phase 1–6 plan, look at the git log around
 
 ## Near-term (likely next session)
 
-### Set up the Routine + start collecting cycles
+### Watch the first 2-3 real cycles + decide delivery vector
 
-Periodic-run **pipeline** shipped 2026-05-11 (Phase 6.9 — see
-`history.md` and [`periodic-runs-design-2026-05-11.md`](periodic-runs-design-2026-05-11.md)).
-What remains is the Layer-2 / Layer-3 wiring:
+Periodic-run **pipeline + Routine** shipped 2026-05-11 (Phase 6.9 /
+6.10 — see `history.md` and
+[`periodic-runs-design-2026-05-11.md`](periodic-runs-design-2026-05-11.md)).
+Routine fires daily at 09:01 local time. What remains is observation
+and Layer-3 design:
 
-- **Create the Claude Code Routine** with the prompt template in
-  the design doc. Daily fire at 07:00 UTC. The Routine fetches the
-  next Eurostat period (best-effort, exits cleanly on 404), then
-  invokes `python scrape.py --periodic-run`. The pipeline is
-  idempotent so a daily fire is harmless between Eurostat releases.
-- **Watch the first 2–3 real cycles land.** Tier 1 currently shows
-  same-day method-bump churn (everything created today); after the
-  first real Eurostat-release cycle, it'll show the actual data
-  diff. Validate that the diff reads usefully editorially.
+- **Click "Run now" once from the Scheduled sidebar** to pre-approve
+  the tools the Routine uses (`psql`, `python scrape.py ...`).
+  Otherwise the first real scheduled run will pause on permission
+  prompts.
+- **Watch the first 2–3 real cycles land** (whenever the next
+  Eurostat release publishes — typically 6-8 weeks after period
+  close). Tier 1 currently shows same-day method-bump churn
+  (everything created today); after the first real Eurostat-release
+  cycle, it'll show the actual data diff. Validate that the diff
+  reads usefully editorially.
 - **Decide on delivery vector** (Layer 3) once we've seen what a
   real cycle looks like in Lisa's hands. Don't pre-pick
-  email/Slack/Drive.
+  email / Slack / Drive — pick after the first usable export
+  has been delivered manually a few times.
 - **Migrate Luke's environment** from laptop to desktop. Steps in
   the design doc § "Migration: laptop → desktop". Routines are
   account-bound; the pipeline is portable via `git clone` +
   `pg_dump | pg_restore`.
-
-### gacc_aggregate findings missing from Tier 2 / Tier 3 brief sections
-
-Discovered 2026-05-11 evening sweep. The new gacc_aggregate_yoy*
-analyser writes findings (now 464 active after the USD/EUR FX
-load + Africa restore), but the brief renderer only surfaces
-them via Tier 1 (the diff). Tier 2 ("current state of play")
-and Tier 3 ("full detail by HS group") iterate hs_group_yoy*
-subkinds only, so a journalist reading a fresh brief sees no
-view of China's trade with ASEAN / LatAm / Africa / Total.
-
-Fix: add a `_section_state_of_play_aggregates` block to Tier 2
-(parallel structure to `_section_state_of_play`, but one block
-per aggregate label rather than per HS group) and surface
-aggregate trends alongside the existing per-group rows. Small
-addition; the data is already in the DB.
 
 ## Coverage extension (surfaced by the 2026-05-11 Soapbox validation pass)
 
@@ -82,14 +70,17 @@ and Lisa quotes them directly. Engaging with the design choice
 rather than papering over it is the ask — needs a separate
 planning pass. Covers ~7 currently-blocked Soapbox claims.
 
-### Single-month / 2-month YoY operator
+### ~~Single-month / 2-month YoY operator~~ DONE 2026-05-11
 
-Soapbox quotes single-month YoYs (Feb 2026 alone −16.2%) and
-2-month cumulatives (Jan-Feb 2026 cars +45%). Our default is
-12mo rolling. The numbers are derivable from raw rows and concur
-exactly (three EXACT matches in the validation pass), but no
-analyser surfaces them. A new operator alongside 12mo-rolling
-would close ~5 currently-blocked claims at Soapbox cadence.
+Single-month and 2-month-cumulative YoY are now sub-fields on
+every hs_group_yoy finding (`detail.totals.single_month`,
+`detail.totals.two_month_cumulative`). Method bumped v9 → v10.
+Tier 2 render shows the latest-month figure alongside the 12mo
+rolling. **Remaining work**: aggregate-level single-month YoY
+(EU-CN deficit single month) is still derivable only from raw
+rows — extending `gacc_aggregate_yoy` to carry the same
+sub-fields would unblock A3.1 / A3.2 / A3.3 at native cadence
+as named findings rather than raw-row queries.
 
 ### Per-reporter hs_group rollup
 

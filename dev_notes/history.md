@@ -104,6 +104,46 @@ missing). No method-version-bumped findings under broken keys
 remain. Findings table is a clean baseline for the first real
 periodic-run cycle when the next Eurostat release lands.
 
+### Aggregate state-of-play + single-month YoY + Routine deployed
+
+Three planned follow-ups landed together (commit
+[`00bff29`](https://github.com/hoyla/gacc/commit/00bff29) and the
+Routine creation via the scheduled-tasks MCP):
+
+- **Tier 2 aggregate state-of-play block.** New
+  `_section_state_of_play_aggregates` renders one block per GACC
+  partner aggregate (ASEAN / Africa / Latin America / world Total)
+  alongside the existing per-HS-group block. Closes the "Africa is
+  invisible" surfacing gap from the bug-fix sweep — the data was
+  always there (after the natural-key fix) but no Tier 2 block
+  read it. Now journalist reads `findings.md` and sees the bloc
+  context alongside the EU-CN per-group view.
+- **Single-month + 2-month-cumulative YoY** added as sub-fields on
+  every `hs_group_yoy` finding (`detail.totals.single_month` +
+  `detail.totals.two_month_cumulative`). Method version
+  `v9_comparison_scope` → `v10_single_month_and_two_month_cumulative`.
+  Editorial register: Soapbox / Lisa routinely quote "Feb 2026 vs
+  Feb 2025" (single-month) or "Jan-Feb 2026 vs Jan-Feb 2025"
+  (2-month cumulative) rather than 12mo rolling. The Tier 2 render
+  now shows both: `+1.4% (kg +7.9%) to €732.4M (12mo to 2026-02-01).
+  Latest month: +11.9% (kg +19.2%)` — for the NdFeB sub-group, the
+  acceleration is the story. Graceful degradation for findings
+  still on older method versions. Currently 3 of 35 hs_groups
+  carry v10 (the seed:soapbox_validation sub-CN8 groups, re-run
+  today to validate); the rest upgrade automatically on the next
+  `--periodic-run`.
+- **Claude Code Routine deployed.** `gacc-daily-periodic-run`,
+  cron `0 9 * * *` (09:01 local time daily — jitter ~40 sec). The
+  Routine fetches the next candidate Eurostat / HMRC period if it
+  might be available, runs `python scrape.py --periodic-run`
+  (idempotent, no-op on most days), and surfaces a 3-5 line Tier 1
+  summary back to chat if a new export was written. Luke handles
+  delivery to Lisa manually (Layer 3). Migration to the desktop
+  later: pipeline portable via `git clone` + `pg_dump | pg_restore`;
+  routine follows the account (per the schedule MCP setup).
+
+Phase 6.9 (periodic-runs pipeline) is now end-to-end live.
+
 ### Follow-up sweep: FX coverage + Natural graphite + state-of-play check
 
 After the three bug fixes landed:
