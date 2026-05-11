@@ -449,7 +449,30 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
   -- with 'is China selling more wind-related metalwork'.
   ('Wind generating sets only',
    'HS 850231 — wind-powered electric generating sets. Narrower than "Wind turbine components"; isolates the finished-turbine question from generator parts and steel towers.',
-   ARRAY['850231%'], 'seed:tan_article');
+   ARRAY['850231%'], 'seed:tan_article'),
+  -- Added after the Soapbox validation pass (dev_notes/soapbox-validation-2026-05-11.md).
+  -- Soapbox routinely cites pork meat and pork offal separately — both as
+  -- targets of China''s anti-dumping action and the resulting volume drops
+  -- (e.g. 2025 meat -11%, offal -3%). The existing Pork (HS 0203) group covers
+  -- meat only; offal sits in HS 0206 sub-codes which were previously
+  -- invisible to the tool.
+  ('Pork offal (HS 0206 swine)',
+   'HS 0206 swine sub-codes — 020630 (fresh/chilled), 020641 (frozen liver), 020649 (frozen other). Sibling to "Pork (HS 0203)". Soapbox tracks pork meat and pork offal separately when reporting on EU-China pork trade and China''s anti-dumping action; surfacing each as its own finding makes both story sides directly quotable.',
+   ARRAY['020630%', '020641%', '020649%'], 'seed:soapbox_validation'),
+  -- Added after the Soapbox validation pass (dev_notes/soapbox-validation-2026-05-11.md).
+  -- The broad Permanent magnets (HS 8505) group spans electromagnets,
+  -- electromagnetic couplings and various other 8505 sub-codes. The
+  -- editorially-loaded story — sintered NdFeB magnets, ~93% from China,
+  -- critical for EV motors / wind turbines / advanced electronics — sits in
+  -- CN8 85051110 specifically. Broad-group volume YoY at 2026-02 was +1.4%;
+  -- 85051110 alone is +18% (matches Soapbox 2026-04-27 to the percentage
+  -- point). Sub-group surfaces the editorial signal that the broad chapter
+  -- dilutes. Also the same code Phase 3 found qwen3 hallucinating about
+  -- (the "93% of permanent magnets" line) — having the tool emit this
+  -- finding independently closes that LLM-hallucination loop.
+  ('Sintered NdFeB magnets (CN8 85051110)',
+   'CN8 85051110 — sintered neodymium-iron-boron permanent magnets. Narrower than "Permanent magnets" (HS 8505 broad). Critical input for EV traction motors, wind-turbine generators, robotics, advanced electronics. China supplies the dominant share of extra-EU imports.',
+   ARRAY['85051110%'], 'seed:soapbox_validation');
 
 -- Caveats journalists should weigh when reading cross-source findings.
 INSERT INTO caveats (code, summary, detail, applies_to) VALUES
