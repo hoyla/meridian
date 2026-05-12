@@ -213,7 +213,7 @@ group-heavy. Closed the gap with four sequential commits — cheapest
 to most-impactful per hour. Stage B/C results captured in
 [`soapbox-validation-2026-05-11.md`](soapbox-validation-2026-05-11.md).
 
-### Step 1 — Thirteen new `hs_groups` ([`5fa011d`](https://github.com/hoyla/gacc/commit/5fa011d), [`b4357ed`](https://github.com/hoyla/gacc/commit/b4357ed))
+### Step 1 — Thirteen new `hs_groups` ([`5fa011d`](https://github.com/hoyla/meridian/commit/5fa011d), [`b4357ed`](https://github.com/hoyla/meridian/commit/b4357ed))
 
 `seed:soapbox_a1_2026_05_12`. Spot-check of latest hs_group_yoy
 findings at `current_end=2026-02`, scope=eu_27, flow=1 (CN→EU
@@ -272,7 +272,7 @@ the typed-facts block) and clarified broad-chapter codes (HS 2922,
 findings. Same hallucination class as the 93%-permanent-magnets
 case from Phase 3.
 
-### Step 2 — `briefing_pack.py` modularisation ([`4da7eca`](https://github.com/hoyla/gacc/commit/4da7eca), [`5457e21`](https://github.com/hoyla/gacc/commit/5457e21))
+### Step 2 — `briefing_pack.py` modularisation ([`4da7eca`](https://github.com/hoyla/meridian/commit/4da7eca), [`5457e21`](https://github.com/hoyla/meridian/commit/5457e21))
 
 The 2,001-line `briefing_pack.py` became a `briefing_pack/` package:
 
@@ -293,7 +293,7 @@ Zero behaviour change — test suite passes 200/200 identical to
 pre-refactor. Done before steps 3+4 so new analyser sections land
 as new files in `sections/` rather than appends to a monolith.
 
-### Step 3 — `gacc_bilateral_aggregate_yoy` analyser ([`c8ea9c3`](https://github.com/hoyla/gacc/commit/c8ea9c3))
+### Step 3 — `gacc_bilateral_aggregate_yoy` analyser ([`c8ea9c3`](https://github.com/hoyla/meridian/commit/c8ea9c3))
 
 `gacc_aggregate_yoy` deliberately excluded `eu_bloc` ("mirror-trade
 handles EU"). The A1 re-test confirmed this left a real editorial
@@ -325,7 +325,7 @@ valid anchor periods. EU export YTD through 2026-04 = +18.2% to
 €175.04B (≈$200B at period FX) vs Soapbox's +19% to $201bn — within
 rounding + FX-rate-source noise.
 
-### Step 4 — `partner_share` analyser + extra-EU world aggregates ([`956e9db`](https://github.com/hoyla/gacc/commit/956e9db))
+### Step 4 — `partner_share` analyser + extra-EU world aggregates ([`956e9db`](https://github.com/hoyla/meridian/commit/956e9db))
 
 Soapbox's most distinctive analytical move is the "China share of
 EU imports by qty vs value" pattern. Every claim of the form
@@ -389,7 +389,7 @@ without reference to Soapbox).
 would need an HMRC-side world aggregate (HMRC ingest stores
 GB+CN/HK/MO only) — forward work.
 
-### Coverage-extension follow-up — `gacc_aggregate_yoy` v4 ([`605bf0d`](https://github.com/hoyla/gacc/commit/605bf0d))
+### Coverage-extension follow-up — `gacc_aggregate_yoy` v4 ([`605bf0d`](https://github.com/hoyla/meridian/commit/605bf0d))
 
 Mirrors step 3's pattern on the existing non-EU aggregate analyser:
 ASEAN / RCEP / Belt&Road / Africa / Latin America / world Total
@@ -419,7 +419,7 @@ updated for the universal-caveats refactor, the CN+HK+MO hardcode,
 the gacc_aggregate_yoy method-version bump, and one CN8 typo
 correction (291712 vs 291713).
 
-### Companion refactor: family-universal caveats + CN+HK+MO hardcode ([`434b592`](https://github.com/hoyla/gacc/commit/434b592))
+### Companion refactor: family-universal caveats + CN+HK+MO hardcode ([`434b592`](https://github.com/hoyla/meridian/commit/434b592))
 
 Two cuts from a code review that landed alongside the A1 work:
 
@@ -534,7 +534,7 @@ periodic-run cycle when the next Eurostat release lands.
 ### Aggregate state-of-play + single-month YoY + Routine deployed
 
 Three planned follow-ups landed together (commit
-[`00bff29`](https://github.com/hoyla/gacc/commit/00bff29) and the
+[`00bff29`](https://github.com/hoyla/meridian/commit/00bff29) and the
 Routine creation via the scheduled-tasks MCP):
 
 - **Tier 2 aggregate state-of-play block.** New
@@ -616,8 +616,8 @@ delivery (manual today).
 
 ### Three-tier findings document structure
 
-Commit [`abd07ec`](https://github.com/hoyla/gacc/commit/abd07ec) (with
-wording follow-up [`c85bfb6`](https://github.com/hoyla/gacc/commit/c85bfb6)).
+Commit [`abd07ec`](https://github.com/hoyla/meridian/commit/abd07ec) (with
+wording follow-up [`c85bfb6`](https://github.com/hoyla/meridian/commit/c85bfb6)).
 Background reasoning: a findings export at time T+1 mostly repeats one
 at time T — every 12mo-rolling window shifts by a month but most YoY
 values barely move. Rendering a full snapshot every cycle is
@@ -753,7 +753,7 @@ Ran the validation against the live DB the same day. Headline:
 
 Acted on the cheapest forward-work items the same afternoon. Two
 new hs_groups added in [`schema.sql`](../schema.sql) and the live
-DB, commit [`91354b3`](https://github.com/hoyla/gacc/commit/91354b3):
+DB, commit [`91354b3`](https://github.com/hoyla/meridian/commit/91354b3):
 
 - **id=33 Pork offal (HS 0206 swine)** — patterns
   `020630% / 020641% / 020649%`, `created_by='seed:soapbox_validation'`.
@@ -783,7 +783,7 @@ coverage extension. Tests: 196 passed.
 
 ### Stage B follow-up #6 — §5.4 snapshot refresh
 
-Commit [`38940ce`](https://github.com/hoyla/gacc/commit/38940ce).
+Commit [`38940ce`](https://github.com/hoyla/meridian/commit/38940ce).
 The annual aggregate table in
 [`shock-validation-2026-05-09.md:404-415`](shock-validation-2026-05-09.md)
 pre-dated the 2026-05-10 `000TOTAL`-mystery resolution (commit
@@ -851,7 +851,7 @@ reports now appear inline next to the findings they qualify:
   excess-over-baseline-pp split. Was sitting in `detail` since the
   ITIC backfill but not surfaced.
 
-Commit [`314962f`](https://github.com/hoyla/gacc/commit/314962f).
+Commit [`314962f`](https://github.com/hoyla/meridian/commit/314962f).
 Helpers `is_threshold_fragile()` and `_compute_predictability_per_group()`
 shared between briefing_pack and sheets_export so both render
 paths use the same definition.
@@ -869,7 +869,7 @@ Split into two paired files: brief stays fully deterministic; LLM
 lead scaffolds move into a separate companion document. Both share
 the same finding IDs; cross-references explicit.
 
-Commit [`acb8697`](https://github.com/hoyla/gacc/commit/acb8697).
+Commit [`acb8697`](https://github.com/hoyla/meridian/commit/acb8697).
 Diff section ("Changes since previous brief" → "Changes since
 previous export") now also excludes `narrative_hs_group` since
 those don't appear in the brief.
@@ -894,7 +894,7 @@ what slice of the data it covers. Currently metadata only — the
 filtering logic is forward work; the naming convention is in place
 so scoped exports can land cleanly when needed.
 
-Commit [`4c3da25`](https://github.com/hoyla/gacc/commit/4c3da25). New
+Commit [`4c3da25`](https://github.com/hoyla/meridian/commit/4c3da25). New
 CLI flags: `--export-dir PATH` and `--export-scope LABEL`.
 
 ### Spreadsheet refresh — three-artefact bundle
@@ -907,7 +907,7 @@ current methodology and added a NEW `predictability_index` tab.
 folder by default so all three artefacts share a single DB
 snapshot.
 
-Commit [`c1ed375`](https://github.com/hoyla/gacc/commit/c1ed375).
+Commit [`c1ed375`](https://github.com/hoyla/meridian/commit/c1ed375).
 Tab roster (8): summary, hs_yoy_imports, hs_yoy_exports,
 trajectories, mirror_gaps, mirror_gap_movers, low_base_review,
 predictability_index. The narrative_hs_group findings are
@@ -922,7 +922,7 @@ Both docs now end with the same shared endnote explaining what
 to look one up today (direct DB query), and pointers to
 `docs/methodology.md` + `docs/architecture.md` for deeper context.
 
-Commit [`4c3da25`](https://github.com/hoyla/gacc/commit/4c3da25).
+Commit [`4c3da25`](https://github.com/hoyla/meridian/commit/4c3da25).
 
 ### "In this export folder" block
 
@@ -931,7 +931,7 @@ leads.md with a structured block in each, listing all three
 artefacts (with the current one marked "(this document)"). The
 spreadsheet is now visible from the Markdown side too.
 
-Commit [`49e9c64`](https://github.com/hoyla/gacc/commit/49e9c64).
+Commit [`49e9c64`](https://github.com/hoyla/meridian/commit/49e9c64).
 
 ### `brief.md` → `findings.md` rename
 
@@ -944,7 +944,7 @@ and CLI flag `--briefing-pack` kept (the *bundle* is still a
 briefing pack — the rename is just the deterministic document
 inside it).
 
-Commit [`73a7f71`](https://github.com/hoyla/gacc/commit/73a7f71).
+Commit [`73a7f71`](https://github.com/hoyla/meridian/commit/73a7f71).
 
 ---
 
@@ -984,7 +984,7 @@ Side-effect: surfaced two missing schema definitions
 emitted by analysers but never had `caveats` table entries; both
 seeded.
 
-Commit [`6765afa`](https://github.com/hoyla/gacc/commit/6765afa).
+Commit [`6765afa`](https://github.com/hoyla/meridian/commit/6765afa).
 
 ### 6.3 — Methodology sensitivity sweep
 
@@ -1004,7 +1004,7 @@ classifications under variant thresholds. Three findings:
 
 Script: `scripts/sensitivity_sweep.py`.
 Report: `dev_notes/sensitivity-sweep-2026-05-10.md` (kept as
-dated artefact). Commit [`85d6cf7`](https://github.com/hoyla/gacc/commit/85d6cf7).
+dated artefact). Commit [`85d6cf7`](https://github.com/hoyla/meridian/commit/85d6cf7).
 
 ### 6.4 — Lead-scaffold restructure of LLM framing
 
@@ -1023,12 +1023,12 @@ trade_defence_outcome, cn8_reclassification, base_effect,
 energy_transition, post_pandemic_normalisation. Verifier
 discipline carries through unchanged. Method: `llm_topline_v2_lead_scaffold`.
 
-Follow-up [`f301342`](https://github.com/hoyla/gacc/commit/f301342) adds an HS-code regex strip
+Follow-up [`f301342`](https://github.com/hoyla/meridian/commit/f301342) adds an HS-code regex strip
 to the verifier so groups whose names embed HS codes (e.g.
 "Antibiotics (HS 2941)") don't trigger false-positive failures
 when the LLM cites the code in a rationale.
 
-Commits [`f624108`](https://github.com/hoyla/gacc/commit/f624108) + [`f301342`](https://github.com/hoyla/gacc/commit/f301342).
+Commits [`f624108`](https://github.com/hoyla/meridian/commit/f624108) + [`f301342`](https://github.com/hoyla/meridian/commit/f301342).
 
 ### 6.5 — Sector breadth review
 
@@ -1051,7 +1051,7 @@ user approval:
 - **Plastic waste renamed** "Plastic waste (post-National-Sword
   residual)" so the historical-only intent is explicit.
 
-Commits [`1b3cdf8`](https://github.com/hoyla/gacc/commit/1b3cdf8) (proposal) + the user-approved
+Commits [`1b3cdf8`](https://github.com/hoyla/meridian/commit/1b3cdf8) (proposal) + the user-approved
 group revisions in the live DB.
 
 ### 6.6 — Out-of-sample backtest of YoY signal stability
@@ -1079,7 +1079,7 @@ periodically — see `roadmap.md`.
 
 Script: `scripts/out_of_sample_backtest.py`.
 Report: `dev_notes/out-of-sample-backtest-2026-05-10.md` (kept as
-dated artefact). Commit [`5d0e23e`](https://github.com/hoyla/gacc/commit/5d0e23e).
+dated artefact). Commit [`5d0e23e`](https://github.com/hoyla/meridian/commit/5d0e23e).
 
 ### 6.7 — GACC 2018 parser (partial)
 
@@ -1101,7 +1101,7 @@ on Eurostat+HMRC) captured in
 `dev_notes/forward-work-gacc-2018-parser.md` — kept open because
 this is genuinely deferred, not closed.
 
-Commit [`3f115b4`](https://github.com/hoyla/gacc/commit/3f115b4).
+Commit [`3f115b4`](https://github.com/hoyla/meridian/commit/3f115b4).
 
 ### 6.8 — Brief versioning ("Changes since previous brief")
 
@@ -1115,7 +1115,7 @@ Foundation for the journalist workflow piece — they want to know
 what's changed since they last looked, not re-read the whole
 brief.
 
-Commit [`1267362`](https://github.com/hoyla/gacc/commit/1267362).
+Commit [`1267362`](https://github.com/hoyla/meridian/commit/1267362).
 
 ### Eurostat aggregate-scale 2x mystery — RESOLVED
 
@@ -1144,7 +1144,7 @@ Code change: new `EUROSTAT_AGGREGATE_PRODUCT_NC` constant in
 `tests/test_eurostat_scale_reconciliation.py` (3 tests, opt-in to
 live DB) guards against regression.
 
-Commit [`50f8dbd`](https://github.com/hoyla/gacc/commit/50f8dbd).
+Commit [`50f8dbd`](https://github.com/hoyla/meridian/commit/50f8dbd).
 
 ### Per-country CIF/FOB baselines from OECD ITIC
 
@@ -1164,7 +1164,7 @@ needing a method-version bump. 351 mirror_gap findings re-emitted.
 
 Sourced reference kept at
 `dev_notes/cif-fob-baselines-2026-05-10.md` for reproducibility.
-Commit [`4d4f7cc`](https://github.com/hoyla/gacc/commit/4d4f7cc).
+Commit [`4d4f7cc`](https://github.com/hoyla/meridian/commit/4d4f7cc).
 
 ---
 
@@ -1241,7 +1241,7 @@ triggered; 1144 findings (25%) had YoY shifts > 5pp; **337 had
 the YoY direction flip** ("growth" ↔ "decline"). Worst examples
 in 2018-2019 aluminium and electrical machinery — old EU-28 sums
 showed +25–30% growth, new EU-27 shows -20–30% decline. Commit
-[`388be73`](https://github.com/hoyla/gacc/commit/388be73).
+[`388be73`](https://github.com/hoyla/meridian/commit/388be73).
 
 ### 6.0.6 — ~10000x analyser speedup
 
@@ -1259,7 +1259,7 @@ the planner's estimated cost from ~476725 to ~41:
    LIKEs that the planner happily turns into a BitmapOr.
 
 Wall time dropped from ~40 minutes (mid-run, ~40%) to ~7 minutes
-full chain. Commit [`70d7bc5`](https://github.com/hoyla/gacc/commit/70d7bc5).
+full chain. Commit [`70d7bc5`](https://github.com/hoyla/meridian/commit/70d7bc5).
 
 ### 6.0.7 — Trajectory tolerates gaps
 
@@ -1273,7 +1273,7 @@ dropped_periods_due_to_gaps}`. The `TRAJECTORY_MIN_WINDOWS = 6`
 safeguard still rejects too-short remnants. Coverage went from 5
 to 57 trajectory findings. The EV trajectory now classifies as
 `dip_recovery` with trough at 2024-08, exactly when EU duties bit
-hardest. Commit [`13f5ea1`](https://github.com/hoyla/gacc/commit/13f5ea1).
+hardest. Commit [`13f5ea1`](https://github.com/hoyla/meridian/commit/13f5ea1).
 
 ---
 

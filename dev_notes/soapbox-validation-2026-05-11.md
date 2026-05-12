@@ -1068,7 +1068,7 @@ includes both.
 The fix and its safeguards already exist in the repo:
 
 - **Resolved** on 2026-05-10 ([history.md:307-334](history.md), commit
-  [`50f8dbd`](https://github.com/hoyla/gacc/commit/50f8dbd)).
+  [`50f8dbd`](https://github.com/hoyla/meridian/commit/50f8dbd)).
 - **Documented** in [docs/methodology.md:56-60](../docs/methodology.md)
   (the bulk-file quirk itself), [:419-423](../docs/methodology.md) (the
   filter rule), and [:500-501](../docs/methodology.md) (the "don't quote"

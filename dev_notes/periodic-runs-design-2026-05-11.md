@@ -164,7 +164,7 @@ device-specific piece.
 
 Steps to migrate:
 
-1. **On the desktop**: `git clone https://github.com/hoyla/gacc.git`,
+1. **On the desktop**: `git clone https://github.com/hoyla/meridian.git`,
    `python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`.
    Install Postgres (brew on macOS) and Ollama (`brew install ollama`).
 2. **Dump the live DB on the laptop**:
