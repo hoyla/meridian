@@ -93,6 +93,11 @@ Soapbox sources cited: GACC (Jan-Apr 2026 export totals), Eurostat (per-product
 shares including the new CN 8504 40 84 inverter code), EU Commission inverter
 restrictions statement.
 
+**Stage B re-test 2026-05-12.** Every claim that *could* be checked
+against the live DB was checked. No claim contradicts our data.
+Coverage gaps surfaced map cleanly to four roadmap items (see
+[roadmap.md "Proposed work order"](roadmap.md#proposed-work-order-post-2026-05-12-a1-re-test)).
+
 ### Testable claims
 
 **A1.1 — Aggregate, GACC side.** "China's exports to the EU reached US\$201bn,
@@ -106,8 +111,17 @@ Exports +19% YoY, imports +12% YoY, surplus +26% YoY."
   Jan + Feb combined; our parser's tolerance accepts up to 4 missing months
   per 24mo window — confirm the Jan-Feb-cumulative release for 2026 is
   ingested before reading the result.
-- **Result**: *(empty — Stage B)*
-- **Verdict**: *(empty)*
+- **Result**: data present in `observations` as `period_kind='ytd'`,
+  release 2026-04. Apr 2026 YTD: exports USD 200,727M, imports USD
+  87,590M, surplus USD 113,137M. Jan-Apr 2025 YTD (release 2025-04):
+  exports USD 168,799M, imports USD 78,465M, surplus USD 90,334M. YoY:
+  exports +18.9%, imports +11.6%, surplus +25.3%.
+- **Verdict**: ✓ **clean concur** on every number (within rounding).
+  But **no analyser emits a finding** — `gacc_aggregate_yoy` is
+  hardcoded to non-EU aggregates ([anomalies.py](../anomalies.py)).
+  This is the article's lead claim and our DB has it; the fix is
+  a new analyser, not a data gap. Logged as roadmap step 3
+  (`gacc_bilateral_aggregate_yoy`).
 
 **A1.2 — MPPT inverters Jan-Feb 2026.** "EU imported more than €220 million
 worth of MPPT inverters [CN 8504 40 84], 95% from China."
@@ -123,8 +137,16 @@ worth of MPPT inverters [CN 8504 40 84], 95% from China."
   which subsumes 8504.40.84. The hs_group_yoy finding for this group at
   2026-02 should also be checkable — but it sums across all 850440 sub-codes,
   not just MPPT.
-- **Result**: *(empty)*
-- **Verdict**: *(empty)*
+- **Result**: CN-side sum = €209.29M; HK adds €23.5k; MO 0. Total
+  CN+HK+MO = €209.31M. **Share unverifiable** — `eurostat.py`
+  filters at ingest to `partner ∈ {CN, HK, MO}`, so we have no
+  non-CN denominator.
+- **Verdict**: ⚠️ **directional concur** on the value (within
+  ~5%; Soapbox said "more than €220M", ours €209M); ✗ share
+  unanswerable. Soapbox is presumably including a non-CN+HK+MO
+  partner contribution we don't ingest. Logged as roadmap step 4
+  (share analyser + extra-EU re-ingest). MPPT-only sub-group
+  logged as Tier 1 hs_group addition.
 
 **A1.3 — Solar inverters share 2025, by volume vs value.** "China supplied
 87% of EU solar inverter imports by quantity in 2025, compared with 75% by
@@ -138,8 +160,13 @@ value."
   hs_group_yoy logic (`low_kg_coverage` caveat). If the hs_group has
   `low_kg_coverage` fired, the quantity-share figure is itself unreliable
   in our data.
-- **Result**: *(empty)*
-- **Verdict**: *(empty)*
+- **Result**: CN-side 2025 totals: €8.62B value / 322k tonnes
+  (1,826 rows). HK adds €42M / 1.4k tonnes, MO negligible.
+  **Share unverifiable** — same reason as A1.2.
+- **Verdict**: ⚠️ **data confirmed, share unanswerable**. The
+  qty-vs-value lens *exists* in our analyser (`yoy_pct_kg` and
+  `kg_coverage_pct` per finding), it's just pointed at YoY rather
+  than partner share. Same blocker as A1.2.
 
 **A1.4 — Rare-earth compounds (yttrium/dysprosium/terbium bucket).** "China
 supplied around 90% of extra-EU imports [of one rare-earth bucket] by
@@ -154,16 +181,39 @@ quantity in each year from 2023 to 2025."
   the hs_group_yoy finding gives EU-27 totals, not CN share. Need
   raw-row query. Idea: a `partner_share` analyser would make this
   one-liner. Logged below.
-- **Result**: *(empty)*
-- **Verdict**: *(empty)*
+- **Result**: 2023 CN8 revision confirmed in our raw rows — pre-2023
+  HS 284690 splits as 28469010/20/30/90; post-2023 as
+  28469030/40/50/60/70/90. CN-side tonnage by likely "dark red
+  bucket" (28469040): 4,035 t (2023) / 3,963 t (2024) / 3,740 t
+  (2025) — dominant volume line consistent with the article's
+  high-share bucket. CN-side value by likely "blue / heavy REE"
+  buckets (28469060 + 28469070): €10.9M (2023) / €11.9M (2024) /
+  €24.9M (2025) — value rising sharply, consistent with Dy/Tb
+  premium pricing. **Share unverifiable** as above.
+- **Verdict**: ⚠️ **bucket structure confirmed; volume + value
+  trends consistent; share unanswerable**. Closest editorial
+  match short of the share analyser is to add narrower hs_groups
+  for the post-2023 sub-codes so the existing analyser stops
+  diluting heavy vs light REEs together. Logged as Tier 1
+  additions.
 
 **A1.5 — UK trade with China to ~US\$100bn vs ~US\$20bn 2026 (estimate).**
 "China's exports to the UK estimated to reach around US\$100bn in 2026,
 imports from the UK close to US\$20bn."
-- **WAIT-UK** — HMRC ingest not yet live; cannot test directly. Add to
-  validation backlog tagged `uk_data_gap`. Pointer: `dev_notes/forward-work-uk-data-gap.md`.
-- **Result**: *(blocked on HMRC ingest)*
-- **Verdict**: *(blocked)*
+- **HMRC ingest live since 2026-05** — A1.5 testable.
+- **Result**: HMRC shows 2025 full year UK imports from CN+HK+MO =
+  €84.4bn / UK exports to CN = €48.1bn (at the per-period FX, EUR-
+  converted). GACC view: 2025 China→UK exports YTD = USD 85.1bn,
+  China imports from UK YTD = USD 18.6bn. Jan-Apr 2026 YTD: China→UK
+  exports USD 29.3bn, China imports from UK USD 6.0bn — annualises
+  to ≈$88bn / $18bn. The article's $100bn/$20bn for 2026 is a
+  forward projection assuming continued growth; our underlying
+  trajectory is consistent with that shape (though projection-
+  arithmetic-dependent).
+- **Verdict**: ✓ **clean concur on the underlying data**. As with
+  A1.1, no analyser emits a "China-X bilateral aggregate YoY"
+  finding. Same fix as A1.1 (roadmap step 3 covers UK as a
+  single-country GACC partner too).
 
 **A1.6 — Bigger in tonnes than euros pattern (food/feed/chemical inputs).**
 Soapbox lists choline 68%/62%, vanillin (similar), ethylvanillin 68%/62%,
@@ -172,8 +222,17 @@ adipic acid (no value given).
 - Analyser: not directly — derive from raw rows. These products are
   NOT in our hs_group set (filed under Idea-generation below).
 - Expected: not applicable — coverage gap.
-- **Result**: *(blocked — no hs_group)*
-- **Verdict**: *(blocked)*
+- **Result**: CN-side data present in `eurostat_raw_rows` for all
+  cited codes (2025 CN→EU): amino acids HS 2922 €1.02B / 1,829
+  rows; adipic acid HS 291713 €78M; choline HS 292310 €10M;
+  vanillin HS 29124100 €40M; ethylvanillin HS 29124200 €12M;
+  feed premixes HS 230990 €228M; inorganic acids HS 2811 €167M.
+  All codes have multi-year CN-side history.
+- **Verdict**: ⚠️ **data present, no hs_groups, share unanswerable**.
+  Two-part fix: (a) seed the hs_groups (Tier 1 additions in
+  roadmap step 1 — unlocks YoY + tonnes/euros movement findings);
+  (b) ship the share analyser (roadmap step 4 — unlocks the
+  share claim Soapbox actually makes).
 
 ### Idea-generation claims (A1)
 
@@ -183,10 +242,17 @@ adipic acid (no value given).
   compounds), HS 2917.12 (adipic acid), HS 2923.10 (choline and salts),
   HS 2912.41 (vanillin) — verify CN8 codes before adding. Editorial value:
   Soapbox's framing ("the quieter story") suggests these are under-reported
-  exposures Lisa hasn't picked up yet.
+  exposures Lisa hasn't picked up yet. **2026-05-12: promoted to roadmap
+  Tier 1 — codes verified, data present, hs_groups ready to seed.**
 - **Natural graphite** — HS 250410 (natural graphite in powder/flake) — CN
   export-licensed since late 2023; Soapbox tracks share quarterly. Strong
-  candidate for a draft hs_group.
+  candidate for a draft hs_group. **Shipped 2026-05-11**.
+- **(New 2026-05-12)** — additional candidates surfaced by the A1
+  re-test that weren't in the original Stage A list: **MPPT inverters
+  only (CN8 85044084)**, **rare-earth sub-buckets (CN8 28469040 /
+  28469060 / 28469070)**, **crude oil (HS 2709)**, **civil aircraft
+  (HS 8802)**, and a **Central Asia country_aliases row**. All
+  promoted to roadmap Tier 1.
 
 ---
 

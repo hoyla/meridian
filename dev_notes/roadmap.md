@@ -5,6 +5,46 @@ What's still open. For history of what shipped, see
 the original Phase 1–6 plan, look at the git log around
 `8f18e68`–`5d0e23e` (2026-05-09 to 2026-05-10).
 
+## Proposed work order (post-2026-05-12 A1 re-test)
+
+The 2026-05-12 re-test of Soapbox A1 ("China's export surge puts EU
+trade defence in the spotlight") against the live DB
+([soapbox-validation-2026-05-11.md § A1](soapbox-validation-2026-05-11.md#a1-2026-05-11--chinas-export-surge-puts-eu-trade-defence-in-the-spotlight))
+confirmed every numerical claim the tool *could* check (no contradictions),
+and surfaced the **shape** of the gap precisely: their reporting is
+share-and-bilateral-aggregate-heavy; ours is growth-and-per-HS-group-heavy.
+Closing that gap is a re-ingest + new-analyser job, not a methodology
+rework.
+
+Recommended order, cheapest-to-most-impactful-per-hour:
+
+1. **Tier 1 hs_group additions** — chemicals / feed / pharma-adjacent
+   inputs + rare-earth sub-buckets + MPPT inverters / crude oil /
+   aircraft / Central Asia alias. Pure `INSERT INTO hs_groups` rows
+   picked up automatically by `hs_group_yoy` /
+   `hs_group_trajectory` / `gacc_aggregate_yoy`. Zero briefing-pack
+   code change. See "Tier 1 hs_group additions" below.
+2. **briefing_pack.py modularisation** — split the 2,001-line file
+   into a `briefing_pack/` package. Done *before* the structural
+   analyser additions so each new analyser's section lands in its
+   natural module from day one. See "Refactor backlog" below.
+3. **`gacc_bilateral_aggregate_yoy` analyser** — emit per-(GACC
+   partner, period, period_kind) YoY findings, including the EU
+   bloc (currently excluded from `gacc_aggregate_yoy`) and using
+   the `period_kind='ytd'` observations we already store. Surfaces
+   the article's lead claim ($201bn / +19% etc.) as a finding on
+   the next periodic run. See "EU/bilateral aggregate analyser"
+   below — expansion of the existing entry.
+4. **Selective Eurostat re-ingest with `partner='EXTRA_EU27_2020'`
+   + `partner_share` analyser** — adds rest-of-world totals for the
+   HS codes we already track so we can compute *share of EU imports
+   by partner*. Unlocks an entire metric class (every "X% from China"
+   claim Soapbox makes). Bigger lift (ingest expansion + new
+   analyser + new section). See "Share-of-EU-imports analyser" below.
+
+Tier 2 hs_groups (MPPT-only inverters, crude oil, aircraft, Central
+Asia) can be bundled into step 1 or done independently anytime.
+
 ## Near-term (likely next session)
 
 ### Watch the first 2-3 real cycles + decide delivery vector
@@ -42,33 +82,126 @@ self-contained. See
 [`soapbox-validation-2026-05-11.md`](soapbox-validation-2026-05-11.md)
 for the per-claim test that motivates each.
 
-### Remaining sub-CN8 sub-groups
+### Tier 1 hs_group additions (proposed step 1 above)
 
-Pork offal (HS 0206 swine) and Sintered NdFeB magnets (CN8 85051110)
-shipped 2026-05-11. Three Soapbox-grade sub-groups remain:
+Pork offal (HS 0206 swine), Sintered NdFeB magnets (CN8 85051110)
+and Natural graphite (HS 250410) shipped 2026-05-11. The 2026-05-12
+A1 re-test added the following candidates, all with CN-side data
+already in `eurostat_raw_rows` (verified per code, 2025 totals
+shown for sanity):
+
+**Chemicals / feed / pharma-adjacent inputs** (the article's "less
+visible inputs" cluster — Soapbox A1 makes the qty-vs-value share
+their headline analytical move):
+
+- **Amino acids (HS 2922)** — 2025 CN→EU value €1.02B / 1,829 rows.
+  Soapbox: 88% qty / 52% value.
+- **Adipic acid (HS 291713)** — 2025 CN→EU €78M / 191 rows.
+- **Choline (HS 292310)** — 2025 CN→EU €10M / 178 rows.
+- **Vanillin + ethylvanillin (HS 29124100 + 29124200)** — 2025 CN→EU
+  €40M + €12M. Soapbox ethylvanillin: 68% qty / 62% value.
+- **Feed premixes (HS 230990)** — 2025 CN→EU €228M / 599 rows.
+  Soapbox: 50% qty / 37% value.
+- **Inorganic acids (HS 2811)** — 2025 CN→EU €167M / 736 rows.
+  Soapbox "other inorganic acids": 60% qty / 47% value.
+- **Aldehyde/ketone acids (HS 2918)** — separate group (Soapbox
+  groups it with the above).
+
+**Rare-earth sub-buckets** (the existing `Rare-earth materials`
+group bulks the pre- and post-2023 CN8 splits together; cn8_revision
+caveat suppresses the seam but the editorial story is in the
+sub-codes):
+
+- **Light rare-earth compounds (CN8 28469040)** — the "dark red
+  bucket"; 2025 CN→EU 3,740 t / €5.3M. Soapbox: ~90% China share
+  each year 2023-25 (share unverifiable from our data — see step 4).
+- **Heavy rare-earth compounds (CN8 28469060 + 28469070)** —
+  contains Dy/Tb-bearing compounds. 2025 CN→EU 67 t / €11.3M for
+  28469060; 490 t / €13.6M for 28469070 (value rising sharply).
+
+**Tier 2 — additions to fill obvious gaps the article exposed:**
 
 - **MPPT inverters (CN8 85044084)** — separate code only from 1
-  Jan 2026 so very limited history (will skip until ~mid-2026).
-- ~~**Natural graphite (HS 250410)**~~ **DONE 2026-05-11**: id=35,
-  `seed:soapbox_validation`. EU-27 12mo to 2026-02: -45% value /
-  -27.8% kg (low_base). Single-period Jan-Feb -22% Soapbox figure
-  still needs the single-month YoY operator.
-- **Rare-earth narrow** (specific 8-digit codes inside HS 284690
-  for yttrium / dysprosium / terbium oxides — the narrow buckets
-  that became separately reportable from 2023).
+  Jan 2026. Article quotes "more than €220M Jan-Feb 2026"; our
+  CN-side sum is €209.3M (HK adds €23k). Limited history but
+  add now so the next 24mo window catches it.
+- **Crude oil (HS 2709)** — no oil coverage at present. Covers
+  the article's Libya claim and broader China-energy partner
+  picture.
+- **Civil aircraft (HS 8802)** — covers the Boeing/Airbus story.
+  GACC reports section-4 country aggregates so we can answer
+  "China imports more aircraft from US than EU" only at country-
+  aggregate level (which we already have).
 
-Each = one row in `schema.sql` + INSERT + re-run analysers.
+**Central Asia alias** — add `country_aliases` row covering
+KZ+UZ+KG+TJ+TM so `gacc_aggregate_yoy` picks it up. Soapbox A1
+claim "$70bn+, tripled since 2020" becomes directly testable.
 
-### `eu_bloc` aggregate analyser
+Each = one schema row + re-run analysers. Estimated <60 minutes
+total including CN8 sanity-checks per code.
+
+### EU/bilateral aggregate analyser (`gacc_bilateral_aggregate_yoy`) — proposed step 3 above
 
 `gacc_aggregate_yoy` deliberately excludes `eu_bloc` per
-[`anomalies.py:2435`](../anomalies.py) ("mirror-trade handles
-EU"). The Soapbox validation confirmed this leaves a real
-editorial gap: Soapbox's USD top-lines ("$201B in Jan-Apr,
-+19% YoY") aren't the same finding as a bilateral mirror gap,
-and Lisa quotes them directly. Engaging with the design choice
-rather than papering over it is the ask — needs a separate
-planning pass. Covers ~7 currently-blocked Soapbox claims.
+[`anomalies.py`](../anomalies.py) ("mirror-trade handles EU").
+The 2026-05-12 A1 re-test confirmed this leaves a real editorial
+gap: Soapbox's USD top-lines ("$201B in Jan-Apr 2026, +19% YoY")
+aren't the same finding as a bilateral mirror gap, and Lisa quotes
+them directly. Our DB has the underlying observation — `releases`
+join `observations` for partner='European Union', period='2026-04',
+period_kind='ytd' returns USD 200,727M — but no analyser promotes
+it to a finding.
+
+**Scope of the new analyser:**
+
+- One subkind per (period_kind, flow) combination —
+  `gacc_bilateral_aggregate_yoy_{ytd,monthly}_{export,import,total}`.
+  YTD subkinds answer the "Jan-Apr 2026 vs Jan-Apr 2025" framing
+  Soapbox uses heavily; monthly answers the same-month YoY framing
+  (Soapbox A3 "EU exports to China Feb 2026 -16.2%").
+- Apply to all aggregate `country_aliases` rows including
+  `eu_bloc`, plus single-country GACC partners (United Kingdom (US),
+  Japan, etc.) so per-partner bilateral YoY is also surfaced.
+- Method-version: bump to a new `gacc_bilateral_aggregate_yoy_v1_...`
+  string — the existing `gacc_aggregate_yoy` keeps its current
+  scope (non-EU aggregates) and natural keys; this is an additive
+  analyser, not a refactor.
+
+Covers ~7 currently-blocked Soapbox claims (every "China-X
+bilateral aggregate YoY" claim across the validation doc).
+
+### Share-of-EU-imports analyser + extra-EU re-ingest — proposed step 4 above
+
+Soapbox's most distinctive analytical move is the "China share of
+EU imports by qty vs value" pattern. The 2026-05-12 A1 re-test
+made the gap concrete: every claim of the form "China supplied
+X% of EU imports of Y" was unverifiable from our DB because
+`eurostat.py` filters at ingest to `partner ∈ {CN, HK, MO}`
+([eurostat.py:98](../eurostat.py)). We have the China-side
+numerator but no rest-of-world denominator.
+
+**Approach** (incremental, not a full re-ingest):
+
+- Extend the Eurostat ingest CLI to accept `--partner EXTRA_EU27_2020`
+  (or equivalent code for the rest-of-world bucket).
+- Re-ingest historical periods for that one partner code across the
+  HS codes we already track + the Tier 1 additions above. Smaller
+  than ingesting every partner individually; bigger than the current
+  CN+HK+MO slice.
+- Add `partner_share_v1_qty_value` analyser. Subkind:
+  `partner_share`. Natural key: `(hs_group_id, period, flow)`.
+  Emits: `cn_share_qty_pct`, `cn_share_value_pct`, plus the
+  qty-vs-value delta (the Soapbox-style flag). Universal caveat:
+  `extra_eu_definitional_drift` (rest-of-world composition
+  changes year-on-year as Brexit-era reclassifications settle).
+- Briefing-pack section: new module under the post-modularisation
+  `briefing_pack/sections/` directory.
+
+**Cost / benefit:** highest analytical impact (whole new metric
+class), highest cost (ingest expansion + new analyser + new
+section). Lowest urgency in the sense that findings without it
+remain defensible; high urgency in the sense that *most* future
+Soapbox articles will lean on this metric.
 
 ### ~~Single-month / 2-month YoY operator~~ DONE 2026-05-11
 
@@ -112,6 +245,48 @@ has 648 rows vs 2018 sp=1 has 351. Analyser output is unaffected
 aggregate rollup is 2x inflated. Forward work to dedupe or
 re-ingest 2017 with the v2 parser. Independent of the 000TOTAL
 filter rule resolution from 2026-05-10.
+
+## Refactor backlog
+
+### briefing_pack.py modularisation — proposed step 2 above
+
+[`briefing_pack.py`](../briefing_pack.py) is 2,001 lines: section
+renderers (`_section_*`), DB helpers, formatters, trace-token
+logic, and the `render()` orchestrator all in one file. Adding a
+new section (which the bilateral aggregate analyser and the share
+analyser both need) means appending to the bottom of an
+already-long file.
+
+**Target shape**: split into a `briefing_pack/` package:
+
+- `briefing_pack/__init__.py` — re-exports `render`,
+  `render_leads`, `export`, `is_threshold_fragile`,
+  `_compute_predictability_per_group`, `_ALL_UNIVERSAL_CAVEATS`,
+  `_SCOPE_LABEL`, `_SCOPE_SUBKIND_SUFFIX` (the symbols
+  `sheets_export` and tests currently import).
+- `briefing_pack/_helpers.py` — DB connection, trace tokens,
+  formatters (`_fmt_eur`, `_fmt_pct`, `_fmt_kg`), shared
+  predicates.
+- `briefing_pack/sections/headline.py`, `reader_guide.py`,
+  `diff.py`, `state_of_play.py`, `state_of_play_aggregates.py`,
+  `hs_yoy_movers.py`, `trajectories.py`, `mirror_gaps.py`,
+  `low_base.py`, `llm_narratives.py`, `methodology_footer.py`,
+  `sources_appendix.py`, `about_findings.py` — one section per
+  module.
+- `briefing_pack/render.py` — the orchestrator (current
+  `render()` + `render_leads()` + `export()`).
+
+**Migration plan**: zero behaviour change — the diff is purely
+moves + an `__init__.py` re-export shim so external callers (CLI,
+sheets_export.py, tests, llm_framing.py) don't change. After the
+move, the bilateral-aggregate analyser and the share analyser
+each land as a new file in `sections/` rather than another
+500-line append.
+
+**Doing it now** rather than after the new analysers means: (a)
+each new section lives in its natural module from day one; (b)
+the migration diff stays clean (just moves, no new logic riding
+along); (c) tests written against the new structure stay valid.
 
 ## Methodology depth (pick up if a story warrants it)
 

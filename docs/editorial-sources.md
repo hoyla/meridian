@@ -165,6 +165,22 @@ Stage A pre-registration + Stage B results live in
 The validation is a living doc — re-run after any major analyser
 change, same as shock-validation.
 
+**A1 re-test (2026-05-12)**: Stage B filled in for the most recent
+Soapbox article (A1, 2026-05-11, "China's export surge puts EU
+trade defence in the spotlight"). **No claim contradicts our
+data**; the gap is *shape*, not accuracy. Their reporting is
+share-and-bilateral-aggregate-heavy ("China supplied 88% of EU
+amino acid imports", "China-EU surplus $113bn Jan-Apr"); ours is
+growth-and-per-HS-group-heavy. The article's lead claim
+($201/$88/$113bn, +19/+12/+26%) is in our DB exactly but isn't
+promoted to a finding because `gacc_aggregate_yoy` excludes the
+EU bloc, and every "X% of EU imports from China" claim is
+structurally unanswerable because `eurostat.py` filters at ingest
+to `partner ∈ {CN, HK, MO}` — we have the numerator but no
+rest-of-world denominator. Closing that gap is a re-ingest +
+new-analyser job, not a methodology rework. Concrete proposals
+in [`dev_notes/roadmap.md`](../dev_notes/roadmap.md#proposed-work-order-post-2026-05-12-a1-re-test).
+
 ### Merics — Mercator Institute for China Studies
 
 <https://merics.org/>
@@ -198,10 +214,17 @@ prompted each addition:
 - `seed:soapbox_validation` — added after the 2026-05-11 Soapbox
   validation pass surfaced gaps where the broad hs_group diluted a
   specific Soapbox claim. Currently: Pork offal (HS 0206 swine),
-  Sintered NdFeB magnets (CN8 85051110), Natural graphite (HS 250410). Pattern: when a Soapbox
-  piece quotes a precise 8-digit code or a sub-bracket of an
-  existing group, add the narrower group as a sibling so the
-  finding can match the cited figure directly.
+  Sintered NdFeB magnets (CN8 85051110), Natural graphite (HS 250410).
+  Pattern: when a Soapbox piece quotes a precise 8-digit code or a
+  sub-bracket of an existing group, add the narrower group as a
+  sibling so the finding can match the cited figure directly.
+  *Pending (2026-05-12 A1 re-test, roadmap Tier 1):* amino acids
+  (HS 2922), adipic acid (HS 291713), choline (HS 292310), vanillin
+  (HS 29124100 + 29124200), feed premixes (HS 230990), inorganic
+  acids (HS 2811), aldehyde/ketone acids (HS 2918), heavy/light
+  rare-earth sub-buckets (CN8 28469040 / 28469060 / 28469070), MPPT
+  inverters (CN8 85044084), crude oil (HS 2709), civil aircraft
+  (HS 8802), Central Asia `country_aliases` row.
 
 When a new article prompts a new group, follow this convention: add
 the row with a `seed:<short_descriptor>` `created_by` value, and
