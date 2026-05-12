@@ -51,15 +51,59 @@ TREND_ANALYSIS_SOURCE_URL = "analysis://mirror_gap_trends/v1"
 HS_GROUP_TREND_SOURCE_URL = "analysis://hs_group_trends/v1"
 HS_GROUP_TRAJECTORY_SOURCE_URL = "analysis://hs_group_trajectory/v1"
 
-# Caveats every mirror_gap finding should cite by default. Specific findings can
-# add more (e.g. 'reporting_lag' if periods don't align).
-DEFAULT_MIRROR_GAP_CAVEATS = [
-    "cif_fob",
-    "currency_timing",
-    "general_vs_special_trade",
-    "transshipment",
-    "eurostat_stat_procedure_mix",
-]
+# Universal caveats per finding-family. These are caveats that apply to EVERY
+# finding of the given subkind family — they're methodological properties of
+# the analyser, not facts about individual findings. They're rendered once in
+# the briefing pack's methodology footer and are NOT attached to per-finding
+# `caveat_codes` arrays. The per-finding array carries only caveats that vary
+# between findings of the same family (low_base_effect, partial_window,
+# transshipment_hub, low_baseline_n, low_kg_coverage, cross_source_sum,
+# aggregate_composition).
+#
+# Subkind suffixes (_export, _uk, _combined) inherit the family's universal
+# set; see UNIVERSAL_CAVEATS_FOR_SUBKIND below.
+#
+# The briefing pack imports this dict to render the universal-caveats section
+# and to know which codes to exclude from per-finding caveat lines. If you add
+# a caveat to an analyser, decide first: does it fire on every finding of that
+# family? Add it here. Does it fire conditionally? Append it to the per-finding
+# `caveat_codes` instead.
+UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY: dict[str, list[str]] = {
+    "mirror_gap": [
+        "cif_fob", "currency_timing", "general_vs_special_trade",
+        "transshipment", "eurostat_stat_procedure_mix", "multi_partner_sum",
+    ],
+    "mirror_gap_zscore": [
+        "cif_fob", "currency_timing", "general_vs_special_trade",
+        "transshipment", "eurostat_stat_procedure_mix", "multi_partner_sum",
+        "aggregate_composition_drift",
+    ],
+    "hs_group_yoy": [
+        "cif_fob", "currency_timing", "classification_drift",
+        "eurostat_stat_procedure_mix", "multi_partner_sum", "cn8_revision",
+    ],
+    "hs_group_trajectory": [
+        "cif_fob", "currency_timing", "classification_drift",
+        "eurostat_stat_procedure_mix", "multi_partner_sum", "cn8_revision",
+    ],
+    "narrative_hs_group": ["llm_drafted"],
+}
+
+
+def universal_caveats_for_subkind(subkind: str) -> list[str]:
+    """Map a concrete subkind (possibly with _export/_uk/_combined suffixes)
+    to the universal-caveat list of its family. Returns [] for subkinds with
+    no defined family (e.g. gacc_aggregate_yoy, which is GACC-only and shares
+    no caveats with the Eurostat/HMRC families)."""
+    # Strip flow suffix first, then scope suffix.
+    base = subkind
+    if base.endswith("_export"):
+        base = base[: -len("_export")]
+    for scope_suffix in ("_combined", "_uk"):
+        if base.endswith(scope_suffix):
+            base = base[: -len(scope_suffix)]
+            break
+    return UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY.get(base, [])
 
 # Phase 2.2: CIF/FOB baseline now lives in the `cif_fob_baselines` table
 # (lookups.lookup_cif_fob_baseline). This constant is kept as a
@@ -81,16 +125,21 @@ LOW_BASE_THRESHOLD_EUR = 50_000_000
 # tagged as low-base, the trajectory finding itself flags low_base_effect.
 TRAJECTORY_LOW_BASE_FRACTION = 0.5
 
-# Default Eurostat partners for "Chinese trade" — CN plus the two Special
+# Eurostat partners for "Chinese trade" — CN plus the two Special
 # Administrative Regions. Editorially, China-via-Hong-Kong is still Chinese
 # trade for Lisa O'Carroll's "China shock" framing; Eurostat reports it under
 # partner=HK because HK is a separate trade jurisdiction, but a journalist
-# investigating Chinese trade volumes wants HK and MO summed in by default.
-# All four analysers (mirror-trade, hs-group-yoy, hs-group-trajectory,
-# llm-framing-via-the-others) inherit this default. Override via CLI
-# --eurostat-partners CN  (CN-only, narrower) when comparing against
-# Soapbox/Merics figures that are themselves CN-only.
-EUROSTAT_PARTNERS_DEFAULT: tuple[str, ...] = ("CN", "HK", "MO")
+# investigating Chinese trade volumes wants HK and MO summed in. All
+# analysers that sum on the China side use this list. The previous
+# `--eurostat-partners` CLI knob has been removed: in practice we always want
+# the CN+HK+MO envelope, and the rare validation against a CN-only Soapbox /
+# Merics figure is a one-off comparator, not a production analyser config.
+# If you need a CN-only spot check, query observations / eurostat_raw_rows
+# directly rather than re-running the analyser with a narrowed partner set.
+# The `multi_partner_sum` caveat is now universal for the affected families
+# (see UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY above) — it no longer needs to be
+# attached per-finding.
+EUROSTAT_PARTNERS: tuple[str, ...] = ("CN", "HK", "MO")
 
 # EU-27 means EU-27 at all times. Our eurostat_raw_rows table contains
 # UK-reporter (GB) rows for 2017–Q1 2020 because the UK was an EU-28 reporter
@@ -187,7 +236,7 @@ class _MirrorGapResult:
     excess_over_cif_fob_baseline_pct: float
     cif_fob_baseline: lookups.CifFobBaseline | None
     transshipment_hub: lookups.TransshipmentHub | None
-    eurostat_partners: list[str]   # partners summed on the EU import side; default EUROSTAT_PARTNERS_DEFAULT
+    eurostat_partners: list[str]   # partners summed on the EU import side (always EUROSTAT_PARTNERS = CN+HK+MO)
     # Aggregate-specific (None for single-country comparisons)
     aggregate_kind: str | None = None
     aggregate_members: list[str] | None = None
@@ -243,28 +292,24 @@ def parse_unit_scale(unit: str | None) -> tuple[float | None, str | None]:
 
 def detect_mirror_trade_gaps(
     period: date | None = None,
-    eurostat_partners: list[str] | None = None,
 ) -> dict[str, int]:
     """Compare GACC China-export-to-X to Eurostat X-import-from-China for each
     overlapping (period, partner) pair. Each comparison emits a findings row of
     kind='anomaly', subkind='mirror_gap'.
 
+    The Eurostat partner set is fixed at CN+HK+MO (see EUROSTAT_PARTNERS):
+    that's the editorially-correct "Chinese trade" envelope. The
+    multi_partner_sum caveat is rendered once in the briefing pack
+    methodology footer, not attached per finding.
+
     Args:
         period: if specified, only analyse that period; otherwise all periods
                 that have GACC data.
-        eurostat_partners: list of Eurostat partner_country codes to sum over
-                on the EU import side. Default `EUROSTAT_PARTNERS_DEFAULT`
-                (CN+HK+MO — the editorially-correct "Chinese trade" envelope
-                including the two Special Administrative Regions). Pass
-                `['CN']` for a narrower direct-China-only view (matches
-                Soapbox/Merics single-partner figures). When more than one
-                partner is used, findings carry a `multi_partner_sum` caveat.
 
     Returns counts: {'emitted', 'skipped_no_eurostat', 'skipped_no_fx',
                      'skipped_aggregate', 'skipped_unmapped', 'skipped_no_value'}.
     """
-    if eurostat_partners is None:
-        eurostat_partners = list(EUROSTAT_PARTNERS_DEFAULT)
+    eurostat_partners = list(EUROSTAT_PARTNERS)
     counts = {
         "emitted": 0,
         "inserted_new": 0,
@@ -291,7 +336,7 @@ def detect_mirror_trade_gaps(
     try:
         gacc_rows = _select_gacc_export_rows(period)
         for gr in gacc_rows:
-            result = _compute_one_gap(gr, eurostat_partners=eurostat_partners)
+            result = _compute_one_gap(gr)
             if isinstance(result, str):
                 counts[result] += 1
                 continue
@@ -346,11 +391,9 @@ def _select_gacc_export_rows(period: date | None) -> list[dict]:
 
 def _compute_one_gap(
     gr: dict,
-    eurostat_partners: list[str] | None = None,
 ) -> _MirrorGapResult | str:
     """Returns the result, OR a sentinel string naming the skip reason for counts."""
-    if eurostat_partners is None:
-        eurostat_partners = list(EUROSTAT_PARTNERS_DEFAULT)
+    eurostat_partners = list(EUROSTAT_PARTNERS)
     if gr["value_amount"] is None or float(gr["value_amount"]) == 0:
         return "skipped_no_value"
 
@@ -465,20 +508,16 @@ def _eurostat_aggregate_for_members(
     period: date, member_iso2s: list[str],
     partners: list[str] | None = None,
 ) -> tuple[float | None, list[int], int]:
-    """Sum Eurostat imports from `partners` (default EUROSTAT_PARTNERS_DEFAULT
+    """Sum Eurostat imports from `partners` (default EUROSTAT_PARTNERS
     = CN+HK+MO) across the given list of EU member ISO-2 codes for the given
-    period.
-
-    When `partners` has more than one entry (the default), we sum across them
-    — this captures HK/MO-routed Chinese trade that Eurostat reports under
-    partner=HK or partner=MO rather than CN. Caller is responsible for
-    attaching the `multi_partner_sum` caveat.
+    period. The multi-partner sum is universal for the analyser families
+    that call this — see UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY.
 
     Returns (total_eur, obs_ids, n_obs)."""
     if not member_iso2s:
         return None, [], 0
     if partners is None:
-        partners = list(EUROSTAT_PARTNERS_DEFAULT)
+        partners = list(EUROSTAT_PARTNERS)
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -556,28 +595,16 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
             f"composition or as-of date. Sources cited: {', '.join(r.aggregate_sources or [])}."
         )
 
-    caveat_codes = list(DEFAULT_MIRROR_GAP_CAVEATS)
+    # Per-finding caveats: only the codes that vary between findings. The
+    # universal ones (cif_fob, currency_timing, general_vs_special_trade,
+    # transshipment, eurostat_stat_procedure_mix, multi_partner_sum) are
+    # rendered once in the briefing pack methodology footer — see
+    # UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY.
+    caveat_codes: list[str] = []
     if is_aggregate:
         caveat_codes.append("aggregate_composition")
     if r.transshipment_hub is not None:
         caveat_codes.append("transshipment_hub")
-    if len(r.eurostat_partners) > 1:
-        # Phase 2.3: when the analyser sums across CN+HK (or +MO), the
-        # comparison no longer maps cleanly to "China's exports vs EU's
-        # imports from China" — it's "China's exports vs EU's imports
-        # from China-or-its-routing-hubs". The number is more inclusive
-        # (catches HK-routed trade); the caveat surfaces the methodological
-        # change so a journalist doesn't compare it directly with single-
-        # partner runs.
-        caveat_codes.append("multi_partner_sum")
-        body += (
-            f"\n\nMulti-partner Eurostat sum: includes "
-            f"{', '.join(r.eurostat_partners)} on the import side. The "
-            f"single-partner ('CN' only) figure misses ~15% of China's trade "
-            f"that routes via Hong Kong, so this aggregated view is more "
-            f"inclusive — but is not directly comparable to single-partner "
-            f"findings. See caveat 'multi_partner_sum'."
-        )
 
     detail = {
         "method": "mirror_trade_v5_per_country_cif_fob_baselines",
@@ -946,7 +973,11 @@ def _insert_zscore_finding(
             f"carried the same weight as a full-window baseline. See caveat "
             f"`low_baseline_n`."
         )
-    caveat_codes = DEFAULT_MIRROR_GAP_CAVEATS + ["aggregate_composition_drift"]
+    # Per-finding caveats: only what varies. Universal mirror_gap_zscore
+    # caveats (cif_fob, currency_timing, general_vs_special_trade,
+    # transshipment, eurostat_stat_procedure_mix, multi_partner_sum,
+    # aggregate_composition_drift) render once in the brief footer.
+    caveat_codes: list[str] = []
     # Phase 1.4: flag low-confidence z-scores rather than dropping them.
     # The mathematical floor was already enforced upstream (min_baseline_n);
     # this caveat says "we computed a z-score, but the baseline is short
@@ -1043,7 +1074,7 @@ def _list_hs_groups(group_names: list[str] | None = None) -> list[_HsGroup]:
 
 def _hs_group_per_period_totals(
     patterns: list[str], flow: int = 1,
-    partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS_DEFAULT,
+    partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS,
     source: str = "eurostat",
 ) -> list[tuple[date, float, float, int, float]]:
     """Returns (period, total_eur, total_kg, n_raw_rows, eur_with_kg) per period.
@@ -1123,7 +1154,7 @@ def _hs_group_per_period_totals(
 
 def _hs_group_top_cn8s(
     patterns: list[str], start: date, end: date, flow: int = 1, limit: int = 10,
-    partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS_DEFAULT,
+    partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS,
     source: str = "eurostat",
 ) -> list[dict]:
     """Top contributing HS-CN8 codes within a group across [start, end]."""
@@ -1171,7 +1202,7 @@ def _hs_group_top_cn8s(
 
 def _hs_group_top_reporters(
     patterns: list[str], start: date, end: date, flow: int = 1, limit: int = 10,
-    partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS_DEFAULT,
+    partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS,
     source: str = "eurostat",
 ) -> list[dict]:
     """Top contributing reporters within a group across [start, end].
@@ -1230,7 +1261,6 @@ def detect_hs_group_yoy(
     yoy_threshold_pct: float = 0.0,
     flow: int = 1,
     low_base_threshold_eur: float = LOW_BASE_THRESHOLD_EUR,
-    eurostat_partners: list[str] | tuple[str, ...] | None = None,
     comparison_scope: str = COMPARISON_SCOPE_DEFAULT,
 ) -> dict[str, int]:
     """For each (hs_group, period_t) where 24 months of history exist, compute:
@@ -1244,12 +1274,9 @@ def detect_hs_group_yoy(
     to Europe' question); 2 = EU exports to China (the 'is Europe selling more
     X to China' question, e.g. for the 'EU pork to China declining' angle).
 
-    `eurostat_partners`: Eurostat partner_country codes to sum over on the
-    Chinese-trade side. Default `EUROSTAT_PARTNERS_DEFAULT` (CN+HK+MO — the
-    full "Chinese trade" envelope including the two SARs). Pass `['CN']` to
-    get the narrower direct-China-only view that matches Soapbox/Merics
-    headline figures. When more than one partner is summed, findings carry
-    a `multi_partner_sum` caveat.
+    The Chinese-trade partner set is fixed at CN+HK+MO (see EUROSTAT_PARTNERS);
+    the multi_partner_sum caveat is universal and lives in the methodology
+    footer, not per-finding.
 
     Returns counts: {'emitted', 'skipped_insufficient_history', 'skipped_below_threshold', 'skipped_zero_prior'}.
     """
@@ -1259,9 +1286,7 @@ def detect_hs_group_yoy(
         raise ValueError(
             f"comparison_scope must be one of {VALID_COMPARISON_SCOPES}; got {comparison_scope!r}"
         )
-    partners: tuple[str, ...] = (
-        tuple(eurostat_partners) if eurostat_partners else EUROSTAT_PARTNERS_DEFAULT
-    )
+    partners: tuple[str, ...] = EUROSTAT_PARTNERS
     sources = COMPARISON_SCOPE_SOURCES[comparison_scope]
     counts = {
         "emitted": 0,
@@ -1521,7 +1546,7 @@ def _insert_hs_group_yoy_finding(
     partial_window: bool = False,
     missing_curr: list[date] | None = None,
     missing_prior: list[date] | None = None,
-    partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS_DEFAULT,
+    partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS,
     comparison_scope: str = COMPARISON_SCOPE_DEFAULT,
     single_month: dict[str, Any] | None = None,
     two_month_cumulative: dict[str, Any] | None = None,
@@ -1614,10 +1639,10 @@ def _insert_hs_group_yoy_finding(
         body_lines.append(f"  {r['reporter']}: €{r['total_eur']:,.0f}, {r['total_kg']:,.0f} kg")
     body_lines.append("")
     body_lines.append(
-        "Caveats applicable: 'cif_fob' (Eurostat reports imports CIF), 'classification_drift' "
-        "(CN8 sub-headings can be ambiguous), 'eurostat_stat_procedure_mix' (totals sum across "
-        "tariff regimes; see eurostat_raw_rows for the breakdown). Unit prices computed as "
-        "value/kg from raw rows."
+        "Unit prices computed as value/kg from raw rows. Methodological caveats "
+        "that apply to every hs_group_yoy finding (cif_fob, currency_timing, "
+        "classification_drift, eurostat_stat_procedure_mix, multi_partner_sum, "
+        "cn8_revision) are documented once in the briefing pack methodology footer."
     )
     if low_base:
         body_lines.append("")
@@ -1629,10 +1654,13 @@ def _insert_hs_group_yoy_finding(
             f"driven the apparent change. See caveat 'low_base_effect'."
         )
 
-    caveat_codes = [
-        "cif_fob", "currency_timing", "classification_drift",
-        "eurostat_stat_procedure_mix",
-    ]
+    # Per-finding caveats: only what varies. Universal hs_group_yoy caveats
+    # (cif_fob, currency_timing, classification_drift,
+    # eurostat_stat_procedure_mix, multi_partner_sum, cn8_revision) render
+    # once in the brief footer. cn8_revision is universal because the
+    # analyser's 24-month window always spans at least one CN8 revision
+    # boundary (Eurostat revises annually each January).
+    caveat_codes: list[str] = []
     if low_base:
         caveat_codes.append("low_base_effect")
     if decomposition_suppressed:
@@ -1655,18 +1683,7 @@ def _insert_hs_group_yoy_finding(
             f"finding once that month has been ingested. See caveat 'partial_window'."
         )
 
-    # Phase 2.8: any 24-month window spanning a calendar-year boundary
-    # crosses at least one Eurostat CN8 nomenclature revision (annual,
-    # each January). Pattern-matching with our LIKE patterns may capture
-    # subtly different commodity scopes pre- vs. post-revision. We add
-    # the caveat as a blanket flag rather than building a full
-    # concordance table — concordance work is parked in Phase 4.
-    if start_prior.year != end_curr.year:
-        caveat_codes.append("cn8_revision")
-
     partner_list = list(partners)
-    if len(partner_list) > 1:
-        caveat_codes.append("multi_partner_sum")
     if comparison_scope == "eu_27_plus_uk":
         # Cross-source sum: Eurostat (EUR-native) + HMRC (GBP→EUR via period
         # FX). The two sources have different threshold rules, suppression
@@ -2438,9 +2455,12 @@ def _insert_trajectory_finding(
             for s in series
         ],
         "underlying_yoy_finding_ids": [s["finding_id"] for s in series],
+        # Per-finding caveats: only what varies. Universal hs_group_trajectory
+        # caveats (cif_fob, currency_timing, classification_drift,
+        # eurostat_stat_procedure_mix, multi_partner_sum, cn8_revision)
+        # render once in the brief footer.
         "caveat_codes": (
-            ["cif_fob", "currency_timing", "classification_drift", "eurostat_stat_procedure_mix"]
-            + (["low_base_effect"] if features.get("low_base_majority") else [])
+            ["low_base_effect"] if features.get("low_base_majority") else []
         ),
     }
     # Score = absolute latest YoY; lets journalists rank by "how much movement is happening now".

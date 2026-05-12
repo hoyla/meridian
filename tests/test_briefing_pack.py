@@ -515,23 +515,22 @@ def _count_brief_runs(test_db_url) -> int:
         return cur.fetchone()[0]
 
 
-def test_universal_caveats_section_renders_with_definitions(empty_findings, test_db_url):
-    """Phase 6.2: the Universal caveats section reads canonical summary +
-    detail text from the `caveats` schema table for each code in
-    SUPPRESSED_INLINE_CAVEATS, so the explainer stays in sync with the
-    schema. The section appears even on an empty DB (the caveats table is
-    seeded by schema.sql)."""
+def test_methodology_footer_renders_with_definitions(empty_findings, test_db_url):
+    """The Methodology footer reads canonical summary + detail text from the
+    `caveats` schema table for each code in
+    `anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY`, grouped by analyser
+    family. It appears even on an empty DB (the caveats table is seeded
+    by schema.sql)."""
     md = briefing_pack.render()
-    assert "## Universal caveats" in md
-    # Spot-check the presence of code headings — these are codes seeded in
-    # schema.sql, so they exist on any fresh schema-applied DB.
+    assert "## Methodology — universal caveats" in md
+    # Spot-check codes seeded in schema.sql — they should all appear under
+    # at least one family heading.
     assert "`cif_fob`" in md
     assert "`cn8_revision`" in md
     assert "`multi_partner_sum`" in md
+    assert "`llm_drafted`" in md
     # The detail text from the caveats table propagates through:
     assert "CIF" in md and "FOB" in md
-    # llm_drafted gets a special-case mention even though it has no schema row.
-    assert "`llm_drafted`" in md
 
 
 def test_universal_caveats_suppressed_inline_in_finding_lines(empty_findings, test_db_url):

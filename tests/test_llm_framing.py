@@ -454,7 +454,10 @@ def _seed_yoy(conn, *, group_id: int, subkind: str, period: date,
             "partial_window": False,
             "decomposition_suppressed": False,
         },
-        "caveat_codes": caveats or ["cif_fob"],
+        # Default seed: empty per-finding caveat list. Universal codes
+        # (cif_fob, currency_timing, ...) live in the brief footer, not
+        # on the finding (see anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY).
+        "caveat_codes": caveats or [],
     }
     cur.execute(
         "INSERT INTO findings (scrape_run_id, kind, subkind, hs_group_ids, "
@@ -475,22 +478,24 @@ def test_load_clusters_skips_groups_with_no_findings(empty_op, test_db_url):
 
 def test_load_clusters_unions_caveats_across_underlying(empty_op, test_db_url):
     """Cluster.caveat_codes should be the union across all (scope, flow)
-    permutations that have findings."""
+    permutations that have findings. In production these are the
+    per-finding-variable caveats (low_base_effect, partial_window,
+    transshipment_hub, cross_source_sum, etc.) — universal caveats are
+    rendered in the brief footer instead of being attached per-finding."""
     with psycopg2.connect(test_db_url) as conn:
         _seed_yoy(conn, group_id=1, subkind="hs_group_yoy",
                   period=date(2026, 2, 1), yoy_pct=0.342,
-                  caveats=["cif_fob", "cn8_revision"])
+                  caveats=["partial_window"])
         _seed_yoy(conn, group_id=1, subkind="hs_group_yoy_export",
                   period=date(2026, 2, 1), yoy_pct=-0.45,
-                  caveats=["cif_fob", "low_base_effect"])
+                  caveats=["low_base_effect"])
 
     clusters = llm_framing._load_hs_group_clusters(group_names=["EV batteries (Li-ion)"])
     assert len(clusters) == 1
     c = clusters[0]
     assert c.group_id == 1
-    assert "cn8_revision" in c.caveat_codes
+    assert "partial_window" in c.caveat_codes
     assert "low_base_effect" in c.caveat_codes
-    assert "cif_fob" in c.caveat_codes
     assert len(c.underlying_finding_ids) == 2
     # Findings landed in the eu_27 scope (their subkinds have no scope suffix)
     assert c.scopes["eu_27"].yoy_import is not None

@@ -124,12 +124,13 @@ def test_yoy_emits_when_growth_above_threshold(empty_op, test_db_url):
     assert detail["totals"]["yoy_pct_kg"] is not None
     assert detail["totals"]["current_unit_price_eur_per_kg"] is not None
     # Provenance: the method definition is queryable from the finding alone.
-    # New default sums CN+HK+MO; explicit partner override available via the
-    # eurostat_partners parameter.
+    # Partner set is hardcoded to CN+HK+MO (the editorially-correct envelope).
     assert detail["method_query"]["partners"] == ["CN", "HK", "MO"]
     assert detail["method_query"]["hs_patterns"] == ["854142%", "854143%"]
-    # multi_partner_sum caveat fires by default (>1 partner summed).
-    assert "multi_partner_sum" in detail["caveat_codes"]
+    # multi_partner_sum is universal for hs_group_yoy — rendered once in the
+    # brief footer, not attached per-finding.
+    assert "multi_partner_sum" not in detail["caveat_codes"]
+    assert "multi_partner_sum" in anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY["hs_group_yoy"]
     # Top contributors recorded with kg
     top = detail["top_cn8_codes_in_current_12mo"]
     assert any(c["hs_code"] == "85414210" for c in top)
@@ -331,40 +332,6 @@ def test_yoy_combined_scope_sums_eurostat_and_hmrc(empty_op, test_db_url):
     assert abs(detail["totals"]["yoy_pct"] - 0.5) < 1e-9
     # cross_source_sum caveat fires by construction.
     assert "cross_source_sum" in detail["caveat_codes"]
-
-
-def test_yoy_cn_only_override_excludes_hk_mo(empty_op, test_db_url):
-    """Mirrors test_yoy_emits_when_growth_above_threshold but with explicit
-    eurostat_partners=['CN']. The finding records partner='CN' alone in
-    method_query.partners and DOES NOT carry the multi_partner_sum caveat
-    (the override is single-partner so the comparison is direct, not summed).
-    Editorial use: the journalist comparing against a single-partner
-    Soapbox/Merics figure passes --eurostat-partners CN to match scope."""
-    with psycopg2.connect(test_db_url) as conn:
-        prior_12 = [100.0] * 12
-        current_12 = [150.0] * 12
-        _seed_eurostat_imports(
-            conn, "85414210",
-            _make_24_months(date(2024, 1, 1), prior_12 + current_12),
-        )
-
-    counts = anomalies.detect_hs_group_yoy(
-        group_names=["Solar PV cells & modules"], yoy_threshold_pct=0.10,
-        eurostat_partners=["CN"],
-    )
-    assert counts["emitted"] >= 1, f"counts={counts}"
-
-    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT detail FROM findings "
-            "WHERE subkind='hs_group_yoy' "
-            "  AND (detail->'totals'->>'partial_window')::boolean = false "
-            "ORDER BY score DESC LIMIT 1"
-        )
-        detail = cur.fetchone()[0]
-
-    assert detail["method_query"]["partners"] == ["CN"]
-    assert "multi_partner_sum" not in detail["caveat_codes"]
 
 
 def test_yoy_silent_when_below_threshold(empty_op, test_db_url):
@@ -671,12 +638,15 @@ def test_yoy_skips_window_with_two_missing_months(empty_op, test_db_url):
     assert partial_count == 0
 
 
-def test_yoy_attaches_cn8_revision_caveat_for_cross_year_window(empty_op, test_db_url):
-    """Phase 2.8: any 24-month window spanning a calendar-year boundary
-    gets a `cn8_revision` caveat. That's most windows in practice."""
+def test_yoy_cn8_revision_is_family_universal(empty_op, test_db_url):
+    """cn8_revision applies to every hs_group_yoy 24-month window (which
+    necessarily spans at least one Eurostat CN8 revision boundary, since
+    revisions are annual). It's a family-universal caveat — rendered in
+    the brief footer once, not attached to each finding."""
+    assert "cn8_revision" in anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY["hs_group_yoy"]
+    assert "cn8_revision" in anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY["hs_group_trajectory"]
+
     with psycopg2.connect(test_db_url) as conn:
-        # Window from Jan 2024 (start_prior) to Dec 2025 (end_curr) —
-        # spans 2024→2025 boundary. Expect cn8_revision caveat.
         _seed_eurostat_imports(
             conn, "85076010",
             _make_24_months(date(2024, 1, 1), [100.0] * 24),
@@ -693,7 +663,8 @@ def test_yoy_attaches_cn8_revision_caveat_for_cross_year_window(empty_op, test_d
             "  ORDER BY score DESC LIMIT 1"
         )
         detail = cur.fetchone()[0]
-    assert "cn8_revision" in detail["caveat_codes"]
+    # Per-finding caveat list excludes the universal codes.
+    assert "cn8_revision" not in detail["caveat_codes"]
 
 
 def test_yoy_decomposition_suppressed_when_kg_coverage_low(empty_op, test_db_url):

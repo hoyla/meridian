@@ -36,6 +36,7 @@ from typing import Any
 import psycopg2
 import psycopg2.extras
 
+import anomalies
 import eurostat
 
 log = logging.getLogger(__name__)
@@ -43,35 +44,16 @@ log = logging.getLogger(__name__)
 PERMALINK_BASE_ENV = "GACC_PERMALINK_BASE"
 DEFAULT_TOP_N = 10
 
-# Caveats that apply universally to every active finding within their relevant
-# subkind family (because of analyser defaults / scope choice / inherent
-# methodology, rather than something unusual about a specific finding).
-# Suppressing them inline keeps the per-finding caveat list focused on signal
-# — what's *unusual* about THIS finding — while the top-of-brief
-# "Universal caveats" section covers them once with full definitions.
-#
-# Membership verified empirically (Phase 6.2): each code below fires on 100%
-# of the active findings in its applicable subkinds (queried 2026-05-10
-# against the live DB). If a code stops being universal — e.g. because we
-# add a scope where it no longer applies — drop it from this set so the per-
-# finding display surfaces the variation again.
-#
-# Per-finding-informative caveats (kept inline): partial_window, low_base_effect,
-# low_baseline_n, low_kg_coverage, transshipment_hub. These signal something
-# specific about the individual finding and matter at glance.
-SUPPRESSED_INLINE_CAVEATS = frozenset({
-    "cif_fob",
-    "classification_drift",
-    "cn8_revision",
-    "currency_timing",
-    "eurostat_stat_procedure_mix",
-    "multi_partner_sum",
-    "general_vs_special_trade",
-    "transshipment",
-    "cross_source_sum",
-    "aggregate_composition_drift",
-    "llm_drafted",
-})
+# Defensive filter for per-finding caveat-line rendering. Analysers no longer
+# attach universal caveats to `findings.caveat_codes` (those live in the
+# Methodology footer once, sourced from
+# `anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY`). This frozenset re-derives
+# the universal codes so per-finding lines remain clean even for findings
+# inserted before the refactor — without this, an older DB row could surface
+# `cif_fob` etc. inline.
+_ALL_UNIVERSAL_CAVEATS: frozenset[str] = frozenset(
+    c for codes in anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY.values() for c in codes
+)
 
 
 def _construct_chinese_source_url(english_url: str | None) -> str | None:
@@ -230,8 +212,9 @@ def _section_headline(
     lines.append("## Scope notes")
     lines.append("")
     lines.append("- **Eurostat partners summed**: CN + HK + MO (the editorially-correct \"Chinese trade\" ")
-    lines.append("  envelope including the two Special Administrative Regions). Pass `--eurostat-partners CN` ")
-    lines.append("  to get a narrower direct-China-only view (matches Soapbox / Merics single-partner figures).")
+    lines.append("  envelope including the two Special Administrative Regions). The HMRC side mirrors this ")
+    lines.append("  partner envelope. For a CN-only spot-check against a Soapbox / Merics figure, query ")
+    lines.append("  `eurostat_raw_rows` directly with `partner = 'CN'`.")
     lines.append("- **EU-27 = EU-27.** Eurostat reporter rows from GB (pre-2021) are excluded at all times so ")
     lines.append("  EU-27 totals are consistent through the Brexit transition. UK trade is captured ")
     lines.append("  separately via HMRC ingest (Phase 6.1) and surfaced under the **UK** comparison scope.")
@@ -239,9 +222,10 @@ def _section_headline(
     lines.append("  (HMRC), and EU-27 + UK combined. The combined view carries a `cross_source_sum` caveat ")
     lines.append("  reflecting the methodological non-comparability of summing across two statistical agencies.")
     lines.append("")
-    lines.append("Standard methodological caveats that apply to every finding in their respective sections ")
-    lines.append("are explained once in the **Universal caveats** block below and suppressed from per-finding ")
-    lines.append("caveat lists, so those lists highlight only what's *unusual* about each finding.")
+    lines.append("Methodological caveats that apply to *every* finding of a given family (e.g. `cif_fob`, ")
+    lines.append("`currency_timing`, `multi_partner_sum`) are documented once in the **Methodology — universal ")
+    lines.append("caveats** block at the end of this document. Per-finding caveat lines above carry only what ")
+    lines.append("varies between findings of the same family.")
     lines.append("")
     lines.append("## Period coverage")
     for s in sources:
@@ -256,13 +240,14 @@ def _section_headline(
 
 def _section_reader_guide() -> _Section:
     """Three-tier reader's guide. Sits right after the headline so a reader
-    knows what they're looking at and where to dive in before they meet the
-    universal-caveats wall.
+    knows what they're looking at and where to dive in before any findings.
 
     The three tiers are also reflected in the headings below so the document
     is navigable: Tier 1 (lead), Tier 2 (compact summary), Tier 3 (full
     per-finding detail). The supersede chain in the DB powers tier 1; the
-    `data.xlsx` companion is the same data as tier 3 in sortable form."""
+    `data.xlsx` companion is the same data as tier 3 in sortable form. The
+    Methodology footer at the end documents caveats that apply to every
+    finding of a given family (cf. _section_methodology_footer)."""
     lines: list[str] = []
     lines.append("## How to read this findings document")
     lines.append("")
@@ -306,54 +291,61 @@ def _section_reader_guide() -> _Section:
     return _Section(markdown="\n".join(lines))
 
 
-def _section_universal_caveats(cur) -> _Section:
-    """Top-of-brief explainer for caveats that fire on essentially every active
-    finding (within their applicable subkind family). Reads the canonical
-    summary text from the `caveats` table so the explainer stays in sync with
-    the schema. Each entry shows where the caveat applies (per subkind)
-    based on a live count of how many active findings carry it; if a code
-    in SUPPRESSED_INLINE_CAVEATS turns out not to be universal anymore,
-    the breakdown will show the gap and you'll know to reconsider."""
-    codes = sorted(SUPPRESSED_INLINE_CAVEATS - {"llm_drafted"})
+_SUBKIND_FAMILY_LABELS: dict[str, str] = {
+    "mirror_gap": "Mirror-trade gap findings (per-partner, per-period)",
+    "mirror_gap_zscore": "Mirror-trade gap z-score movers",
+    "hs_group_yoy": "HS-group YoY findings (rolling 12-month windows)",
+    "hs_group_trajectory": "HS-group trajectories (multi-period shape)",
+    "narrative_hs_group": "LLM-scaffolded investigation leads",
+}
+
+
+def _section_methodology_footer(cur) -> _Section:
+    """End-of-brief methodology block: caveats that apply to every finding
+    in their subkind family. Defined once in
+    `anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY`; rendered here from the
+    canonical summary + detail text in the `caveats` table so a reader can
+    look up any code's definition without digging into the schema.
+
+    Grouped by family so a reader reading a Tier-3 hs_group_yoy section
+    knows exactly which family-universal caveats apply to those findings
+    (without those caveats cluttering each finding's own caveat line)."""
+    universal = anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY
+    all_codes = sorted({c for codes in universal.values() for c in codes})
     cur.execute(
-        "SELECT code, summary, detail FROM caveats WHERE code = ANY(%s) ORDER BY code",
-        (codes,),
+        "SELECT code, summary, detail FROM caveats WHERE code = ANY(%s)",
+        (all_codes,),
     )
-    rows = cur.fetchall()
-    found_codes = {r["code"] for r in rows}
+    by_code = {r["code"]: r for r in cur.fetchall()}
 
     lines: list[str] = []
-    lines.append("## Universal caveats")
+    lines.append("## Methodology — universal caveats")
     lines.append("")
     lines.append(
-        "These methodological caveats apply by default to every finding in "
-        "the sections they cover. They are real limitations on the underlying "
-        "data, but they don't differentiate one finding from another — so the "
-        "per-finding caveat lists below suppress them to keep the focus on "
-        "what's *unusual* about each finding. The full definitions live here."
+        "Each block below lists caveats that fire on *every* finding of that "
+        "family. They are real limitations on the underlying data — not "
+        "per-finding signal — so they are documented once here rather than "
+        "repeated on every finding's caveat line. Per-finding caveat lines "
+        "above carry only what varies between findings (low_base_effect, "
+        "partial_window, transshipment_hub, low_baseline_n, low_kg_coverage, "
+        "cross_source_sum, aggregate_composition)."
     )
     lines.append("")
-    for r in rows:
-        lines.append(f"**`{r['code']}` — {r['summary']}**")
+    for family, codes in universal.items():
+        label = _SUBKIND_FAMILY_LABELS.get(family, family)
+        lines.append(f"### {label} (`subkind={family}` and `_uk` / `_combined` / `_export` variants)")
         lines.append("")
-        if r["detail"]:
-            lines.append(r["detail"])
+        for code in codes:
+            row = by_code.get(code)
+            if row is None:
+                lines.append(f"- **`{code}`** — *Note: missing `caveats` table definition.*")
+                lines.append("")
+                continue
+            lines.append(f"- **`{code}` — {row['summary']}**")
+            if row["detail"]:
+                lines.append("")
+                lines.append(f"  {row['detail']}")
             lines.append("")
-    # llm_drafted is suppressed inline because the section header itself
-    # already says "LLM-scaffolded". Mention it briefly so a reader who sees
-    # the SUPPRESSED set in code knows where it is documented.
-    lines.append(
-        "**`llm_drafted`** — applied to every finding in the *Investigation "
-        "leads* section. Suppressed inline because the section header already "
-        "communicates editorial origin."
-    )
-    lines.append("")
-    # Surface any code whose schema row is missing — usually means a typo or
-    # a code added to the analysers without a matching caveats-table entry.
-    missing = sorted(c for c in codes if c not in found_codes)
-    if missing:
-        lines.append(f"*Note: missing `caveats` table definition for: {', '.join(missing)}.*")
-        lines.append("")
     return _Section(markdown="\n".join(lines))
 
 
@@ -410,7 +402,7 @@ def _section_llm_narratives(cur) -> _Section:
         detail = r["detail"]
         group_name = detail.get("group", {}).get("name", "—")
         caveats = detail.get("caveat_codes") or []
-        visible_caveats = [c for c in caveats if c not in SUPPRESSED_INLINE_CAVEATS]
+        visible_caveats = [c for c in caveats if c not in _ALL_UNIVERSAL_CAVEATS]
         lines.append(f"### {group_name}")
         lines.append("")
         scaffold = detail.get("lead_scaffold")
@@ -906,7 +898,7 @@ def _section_mirror_gaps(cur) -> _Section:
             # `transshipment_hub`) surface correctly. Caveats that apply to
             # essentially every finding by default (multi_partner_sum) are
             # suppressed inline; the top-of-brief note covers them.
-            caveats = [c for c in (r['caveat_codes'] or []) if c not in SUPPRESSED_INLINE_CAVEATS]
+            caveats = [c for c in (r['caveat_codes'] or []) if c not in _ALL_UNIVERSAL_CAVEATS]
             lines.append(f"- *Caveats*: {', '.join(caveats) if caveats else '—'}")
             if r['hub_iso2']:
                 # One-line transshipment-hub annotation when the partner is in
@@ -1715,7 +1707,6 @@ def render(
             cur, companion_filename=companion_filename, scope_label=scope_label,
         ))
         sections.append(_section_reader_guide())
-        sections.append(_section_universal_caveats(cur))
 
         # Phase: per-group YoY-predictability badges. Computed once and
         # passed into the state-of-play section and each per-scope mover
@@ -1767,9 +1758,11 @@ def render(
         sections.append(sec)
         release_ids |= sec.release_ids
 
-        # ----- Endmatter: source citations + about-findings endnote.
-        # Outside the tier structure — these are reference material that
-        # applies to the whole document, not part of the editorial flow.
+        # ----- Endmatter: methodology footer, source citations, endnote.
+        # Universal caveats live here (not at the top) so a journalist
+        # scanning the document hits findings first; the methodology block
+        # is reference material they consult on demand, not the lead.
+        sections.append(_section_methodology_footer(cur))
         sections.append(_section_sources_appendix(cur, release_ids))
         sections.append(_section_about_findings())
 

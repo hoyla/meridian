@@ -264,15 +264,16 @@ def _seed_extra_eurostat_partner(conn, period: date, reporter: str,
     conn.commit()
 
 
-def test_mirror_gap_default_includes_hk_mo(empty_op_tables, test_db_url):
-    """Default eurostat_partners is now (CN, HK, MO) — the editorially-correct
-    'Chinese trade' envelope. A Eurostat partner=HK row IS counted in the
-    mirror-gap sum without an explicit CLI override. The finding carries a
-    `multi_partner_sum` caveat (since len > 1)."""
+def test_mirror_gap_partner_set_is_cn_hk_mo(empty_op_tables, test_db_url):
+    """The Eurostat partner set is hardcoded to CN+HK+MO — the editorially-
+    correct 'Chinese trade' envelope. A Eurostat partner=HK row IS counted
+    in the mirror-gap sum. `multi_partner_sum` is universal for mirror_gap
+    findings (see anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY); it is
+    NOT attached per-finding."""
     period = date(2025, 12, 1)
     with psycopg2.connect(test_db_url) as conn:
         _seed_pair_for_partner(conn, period, "Germany", "DE")
-        # Add a HK-routed €1B import for DE — this should now BE included by default.
+        # Add a HK-routed €1B import for DE — included by default in the sum.
         _seed_extra_eurostat_partner(conn, period, "DE", "HK", 1_000_000_000)
 
     anomalies.detect_mirror_trade_gaps(period=period)
@@ -282,53 +283,12 @@ def test_mirror_gap_default_includes_hk_mo(empty_op_tables, test_db_url):
         )
         detail = cur.fetchone()[0]
     assert detail["eurostat"]["partners_summed"] == ["CN", "HK", "MO"]
-    assert "multi_partner_sum" in detail["caveat_codes"]
+    # multi_partner_sum is universal — rendered once in the brief footer,
+    # not on the finding.
+    assert "multi_partner_sum" not in detail["caveat_codes"]
+    assert "multi_partner_sum" in anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY["mirror_gap"]
     # Eurostat total = 12B (CN + HK; MO has no rows but is requested).
     assert abs(detail["eurostat"]["total_eur"] - 12_000_000_000) < 1
-
-
-def test_mirror_gap_cn_only_override_excludes_hk(empty_op_tables, test_db_url):
-    """Explicit `eurostat_partners=['CN']` is the narrower override (matches
-    Soapbox/Merics single-partner figures). HK rows are NOT summed; the
-    `multi_partner_sum` caveat is absent."""
-    period = date(2025, 12, 1)
-    with psycopg2.connect(test_db_url) as conn:
-        _seed_pair_for_partner(conn, period, "Germany", "DE")
-        _seed_extra_eurostat_partner(conn, period, "DE", "HK", 1_000_000_000)
-
-    anomalies.detect_mirror_trade_gaps(period=period, eurostat_partners=["CN"])
-    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT detail FROM findings WHERE subkind = 'mirror_gap'"
-        )
-        detail = cur.fetchone()[0]
-    assert detail["eurostat"]["partners_summed"] == ["CN"]
-    assert "multi_partner_sum" not in detail["caveat_codes"]
-    assert abs(detail["eurostat"]["total_eur"] - 11_000_000_000) < 1
-
-
-def test_mirror_gap_with_cn_hk_sums_both_partners(empty_op_tables, test_db_url):
-    """Phase 2.3: when --eurostat-partners CN,HK is used, the analyser sums
-    both partner_country rows. The multi_partner_sum caveat is attached
-    and the body annotation explains the methodological shift."""
-    period = date(2025, 12, 1)
-    with psycopg2.connect(test_db_url) as conn:
-        _seed_pair_for_partner(conn, period, "Germany", "DE")
-        _seed_extra_eurostat_partner(conn, period, "DE", "HK", 1_000_000_000)
-
-    anomalies.detect_mirror_trade_gaps(
-        period=period, eurostat_partners=["CN", "HK"],
-    )
-    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT body, detail FROM findings WHERE subkind = 'mirror_gap'"
-        )
-        body, detail = cur.fetchone()
-    assert detail["eurostat"]["partners_summed"] == ["CN", "HK"]
-    assert "multi_partner_sum" in detail["caveat_codes"]
-    # Eurostat total = 12B (CN + HK).
-    assert abs(detail["eurostat"]["total_eur"] - 12_000_000_000) < 1
-    assert "Multi-partner Eurostat sum" in body
 
 
 def test_mirror_gap_records_cif_fob_baseline_provenance(empty_op_tables, test_db_url):
@@ -453,9 +413,13 @@ def test_mirror_gap_emits_finding_with_provenance(empty_op_tables, test_db_url):
     assert abs(detail["gap_pct"] + 0.12) < 1e-6
     assert abs(float(score) - 0.12) < 1e-6
     assert "Germany" in body or "DE" in title  # both sides mentioned somewhere
-    # Caveats cited
-    assert "cif_fob" in detail["caveat_codes"]
-    assert "currency_timing" in detail["caveat_codes"]
+    # Universal caveats (cif_fob, currency_timing, ...) are NOT attached
+    # per-finding — they're documented once in the brief footer. The
+    # finding's caveat_codes carries only what varies per-finding.
+    assert "cif_fob" not in detail["caveat_codes"]
+    assert "currency_timing" not in detail["caveat_codes"]
+    assert "cif_fob" in anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY["mirror_gap"]
+    assert "currency_timing" in anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY["mirror_gap"]
     # FX provenance
     assert detail["fx"]["rate"] == 0.125
     assert detail["fx"]["from_currency"] == "CNY"

@@ -88,10 +88,13 @@ A non-exhaustive list, in rough order of magnitude:
 2. **Partner attribution.** Goods physically Chinese in origin can
    be reported by Eurostat under partner=HK / partner=MO if the
    shipping documentation routes them via Hong Kong or Macau.
-   ~15% of China's reported exports route via HK. Our default
-   `--eurostat-partners CN,HK,MO` sums all three; `--eurostat-partners CN`
-   gives the narrower direct-China view. (See §3 caveat
-   `multi_partner_sum`.)
+   ~15% of China's reported exports route via HK. We sum CN + HK + MO
+   on the Eurostat side (`anomalies.EUROSTAT_PARTNERS`). For a CN-only
+   spot check against a Soapbox / Merics single-partner figure, query
+   `eurostat_raw_rows` directly with `partner = 'CN'` — the analyser no
+   longer accepts a partner-set override since CN+HK+MO is the
+   editorially-correct production envelope. (See §3 caveat
+   `multi_partner_sum`, which is family-universal.)
 
 3. **Transshipment via third countries.** Goods might leave China
    FOB-declared to NL, transit Rotterdam, then be declared by DE
@@ -280,40 +283,44 @@ captured separately under the `uk` scope from HMRC.
 
 ## 3. Caveats reference
 
-Caveat codes propagate from analysers into `findings.detail.caveat_codes`,
-and the findings document renders them inline per-finding (with the universal
-ones suppressed and explained once at the top). Canonical text for
-each code lives in the `caveats` schema table.
+Caveat codes split two ways. *Family-universal* codes fire on every
+finding of a given analyser family — they are not attached to
+individual findings; they are documented once in the brief's
+Methodology footer, sourced from
+`anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY`. *Per-finding-variable*
+codes ride on each finding's `caveat_codes` array and surface inline.
+Canonical text for each code lives in the `caveats` schema table.
 
-### Universal (suppressed inline; explained at top of brief)
+### Family-universal (rendered once in Methodology footer)
 
-These fire on essentially every active finding within the relevant
-subkind family. They reflect inherent methodology, not anything
-unusual about a specific finding.
+These fire on every active finding within the relevant subkind family.
+They reflect inherent methodology, not anything unusual about a
+specific finding.
 
 | Code | Applies to | What it means |
 |---|---|---|
-| `cif_fob` | mirror_gap, mirror_gap_zscore | CIF (imports) vs FOB (exports) baseline gap |
-| `classification_drift` | hs_group_yoy*, mirror_gap | CHS8 vs CN8 divergence at HS-8 |
-| `cn8_revision` | hs_group_yoy* | YoY window spans Eurostat's annual CN8 revision |
-| `currency_timing` | mirror_gap*, hs_group_yoy* | FX rate sensitive to which day's used |
-| `eurostat_stat_procedure_mix` | mirror_gap*, hs_group_yoy* | Sum across tariff regimes hides the mix |
+| `cif_fob` | mirror_gap, mirror_gap_zscore, hs_group_yoy*, hs_group_trajectory* | CIF (imports) vs FOB (exports) baseline gap |
+| `classification_drift` | hs_group_yoy*, hs_group_trajectory* | CHS8 vs CN8 divergence at HS-8 |
+| `cn8_revision` | hs_group_yoy*, hs_group_trajectory* | 24-month window always spans Eurostat's annual CN8 revision |
+| `currency_timing` | mirror_gap*, hs_group_yoy*, hs_group_trajectory* | FX rate sensitive to which day's used |
+| `eurostat_stat_procedure_mix` | mirror_gap*, hs_group_yoy*, hs_group_trajectory* | Sum across tariff regimes hides the mix |
 | `multi_partner_sum` | all Eurostat-side | EU side sums across CN+HK+MO partners |
-| `general_vs_special_trade` | mirror_gap | Different definitions of "trade" |
-| `transshipment` | mirror_gap | Generic transshipment caveat (not the per-hub one below) |
-| `cross_source_sum` | hs_group_yoy_combined* | EU-27 (Eurostat) + UK (HMRC) summed; non-comparable methodologies |
+| `general_vs_special_trade` | mirror_gap* | Different definitions of "trade" |
+| `transshipment` | mirror_gap* | Generic transshipment caveat (not the per-hub one below) |
 | `aggregate_composition_drift` | mirror_gap_zscore | Z-score baseline's underlying composition may shift |
 | `llm_drafted` | narrative_hs_group | Editorial framing produced by LLM (with verification) |
 
-### Per-finding (rendered inline; signal something specific)
+### Per-finding-variable (rendered inline; signal something specific)
 
 | Code | Applies to | What it means |
 |---|---|---|
-| `partial_window` | hs_group_yoy* | 1 missing month in either current or prior 12mo window |
-| `low_base_effect` | hs_group_yoy* | Smaller of current/prior 12mo EUR is below €50M threshold; percentage rests on small base |
+| `partial_window` | hs_group_yoy*, gacc_aggregate_yoy | 1 missing month in either current or prior 12mo window |
+| `low_base_effect` | hs_group_yoy*, hs_group_trajectory* | Smaller of current/prior 12mo EUR is below €50M threshold; percentage rests on small base |
 | `low_baseline_n` | mirror_gap_zscore | Z-score baseline has fewer than 6 prior periods; stdev estimate is noisy |
 | `low_kg_coverage` | hs_group_yoy* | Less than 80% of value_eur is backed by an actual quantity_kg measurement; unit-price decomposition suppressed |
 | `transshipment_hub` | mirror_gap | Partner is in `transshipment_hubs` table (NL, BE, HK, SG, AE, MX) |
+| `aggregate_composition` | mirror_gap | Comparison is aggregate-to-aggregate (e.g. EU bloc); member definitions may differ across sources |
+| `cross_source_sum` | hs_group_yoy_combined* | Combined-scope finding sums Eurostat (EUR-native) + HMRC (GBP→EUR via period FX) |
 
 ### CIF/FOB baselines: per-country detail
 

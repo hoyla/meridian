@@ -2,9 +2,9 @@
 
 Phase 6.1 — UK-side counterpart to eurostat.py. The Guardian publishes from
 London, and Eurostat dropped the UK after Brexit (full exit 2021-01); this
-module fetches UK-side trade with non-EU partners (initially CN + HK + MO,
-matching the existing EUROSTAT_PARTNERS_DEFAULT) so the analyser can build
-a UK-only or EU-27-plus-UK comparison alongside the existing EU-27 view.
+module fetches UK-side trade with non-EU partners (CN + HK + MO, matching
+`anomalies.EUROSTAT_PARTNERS`) so the analyser can build a UK-only or
+EU-27-plus-UK comparison alongside the existing EU-27 view.
 
 API: https://api.uktradeinfo.com/OTS — public, unauthenticated, OData v4.
 The OTS entity is the per-(commodity, country, port, flow, period) fact
@@ -59,9 +59,9 @@ ODATA_BASE = "https://api.uktradeinfo.com"
 DEFAULT_TIMEOUT = 120.0
 DEFAULT_PAGE_SIZE = 10000
 
-# Default partner CountryIds for "Chinese trade" — CN plus the two SARs.
-# Matches the existing EUROSTAT_PARTNERS_DEFAULT in anomalies.py editorially.
-# Configurable per call when a journalist wants a narrower or broader set.
+# Partner CountryIds for "Chinese trade" — CN plus the two SARs. Matches
+# `anomalies.EUROSTAT_PARTNERS` (CN+HK+MO) so EU-27 + UK combined-scope
+# findings sum the same partner envelope on both sides.
 DEFAULT_COUNTRY_IDS: tuple[int, ...] = (720, 740, 743)  # CN, HK, MO
 
 # CountryId → ISO-2 lookup. Extended as new partners are added; the

@@ -40,9 +40,9 @@ import psycopg2
 import psycopg2.extras
 
 from briefing_pack import (
+    _ALL_UNIVERSAL_CAVEATS,
     _SCOPE_LABEL,
     _SCOPE_SUBKIND_SUFFIX,
-    SUPPRESSED_INLINE_CAVEATS,
     _compute_predictability_per_group,
     is_threshold_fragile,
 )
@@ -94,9 +94,9 @@ def _trajectory_subkind(scope: str, flow: int) -> str:
 
 
 def _filter_visible_caveats(codes: list[str] | None) -> list[str]:
-    """Drop the universally-fired caveats that the brief suppresses
-    inline; keep the per-finding-informative ones."""
-    return [c for c in (codes or []) if c not in SUPPRESSED_INLINE_CAVEATS]
+    """Drop the family-universal caveats (defined once in the brief
+    methodology footer); keep the per-finding-variable ones."""
+    return [c for c in (codes or []) if c not in _ALL_UNIVERSAL_CAVEATS]
 
 
 # =============================================================================

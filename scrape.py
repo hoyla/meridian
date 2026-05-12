@@ -276,15 +276,6 @@ def main() -> None:
     p.add_argument("--llm-model", metavar="NAME", default=None,
                    help=f"Ollama model name for --analyse llm-framing. Default: "
                         f"{llm_framing.DEFAULT_OLLAMA_MODEL}")
-    p.add_argument("--eurostat-partners", metavar="LIST",
-                   help="Comma-separated Eurostat partner_country codes to sum on the EU "
-                        "import side. Applies to --analyse mirror-trade and "
-                        "--analyse hs-group-yoy (trajectory inherits from yoy). "
-                        "Default: 'CN,HK,MO' (the editorially-correct 'Chinese trade' "
-                        "envelope including HK and MO Special Administrative Regions). "
-                        "Pass 'CN' for the narrower direct-China-only view that matches "
-                        "Soapbox/Merics single-partner figures. When >1 partner is used, "
-                        "findings carry a multi_partner_sum caveat.")
     p.add_argument("--comparison-scope",
                    choices=anomalies.VALID_COMPARISON_SCOPES,
                    default=anomalies.COMPARISON_SCOPE_DEFAULT,
@@ -393,13 +384,8 @@ def main() -> None:
         return
 
     if args.analyse == "mirror-trade":
-        partners = (
-            [p.strip().upper() for p in args.eurostat_partners.split(",") if p.strip()]
-            if args.eurostat_partners else None
-        )
         counts = anomalies.detect_mirror_trade_gaps(
             period=args.analyse_period,
-            eurostat_partners=partners,
         )
         log.info("Mirror-trade analysis: %s", counts)
         return
@@ -414,16 +400,11 @@ def main() -> None:
         return
 
     if args.analyse == "hs-group-yoy":
-        partners = (
-            [p.strip().upper() for p in args.eurostat_partners.split(",") if p.strip()]
-            if args.eurostat_partners else None
-        )
         counts = anomalies.detect_hs_group_yoy(
             group_names=args.hs_group,
             yoy_threshold_pct=args.yoy_threshold,
             flow=args.flow,
             low_base_threshold_eur=args.low_base_threshold,
-            eurostat_partners=partners,
             comparison_scope=args.comparison_scope,
         )
         log.info("HS-group YoY analysis (flow=%d, scope=%s): %s",

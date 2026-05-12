@@ -88,8 +88,8 @@ CAUSAL_HYPOTHESES = [
             "partner=CN is queried."
         ),
         "corroboration_steps": [
-            "Re-run with --eurostat-partners CN,HK,MO and check whether the anomaly persists",
-            "Look at the partner-share ratio (CN vs HK+MO) over the same window",
+            "Look at the partner-share ratio (CN vs HK+MO) over the same window in eurostat_raw_rows",
+            "Query eurostat_raw_rows for CN-only flows to check whether HK+MO inclusion is masking a CN-side drop",
             "Check for known transshipment-hub effects in the partner field — Rotterdam (NL) for EU re-exports",
         ],
     },
