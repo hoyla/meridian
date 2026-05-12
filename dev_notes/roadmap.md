@@ -5,73 +5,11 @@ What's still open. For history of what shipped, see
 the original Phase 1–6 plan, look at the git log around
 `8f18e68`–`5d0e23e` (2026-05-09 to 2026-05-10).
 
-## Proposed work order (post-2026-05-12 A1 re-test)
-
-The 2026-05-12 re-test of Soapbox A1 ("China's export surge puts EU
-trade defence in the spotlight") against the live DB
-([soapbox-validation-2026-05-11.md § A1](soapbox-validation-2026-05-11.md#a1-2026-05-11--chinas-export-surge-puts-eu-trade-defence-in-the-spotlight))
-confirmed every numerical claim the tool *could* check (no contradictions),
-and surfaced the **shape** of the gap precisely: their reporting is
-share-and-bilateral-aggregate-heavy; ours is growth-and-per-HS-group-heavy.
-Closing that gap is a re-ingest + new-analyser job, not a methodology
-rework.
-
-Recommended order, cheapest-to-most-impactful-per-hour:
-
-1. ~~**Tier 1 hs_group additions**~~ — **DONE 2026-05-12**. Thirteen
-   new `hs_groups` rows shipped (`seed:soapbox_a1_2026_05_12`):
-   seven chemicals/feed/pharma-adjacent groups, four rare-earth
-   sub-buckets matching the 2023 EU CN8 split of HS 284690, plus
-   MPPT solar inverters (CN8 85044084, limited history — will catch
-   when 24mo accumulates) and Civil aircraft (HS 8802). Analysers
-   re-run; 3,995 new YoY findings + 60 new trajectory findings
-   emitted across the three comparison scopes × both flows. Crude
-   oil (HS 2709) and the Central Asia alias dropped from this round
-   — both need ingest-scope expansion to surface anything (China is
-   not a meaningful crude-oil exporter to the EU, and GACC section
-   4 doesn't break out Central Asian states individually). See
-   "Tier 1 hs_group additions" below.
-2. ~~**briefing_pack.py modularisation**~~ — **DONE 2026-05-12**.
-   Split into a `briefing_pack/` package: `_helpers.py` (constants
-   + cross-section utilities), `sections/*.py` (one file per
-   `_section_*` builder), `render.py` (orchestrator), `__init__.py`
-   (re-export shim). Zero behaviour change — test suite passes
-   200/200 identical to pre-refactor. Largest section module is 172
-   lines (`hs_yoy_movers.py`); smallest is 27 (`detail_opener.py`).
-   New sections for steps 3 + 4 below land as new files in
-   `sections/` rather than appends to a 2,000-line monolith.
-3. ~~**`gacc_bilateral_aggregate_yoy` analyser**~~ — **DONE 2026-05-12**.
-   New analyser covers the EU bloc + every single-country GACC
-   partner. Each finding carries three YoY operators in
-   `detail.totals` side-by-side: `current_12mo_eur`/`yoy_pct` (12mo
-   rolling), `ytd_cumulative` (Jan-to-anchor vs same range prior
-   year — the Soapbox A1 register), and `single_month` (anchor
-   month vs same month prior year — the Soapbox A3 register).
-   Subkinds `gacc_bilateral_aggregate_yoy[_import]`. Wired into
-   the periodic pipeline. Brief renders a new "GACC bilateral
-   partners" Tier-2 block between the per-HS-group view and the
-   non-EU aggregate view. Spot-check 2026-04 EU export YTD vs
-   article: ours +18.2% to €175.04B (≈$200B), article +19% to
-   $201bn — within rounding + FX-source noise.
-4. ~~**Selective Eurostat re-ingest + `partner_share` analyser**~~ —
-   **DONE 2026-05-12**. Discovered that Eurostat bulk files contain
-   no pre-computed aggregates (only 246 ISO-2 partner codes), so the
-   denominator is computed at ingest time: `aggregate_to_world_totals`
-   sums across all partners except the 27 EU-27 ISO codes
-   (`eurostat.EU27_PARTNER_CODES`), producing an extra-EU total. New
-   table `eurostat_world_aggregates` stores it. New analyser
-   `detect_partner_share` divides our CN+HK+MO sum (from
-   `eurostat_raw_rows`) into that extra-EU sum, emitting one finding
-   per (hs_group, anchor) with `share_value`, `share_kg`, and the
-   `qty_minus_value_pp` gap (the Soapbox "bigger in tonnes than in
-   euros" signal). Backfilled 26 months (2024-01 → 2026-02). Spot-
-   check vs Soapbox A1: new narrow group `Photovoltaic inverters
-   (CN8 85044086)` shows **80% value / 91% qty** for 12mo to 2025-12;
-   article claims 75% / 87%. Within ±5pp validation band; gap shape
-   (+10.7pp qty-over-value) matches the editorial register exactly.
-
-Tier 2 hs_groups (MPPT-only inverters, crude oil, aircraft, Central
-Asia) can be bundled into step 1 or done independently anytime.
+The four-step feature pass triggered by the 2026-05-12 Soapbox A1
+re-test (Tier 1 hs_groups, briefing-pack modularisation,
+`gacc_bilateral_aggregate_yoy`, `partner_share` + extra-EU
+aggregates) has shipped — see
+[`history.md` § 2026-05-12](history.md#2026-05-12--soapbox-a1-re-test--four-step-feature-pass).
 
 ## Near-term (likely next session)
 
@@ -109,184 +47,6 @@ the periodic-runs critical path. Each is small-to-medium and
 self-contained. See
 [`soapbox-validation-2026-05-11.md`](soapbox-validation-2026-05-11.md)
 for the per-claim test that motivates each.
-
-### Tier 1 hs_group additions — shipped 2026-05-12
-
-Pork offal (HS 0206 swine), Sintered NdFeB magnets (CN8 85051110)
-and Natural graphite (HS 250410) shipped 2026-05-11. The 2026-05-12
-A1 re-test added thirteen more, all tagged
-`seed:soapbox_a1_2026_05_12`. Spot-check of latest hs_group_yoy
-findings at current_end=2026-02, scope=eu_27, flow=1 (CN→EU
-imports), `partial_window=false` (numbers from the live DB):
-
-**Chemicals / feed / pharma-adjacent inputs** (the article's "less
-visible inputs" cluster):
-
-- **Amino acids (HS 2922)** — id=36. 12mo to 2026-02: €968M,
-  -28.4% YoY value / -22.9% kg.
-- **Adipic acid (HS 291712)** — id=37. €74M, -43.4% / -31.9%.
-  (Roadmap originally proposed 291713 which is sebacic/azelaic;
-  corrected to 291712 during the per-code data verification.)
-- **Choline (HS 292310)** — id=38. €8M, -50.8% / -70.8% (low_base).
-- **Vanillin and ethylvanillin (HS 29124100 + 29124200)** —
-  id=39. €42M, -46.9% / -42.5% (low_base).
-- **Feed premixes (HS 230990)** — id=40. €210M, -36.4% / -30.1%.
-- **Inorganic acids (HS 2811)** — id=41. €171M, +5.0% / +28.3%.
-- **Aldehyde/ketone acids (HS 2918)** — id=42. €663M, +0.4% / +12.1%.
-
-**Rare-earth sub-buckets** (post-2023 EU CN8 split of HS 284690;
-element labels per Eurostat 2024 CN8 nomenclature):
-
-- **Lanthanum compounds (CN8 28469040)** — id=43. €5M, +5.2% /
-  +7.4% (low_base). Aligns with Soapbox's "dark-red bucket"
-  framing (bulk light-REE volume).
-- **Praseodymium/neodymium/samarium compounds (CN8 28469050)** —
-  id=44. €2M, +25.6% / +12.8% (low_base). Nd is the magnet element.
-- **Gadolinium/terbium/dysprosium compounds (CN8 28469060)** —
-  id=45. €11M, **+149.6% value** / -21.9% kg (low_base). The
-  article's "blue bucket"; price-per-kg surging as Dy/Tb usage in
-  high-end magnets accelerates.
-- **Europium/holmium/erbium/thulium/ytterbium/lutetium/yttrium
-  compounds (CN8 28469070)** — id=46. €16M, +85.0% / +67.5%
-  (low_base). Yttrium dominates by volume; heavier elements small
-  but strategically tracked.
-
-**Tier 2 article-exposed gaps**:
-
-- **MPPT solar inverters (CN8 85044084)** — id=47. **Skipped with
-  insufficient_history** (code separated by the EU only from 1 Jan
-  2026; 24mo window needs ~mid-2027). Included now so the next
-  valid window picks it up automatically.
-- **Civil aircraft (HS 8802)** — id=48. €1.16B, **+57.7%** /
-  +26.7%. Notable mover.
-
-**Dropped from Tier 1**:
-
-- **Crude oil (HS 2709)** — CN→EU 2025 was effectively zero
-  (€0.0M / 0.34 t — China is not a meaningful crude exporter to
-  the EU). The article's Libya story is about China-as-importer,
-  which our `partner ∈ {CN, HK, MO}` ingest can't reach. Logged as
-  a data-source-expansion item, not a schema addition.
-- **Central Asia `country_aliases` row** — GACC section 4
-  doesn't break out KZ/UZ/KG/TJ/TM individually (they roll into
-  the existing Belt & Road aggregate). Adding an alias without
-  matching observation rows would emit empty findings. Logged as
-  a data-source-expansion item.
-
-### EU/bilateral aggregate analyser (`gacc_bilateral_aggregate_yoy`) — shipped 2026-05-12
-
-`gacc_aggregate_yoy` deliberately excludes `eu_bloc` per
-[`anomalies.py`](../anomalies.py) ("mirror-trade handles EU").
-The 2026-05-12 A1 re-test confirmed this left a real editorial
-gap: Soapbox's USD top-lines ("$201B in Jan-Apr 2026, +19% YoY")
-aren't the same finding as a bilateral mirror gap, and Lisa quotes
-them directly. The new analyser closes the gap.
-
-**Shape**: rather than separate subkinds per (period_kind, flow),
-one finding per (partner, anchor_period, flow) carries three YoY
-operators side-by-side in `detail.totals`. This mirrors the
-Phase 6.10 design on `hs_group_yoy` (where `single_month` and
-`two_month_cumulative` are sub-fields, not separate findings):
-
-- `yoy_pct` — 12mo rolling (the primary, drives `score` + supersede)
-- `ytd_cumulative.yoy_pct` — Jan-to-anchor of current year vs prior
-  year. Null when prior-year YTD is missing.
-- `single_month.yoy_pct` — anchor month vs same month prior year.
-  Null when prior month is missing.
-
-Sharing one finding keeps the supersede chain coherent — when
-underlying data revises, all three operators move together — and
-matches the rendering pattern in the new
-`briefing_pack/sections/state_of_play_bilaterals.py`.
-
-**Coverage**: EU bloc + all single-country GACC partners
-(`country_aliases.aggregate_kind = 'eu_bloc' OR IS NULL`). The
-existing `gacc_aggregate_yoy` keeps its non-EU-multi-country scope
-unchanged. Subkinds: `gacc_bilateral_aggregate_yoy` (export) /
-`gacc_bilateral_aggregate_yoy_import` (import). Method version:
-`gacc_bilateral_aggregate_yoy_v1_eu_and_single_countries`.
-
-**First run** (2026-05-12): 2,664 findings emitted across 22
-partners × 2 flows × ~30 valid anchor periods. EU export YTD
-through 2026-04 = +18.2% to €175.04B (≈$200B at period FX) vs
-Soapbox's +19% to $201bn — within rounding + FX-rate-source noise.
-
-### Partner-share analyser + extra-EU world aggregates — shipped 2026-05-12
-
-Soapbox's most distinctive analytical move is the "China share of
-EU imports by qty vs value" pattern. The 2026-05-12 A1 re-test
-made the gap concrete: every claim of the form "China supplied
-X% of EU imports of Y" was unverifiable from our DB because
-`eurostat.py` filters at ingest to `partner ∈ {CN, HK, MO}`. We
-had the China-side numerator but no rest-of-world denominator.
-
-**Implementation**. New table `eurostat_world_aggregates` stores
-pre-summed extra-EU partner totals per (period, reporter, product_nc,
-flow) for the HS prefixes our hs_groups track. The aggregator
-(`eurostat.aggregate_to_world_totals`) excludes the 27 EU-27
-ISO-2 partner codes (`eurostat.EU27_PARTNER_CODES`) so the
-denominator matches the editorial register "share of imports from
-*outside* the EU". Including intra-EU would conflate "share of EU
-consumption" with "share of non-EU imports" — Soapbox always means
-the latter.
-
-The discovery during validation: the bulk files contain only ISO-2
-country codes, no pre-computed `EXTRA_EU27_2020` or `WORLD`
-aggregates. So "rest of world" has to be computed by summing across
-all 246 partner codes Eurostat publishes, minus the 27 EU-27 codes.
-The aggregator does this in a single streaming pass over the bulk
-file (~11s per period). Backfill: 26 months (2024-01 → 2026-02),
-77k–94k aggregate rows per period, ~2.2M total rows.
-
-**Analyser** (`detect_partner_share`): emits one finding per
-(hs_group, anchor_period, flow) under subkind
-`partner_share[_export]`. `detail.totals` carries `share_value`,
-`share_kg`, and `qty_minus_value_pp` — the Soapbox "bigger in
-tonnes than in euros" signal. Natural key
-`(hs_group_id, current_end_yyyymm)`. Method version
-`partner_share_v1_eurostat_world_aggregates`. New universal caveat
-`extra_eu_definitional_drift` documents that the 246-partner
-denominator sums customs authorities with slight definitional
-drift across CN8 revisions.
-
-**Brief section**: `briefing_pack/sections/partner_share.py` —
-Tier-3 block listing groups by share descending, with both shares
-+ the gap + a brief framing note (>+5pp = unit-price pressure;
->-5pp = premium pricing; between = noise band).
-
-**Validation** vs Soapbox A1. The article cites "China supplied
-87% of EU solar inverter imports by quantity in 2025, compared
-with 75% by value" — for the narrow PV-specific CN8 sub-code
-85044086 (separated from broader HS 850440 as a new hs_group
-during this work) our finding at 12mo-to-2025-12 shows **80%
-value / 91% qty**, gap +10.7pp. Within ±5pp validation band on
-the absolute figures; the qty-over-value gap shape matches
-exactly. Direction and editorial framing fully reproduce
-Soapbox's analytical move.
-
-**Coverage limitation**: EU-27 scope only. UK and combined scopes
-would need an HMRC-side world aggregate (HMRC ingest stores
-GB+CN/HK/MO only) — forward work.
-
-### ~~Single-month / 2-month YoY operator~~ DONE 2026-05-11/12
-
-Single-month and 2-month-cumulative YoY are now sub-fields on
-every hs_group_yoy finding (`detail.totals.single_month`,
-`detail.totals.two_month_cumulative`). Method bumped v9 → v10.
-Tier 2 render shows the latest-month figure alongside the 12mo
-rolling.
-
-**Aggregate-level extension shipped 2026-05-12.** The same
-sub-field pattern landed on `gacc_aggregate_yoy[_import]` —
-method bumped `v3_per_alias_natural_key` →
-`v4_ytd_and_single_month_operators`. Each non-EU aggregate finding
-(ASEAN / RCEP / Belt&Road / Africa / Latin America / world Total)
-now carries `ytd_cumulative` and `single_month` sub-fields
-alongside the existing 12mo rolling. The Tier-2 partner-aggregate
-block surfaces all three operators at once so a journalist quoting
-Soapbox A3-style "Jan-N exports +X%" or A3.1-style single-month
-figures has finding-grade citation rather than raw-row queries.
-First run superseded all 464 existing aggregate findings with v4.
 
 ### Per-reporter hs_group rollup
 
@@ -416,10 +176,12 @@ any near-term path:
 - [`soapbox-validation-2026-05-11.md`](soapbox-validation-2026-05-11.md)
   — peer-comparison validation against Soapbox Trade
   (substack). 50 testable claims pre-registered, ~60% clean concur,
-  ~80% directional. Stage B follow-ups #3 (pork+offal) and #6
-  (§5.4 refresh) completed same day; surfaced the open items in
-  "Coverage extension" above. Re-run after any major analyser
-  change, same pattern as shock-validation.
+  ~80% directional. The 2026-05-12 A1 re-test (Stage B/C) drove
+  the four-step feature pass (Tier 1 hs_groups, briefing-pack
+  modularisation, bilateral aggregate analyser, partner_share +
+  extra-EU aggregates) recorded in
+  [`history.md`](history.md#2026-05-12--soapbox-a1-re-test--four-step-feature-pass).
+  Living methodology doc — re-run after any major analyser change.
 - [`cif-fob-baselines-2026-05-10.md`](cif-fob-baselines-2026-05-10.md)
   — sourced reference for the OECD ITIC backfill. Reproducibility
   notes for refreshing in a future year.
