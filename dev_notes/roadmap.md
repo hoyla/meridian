@@ -72,6 +72,30 @@ filter rule resolution from 2026-05-10.
 
 ## Methodology depth (pick up if a story warrants it)
 
+### Editorial calibration of `low_base_threshold_eur` via shock-validation backtest
+
+Phase 6.3 sensitivity sweep showed €50M is the single largest
+editorial-framing driver — 49% of `hs_group_yoy*` findings would
+flip low_base classification across €5M–€500M. The default has
+never been calibrated against editorial reality. Approach:
+
+1. Take each shock from `shock-validation-2026-05-09.md` (2018
+   Section 232 steel, Q1 2020 COVID lockdown, Feb 2022 Russia
+   invasion, Oct 2023 EV probe).
+2. For each, identify which HS groups carried the story and what
+   their absolute 12mo €-figures were at the surfacing anchor.
+3. Replay the sensitivity sweep — would those groups have been
+   suppressed under €100M? Surfaced cleanly under €25M?
+4. Pick the threshold that minimises both false-positive
+   (low_base flag on a real story) and false-negative (no flag
+   on a story that genuinely rests on a niche base).
+
+Same exercise plausibly applies to the Soapbox-validation
+2026-05-11 doc's per-claim concur table. Decide whether to keep
+€50M (the engineered floor), shift it, or move to a per-group
+threshold seeded from the group's typical EU-27 12mo magnitude.
+Discussed 2026-05-12 with the first-export audit.
+
 ### CN8 concordance table (Phase 4 carry-over)
 
 Full mapping of old→new codes across Eurostat's annual revisions.

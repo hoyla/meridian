@@ -659,23 +659,28 @@ def test_predictability_badge_appears_when_t_minus_6_pair_exists(
 ):
     """Phase: per-group YoY-predictability badge. Seed the same group at
     T (2026-02) and T-6 (2025-08) with the same yoy_pct → 100% persistent
-    → 🟢 badge. Seed another with sign-flipped yoy → 🔴 badge."""
+    → 🟢 badge. Seed another with sign-flipped yoy → 🔴 badge.
+
+    Need at least PREDICTABILITY_MIN_PAIRS = 3 (scope, flow) permutations
+    with both-anchors data for the badge to render at all — seed three
+    subkinds per group so the gate passes."""
     with psycopg2.connect(test_db_url) as conn:
         cur = conn.cursor()
         run = _seed_run(cur)
-        # Releases for both windows
         for y, m in [(2024, 2), (2024, 8), (2025, 2), (2025, 8), (2026, 2)]:
             _seed_eurostat_release(cur, date(y, m, 1))
-        # Persistent group: same yoy at T and T-6
-        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)", yoy_pct=0.30,
-                             period=date(2025, 8, 1))
-        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)", yoy_pct=0.32,
-                             period=date(2026, 2, 1))
-        # Volatile group: sign flip between T-6 and T
-        _seed_hs_yoy_finding(cur, run, "Rare-earth materials", yoy_pct=0.40,
-                             period=date(2025, 8, 1))
-        _seed_hs_yoy_finding(cur, run, "Rare-earth materials", yoy_pct=-0.30,
-                             period=date(2026, 2, 1))
+        # Persistent group: same yoy at T and T-6, across 3 subkinds.
+        for sk in ("hs_group_yoy", "hs_group_yoy_export", "hs_group_yoy_combined"):
+            _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)", subkind=sk,
+                                 yoy_pct=0.30, period=date(2025, 8, 1))
+            _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)", subkind=sk,
+                                 yoy_pct=0.32, period=date(2026, 2, 1))
+        # Volatile group: sign flip between T-6 and T, across 3 subkinds.
+        for sk in ("hs_group_yoy", "hs_group_yoy_export", "hs_group_yoy_combined"):
+            _seed_hs_yoy_finding(cur, run, "Rare-earth materials", subkind=sk,
+                                 yoy_pct=0.40, period=date(2025, 8, 1))
+            _seed_hs_yoy_finding(cur, run, "Rare-earth materials", subkind=sk,
+                                 yoy_pct=-0.30, period=date(2026, 2, 1))
         conn.commit()
 
     md = briefing_pack.render(top_n=20)
@@ -692,6 +697,37 @@ def test_predictability_badge_appears_when_t_minus_6_pair_exists(
     assert "🔴" in re_line
     # Brief explains the badge.
     assert "YoY predictability" in md
+
+
+def test_predictability_badge_suppressed_below_min_pairs(
+    empty_findings, test_db_url,
+):
+    """Predictability badges require PREDICTABILITY_MIN_PAIRS=3 (scope, flow)
+    permutations with T-6 pair data. Below that, the brief should NOT show a
+    badge — the signal is too sparse to be a confident editorial cue.
+
+    Seed only one subkind with T and T-6 data → one permutation → badge
+    suppressed. The group still renders in the brief; just without a badge."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        for y, m in [(2024, 2), (2024, 8), (2025, 2), (2025, 8), (2026, 2)]:
+            _seed_eurostat_release(cur, date(y, m, 1))
+        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)",
+                             subkind="hs_group_yoy",
+                             yoy_pct=0.30, period=date(2025, 8, 1))
+        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)",
+                             subkind="hs_group_yoy",
+                             yoy_pct=0.32, period=date(2026, 2, 1))
+        conn.commit()
+
+    md = briefing_pack.render(top_n=20)
+    ev_line = next(line for line in md.splitlines()
+                   if line.startswith("### EV batteries (Li-ion)"))
+    # No badge emoji should appear on the heading line.
+    assert "🟢" not in ev_line
+    assert "🟡" not in ev_line
+    assert "🔴" not in ev_line
 
 
 def test_threshold_fragility_appears_in_brief(empty_findings, test_db_url):

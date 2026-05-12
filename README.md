@@ -26,8 +26,15 @@ pip install -r requirements-dev.txt  # for tests
 
 cp .env.example .env  # edit DATABASE_URL etc.
 
+# The Postgres DB is named `gacc` (pre-rename); the project renamed to
+# Meridian in May 2026 but the local DB and the `DATABASE_URL` default in
+# .env.example kept the old name. Rename if you prefer — nothing in the
+# code depends on the literal string.
 createdb gacc
 psql gacc < schema.sql
+
+# Ollama for the LLM lead-scaffold pass (optional — `--skip-llm` skips it):
+ollama pull qwen3.6:latest
 ```
 
 ## Usage

@@ -68,6 +68,21 @@ CURRENCY_TOLERANCE_REL = 0.05  # 5% relative
 # truncation is bounded.
 MAX_HYPOTHESES_PER_LEAD = 3
 
+# Universal caveats that fire on every hs_group_yoy* finding by
+# construction. They're documented once in the brief's methodology footer.
+# Filtered out of the prompt's caveat list because they have no per-finding
+# signal — including them caused `cn8_reclassification` to dominate
+# hypothesis picks (33/99 across the 2026-05-12 audit export) just because
+# `cn8_revision` was always in the typed facts.
+_UNIVERSAL_CAVEATS_FILTERED_FROM_PROMPT: frozenset[str] = frozenset({
+    "cif_fob",
+    "classification_drift",
+    "cn8_revision",
+    "currency_timing",
+    "eurostat_stat_procedure_mix",
+    "multi_partner_sum",
+})
+
 
 # =============================================================================
 # Backend interface
@@ -263,11 +278,26 @@ def _build_facts(cluster: HsGroupCluster) -> dict[str, Any]:
     facts means the LLM literally can't see them. EU-27 is preserved
     even when low_base because it's the always-lead and dropping it
     would leave nothing to anchor the summary to.
+
+    Universal caveats (cif_fob, classification_drift, cn8_revision,
+    currency_timing, eurostat_stat_procedure_mix, multi_partner_sum)
+    are filtered out of the prompt's caveat list. They fire on every
+    hs_group_yoy* finding by construction — they don't tell the LLM
+    anything specific about this group. Leaving them in caused
+    `cn8_reclassification` to dominate hypothesis picks (33/99 across
+    the 2026-05-12 audit export) just because cn8_revision was in the
+    typed facts. Per-finding-variable caveats (low_base_effect,
+    partial_window, transshipment_hub, low_baseline_n, low_kg_coverage,
+    cross_source_sum, aggregate_composition) are kept since those DO
+    carry per-finding signal.
     """
+    visible_caveats = [
+        c for c in cluster.caveat_codes if c not in _UNIVERSAL_CAVEATS_FILTERED_FROM_PROMPT
+    ]
     facts: dict[str, Any] = {
         "group_name": cluster.group_name,
         "hs_patterns": cluster.hs_patterns,
-        "caveats": sorted(cluster.caveat_codes),
+        "caveats": sorted(visible_caveats),
         "scopes": {},
     }
     for scope_name, scope_data in cluster.scopes.items():
@@ -375,11 +405,20 @@ B. EVERY HYPOTHESIS ID YOU PICK MUST APPEAR IN THE CATALOG. Do not invent
 C. PICK 2-3 HYPOTHESES, NOT MORE. Pick the ones most clearly supported by
    the facts. If only one fits, pick one. If none fit (rare, but possible
    for very flat / featureless groups), return an empty hypotheses list.
-D. If a caveat applies (low_base, partial_window, transshipment_hub,
-   low_kg_coverage, cn8_revision, multi_partner_sum), let it shape your
-   hypothesis selection (e.g. cn8_revision strongly suggests cn8_reclassification).
-   Mention the caveat by name in the relevant rationale when it directly
-   motivates the pick.
+D. The `caveats` array in the FACTS block lists per-finding-variable
+   caveats only (low_base_effect, partial_window, transshipment_hub,
+   low_kg_coverage, low_baseline_n, cross_source_sum,
+   aggregate_composition). Family-universal caveats — which fire on
+   every finding of this family by construction (CIF/FOB, CN8 revisions,
+   stat-procedure mix, etc.) — are deliberately omitted because they
+   carry no per-finding signal. So: let any caveat that IS in the array
+   shape your hypothesis selection (e.g. transshipment_hub motivates
+   transshipment_reroute; low_base_effect motivates base_effect).
+   Mention the caveat by name in the relevant rationale when it
+   directly motivates the pick. Do NOT pick cn8_reclassification by
+   default — only pick it when you have a specific reason to suspect
+   a code change drove the move (e.g. the trajectory has a sharp
+   single-period inflection coinciding with a January boundary).
 E. NEVER claim "volume-driven" or "price-driven" when decomposition_suppressed
    is true.
 F. The FACTS block has a `scopes` object with up to three entries:

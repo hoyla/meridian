@@ -150,6 +150,11 @@ PREDICTABILITY_LOOKBACK_MONTHS = 6
 PREDICTABILITY_SHIFT_PP = 5.0    # |yoy_T - yoy_{T-6}| pp threshold
 PREDICTABILITY_GREEN_PCT = 0.67  # ≥67% persistent → 🟢
 PREDICTABILITY_YELLOW_PCT = 0.33  # 33-67% → 🟡; <33% → 🔴
+PREDICTABILITY_MIN_PAIRS = 3     # need at least N (scope, flow) T-6 pairs
+                                 # to render a badge; below this the
+                                 # signal is too sparse to support an
+                                 # editorial confidence cue. Phase 6.6
+                                 # backtest had 5–6 per established group.
 THRESHOLD_FRAGILITY_RATIO = 1.5  # within 1.5× of threshold → flag
 
 
@@ -209,7 +214,14 @@ def _compute_predictability_per_group(cur) -> dict[str, tuple[str, float, int]]:
     out: dict[str, tuple[str, float, int]] = {}
     for gn, persists in by_group.items():
         n = len(persists)
-        pct = sum(persists) / n if n else 0.0
+        # Below the minimum-pairs threshold, the badge would rest on too
+        # few permutations to be a confident editorial cue. Suppress
+        # rather than display a misleadingly-strong signal — the journalist
+        # reads the trajectory line and the headline % without a badge,
+        # which correctly reflects "we don't yet know."
+        if n < PREDICTABILITY_MIN_PAIRS:
+            continue
+        pct = sum(persists) / n
         if pct >= PREDICTABILITY_GREEN_PCT:
             badge = "🟢"
         elif pct >= PREDICTABILITY_YELLOW_PCT:

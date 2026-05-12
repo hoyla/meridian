@@ -652,3 +652,88 @@ A practical rubric:
 When in doubt, click through the trace token (`finding/12345`) to
 the underlying detail. Every claim has a citation chain back to the
 raw rows; quote only the parts that hold up under that walk.
+
+## 10. Known editorial-output limitations
+
+§7 covered known fragility in the underlying methodology. This
+section covers known limitations in the *reading layer* — places
+where the findings document or spreadsheet may say something the
+journalist needs to discount. Each is a real, observed effect from
+the 2026-05-12 first-export audit; each has a known mitigation
+path (some shipped, some not yet).
+
+### Trajectory shape "volatile" over-fires
+
+Roughly two-thirds of `hs_group_trajectory*` findings classify as
+`volatile (multiple direction changes)`. This is partly correct
+— the Phase 6.6 backtest established that HS-group YoY series are
+noisy at 6-month horizons (31% sign flips, 43% magnitude shifts)
+— but it leaves the journalist with no narrative shape to lean on
+for those groups. The methodology rubric's "Quote with confidence:
+inverse_u_peak / u_recovery / dip_recovery" applies to a smaller
+fraction of the brief than the structure implies. Treat `volatile`
+as "no usable trajectory signal for this group; use the headline %
+and the predictability badge instead."
+
+Mitigation: a smoothing-window knob is exposed
+(`--smooth-window N`); a longer window suppresses some of the
+intra-window volatility but at the cost of slower response to
+real inflections. Production default is 3 months.
+
+### LLM-lead hypothesis catalog can skew toward universal caveats
+
+Before the 2026-05-12 prompt fix, the LLM picked
+`cn8_reclassification` for 33 of 99 hypothesis slots — primarily
+because the universal `cn8_revision` caveat sat in the typed-facts
+block and the LLM treated it as a per-finding signal. The fix
+filters universal caveats out of the prompt and updates the rule
+about caveat-driven picks; the picks-by-id distribution should
+rebalance on the next `--analyse llm-framing` pass. Watch for
+recurrence: if any single hypothesis ID exceeds ~25% of total
+picks in future leads, suspect a prompt-side bias rather than a
+real story.
+
+### Predictability badges depend on having enough (scope, flow) permutations
+
+The 🟢 / 🟡 / 🔴 badge is computed across up to 6 (scope, flow)
+permutations per HS group at T vs T-6. Groups with fewer than 3
+permutations carrying T-6 history don't get a badge displayed
+(`PREDICTABILITY_MIN_PAIRS = 3`) — the signal is too sparse to
+support an editorial confidence cue. A group that was added very
+recently with limited CN8 history (e.g. MPPT inverters CN8
+85044084 which only became reportable separately from 2026-01)
+will show no badge until enough permutations accumulate
+T-6 pairs.
+
+### Tier 1 method-bump suppression
+
+After a method-version bump (e.g. Phase 6.11 v10 → v11), the
+analyser produces a supersede pair for every active finding. The
+diff section detects when ≥95% of these pairs are value-identical
+(YoY moved by less than 0.01pp) AND no material shifts surfaced;
+in that case Tier 1 renders a one-line "this cycle is a
+method-version bump, not editorial movement" notice instead of a
+long count of new findings. If you see that notice, the brief is
+working as designed — the methodology rippled, the world didn't
+move.
+
+### Single-month YoY on lumpy categories
+
+The Phase 6.10 single-month YoY view (rendered in Tier 2 as
+"Latest month: ±X%") is exact on the data but misleading on
+categories with low monthly cadence — Civil aircraft (HS 8802),
+Wind generating sets, etc., where one shipment dominates a month.
+A 12mo rolling figure of +57% paired with a "Latest month: -99%"
+is the typical shape. Use the 12mo figure as the editorial
+anchor; treat single-month as a "what's the very latest direction"
+hint, not a quotable percentage.
+
+### "Combined" scope is methodologically imperfect
+
+The `_combined` (EU-27 + UK) view sums Eurostat-side EUR-native
+totals with HMRC-side GBP→EUR-converted totals. The two sources
+have different threshold rules, suppression policies, and
+revision cycles. The `cross_source_sum` caveat fires on every
+combined finding. Use this scope for headline framing only ("the
+EU+UK envelope"); cite per-scope figures (`eu_27` or `uk`) when
+the precision matters.
