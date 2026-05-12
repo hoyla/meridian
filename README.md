@@ -1,13 +1,66 @@
 # Meridian
 
-**Meridian** ingests China–EU/UK trade statistics from both sides of the customs fence — GACC (China), and Eurostat Comext (EU-27) / HMRC OTS (UK post-Brexit) — into a shared schema, cross-compares them to surface mirror-trade gaps and HS-group trends, and presents the most journalistically interesting findings as a three-artefact bundle per export folder: 
-- a deterministic Markdown findings document (NotebookLM-ready, no LLM in the loop),
-- an 8-tab spreadsheet for data journalists,
-- and a separate companion leads document where an LLM scaffolds investigation starting points per HS group.
+A trade-statistics monitor for Guardian journalists working the
+China–EU/UK beat. Ingests both sides of the customs fence — GACC
+(China), Eurostat Comext (EU-27), HMRC OTS (UK post-Brexit) — into a
+shared schema, cross-compares them, and writes a three-artefact
+bundle per export: a deterministic Markdown brief, an 8-tab
+spreadsheet, and a companion LLM-leads file. The model for what it
+should produce is [Soapbox Trade](https://soapboxtrade.substack.com);
+the model journalist is Lisa O'Carroll.
 
-The findings document and spreadsheet are kept LLM-free so downstream LLM tools reasoning over them see raw findings, not another LLM's interpretation. All three artefacts share a single DB snapshot per export. ECB FX rates are pulled automatically (CNY/EUR for GACC, GBP/EUR for HMRC) so all values are comparable in EUR.
+## What the brief looks like
 
-Domain-agnostic by design: HS-group definitions live in a journalist-editable `hs_groups` table, so the same machinery investigates EVs, solar PV, rare earths, pork, or whatever the news desk asks about.
+Every export bundle's `findings.md` opens with three tiers (what's
+new since last time → current state of play → full detail). A
+typical Tier 2 entry for one HS group reads like this:
+
+> ### EV batteries (Li-ion) 🟡
+>
+>   - **EU-27 imports (CN→reporter)**: +34.5% (kg +69.4%) to
+>     €27.25B (12mo to 2026-02-01). Latest month: +31.5% (kg
+>     +69.0%). Trajectory: `dip-and-recovery (was rising, dipped,
+>     now rising again)`. `finding/38664`
+>   - **UK imports (CN→reporter)**: +13.8% (kg +35.3%) to €1.66B.
+>     `finding/45367`
+>   - **EU-27 exports (reporter→CN)**: -36.2% (kg -8.7%) to
+>     €453.7M. `finding/42085`
+
+🟢 / 🟡 / 🔴 are predictability badges (would the headline % from
+6 months ago still hold today?); `finding/{id}` is a stable citation
+token you can paste into a story and follow back to source rows.
+Tier 3 ("Full detail") adds the top contributing reporter countries
+(*"Germany alone explains 66% of the EU-wide drop"*), top
+contributing HS-CN8 codes, mirror-trade gaps, and the per-finding
+caveats. Every finding traces back to a Eurostat / HMRC raw row or a
+GACC release page.
+
+## Three rules the design follows
+
+- **Brief and spreadsheet are LLM-free.** The LLM lead scaffolds live
+  in a separate `leads.md` — so a downstream LLM tool (NotebookLM,
+  Claude, etc.) reasoning over the brief sees raw findings, not
+  another LLM's interpretation.
+- **Findings are versioned, not over-written.** When data revises or
+  methodology evolves, the old finding is marked superseded with a
+  back-pointer to the new one. Citation tokens stay stable; the
+  supersede chain is the audit trail.
+- **HS groups are journalist-editable.** They live in an
+  `hs_groups` DB table — to investigate a new commodity or sector,
+  add a row, no code change required.
+
+## Where to read more
+
+- **[docs/README.md](docs/README.md)** — guided reading paths by
+  what you're trying to do.
+- **[docs/glossary.md](docs/glossary.md)** — every unfamiliar term
+  in one place.
+- **[docs/architecture.md](docs/architecture.md)** — how the pipeline
+  works.
+- **[docs/methodology.md](docs/methodology.md)** — what each finding
+  means and when to quote it.
+- **[docs/editorial-sources.md](docs/editorial-sources.md)** — the
+  journalism the tool exists to support.
 
 ## Stack
 

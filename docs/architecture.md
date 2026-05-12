@@ -2,7 +2,25 @@
 
 How the tool works, end-to-end. For the journalism it serves see
 [editorial-sources.md](editorial-sources.md); for what each finding
-means and how to interpret it see [methodology.md](methodology.md).
+means and how to interpret it see [methodology.md](methodology.md);
+for unfamiliar terms see [glossary.md](glossary.md).
+
+> **TL;DR.** Three customs sources (GACC / Eurostat / HMRC), three
+> data layers (`raw_rows` → `observations` → `findings`), an
+> append-plus-supersede chain on findings, a per-export folder
+> bundle of three artefacts (`findings.md` + `leads.md` +
+> `data.xlsx`). A daily periodic-run pipeline re-emits the bundle
+> when a new Eurostat release lands; idempotent on no-op days.
+>
+> Reading paths:
+> - **Adding a new analyser kind?** Start with
+>   [Three-layer data flow](#three-layer-data-flow) →
+>   [Append-plus-supersede chain](#append-plus-supersede-chain).
+> - **Wiring a new data source?** Same two sections, then
+>   [Storage layout](#storage-layout-key-tables) and
+>   [External dependencies](#external-dependencies).
+> - **Setting up a fresh deployment?** [CLI surface](#cli-surface)
+>   → [Configuration](#configuration) → the README's setup block.
 
 ## Two-source-by-design (now three)
 
@@ -21,9 +39,10 @@ Today the tool ingests three sources:
 | **HMRC OTS** | UK customs declarations of trade with all partners | OData REST API, GBP-native, CIF | Monthly |
 
 The schema anticipated the second source from the start; the third
-(HMRC, Phase 6.1) slotted in cleanly behind the same interface. The
-analysers all support a `--comparison-scope` flag that picks
-EU-27 (Eurostat) / UK (HMRC) / EU-27 + UK combined.
+([HMRC](glossary.md#hmrc-ots-overseas-trade-statistics), Phase 6.1)
+slotted in cleanly behind the same interface. The analysers all
+support a `--comparison-scope` flag that picks
+[EU-27 / UK / EU-27 + UK combined](glossary.md#eu-27-vs-eu-27--uk-comparison-scopes).
 
 ## Three-layer data flow
 
@@ -98,9 +117,10 @@ Three layers because each has a distinct concern:
 
 ## Append-plus-supersede chain
 
-Findings are versioned, not over-written. When the analyser re-runs
-and concludes the same natural-key (e.g. `(group_id, period_end)`)
-should produce a different value, the prior row gets
+[Findings](glossary.md#finding) are versioned, not over-written.
+When the analyser re-runs and concludes the same
+[*natural key*](glossary.md#natural-key) (e.g. `(group_id,
+period_end)`) should produce a different value, the prior row gets
 `superseded_at = now()` + `superseded_by_finding_id` set; a new row
 is inserted with the same natural-key.
 

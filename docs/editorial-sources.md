@@ -9,6 +9,15 @@ expects to write at the end of it.
 Append new pieces under "Other articles tracked" as they appear; the
 register is open-ended.
 
+> **TL;DR.** The primary editorial target is Lisa O'Carroll
+> (Guardian Brussels correspondent); the model methodology is
+> Soapbox Trade. The tool exists to give Lisa-shape journalists
+> Soapbox-shape figures on their own schedule, with editorial-grade
+> caveats inline. Story shapes the tool supports map directly to
+> seeded `hs_groups` (tagged `seed:lisa_article`, `seed:tan_article`,
+> `seed:soapbox_validation`, `seed:soapbox_a1_2026_05_12`). To add a
+> new story shape, add a row to `hs_groups`; no code change required.
+
 ## Three modes of journalist use
 
 Agreed during the design conversations on 2026-05-09. Every shipped

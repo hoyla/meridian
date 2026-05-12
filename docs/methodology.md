@@ -5,13 +5,34 @@ quotable. Aimed at a journalist asking "can I use this in copy?".
 
 For the system that produces the findings, see
 [architecture.md](architecture.md). For the journalism the tool
-serves, see [editorial-sources.md](editorial-sources.md).
+serves, see [editorial-sources.md](editorial-sources.md). For
+unfamiliar terms see [glossary.md](glossary.md).
+
+> **TL;DR.** This is the doc that says what each finding *means*,
+> what its limits are, and when you can quote a number with
+> confidence. By audience / reading goal:
+>
+> - **About to quote a number?** §9 [What to quote vs hedge vs
+>   not quote](#9-what-to-quote-vs-hedge-vs-not-quote) is the
+>   rubric; §3 [Caveats reference](#3-caveats-reference) tells you
+>   what a caveat code means.
+> - **Auditing the methodology?** §0 [Why sources don't agree](#0-sources-and-why-they-dont-agree)
+>   + §7 [Known fragility](#7-known-fragility) + §10
+>   [Known editorial-output limitations](#10-known-editorial-output-limitations).
+> - **Brand new to the tool?** §0 → §1 [Anomaly subkinds catalogue](#1-anomaly-subkinds-catalogue)
+>   → §3 → §9, in that order.
+> - **Want the story-shape vocabulary?** §4
+>   [Trajectory shape vocabulary](#4-trajectory-shape-vocabulary).
+> - **Why does an LLM appear at all?** §5
+>   [The hypothesis catalog](#5-the-hypothesis-catalog) + §6
+>   [Numeric verification rules](#6-numeric-verification-rules).
 
 ## 0. Sources, and why they don't agree
 
 The tool ingests three customs sources. They report — nominally —
 the same trade. They never agree exactly. The divergences are
-themselves the editorial story: a "mirror gap" between what GACC
+themselves the editorial story: a [*mirror gap*](glossary.md#mirror-trade--mirror-gap)
+between what [GACC](glossary.md#gacc-general-administration-of-customs-of-the-prc)
 says China exported to country X and what X's customs says it
 imported from China is the headline product of this tool.
 
