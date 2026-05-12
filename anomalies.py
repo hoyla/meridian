@@ -2852,3 +2852,418 @@ def _insert_gacc_aggregate_yoy_finding(
             detail=detail,
         )
     return action
+
+
+# =============================================================================
+# GACC-bilateral aggregate YoY: EU bloc + single-country GACC partners.
+# =============================================================================
+# Complementary to `gacc_aggregate_yoy`: that one covers multi-country non-EU
+# aggregates (ASEAN, RCEP, Africa, Latin America, Belt & Road, world Total).
+# This one covers the gap surfaced by the 2026-05-12 Soapbox A1 re-test —
+# the EU bloc and individual partner countries. The article's lead claim
+# ("China's exports to the EU reached US$201bn ... +19% YoY in Jan-Apr 2026")
+# is a bilateral YTD-cumulative figure that nothing in the existing pipeline
+# emits as a finding, though the underlying observations are in the DB.
+#
+# Each finding carries three YoY operators side-by-side in detail.totals:
+# - rolling_12mo: 12mo to anchor vs 12mo to anchor-12 (matches the existing
+#   gacc_aggregate_yoy operator)
+# - ytd_cumulative: Jan-to-anchor of current year vs Jan-to-anchor of prior
+#   year (the Soapbox A1 framing)
+# - single_month: anchor month vs same month prior year (the Soapbox A3
+#   framing, "EU exports to China Feb 2026 -16.2% YoY")
+# Sharing one finding keeps the supersede chain coherent — when underlying
+# data revises, all three operators move together.
+
+GACC_BILATERAL_TREND_SOURCE_URL = "analysis://gacc_bilateral_aggregate_yoy/v1"
+
+
+def _gacc_partner_ytd_by_period(
+    partner_label: str, flow: str,
+) -> dict[date, tuple[float, list[int]]]:
+    """Return {period: (eur_total, [obs_ids])} for the partner's
+    period_kind='ytd' observations. Same currency + FX convention as
+    `_gacc_aggregate_per_period_totals` so values are directly comparable."""
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT r.period, o.value_amount, r.unit, o.id AS obs_id
+              FROM observations o
+              JOIN releases r ON r.id = o.release_id
+             WHERE r.source = 'gacc'
+               AND r.currency = 'CNY'
+               AND o.flow = %s
+               AND o.period_kind = 'ytd'
+               AND o.partner_country = %s
+               AND o.value_amount IS NOT NULL
+          ORDER BY r.period, o.id
+            """,
+            (flow, partner_label),
+        )
+        rows = cur.fetchall()
+    by_period: dict[date, tuple[float, list[int]]] = {}
+    for period, value_amount, unit, obs_id in rows:
+        scale, currency = parse_unit_scale(unit)
+        if scale is None:
+            continue
+        ccy = currency or "CNY"
+        fx = lookups.lookup_fx(ccy, "EUR", period)
+        if fx is None:
+            continue
+        eur = float(value_amount) * scale * fx.rate
+        existing = by_period.get(period)
+        if existing is None:
+            by_period[period] = (eur, [obs_id])
+        else:
+            old_eur, old_ids = existing
+            by_period[period] = (old_eur + eur, old_ids + [obs_id])
+    return by_period
+
+
+def detect_gacc_bilateral_aggregate_yoy(
+    flow: str = "export",
+    partner_labels: list[str] | None = None,
+    yoy_threshold_pct: float = 0.0,
+) -> dict[str, int]:
+    """For each (bilateral partner, anchor_period) where ≥1 of the three
+    YoY operators can be computed, emit one finding under subkind
+    'gacc_bilateral_aggregate_yoy[_import]'.
+
+    Coverage: EU bloc (country_aliases.aggregate_kind='eu_bloc') plus
+    every single-country partner (aggregate_kind IS NULL) that has at
+    least one matching GACC observation. The multi-country non-EU
+    aggregates remain the domain of `detect_gacc_aggregate_yoy`.
+
+    `flow`: 'export' (China selling to partner) or 'import' (China buying).
+    `partner_labels`: subset of partner raw_labels. Default: all eligible.
+    `yoy_threshold_pct`: minimum |rolling_12mo_yoy_pct| to emit. Default 0.0
+        emits one finding per (partner, anchor) regardless of size — useful
+        for state-of-play renders that want a finding for every period.
+
+    Returns counts: emitted, inserted_new, confirmed_existing, superseded,
+    skipped_insufficient_history, skipped_zero_prior, skipped_below_threshold.
+    """
+    if flow not in ("export", "import"):
+        raise ValueError(f"flow must be 'export' or 'import'; got {flow!r}")
+
+    counts = {
+        "emitted": 0,
+        "inserted_new": 0, "confirmed_existing": 0, "superseded": 0,
+        "skipped_insufficient_history": 0,
+        "skipped_zero_prior": 0,
+        "skipped_below_threshold": 0,
+        "skipped_no_partners": 0,
+    }
+
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        if partner_labels:
+            cur.execute(
+                """
+                SELECT id AS alias_id, raw_label, aggregate_kind
+                  FROM country_aliases
+                 WHERE source = 'gacc'
+                   AND raw_label = ANY(%s)
+                   AND (aggregate_kind = 'eu_bloc' OR aggregate_kind IS NULL)
+              ORDER BY raw_label
+                """,
+                (partner_labels,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id AS alias_id, raw_label, aggregate_kind
+                  FROM country_aliases
+                 WHERE source = 'gacc'
+                   AND (aggregate_kind = 'eu_bloc' OR aggregate_kind IS NULL)
+              ORDER BY aggregate_kind NULLS LAST, raw_label
+                """
+            )
+        partners = [dict(r) for r in cur.fetchall()]
+
+    if not partners:
+        counts["skipped_no_partners"] += 1
+        return counts
+
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'running') RETURNING id",
+            (GACC_BILATERAL_TREND_SOURCE_URL,),
+        )
+        analysis_run_id = cur.fetchone()[0]
+
+    try:
+        for p in partners:
+            monthly_series = _gacc_aggregate_per_period_totals(p["raw_label"], flow=flow)
+            if not monthly_series:
+                counts["skipped_insufficient_history"] += 1
+                continue
+            ytd_by_period = _gacc_partner_ytd_by_period(p["raw_label"], flow=flow)
+            eur_by_period: dict[date, float] = {pd: e for pd, e, _ in monthly_series}
+            obs_by_period: dict[date, list[int]] = {pd: ids for pd, _, ids in monthly_series}
+            periods_sorted = sorted(eur_by_period.keys())
+
+            for t in periods_sorted:
+                # ----- 12mo rolling YoY -----
+                start_curr = _months_back(t, 11)
+                end_curr   = t
+                start_prior = _months_back(t, 23)
+                end_prior   = _months_back(t, 12)
+                want = []
+                pd = start_prior
+                while pd <= end_curr:
+                    want.append(pd)
+                    pd = _months_back(pd, -1)
+                want_curr = [pd for pd in want if start_curr <= pd <= end_curr]
+                want_prior = [pd for pd in want if start_prior <= pd <= end_prior]
+                missing_curr = [pd for pd in want_curr if pd not in eur_by_period]
+                missing_prior = [pd for pd in want_prior if pd not in eur_by_period]
+                n_curr = 12 - len(missing_curr)
+                n_prior = 12 - len(missing_prior)
+                if n_curr < 8 or n_prior < 8:
+                    counts["skipped_insufficient_history"] += 1
+                    continue
+                partial_window = (len(missing_curr) + len(missing_prior)) > 0
+                current_eur = sum(eur_by_period[pd] for pd in want_curr if pd in eur_by_period)
+                prior_eur   = sum(eur_by_period[pd] for pd in want_prior if pd in eur_by_period)
+                if prior_eur == 0:
+                    counts["skipped_zero_prior"] += 1
+                    continue
+                rolling_yoy = (current_eur - prior_eur) / abs(prior_eur)
+                if abs(rolling_yoy) < yoy_threshold_pct:
+                    counts["skipped_below_threshold"] += 1
+                    continue
+
+                # ----- YTD cumulative YoY -----
+                # YTD at T = Jan..T of T's year (read from period_kind='ytd' obs).
+                # YTD prior = same range one year earlier — look up the YTD
+                # observation at the equivalent month of the prior year.
+                ytd_block: dict | None = None
+                t_minus_12 = date(t.year - 1, t.month, 1)
+                curr_ytd = ytd_by_period.get(t)
+                prior_ytd = ytd_by_period.get(t_minus_12)
+                if curr_ytd is not None and prior_ytd is not None:
+                    curr_ytd_eur, curr_ytd_obs = curr_ytd
+                    prior_ytd_eur, prior_ytd_obs = prior_ytd
+                    if prior_ytd_eur != 0:
+                        ytd_yoy = (curr_ytd_eur - prior_ytd_eur) / abs(prior_ytd_eur)
+                        ytd_block = {
+                            "current_eur": curr_ytd_eur,
+                            "prior_eur": prior_ytd_eur,
+                            "delta_eur": curr_ytd_eur - prior_ytd_eur,
+                            "yoy_pct": ytd_yoy,
+                            "months_in_ytd": t.month,
+                            "prior_period": t_minus_12.isoformat(),
+                        }
+
+                # ----- Single-month YoY -----
+                sm_block: dict | None = None
+                curr_sm = eur_by_period.get(t)
+                prior_sm = eur_by_period.get(t_minus_12)
+                if curr_sm is not None and prior_sm is not None and prior_sm != 0:
+                    sm_yoy = (curr_sm - prior_sm) / abs(prior_sm)
+                    sm_block = {
+                        "current_eur": curr_sm,
+                        "prior_eur": prior_sm,
+                        "delta_eur": curr_sm - prior_sm,
+                        "yoy_pct": sm_yoy,
+                        "current_period": t.isoformat(),
+                        "prior_period": t_minus_12.isoformat(),
+                    }
+
+                obs_ids: list[int] = []
+                for pd in want_curr + want_prior:
+                    obs_ids.extend(obs_by_period.get(pd, []))
+                if curr_ytd is not None:
+                    obs_ids.extend(curr_ytd[1])
+                if prior_ytd is not None:
+                    obs_ids.extend(prior_ytd[1])
+
+                action = _insert_gacc_bilateral_aggregate_yoy_finding(
+                    analysis_run_id, p, t,
+                    start_curr, end_curr, start_prior, end_prior,
+                    current_eur, prior_eur, rolling_yoy,
+                    ytd_block, sm_block,
+                    monthly_series, obs_ids, flow=flow,
+                    partial_window=partial_window,
+                    missing_curr=missing_curr,
+                    missing_prior=missing_prior,
+                )
+                _tally(counts, action)
+
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='success', ended_at=now() WHERE id=%s",
+                (analysis_run_id,),
+            )
+    except Exception as e:
+        log.exception("GACC-bilateral-aggregate YoY analysis failed")
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='failed', error_message=%s, ended_at=now() WHERE id=%s",
+                (str(e), analysis_run_id),
+            )
+        raise
+    return counts
+
+
+def _insert_gacc_bilateral_aggregate_yoy_finding(
+    analysis_run_id: int,
+    partner: dict,
+    anchor_period: date,
+    start_curr: date,
+    end_curr: date,
+    start_prior: date,
+    end_prior: date,
+    current_eur: float,
+    prior_eur: float,
+    rolling_yoy: float,
+    ytd_block: dict | None,
+    sm_block: dict | None,
+    monthly_series: list[tuple[date, float, list[int]]],
+    obs_ids: list[int],
+    flow: str = "export",
+    partial_window: bool = False,
+    missing_curr: list[date] | None = None,
+    missing_prior: list[date] | None = None,
+) -> findings_io.EmitAction:
+    direction = "up" if rolling_yoy > 0 else "down"
+    flow_label = "China exports to" if flow == "export" else "China imports from"
+    flow_subkind_suffix = "" if flow == "export" else "_import"
+
+    title = (
+        f"GACC bilateral ({flow_label} {partner['raw_label']}): rolling 12mo to "
+        f"{end_curr.strftime('%Y-%m')}: €{current_eur/1e9:,.2f}B "
+        f"({rolling_yoy*100:+.1f}% {direction} YoY)"
+    )
+
+    body_lines = [
+        f"GACC bilateral partner: {partner['raw_label']} "
+        f"(kind={partner['aggregate_kind'] or 'single_country'})",
+        f"Direction: {flow_label} {partner['raw_label']}",
+        "",
+        f"Rolling 12 months ending {end_curr.strftime('%Y-%m')}:",
+        f"  Value:  €{current_eur:,.0f} ({rolling_yoy*100:+.2f}% YoY vs €{prior_eur:,.0f})",
+    ]
+    if ytd_block is not None:
+        body_lines += [
+            "",
+            f"Year-to-date through {end_curr.strftime('%Y-%m')}:",
+            f"  Value:  €{ytd_block['current_eur']:,.0f} "
+            f"({ytd_block['yoy_pct']*100:+.2f}% YoY vs €{ytd_block['prior_eur']:,.0f})",
+            f"  ({ytd_block['months_in_ytd']} months cumulative)",
+        ]
+    if sm_block is not None:
+        body_lines += [
+            "",
+            f"Single-month ({end_curr.strftime('%Y-%m')}) vs same month prior year:",
+            f"  Value:  €{sm_block['current_eur']:,.0f} "
+            f"({sm_block['yoy_pct']*100:+.2f}% YoY vs €{sm_block['prior_eur']:,.0f})",
+        ]
+    body_lines += [
+        "",
+        ("GACC-side data only; the bilateral counterpart from the partner's "
+         "own customs authority (Eurostat for EU members, HMRC for UK) is "
+         "tracked via the mirror_gap and hs_group_yoy families. The bilateral "
+         "aggregate here is the editorial register Soapbox / Merics quote "
+         "directly — \"China-X trade rose Y%\" — and the natural framing for "
+         "Jan-N month-to-date headlines."),
+    ]
+
+    caveat_codes: list[str] = []
+    if partial_window:
+        caveat_codes.append("partial_window")
+        n_missing = len(missing_curr or []) + len(missing_prior or [])
+        missing_strs = ", ".join(
+            d.strftime("%Y-%m") for d in (missing_curr or []) + (missing_prior or [])
+        )
+        body_lines.append("")
+        body_lines.append(
+            f"⚠ PARTIAL WINDOW: {n_missing} of 24 months missing from the rolling-12mo window "
+            f"({missing_strs}). GACC publishes Jan + Feb as a combined "
+            f"cumulative release (Chinese New Year), and our parser doesn't yet "
+            f"handle that format — every January is a structural data gap, "
+            f"and February's monthly observation often duplicates the YTD. "
+            f"The YTD operator is unaffected by this gap (read directly from "
+            f"period_kind='ytd' rows). See caveat 'partial_window' and "
+            f"`dev_notes/forward-work-gacc-2018-parser.md`."
+        )
+
+    detail = {
+        "method": "gacc_bilateral_aggregate_yoy_v1_eu_and_single_countries",
+        "method_query": {
+            "source": "observations (source=gacc)",
+            "flow": flow,
+            "partner_country_label": partner["raw_label"],
+            "aggregate_kind": partner["aggregate_kind"],
+            "rolling_window_months": 12,
+        },
+        "partner": {
+            "alias_id": partner["alias_id"],
+            "raw_label": partner["raw_label"],
+            "kind": partner["aggregate_kind"] or "single_country",
+        },
+        "windows": {
+            "current_start": start_curr.isoformat(), "current_end": end_curr.isoformat(),
+            "prior_start": start_prior.isoformat(), "prior_end": end_prior.isoformat(),
+        },
+        "totals": {
+            # 12mo rolling — the primary operator + the one the analyser uses
+            # for scoring and supersede-chain triggering. Sub-keys mirror the
+            # hs_group_yoy "totals" block so downstream renders can share
+            # formatters.
+            "current_12mo_eur": current_eur,
+            "prior_12mo_eur": prior_eur,
+            "delta_eur": current_eur - prior_eur,
+            "yoy_pct": rolling_yoy,
+            "partial_window": partial_window,
+            "missing_months_current": [d.isoformat() for d in (missing_curr or [])],
+            "missing_months_prior": [d.isoformat() for d in (missing_prior or [])],
+            # YTD cumulative — Jan..anchor of current year vs same range prior
+            # year. Null when either side is missing. This is the Soapbox A1
+            # editorial register ("Jan-Apr exports +19% YoY").
+            "ytd_cumulative": ytd_block,
+            # Single-month YoY — anchor month vs same month prior year. The
+            # Soapbox A3 register ("Feb 2026 -16.2% YoY"). Null when prior
+            # month is missing.
+            "single_month": sm_block,
+        },
+        "monthly_series": [
+            {"period": p.isoformat(), "value_eur": e}
+            for (p, e, _) in monthly_series
+            if start_prior <= p <= end_curr
+        ],
+        "caveat_codes": caveat_codes,
+    }
+    score = abs(rolling_yoy)
+    subkind = f"gacc_bilateral_aggregate_yoy{flow_subkind_suffix}"
+    current_end_yyyymm = end_curr.strftime("%Y-%m")
+
+    with _conn() as conn, conn.cursor() as cur:
+        _, action = findings_io.emit_finding(
+            cur,
+            scrape_run_id=analysis_run_id,
+            kind="anomaly",
+            subkind=subkind,
+            natural_key=findings_io.nk_gacc_bilateral_aggregate_yoy(
+                partner["alias_id"], current_end_yyyymm,
+            ),
+            value_fields={
+                "method": detail["method"],
+                "yoy_pct": round(rolling_yoy, 6),
+                "current_eur": round(current_eur, 2),
+                "prior_eur": round(prior_eur, 2),
+                "ytd_yoy_pct": (
+                    round(ytd_block["yoy_pct"], 6) if ytd_block else None
+                ),
+                "sm_yoy_pct": (
+                    round(sm_block["yoy_pct"], 6) if sm_block else None
+                ),
+                "partial_window": partial_window,
+            },
+            observation_ids=sorted(set(obs_ids)),
+            score=score,
+            title=title,
+            body="\n".join(body_lines),
+            detail=detail,
+        )
+    return action

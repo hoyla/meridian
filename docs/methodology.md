@@ -246,11 +246,12 @@ findings, not over another LLM's interpretation of them.
 
 Year-on-year movement on GACC's own partner-aggregate trade totals
 (not HS-group-level). Covers ASEAN, RCEP, Belt & Road, Africa, Latin
-America, world Total. The EU bloc is intentionally excluded — for EU
-we have Eurostat's HS-level data which is editorially richer; see
-`anomalies.py:GACC_AGGREGATE_KINDS`. Findings have the aggregate
-label under `detail.aggregate.raw_label` and the bucket under
-`detail.aggregate.kind` (NOT `detail.group.name` like hs_group_yoy).
+America, world Total. The EU bloc and single-country partners are
+covered by the bilateral analyser below — this one's scope is the
+multi-country non-EU aggregates. See `anomalies.py:GACC_AGGREGATE_KINDS`.
+Findings have the aggregate label under `detail.aggregate.raw_label`
+and the bucket under `detail.aggregate.kind` (NOT `detail.group.name`
+like hs_group_yoy).
 
 **Natural-key fix 2026-05-11**: the key is `(alias_id,
 aggregate_kind, current_end_yyyymm)`. Before the alias_id was added,
@@ -261,6 +262,45 @@ invisible in active findings. Method bumped
 
 Where in the findings document: Tier 2 has a dedicated per-aggregate
 state-of-play block alongside the per-HS-group blocks (Phase 6.10).
+
+### `gacc_bilateral_aggregate_yoy` / `gacc_bilateral_aggregate_yoy_import`
+
+Bilateral counterpart to `gacc_aggregate_yoy`. Same GACC-side data,
+but covers the EU bloc + every single-country GACC partner (those
+that `gacc_aggregate_yoy` deliberately omits). Added 2026-05-12
+after the Soapbox A1 re-test confirmed the gap: Soapbox's lead claim
+("China's exports to the EU reached US\$201bn ... +19% YoY in Jan-Apr
+2026") was sitting in our `observations` table as a `period_kind='ytd'`
+row but no analyser promoted it to a finding.
+
+**Each finding carries three YoY operators side-by-side** in
+`detail.totals`:
+
+- `yoy_pct` (with `current_12mo_eur` / `prior_12mo_eur`) — 12mo
+  rolling. Same operator as `gacc_aggregate_yoy`. Drives `score`
+  and the supersede-chain trigger.
+- `ytd_cumulative.yoy_pct` — Jan-to-anchor of current year vs same
+  range prior year. The Soapbox A1 register: "Jan-Apr exports +19%".
+  Null when the prior-year YTD observation is absent (e.g. anchors
+  in early 2025 where the equivalent prior-year month is missing
+  due to GACC's Jan-Feb-combined Chinese New Year format).
+- `single_month.yoy_pct` — anchor month vs same month prior year.
+  The Soapbox A3 register: "EU exports to China Feb 2026 -16.2%".
+  Null when prior month is missing.
+
+Sharing one finding keeps the supersede chain coherent — when
+underlying data revises, all three operators move together. The
+brief renders all three in `state_of_play_bilaterals.py`; a
+journalist picks whichever cadence matches the story.
+
+**Natural key**: `(alias_id, current_end_yyyymm)`. Flow direction
+encoded in subkind. Method version
+`gacc_bilateral_aggregate_yoy_v1_eu_and_single_countries`.
+
+Where in the findings document: Tier 2 has a dedicated per-bilateral
+state-of-play block, between the per-HS-group view (narrower) and
+the non-EU aggregate view (wider). Reader narrows scope rather than
+widens.
 
 ## 2. The three comparison scopes
 

@@ -990,3 +990,118 @@ def test_gacc_aggregate_yoy_skips_when_no_history(empty_op_tables, test_db_url):
     )
     assert counts["emitted"] == 0
     assert counts["skipped_insufficient_history"] >= 1
+
+
+# =============================================================================
+# gacc_bilateral_aggregate_yoy — EU bloc + single-country GACC partners
+# =============================================================================
+
+
+def _seed_gacc_bilateral_24mo(
+    conn, partner_label: str, anchor_period: date,
+    prior_monthly: list[float], current_monthly: list[float],
+):
+    """Seed 24 months of GACC observations (monthly + matching YTD) for a
+    bilateral partner label. Each month gets monthly + ytd observations.
+    YTD is the cumulative-from-January running sum across that calendar year."""
+    assert len(prior_monthly) == 12 and len(current_monthly) == 12
+    monthlies = prior_monthly + current_monthly
+    cur = conn.cursor()
+    ytd_running: dict[int, float] = {}  # year -> running total
+    for i, val in enumerate(monthlies):
+        period = _add_months(anchor_period, -23 + i)
+        # YTD running sum resets each January.
+        if period.month == 1:
+            ytd_running[period.year] = 0.0
+        ytd_running[period.year] = ytd_running.get(period.year, 0.0) + val
+        ytd_val = ytd_running[period.year]
+
+        cur.execute(
+            "SELECT id FROM releases WHERE source='gacc' AND section_number=4 "
+            "AND currency='CNY' AND period=%s AND release_kind='preliminary'",
+            (period,),
+        )
+        existing = cur.fetchone()
+        if existing:
+            rel_id = existing[0]
+        else:
+            cur.execute(
+                "INSERT INTO releases (source, section_number, currency, period, release_kind, "
+                "                      source_url, unit, title, description) "
+                "VALUES ('gacc', 4, 'CNY', %s, 'preliminary', %s, "
+                "        'CNY 100 Million', 't', 'd') RETURNING id",
+                (period, f"http://example/gacc-bilat-{period.isoformat()}.html"),
+            )
+            rel_id = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'success') RETURNING id",
+            (f"http://example/gacc-bilat-{period.isoformat()}.html",),
+        )
+        run_id = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO observations (release_id, scrape_run_id, period_kind, flow, "
+            "                          partner_country, value_amount, value_currency, source_row) "
+            "VALUES (%s, %s, 'monthly', 'export', %s, %s, 'CNY', '{}')",
+            (rel_id, run_id, partner_label, val),
+        )
+        cur.execute(
+            "INSERT INTO observations (release_id, scrape_run_id, period_kind, flow, "
+            "                          partner_country, value_amount, value_currency, source_row) "
+            "VALUES (%s, %s, 'ytd', 'export', %s, %s, 'CNY', '{}')",
+            (rel_id, run_id, partner_label, ytd_val),
+        )
+        cur.execute(
+            "INSERT INTO fx_rates (currency_from, currency_to, rate_date, rate, rate_source, "
+            "                      rate_source_url, notes) "
+            "VALUES ('CNY', 'EUR', %s, 0.125, 'test', 'http://example/fx', 't') "
+            "ON CONFLICT (currency_from, currency_to, rate_date, rate_source) DO NOTHING",
+            (period,),
+        )
+    conn.commit()
+
+
+def test_gacc_bilateral_aggregate_yoy_eu_carries_three_operators(empty_op_tables, test_db_url):
+    """The EU bloc (aggregate_kind=eu_bloc) is covered by the new analyser;
+    each finding carries rolling_12mo, ytd_cumulative, and single_month
+    YoY operators in detail.totals. Anchor 2025-12: prior 12mo = 12 × 800,
+    current 12mo = 12 × 1200, YoY = +50% on all three operators (since
+    every month is uniform within each year)."""
+    anchor = date(2025, 12, 1)
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_gacc_bilateral_24mo(
+            conn, "European Union", anchor,
+            prior_monthly=[800.0] * 12,
+            current_monthly=[1200.0] * 12,
+        )
+
+    counts = anomalies.detect_gacc_bilateral_aggregate_yoy(
+        flow="export", partner_labels=["European Union"], yoy_threshold_pct=0.0,
+    )
+    assert counts["emitted"] >= 1, f"counts={counts}"
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT title, detail FROM findings "
+            "WHERE subkind='gacc_bilateral_aggregate_yoy' "
+            "  AND (detail->'totals'->>'partial_window')::boolean = false "
+            "ORDER BY score DESC LIMIT 1"
+        )
+        title, detail = cur.fetchone()
+
+    assert "European Union" in title
+    assert detail["partner"]["kind"] == "eu_bloc"
+
+    totals = detail["totals"]
+    # All three operators present + agree (uniform monthlies → +50% across).
+    assert abs(totals["yoy_pct"] - 0.5) < 1e-9
+    assert totals["ytd_cumulative"] is not None
+    assert abs(totals["ytd_cumulative"]["yoy_pct"] - 0.5) < 1e-9
+    assert totals["ytd_cumulative"]["months_in_ytd"] == 12  # anchor 2025-12
+    assert totals["single_month"] is not None
+    assert abs(totals["single_month"]["yoy_pct"] - 0.5) < 1e-9
+
+    # Natural key includes alias_id (not aggregate_kind), so per-partner
+    # supersede streams are independent of the existing gacc_aggregate_yoy
+    # family which keys on aggregate_kind.
+    method = detail["method"]
+    assert method.startswith("gacc_bilateral_aggregate_yoy_")

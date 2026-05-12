@@ -40,6 +40,9 @@ from briefing_pack.sections.state_of_play import _section_state_of_play
 from briefing_pack.sections.state_of_play_aggregates import (
     _section_state_of_play_aggregates,
 )
+from briefing_pack.sections.state_of_play_bilaterals import (
+    _section_state_of_play_bilaterals,
+)
 from briefing_pack.sections.trajectories import _section_trajectories
 
 log = logging.getLogger(__name__)
@@ -145,10 +148,14 @@ def render(
 
         # ----- Tier 2: current state of play (compact summary) -----
         # Per-HS-group block first (the EU-CN deep-dive view), then the
-        # partner-aggregate block (the bloc-level context view). A reader
-        # scanning Tier 2 sees per-group detail first, then sees the
-        # surrounding aggregates to contextualise.
+        # bilateral block (EU + single-country GACC partners, the Soapbox
+        # editorial register), then the non-EU partner-aggregate block
+        # (ASEAN / RCEP / Belt&Road / Africa / Latin America / world Total).
+        # A reader scanning Tier 2 sees per-group detail → bilateral
+        # bloc-and-country → multi-country aggregates, narrowing scope
+        # rather than widening.
         sections.append(_section_state_of_play(cur, predictability))
+        sections.append(_section_state_of_play_bilaterals(cur))
         sections.append(_section_state_of_play_aggregates(cur))
 
         # ----- Tier 3: full per-finding detail by HS group -----

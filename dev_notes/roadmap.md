@@ -40,13 +40,19 @@ Recommended order, cheapest-to-most-impactful-per-hour:
    lines (`hs_yoy_movers.py`); smallest is 27 (`detail_opener.py`).
    New sections for steps 3 + 4 below land as new files in
    `sections/` rather than appends to a 2,000-line monolith.
-3. **`gacc_bilateral_aggregate_yoy` analyser** — emit per-(GACC
-   partner, period, period_kind) YoY findings, including the EU
-   bloc (currently excluded from `gacc_aggregate_yoy`) and using
-   the `period_kind='ytd'` observations we already store. Surfaces
-   the article's lead claim ($201bn / +19% etc.) as a finding on
-   the next periodic run. See "EU/bilateral aggregate analyser"
-   below — expansion of the existing entry.
+3. ~~**`gacc_bilateral_aggregate_yoy` analyser**~~ — **DONE 2026-05-12**.
+   New analyser covers the EU bloc + every single-country GACC
+   partner. Each finding carries three YoY operators in
+   `detail.totals` side-by-side: `current_12mo_eur`/`yoy_pct` (12mo
+   rolling), `ytd_cumulative` (Jan-to-anchor vs same range prior
+   year — the Soapbox A1 register), and `single_month` (anchor
+   month vs same month prior year — the Soapbox A3 register).
+   Subkinds `gacc_bilateral_aggregate_yoy[_import]`. Wired into
+   the periodic pipeline. Brief renders a new "GACC bilateral
+   partners" Tier-2 block between the per-HS-group view and the
+   non-EU aggregate view. Spot-check 2026-04 EU export YTD vs
+   article: ours +18.2% to €175.04B (≈$200B), article +19% to
+   $201bn — within rounding + FX-source noise.
 4. **Selective Eurostat re-ingest with `partner='EXTRA_EU27_2020'`
    + `partner_share` analyser** — adds rest-of-world totals for the
    HS codes we already track so we can compute *share of EU imports
@@ -157,35 +163,43 @@ element labels per Eurostat 2024 CN8 nomenclature):
   matching observation rows would emit empty findings. Logged as
   a data-source-expansion item.
 
-### EU/bilateral aggregate analyser (`gacc_bilateral_aggregate_yoy`) — proposed step 3 above
+### EU/bilateral aggregate analyser (`gacc_bilateral_aggregate_yoy`) — shipped 2026-05-12
 
 `gacc_aggregate_yoy` deliberately excludes `eu_bloc` per
 [`anomalies.py`](../anomalies.py) ("mirror-trade handles EU").
-The 2026-05-12 A1 re-test confirmed this leaves a real editorial
+The 2026-05-12 A1 re-test confirmed this left a real editorial
 gap: Soapbox's USD top-lines ("$201B in Jan-Apr 2026, +19% YoY")
 aren't the same finding as a bilateral mirror gap, and Lisa quotes
-them directly. Our DB has the underlying observation — `releases`
-join `observations` for partner='European Union', period='2026-04',
-period_kind='ytd' returns USD 200,727M — but no analyser promotes
-it to a finding.
+them directly. The new analyser closes the gap.
 
-**Scope of the new analyser:**
+**Shape**: rather than separate subkinds per (period_kind, flow),
+one finding per (partner, anchor_period, flow) carries three YoY
+operators side-by-side in `detail.totals`. This mirrors the
+Phase 6.10 design on `hs_group_yoy` (where `single_month` and
+`two_month_cumulative` are sub-fields, not separate findings):
 
-- One subkind per (period_kind, flow) combination —
-  `gacc_bilateral_aggregate_yoy_{ytd,monthly}_{export,import,total}`.
-  YTD subkinds answer the "Jan-Apr 2026 vs Jan-Apr 2025" framing
-  Soapbox uses heavily; monthly answers the same-month YoY framing
-  (Soapbox A3 "EU exports to China Feb 2026 -16.2%").
-- Apply to all aggregate `country_aliases` rows including
-  `eu_bloc`, plus single-country GACC partners (United Kingdom (US),
-  Japan, etc.) so per-partner bilateral YoY is also surfaced.
-- Method-version: bump to a new `gacc_bilateral_aggregate_yoy_v1_...`
-  string — the existing `gacc_aggregate_yoy` keeps its current
-  scope (non-EU aggregates) and natural keys; this is an additive
-  analyser, not a refactor.
+- `yoy_pct` — 12mo rolling (the primary, drives `score` + supersede)
+- `ytd_cumulative.yoy_pct` — Jan-to-anchor of current year vs prior
+  year. Null when prior-year YTD is missing.
+- `single_month.yoy_pct` — anchor month vs same month prior year.
+  Null when prior month is missing.
 
-Covers ~7 currently-blocked Soapbox claims (every "China-X
-bilateral aggregate YoY" claim across the validation doc).
+Sharing one finding keeps the supersede chain coherent — when
+underlying data revises, all three operators move together — and
+matches the rendering pattern in the new
+`briefing_pack/sections/state_of_play_bilaterals.py`.
+
+**Coverage**: EU bloc + all single-country GACC partners
+(`country_aliases.aggregate_kind = 'eu_bloc' OR IS NULL`). The
+existing `gacc_aggregate_yoy` keeps its non-EU-multi-country scope
+unchanged. Subkinds: `gacc_bilateral_aggregate_yoy` (export) /
+`gacc_bilateral_aggregate_yoy_import` (import). Method version:
+`gacc_bilateral_aggregate_yoy_v1_eu_and_single_countries`.
+
+**First run** (2026-05-12): 2,664 findings emitted across 22
+partners × 2 flows × ~30 valid anchor periods. EU export YTD
+through 2026-04 = +18.2% to €175.04B (≈$200B at period FX) vs
+Soapbox's +19% to $201bn — within rounding + FX-rate-source noise.
 
 ### Share-of-EU-imports analyser + extra-EU re-ingest — proposed step 4 above
 

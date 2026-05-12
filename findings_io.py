@@ -258,3 +258,24 @@ def nk_gacc_aggregate_yoy(
     that. See history.md.
     """
     return (str(alias_id), aggregate_kind, current_end_yyyymm)
+
+
+def nk_gacc_bilateral_aggregate_yoy(
+    alias_id: int,
+    current_end_yyyymm: str,
+) -> tuple[str, str]:
+    """A gacc_bilateral_aggregate_yoy finding is identified by (alias_id,
+    window-end). alias_id is the country_aliases row for the bilateral
+    partner — either the EU bloc (aggregate_kind='eu_bloc') or a single
+    GACC partner country (aggregate_kind IS NULL). Flow direction is in
+    the subkind (`gacc_bilateral_aggregate_yoy` vs
+    `gacc_bilateral_aggregate_yoy_import`).
+
+    Distinct family from `gacc_aggregate_yoy`: that one covers multi-
+    country non-EU aggregates (ASEAN, RCEP, Africa, Latin America, Belt
+    & Road, world Total). This one covers the EU bloc + single-country
+    partners. The split keeps the existing analyser's natural-key
+    behaviour stable while adding the coverage the 2026-05-12 Soapbox
+    A1 re-test surfaced as a real gap.
+    """
+    return (str(alias_id), current_end_yyyymm)

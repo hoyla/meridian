@@ -70,6 +70,8 @@ python scrape.py --analyse hs-group-trajectory --smooth-window 1   # disable smo
 python scrape.py --analyse hs-group-trajectory --comparison-scope uk    # UK trajectories
 python scrape.py --analyse gacc-aggregate-yoy --flow 1         # GACC-only YoY for non-EU partner aggregates (ASEAN, RCEP, Belt&Road, Africa, LatAm, world Total)
 python scrape.py --analyse gacc-aggregate-yoy --flow 2         # same, China imports from each bloc
+python scrape.py --analyse gacc-bilateral-aggregate-yoy --flow 1   # bilateral counterpart: EU bloc + every single-country GACC partner; each finding carries 12mo rolling, YTD cumulative, and single-month YoY operators side-by-side
+python scrape.py --analyse gacc-bilateral-aggregate-yoy --flow 2   # same, China imports from each partner
 
 # LLM-drafted editorial top-lines (consumes the deterministic findings above)
 python scrape.py --analyse llm-framing                        # one narrative per HS group (default qwen3.6:latest)

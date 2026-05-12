@@ -112,6 +112,23 @@ Soapbox highlights is now surfaced as `yoy_pct_kg` alongside
 `yoy_pct` on every per-finding row; the absolute *share* of EU
 imports still needs the partner_share analyser (roadmap step 4).
 
+**Stage C step-3 shipped 2026-05-12.** New
+`gacc_bilateral_aggregate_yoy[_import]` analyser covers the EU bloc
++ every single-country GACC partner; each finding carries 12mo
+rolling, YTD cumulative, and single-month YoY operators side-by-
+side in `detail.totals`. 2,664 findings emitted on first run. The
+brief renders a new "GACC bilateral partners" Tier-2 block. A1.1
+(the article's lead claim) and A1.5 (UK trade) now both surface
+as findings rather than raw-row queries:
+
+- A1.1: EU export YTD through 2026-04 = €175.04B (≈$200B at period
+  FX), +18.2% YoY. Soapbox: $201bn / +19%. ✓ matches within the
+  FX-rate-source noise (GACC's internal CNY↔USD vs ECB's CNY↔EUR).
+- A1.5: UK export YTD through 2026-04 = €25.55B (≈$29B), +15.2%
+  YoY. Soapbox's $100bn / +20bn 2026 estimate is a forward
+  projection; our 4-month YTD at this anchor annualises consistent
+  with the article's shape.
+
 ### Testable claims
 
 **A1.1 — Aggregate, GACC side.** "China's exports to the EU reached US\$201bn,

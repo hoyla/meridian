@@ -268,7 +268,8 @@ def main() -> None:
                    help="Only fetch FX rates from this period onwards (default: full history)")
     p.add_argument("--analyse",
                    choices=["mirror-trade", "mirror-gap-trends", "hs-group-yoy",
-                            "hs-group-trajectory", "gacc-aggregate-yoy", "llm-framing"],
+                            "hs-group-trajectory", "gacc-aggregate-yoy",
+                            "gacc-bilateral-aggregate-yoy", "llm-framing"],
                    help="Run a deterministic anomaly pass over already-ingested data, "
                         "or 'llm-framing' to generate per-hs-group lead scaffolds "
                         "(anomaly summary + 2-3 picked hypotheses + corroboration steps; "
@@ -433,6 +434,19 @@ def main() -> None:
             flow=flow_str, yoy_threshold_pct=args.yoy_threshold,
         )
         log.info("GACC-aggregate YoY analysis (flow=%s): %s", flow_str, counts)
+        return
+
+    if args.analyse == "gacc-bilateral-aggregate-yoy":
+        # Bilateral counterpart to gacc-aggregate-yoy: EU bloc + single-country
+        # GACC partners. Each finding carries three YoY operators side-by-side
+        # (12mo rolling, YTD cumulative, single-month) so the brief can quote
+        # whichever cadence matches the story being written. Surfaces the
+        # Soapbox A1 lead claim ($201bn EU exports Jan-Apr 2026, +19% YoY).
+        flow_str = "export" if args.flow == 1 else "import"
+        counts = anomalies.detect_gacc_bilateral_aggregate_yoy(
+            flow=flow_str, yoy_threshold_pct=args.yoy_threshold,
+        )
+        log.info("GACC bilateral-aggregate YoY analysis (flow=%s): %s", flow_str, counts)
         return
 
     if args.analyse == "llm-framing":

@@ -156,6 +156,11 @@ def run_periodic(
         log.info("periodic-run: running %s", key)
         counts[key] = anomalies.detect_gacc_aggregate_yoy(flow=flow_str)
 
+    for flow_str in ("export", "import"):
+        key = f"gacc_bilateral_aggregate_yoy_{flow_str}"
+        log.info("periodic-run: running %s", key)
+        counts[key] = anomalies.detect_gacc_bilateral_aggregate_yoy(flow=flow_str)
+
     if not skip_llm:
         log.info("periodic-run: running llm-framing")
         try:
