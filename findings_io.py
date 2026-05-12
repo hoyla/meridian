@@ -260,6 +260,19 @@ def nk_gacc_aggregate_yoy(
     return (str(alias_id), aggregate_kind, current_end_yyyymm)
 
 
+def nk_partner_share(
+    hs_group_id: int,
+    current_end_yyyymm: str,
+) -> tuple[str, str]:
+    """A partner_share finding is identified by (hs_group, window-end).
+    The partner_share subkind family asks "what fraction of EU imports
+    of this product came from China?" — by value AND by quantity_kg. The
+    denominator is eurostat_world_aggregates (sum across all 246 partner
+    codes); the numerator is the existing eurostat_raw_rows for CN+HK+MO.
+    Flow direction (imports / exports) is encoded in the subkind."""
+    return (str(hs_group_id), current_end_yyyymm)
+
+
 def nk_gacc_bilateral_aggregate_yoy(
     alias_id: int,
     current_end_yyyymm: str,

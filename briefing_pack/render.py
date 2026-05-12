@@ -34,6 +34,7 @@ from briefing_pack.sections.llm_narratives import _section_llm_narratives
 from briefing_pack.sections.low_base import _section_low_base
 from briefing_pack.sections.methodology_footer import _section_methodology_footer
 from briefing_pack.sections.mirror_gaps import _section_mirror_gaps
+from briefing_pack.sections.partner_share import _section_partner_share
 from briefing_pack.sections.reader_guide import _section_reader_guide
 from briefing_pack.sections.sources_appendix import _section_sources_appendix
 from briefing_pack.sections.state_of_play import _section_state_of_play
@@ -181,6 +182,16 @@ def render(
         sec = _section_mirror_gaps(cur)
         sections.append(sec)
         release_ids |= sec.release_ids
+
+        # Partner-share snapshot: China's share of EU-27 imports by value
+        # + tonnes per HS group, sitting alongside the YoY movers in
+        # Tier 3. Empty when partner_share findings haven't been emitted
+        # (the world-aggregates denominator must exist for the analyser
+        # to compute the share — see anomalies.detect_partner_share).
+        for share_flow in (1, 2):
+            sec = _section_partner_share(cur, flow=share_flow)
+            sections.append(sec)
+            release_ids |= sec.release_ids
 
         sec = _section_low_base(cur)
         sections.append(sec)

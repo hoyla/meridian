@@ -1105,3 +1105,104 @@ def test_gacc_bilateral_aggregate_yoy_eu_carries_three_operators(empty_op_tables
     # family which keys on aggregate_kind.
     method = detail["method"]
     assert method.startswith("gacc_bilateral_aggregate_yoy_")
+
+
+# =============================================================================
+# partner_share analyser — China's share of EU-27 imports
+# =============================================================================
+
+
+def _seed_partner_share_24mo(
+    conn, group_id: int, hs_pattern: str, anchor: date,
+    cn_monthly_eur: list[float], cn_monthly_kg: list[float],
+    world_monthly_eur: list[float], world_monthly_kg: list[float],
+    reporter: str = "DE",
+):
+    """Seed eurostat_raw_rows (CN+HK+MO partner) AND
+    eurostat_world_aggregates (all-partner totals) for a single HS pattern
+    over 24 months. Both halves of each window are uniform within their
+    respective monthly arrays so the analyser's per-period sum is exact.
+
+    `cn_monthly_*` index 0 = months [t-23 .. t-12], index 1 = [t-11 .. t]
+    is wrong — actually each list has 12 entries covering the 12-month
+    window of interest. We only need 12 months for a single 12mo share
+    snapshot; the analyser doesn't require 24mo here (unlike YoY)."""
+    assert len(cn_monthly_eur) == 12 and len(cn_monthly_kg) == 12
+    assert len(world_monthly_eur) == 12 and len(world_monthly_kg) == 12
+
+    cur = conn.cursor()
+    # Reuse the project's _add_months helper (already defined above).
+    cur.execute(
+        "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'success') RETURNING id",
+        ("test://partner-share-seed",),
+    )
+    run_id = cur.fetchone()[0]
+    for i in range(12):
+        period = _add_months(anchor, -11 + i)
+        # CN side: one raw row for partner=CN
+        cur.execute(
+            """
+            INSERT INTO eurostat_raw_rows
+                (scrape_run_id, period, reporter, partner, product_nc, flow,
+                 value_eur, quantity_kg)
+            VALUES (%s, %s, %s, 'CN', %s, 1, %s, %s)
+            """,
+            (run_id, period, reporter, hs_pattern.rstrip('%'),
+             cn_monthly_eur[i], cn_monthly_kg[i]),
+        )
+        # World side: one aggregate row
+        cur.execute(
+            """
+            INSERT INTO eurostat_world_aggregates
+                (scrape_run_id, period, reporter, product_nc, flow,
+                 value_eur, quantity_kg, n_partners_summed, n_raw_rows)
+            VALUES (%s, %s, %s, %s, 1, %s, %s, 1, 1)
+            """,
+            (run_id, period, reporter, hs_pattern.rstrip('%'),
+             world_monthly_eur[i], world_monthly_kg[i]),
+        )
+    conn.commit()
+
+
+def test_partner_share_emits_finding_with_value_and_qty_share(empty_op_tables, test_db_url):
+    """Seed CN-side 88% of world value AND 92% of world qty for an
+    HS group → the analyser emits one partner_share finding with
+    share_value = 0.88, share_kg = 0.92, qty_minus_value_pp = +4.0 pp."""
+    anchor = date(2025, 12, 1)
+    # Choose an existing hs_group: Amino acids (HS 2922).
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT id FROM hs_groups WHERE name = 'Amino acids (HS 2922)'")
+        row = cur.fetchone()
+        assert row, "Amino acids (HS 2922) hs_group should exist (seed:soapbox_a1_2026_05_12)"
+        group_id = row[0]
+
+    # 12 months of CN-side value summing to 88, CN-side kg summing to 920.
+    # World value summing to 100, world kg summing to 1000.
+    cn_eur = [88.0 / 12] * 12
+    cn_kg = [920.0 / 12] * 12
+    world_eur = [100.0 / 12] * 12
+    world_kg = [1000.0 / 12] * 12
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_partner_share_24mo(
+            conn, group_id, "292210", anchor,
+            cn_eur, cn_kg, world_eur, world_kg,
+        )
+
+    counts = anomalies.detect_partner_share(
+        group_names=["Amino acids (HS 2922)"], flow=1,
+    )
+    assert counts["emitted"] >= 1, f"counts={counts}"
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT title, detail FROM findings WHERE subkind='partner_share' "
+            "ORDER BY id DESC LIMIT 1"
+        )
+        title, detail = cur.fetchone()
+
+    assert "Amino acids (HS 2922)" in title
+    totals = detail["totals"]
+    assert abs(totals["share_value"] - 0.88) < 1e-6
+    assert abs(totals["share_kg"] - 0.92) < 1e-6
+    # Gap: 92% - 88% = +4pp (positive = qty share exceeds value share).
+    assert abs(totals["qty_minus_value_pp"] - 4.0) < 1e-6

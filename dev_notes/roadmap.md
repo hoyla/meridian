@@ -53,12 +53,22 @@ Recommended order, cheapest-to-most-impactful-per-hour:
    non-EU aggregate view. Spot-check 2026-04 EU export YTD vs
    article: ours +18.2% to €175.04B (≈$200B), article +19% to
    $201bn — within rounding + FX-source noise.
-4. **Selective Eurostat re-ingest with `partner='EXTRA_EU27_2020'`
-   + `partner_share` analyser** — adds rest-of-world totals for the
-   HS codes we already track so we can compute *share of EU imports
-   by partner*. Unlocks an entire metric class (every "X% from China"
-   claim Soapbox makes). Bigger lift (ingest expansion + new
-   analyser + new section). See "Share-of-EU-imports analyser" below.
+4. ~~**Selective Eurostat re-ingest + `partner_share` analyser**~~ —
+   **DONE 2026-05-12**. Discovered that Eurostat bulk files contain
+   no pre-computed aggregates (only 246 ISO-2 partner codes), so the
+   denominator is computed at ingest time: `aggregate_to_world_totals`
+   sums across all partners except the 27 EU-27 ISO codes
+   (`eurostat.EU27_PARTNER_CODES`), producing an extra-EU total. New
+   table `eurostat_world_aggregates` stores it. New analyser
+   `detect_partner_share` divides our CN+HK+MO sum (from
+   `eurostat_raw_rows`) into that extra-EU sum, emitting one finding
+   per (hs_group, anchor) with `share_value`, `share_kg`, and the
+   `qty_minus_value_pp` gap (the Soapbox "bigger in tonnes than in
+   euros" signal). Backfilled 26 months (2024-01 → 2026-02). Spot-
+   check vs Soapbox A1: new narrow group `Photovoltaic inverters
+   (CN8 85044086)` shows **80% value / 91% qty** for 12mo to 2025-12;
+   article claims 75% / 87%. Within ±5pp validation band; gap shape
+   (+10.7pp qty-over-value) matches the editorial register exactly.
 
 Tier 2 hs_groups (MPPT-only inverters, crude oil, aircraft, Central
 Asia) can be bundled into step 1 or done independently anytime.
@@ -201,38 +211,62 @@ partners × 2 flows × ~30 valid anchor periods. EU export YTD
 through 2026-04 = +18.2% to €175.04B (≈$200B at period FX) vs
 Soapbox's +19% to $201bn — within rounding + FX-rate-source noise.
 
-### Share-of-EU-imports analyser + extra-EU re-ingest — proposed step 4 above
+### Partner-share analyser + extra-EU world aggregates — shipped 2026-05-12
 
 Soapbox's most distinctive analytical move is the "China share of
 EU imports by qty vs value" pattern. The 2026-05-12 A1 re-test
 made the gap concrete: every claim of the form "China supplied
 X% of EU imports of Y" was unverifiable from our DB because
-`eurostat.py` filters at ingest to `partner ∈ {CN, HK, MO}`
-([eurostat.py:98](../eurostat.py)). We have the China-side
-numerator but no rest-of-world denominator.
+`eurostat.py` filters at ingest to `partner ∈ {CN, HK, MO}`. We
+had the China-side numerator but no rest-of-world denominator.
 
-**Approach** (incremental, not a full re-ingest):
+**Implementation**. New table `eurostat_world_aggregates` stores
+pre-summed extra-EU partner totals per (period, reporter, product_nc,
+flow) for the HS prefixes our hs_groups track. The aggregator
+(`eurostat.aggregate_to_world_totals`) excludes the 27 EU-27
+ISO-2 partner codes (`eurostat.EU27_PARTNER_CODES`) so the
+denominator matches the editorial register "share of imports from
+*outside* the EU". Including intra-EU would conflate "share of EU
+consumption" with "share of non-EU imports" — Soapbox always means
+the latter.
 
-- Extend the Eurostat ingest CLI to accept `--partner EXTRA_EU27_2020`
-  (or equivalent code for the rest-of-world bucket).
-- Re-ingest historical periods for that one partner code across the
-  HS codes we already track + the Tier 1 additions above. Smaller
-  than ingesting every partner individually; bigger than the current
-  CN+HK+MO slice.
-- Add `partner_share_v1_qty_value` analyser. Subkind:
-  `partner_share`. Natural key: `(hs_group_id, period, flow)`.
-  Emits: `cn_share_qty_pct`, `cn_share_value_pct`, plus the
-  qty-vs-value delta (the Soapbox-style flag). Universal caveat:
-  `extra_eu_definitional_drift` (rest-of-world composition
-  changes year-on-year as Brexit-era reclassifications settle).
-- Briefing-pack section: new module under the post-modularisation
-  `briefing_pack/sections/` directory.
+The discovery during validation: the bulk files contain only ISO-2
+country codes, no pre-computed `EXTRA_EU27_2020` or `WORLD`
+aggregates. So "rest of world" has to be computed by summing across
+all 246 partner codes Eurostat publishes, minus the 27 EU-27 codes.
+The aggregator does this in a single streaming pass over the bulk
+file (~11s per period). Backfill: 26 months (2024-01 → 2026-02),
+77k–94k aggregate rows per period, ~2.2M total rows.
 
-**Cost / benefit:** highest analytical impact (whole new metric
-class), highest cost (ingest expansion + new analyser + new
-section). Lowest urgency in the sense that findings without it
-remain defensible; high urgency in the sense that *most* future
-Soapbox articles will lean on this metric.
+**Analyser** (`detect_partner_share`): emits one finding per
+(hs_group, anchor_period, flow) under subkind
+`partner_share[_export]`. `detail.totals` carries `share_value`,
+`share_kg`, and `qty_minus_value_pp` — the Soapbox "bigger in
+tonnes than in euros" signal. Natural key
+`(hs_group_id, current_end_yyyymm)`. Method version
+`partner_share_v1_eurostat_world_aggregates`. New universal caveat
+`extra_eu_definitional_drift` documents that the 246-partner
+denominator sums customs authorities with slight definitional
+drift across CN8 revisions.
+
+**Brief section**: `briefing_pack/sections/partner_share.py` —
+Tier-3 block listing groups by share descending, with both shares
++ the gap + a brief framing note (>+5pp = unit-price pressure;
+>-5pp = premium pricing; between = noise band).
+
+**Validation** vs Soapbox A1. The article cites "China supplied
+87% of EU solar inverter imports by quantity in 2025, compared
+with 75% by value" — for the narrow PV-specific CN8 sub-code
+85044086 (separated from broader HS 850440 as a new hs_group
+during this work) our finding at 12mo-to-2025-12 shows **80%
+value / 91% qty**, gap +10.7pp. Within ±5pp validation band on
+the absolute figures; the qty-over-value gap shape matches
+exactly. Direction and editorial framing fully reproduce
+Soapbox's analytical move.
+
+**Coverage limitation**: EU-27 scope only. UK and combined scopes
+would need an HMRC-side world aggregate (HMRC ingest stores
+GB+CN/HK/MO only) — forward work.
 
 ### ~~Single-month / 2-month YoY operator~~ DONE 2026-05-11
 

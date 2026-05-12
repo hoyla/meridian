@@ -161,6 +161,15 @@ def run_periodic(
         log.info("periodic-run: running %s", key)
         counts[key] = anomalies.detect_gacc_bilateral_aggregate_yoy(flow=flow_str)
 
+    # Partner-share runs ONLY if the eurostat_world_aggregates table has
+    # data for the latest 12 months — otherwise the analyser skips with
+    # `skipped_no_world_data`. The periodic step is light when there's
+    # no fresh denominator, heavy when there is.
+    for flow_int in (1, 2):
+        key = f"partner_share_flow{flow_int}"
+        log.info("periodic-run: running %s", key)
+        counts[key] = anomalies.detect_partner_share(flow=flow_int)
+
     if not skip_llm:
         log.info("periodic-run: running llm-framing")
         try:

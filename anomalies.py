@@ -87,6 +87,17 @@ UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY: dict[str, list[str]] = {
         "eurostat_stat_procedure_mix", "multi_partner_sum", "cn8_revision",
     ],
     "narrative_hs_group": ["llm_drafted"],
+    "partner_share": [
+        # Same Eurostat-source universal caveats as the hs_group families.
+        "cif_fob", "currency_timing", "classification_drift",
+        "eurostat_stat_procedure_mix", "multi_partner_sum", "cn8_revision",
+        # New, specific to the share metric: the all-partner denominator
+        # mixes 246 reporting partners whose mapping from world commodity
+        # flows into Eurostat's CN8 nomenclature varies year-to-year.
+        # Editorially the caveat hedges the absolute share figure while
+        # leaving the *direction* of qty-vs-value pressure intact.
+        "extra_eu_definitional_drift",
+    ],
 }
 
 
@@ -3261,6 +3272,351 @@ def _insert_gacc_bilateral_aggregate_yoy_finding(
                 "partial_window": partial_window,
             },
             observation_ids=sorted(set(obs_ids)),
+            score=score,
+            title=title,
+            body="\n".join(body_lines),
+            detail=detail,
+        )
+    return action
+
+
+# =============================================================================
+# Partner share: China's share of EU-27 extra-EU imports/exports by value + kg.
+# =============================================================================
+# The 2026-05-12 Soapbox A1 re-test surfaced a structural metric gap: every
+# claim of the form "China supplied X% of EU imports of Y" was unverifiable
+# from our DB because `eurostat.py` filters at ingest to CN+HK+MO partners —
+# we had the numerator but no denominator.
+#
+# The fix landed alongside this analyser: `eurostat_world_aggregates` stores
+# the pre-summed extra-EU totals per (period, reporter, product_nc, flow)
+# for the HS prefixes our hs_groups track. (Extra-EU = sum across all
+# Eurostat partner codes minus the 27 EU-27 partner codes, so the
+# denominator represents "imports from outside the EU" — the Soapbox
+# editorial register. Including intra-EU would conflate "share of EU
+# consumption" with "share of non-EU imports".)
+#
+# This analyser divides the CN+HK+MO partner sum (read from
+# `eurostat_raw_rows`) into the extra-EU sum (read from
+# `eurostat_world_aggregates`) and emits the share per (hs_group,
+# anchor_period, flow). Both share-by-value and share-by-kg surface
+# alongside, plus the gap between them — Soapbox's distinctive
+# "bigger in tonnes than euros" analytical move.
+
+PARTNER_SHARE_SOURCE_URL = "analysis://partner_share/v1"
+# Editorial label set for the partner numerator. Same envelope as the
+# YoY analysers — see EUROSTAT_PARTNERS — but stored on the finding for
+# transparency.
+PARTNER_SHARE_PARTNERS: tuple[str, ...] = EUROSTAT_PARTNERS
+
+
+def _hs_group_world_per_period_totals(
+    patterns: list[str], flow: int,
+) -> list[tuple[date, float, float]]:
+    """World (all-partner) per-period totals for the given HS prefix set,
+    pulled from `eurostat_world_aggregates`. Returns
+    (period, total_value_eur, total_quantity_kg) per period, EU-27
+    reporters only (excludes pre-Brexit GB).
+
+    The aggregates table mirrors the partner-filtered `eurostat_raw_rows`
+    schema-shape so summing across periods uses the same window logic
+    the hs_group_yoy analyser already implements."""
+    like_clause, like_params = _hs_pattern_or_clause(patterns)
+    sql = f"""
+        SELECT period,
+               COALESCE(SUM(value_eur), 0) AS total_eur,
+               COALESCE(SUM(quantity_kg), 0) AS total_kg
+          FROM eurostat_world_aggregates
+         WHERE flow = %s
+           AND {like_clause}
+           AND reporter <> ALL(%s)
+      GROUP BY period
+      ORDER BY period
+    """
+    params = (flow, *like_params, list(EU27_EXCLUDE_REPORTERS))
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        return [(r[0], float(r[1] or 0), float(r[2] or 0)) for r in cur.fetchall()]
+
+
+def _hs_group_cn_partner_per_period_totals(
+    patterns: list[str], flow: int,
+) -> list[tuple[date, float, float]]:
+    """CN+HK+MO partner per-period totals from `eurostat_raw_rows`, EU-27
+    reporters only. Parallel to `_hs_group_world_per_period_totals` but
+    reads the partner-filtered raw rows we've stored since the project
+    started. Returns (period, value_eur, quantity_kg)."""
+    like_clause, like_params = _hs_pattern_or_clause(patterns)
+    sql = f"""
+        SELECT period,
+               COALESCE(SUM(value_eur), 0) AS total_eur,
+               COALESCE(SUM(quantity_kg), 0) AS total_kg
+          FROM eurostat_raw_rows
+         WHERE flow = %s
+           AND partner = ANY(%s)
+           AND {like_clause}
+           AND reporter <> ALL(%s)
+      GROUP BY period
+      ORDER BY period
+    """
+    params = (flow, list(EUROSTAT_PARTNERS), *like_params, list(EU27_EXCLUDE_REPORTERS))
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        return [(r[0], float(r[1] or 0), float(r[2] or 0)) for r in cur.fetchall()]
+
+
+def detect_partner_share(
+    group_names: list[str] | None = None,
+    flow: int = 1,
+) -> dict[str, int]:
+    """For each (hs_group, anchor_period) where 12 months of both CN-side
+    partner data AND extra-EU aggregate data exist, emit one finding
+    under subkind 'partner_share[_export]' with China's share of EU-27
+    extra-EU imports by value AND by quantity_kg, plus the gap between
+    them.
+
+    Editorially this unlocks the Soapbox A1 analytical register —
+    "China supplied 88% of EU import quantity but only 52% of value" —
+    as a finding rather than an ad-hoc raw-row query. The qty-vs-value
+    gap is the project's primary "bigger in tonnes than euros" signal.
+    Denominator is *extra-EU only* (intra-EU trade excluded — see
+    eurostat.EU27_PARTNER_CODES) so the share matches the Soapbox
+    framing of "share of imports from outside the EU".
+
+    `flow`: 1 = imports (CN→EU, the editorial default), 2 = exports.
+    `group_names`: subset of hs_groups by name. Default: all groups
+        with at least 12 months of overlapping CN-side and world data.
+
+    Coverage limitation: only EU-27 scope (Eurostat-side). UK and
+    combined scopes need an HMRC-side world aggregate which doesn't
+    yet exist — HMRC ingest currently stores GB+CN/HK/MO only.
+    """
+    if flow not in (1, 2):
+        raise ValueError(f"flow must be 1 (import) or 2 (export); got {flow}")
+    counts = {
+        "emitted": 0,
+        "inserted_new": 0, "confirmed_existing": 0, "superseded": 0,
+        "skipped_insufficient_history": 0,
+        "skipped_zero_denominator": 0,
+        "skipped_no_world_data": 0,
+    }
+
+    groups = _list_hs_groups(group_names)
+    if not groups:
+        return counts
+
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'running') RETURNING id",
+            (PARTNER_SHARE_SOURCE_URL,),
+        )
+        analysis_run_id = cur.fetchone()[0]
+
+    try:
+        for group in groups:
+            cn_series = _hs_group_cn_partner_per_period_totals(
+                group.hs_patterns, flow=flow,
+            )
+            world_series = _hs_group_world_per_period_totals(
+                group.hs_patterns, flow=flow,
+            )
+            if not world_series:
+                counts["skipped_no_world_data"] += 1
+                continue
+            cn_eur = {p: e for p, e, _ in cn_series}
+            cn_kg = {p: k for p, _, k in cn_series}
+            world_eur = {p: e for p, e, _ in world_series}
+            world_kg = {p: k for p, _, k in world_series}
+
+            # Anchor on the intersection of CN-side and world periods that
+            # both have ≥12 months of contiguous history (for a 12mo rolling
+            # share). Same pattern as hs_group_yoy.
+            world_periods = sorted(world_eur.keys())
+            for t in world_periods:
+                start_curr = _months_back(t, 11)
+                end_curr = t
+                want = []
+                p = start_curr
+                while p <= end_curr:
+                    want.append(p)
+                    p = _months_back(p, -1)
+                # Strict tolerance: every month of the 12mo window must be
+                # present in BOTH the world aggregates AND the CN-side rows.
+                # If any month is missing from either side, the share would
+                # be biased by the gap.
+                missing_world = [p for p in want if p not in world_eur]
+                missing_cn = [p for p in want if p not in cn_eur]
+                if missing_world or missing_cn:
+                    counts["skipped_insufficient_history"] += 1
+                    continue
+
+                world_12mo_eur = sum(world_eur[p] for p in want)
+                world_12mo_kg = sum(world_kg[p] for p in want)
+                cn_12mo_eur = sum(cn_eur[p] for p in want)
+                cn_12mo_kg = sum(cn_kg[p] for p in want)
+                if world_12mo_eur == 0 or world_12mo_kg == 0:
+                    counts["skipped_zero_denominator"] += 1
+                    continue
+
+                share_value = cn_12mo_eur / world_12mo_eur
+                share_kg = cn_12mo_kg / world_12mo_kg if world_12mo_kg else None
+                # Soapbox's signature analytical move: the gap. Positive
+                # means China's quantity share exceeds its value share —
+                # consistent with downward unit-price pressure ("bigger
+                # in tonnes than in euros").
+                qty_minus_value_pp = (
+                    (share_kg - share_value) * 100
+                    if share_kg is not None else None
+                )
+
+                action = _insert_partner_share_finding(
+                    analysis_run_id, group, t, start_curr, end_curr,
+                    cn_12mo_eur, world_12mo_eur, share_value,
+                    cn_12mo_kg, world_12mo_kg, share_kg,
+                    qty_minus_value_pp, flow=flow,
+                )
+                _tally(counts, action)
+
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='success', ended_at=now() WHERE id=%s",
+                (analysis_run_id,),
+            )
+    except Exception as e:
+        log.exception("partner_share analysis failed")
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='failed', error_message=%s, ended_at=now() WHERE id=%s",
+                (str(e), analysis_run_id),
+            )
+        raise
+    return counts
+
+
+def _insert_partner_share_finding(
+    analysis_run_id: int,
+    group: _HsGroup,
+    anchor_period: date,
+    start_curr: date,
+    end_curr: date,
+    cn_12mo_eur: float,
+    world_12mo_eur: float,
+    share_value: float,
+    cn_12mo_kg: float,
+    world_12mo_kg: float,
+    share_kg: float | None,
+    qty_minus_value_pp: float | None,
+    flow: int = 1,
+) -> findings_io.EmitAction:
+    flow_subkind_suffix = "" if flow == 1 else "_export"
+    flow_label = "Imports (CN→EU-27)" if flow == 1 else "Exports (EU-27→CN)"
+    direction_phrase = (
+        "China's share of EU-27 extra-EU imports"
+        if flow == 1
+        else "China's share of EU-27 extra-EU exports"
+    )
+
+    title = (
+        f"{direction_phrase} of {group.name} "
+        f"(12mo to {end_curr.strftime('%Y-%m')}): "
+        f"{share_value*100:.1f}% by value"
+        + (f" / {share_kg*100:.1f}% by tonnes" if share_kg is not None else "")
+    )
+
+    body_lines = [
+        f"HS group: {group.name}",
+        f"Flow: {flow_label}",
+        f"Window: 12 months ending {end_curr.strftime('%Y-%m')}",
+        "",
+        f"China side (CN+HK+MO):  €{cn_12mo_eur/1e6:,.1f}M, "
+        f"{cn_12mo_kg/1e3:,.1f}k tonnes",
+        f"Extra-EU partner total: €{world_12mo_eur/1e6:,.1f}M, "
+        f"{world_12mo_kg/1e3:,.1f}k tonnes "
+        "(all partners except the 27 EU-27 ISO codes)",
+        "",
+        f"Share by value: {share_value*100:.2f}%",
+    ]
+    if share_kg is not None:
+        body_lines.append(f"Share by quantity (kg): {share_kg*100:.2f}%")
+    if qty_minus_value_pp is not None:
+        body_lines.append(
+            f"Gap (qty − value): {qty_minus_value_pp:+.2f} percentage points"
+        )
+        if qty_minus_value_pp > 0:
+            body_lines.append(
+                "Positive gap: China's tonnage share exceeds its value "
+                "share — consistent with downward unit-price pressure "
+                "(\"bigger in tonnes than in euros\" — Soapbox A1 framing)."
+            )
+
+    body_lines += [
+        "",
+        ("Numerator: SUM(value_eur), SUM(quantity_kg) from eurostat_raw_rows "
+         "where partner ∈ {CN, HK, MO}, EU-27 reporters only. Denominator: "
+         "SUM(value_eur), SUM(quantity_kg) from eurostat_world_aggregates "
+         "(extra-EU partner totals pre-summed at ingest — intra-EU trade "
+         "excluded so the share matches Soapbox's editorial register: "
+         "\"China supplied X% of EU imports from outside the EU\"). "
+         "Both are 12-month sums across the same window so the share is "
+         "directly interpretable."),
+    ]
+
+    detail = {
+        "method": "partner_share_v1_eurostat_world_aggregates",
+        "method_query": {
+            "source_numerator": "eurostat_raw_rows (partner ∈ {CN, HK, MO})",
+            "source_denominator": "eurostat_world_aggregates (all 246 partners)",
+            "flow": flow,
+            "partners_summed_numerator": list(PARTNER_SHARE_PARTNERS),
+            "reporter_scope": "eu_27_excl_gb",
+            "rolling_window_months": 12,
+            "hs_patterns": group.hs_patterns,
+        },
+        "group": {
+            "id": group.id, "name": group.name,
+            "description": group.description,
+            "hs_patterns": group.hs_patterns,
+        },
+        "windows": {
+            "current_start": start_curr.isoformat(),
+            "current_end": end_curr.isoformat(),
+        },
+        "totals": {
+            "cn_12mo_eur": cn_12mo_eur,
+            "world_12mo_eur": world_12mo_eur,
+            "cn_12mo_kg": cn_12mo_kg,
+            "world_12mo_kg": world_12mo_kg,
+            "share_value": share_value,
+            "share_kg": share_kg,
+            "qty_minus_value_pp": qty_minus_value_pp,
+        },
+        # Universal caveats for the partner_share family render once in the
+        # methodology footer (see anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY
+        # — partner_share entry added alongside this analyser). Per-finding
+        # caveats stay empty unless a conditional fires.
+        "caveat_codes": [],
+    }
+    score = abs(qty_minus_value_pp or 0) + share_value * 100  # rank by gap+share
+    subkind = f"partner_share{flow_subkind_suffix}"
+    current_end_yyyymm = end_curr.strftime("%Y-%m")
+
+    with _conn() as conn, conn.cursor() as cur:
+        _, action = findings_io.emit_finding(
+            cur,
+            scrape_run_id=analysis_run_id,
+            kind="anomaly",
+            subkind=subkind,
+            natural_key=findings_io.nk_partner_share(group.id, current_end_yyyymm),
+            value_fields={
+                "method": detail["method"],
+                "share_value": round(share_value, 6),
+                "share_kg": round(share_kg, 6) if share_kg is not None else None,
+                "qty_minus_value_pp": (
+                    round(qty_minus_value_pp, 4)
+                    if qty_minus_value_pp is not None else None
+                ),
+            },
+            hs_group_ids=[group.id],
             score=score,
             title=title,
             body="\n".join(body_lines),

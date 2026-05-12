@@ -97,6 +97,53 @@ CREATE INDEX idx_eu_raw_analyser ON eurostat_raw_rows
   USING btree (flow, partner, product_nc text_pattern_ops, period)
   INCLUDE (value_eur, quantity_kg, reporter);
 
+-- Eurostat extra-EU aggregates per (period, reporter, product_nc, flow).
+-- Populated from the same bulk files as `eurostat_raw_rows` but with no
+-- partner filter — except that the 27 EU-27 ISO-2 partner codes are
+-- EXCLUDED at aggregation time so the resulting sum represents
+-- **extra-EU imports** (each EU member's imports from non-EU partners
+-- combined). The editorial purpose is the partner_share metric: divide
+-- our existing CN+HK+MO partner sum into this denominator to get
+-- "China's share of EU imports of X" — the Soapbox A1 register.
+--
+-- Intra-EU trade dwarfs extra-EU trade for most HS chapters, so including
+-- intra-EU in the denominator would conflate "share of EU consumption"
+-- (small) with "share of non-EU imports" (the editorial point). The
+-- aggregator filters intra-EU explicitly — see EU27_PARTNER_CODES in
+-- eurostat.py.
+--
+-- We don't store individual non-CN partner rows in eurostat_raw_rows
+-- (storage cost is too high for the breadth of HS codes journalists ask
+-- about — 246 partners × full CN8 detail × 110 historical periods = tens of
+-- GB). Instead we precompute the SUM at ingest time and store just the
+-- extra-EU aggregate. Trade-off: any future "share of imports from a
+-- specific non-CN partner" question requires re-ingesting that partner;
+-- the "share of extra-EU imports" question (Soapbox A1) is fast.
+--
+-- Schema mirrors eurostat_raw_rows's content columns so the partner_share
+-- analyser can subtract one from the other without column-name gymnastics.
+-- Populated only for the HS prefixes our hs_groups currently track —
+-- adding a new hs_group requires backfilling the aggregates table for that
+-- prefix.
+CREATE TABLE eurostat_world_aggregates (
+    id                    BIGSERIAL PRIMARY KEY,
+    scrape_run_id         BIGINT      NOT NULL REFERENCES scrape_runs(id),
+    period                DATE        NOT NULL,
+    reporter              TEXT        NOT NULL,
+    product_nc            TEXT        NOT NULL,    -- HS-CN8, zero-padded 8 chars
+    flow                  INT         NOT NULL,    -- 1 = import, 2 = export
+    value_eur             NUMERIC,                 -- SUM across all partners
+    quantity_kg           NUMERIC,
+    quantity_suppl_unit   NUMERIC,
+    n_partners_summed     INT         NOT NULL,    -- how many distinct partner codes fed this row
+    n_raw_rows            INT         NOT NULL,    -- how many raw bulk-file rows fed it (≥ n_partners_summed)
+    computed_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (period, reporter, product_nc, flow)
+);
+CREATE INDEX idx_eu_world_analyser ON eurostat_world_aggregates
+  USING btree (flow, product_nc text_pattern_ops, period)
+  INCLUDE (value_eur, quantity_kg, reporter);
+
 -- HMRC OTS (Overseas Trade Statistics) raw rows. Phase 6.1: parallel to
 -- eurostat_raw_rows but for UK-side (reporter=GB) trade. Sourced from
 -- https://api.uktradeinfo.com/OTS via OData. UK uses CN8 codes (matching
@@ -541,6 +588,9 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
   ('MPPT solar inverters (CN8 85044084)',
    'CN8 85044084 — MPPT solar photovoltaic inverters, separated out by the EU from 1 Jan 2026 from the broader HS 850440 bucket. Will skip with insufficient_history until ~24 months of data accumulate; included now so the next valid window picks it up automatically.',
    ARRAY['85044084%'], 'seed:soapbox_a1_2026_05_12'),
+  ('Photovoltaic inverters (CN8 85044086)',
+   'CN8 85044086 — photovoltaic inverters (the sub-code of HS 850440 explicitly for PV inverters, distinct from IT power supplies, traction converters, etc. also classified under 850440). This is the narrowest available pre-2026 code matching Soapbox A1''s "EU solar inverter imports" framing. From 1 Jan 2026 onward Eurostat split out CN8 85044084 (MPPT specifically) from this code, so trend continuity post-2026 may need both codes combined.',
+   ARRAY['85044086%'], 'seed:soapbox_a1_2026_05_12'),
   ('Civil aircraft (HS 8802)',
    'HS 8802 — powered aircraft (broad chapter; covers helicopters, aeroplanes, gliders and unmanned aircraft across all weights). "Civil aircraft" is the editorial shorthand for the predominantly civil flows seen in EU trade. Large civil aircraft specifically sit at CN8 880240 (unladen weight >15,000 kg) — refine to that sub-code if a story rests on the wide-body / jetliner segment. Captures EU-side imports from China and exports to China; the China-as-importer flow is not in this dataset.',
    ARRAY['8802%'], 'seed:soapbox_a1_2026_05_12');
@@ -615,7 +665,11 @@ INSERT INTO caveats (code, summary, detail, applies_to) VALUES
    'Combined-scope total sums Eurostat (EUR-native) and HMRC (GBP→EUR via period FX)',
    'Findings emitted under comparison_scope=eu_27_plus_uk add the EU-27 total (sourced from Eurostat, native EUR) to the UK total (sourced from HMRC, GBP converted to EUR using the ECB monthly average for each period). The two sources differ on threshold rules (HMRC suppresses small flows), revision cycles (Eurostat revises later than HMRC), and methodology (e.g. CIF vs FOB treatment, partner-attribution rules for transit goods). The combined number is a useful editorial approximation of "Chinese trade with the British Isles" but is not a like-for-like aggregate from a single statistical agency. Single-scope EU-27 (Eurostat) or UK (HMRC) findings remain the methodologically clean comparators.',
    ARRAY['hs_group_yoy_combined', 'hs_group_yoy_combined_export',
-         'hs_group_trajectory_combined', 'hs_group_trajectory_combined_export']);
+         'hs_group_trajectory_combined', 'hs_group_trajectory_combined_export']),
+  ('extra_eu_definitional_drift',
+   'Share denominator sums 246 partner reporters whose CN8 mappings drift year-on-year',
+   'partner_share findings divide our CN+HK+MO partner sum (eurostat_raw_rows) into an all-partner sum (eurostat_world_aggregates) computed across the 246 ISO-2 partner codes Eurostat publishes. The denominator therefore mixes 246 customs authorities whose own product-classification practices vary slightly across CN8 revisions — a small flow originally booked under one CN8 code in 2024 may appear under a sibling code in 2026, shifting the denominator without any real trade change. The editorial direction of the share (rising, falling, qty>value, etc.) is robust to this drift; the absolute share figure should be quoted with the caveat that "EU imports of HS X" in our data means "the sum across all 246 partner reporters as classified at ingest". Methodologically distinct from cn8_revision, which covers Eurostat''s own revisions on the numerator side.',
+   ARRAY['partner_share', 'partner_share_export']);
 
 -- Phase 2.1: known transshipment hubs. Each row should carry an evidence_url
 -- documenting the editorial basis. These are starting points — journalists

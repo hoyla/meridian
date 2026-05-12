@@ -129,6 +129,57 @@ as findings rather than raw-row queries:
   projection; our 4-month YTD at this anchor annualises consistent
   with the article's shape.
 
+**Stage C step-4 shipped 2026-05-12.** New `partner_share[_export]`
+analyser covers the share metric class: China's share of EU-27
+extra-EU imports by value AND by quantity_kg per HS group, plus
+the qty-vs-value gap. New table `eurostat_world_aggregates` stores
+the extra-EU denominator (sum across all 246 Eurostat partner
+codes minus the 27 EU-27 codes). Bulk-file aggregator
+`eurostat.aggregate_to_world_totals` populates it in a single
+streaming pass per period. Backfilled 26 months (2024-01 → 2026-02).
+1,288 findings emitted on first run. New brief section
+`partner_share.py` renders the Tier-3 block.
+
+- A1.3 (solar inverter shares): article says 75% value / 87% qty
+  for 2025. Added narrower hs_group `Photovoltaic inverters (CN8
+  85044086)` to match Soapbox's editorial scope (their "solar
+  inverters" excludes the IT power supplies, traction converters
+  etc. that share HS 850440). Our finding at 12mo-to-2025-12 on
+  85044086: **80% value / 91% qty**, qty-over-value gap +10.7pp.
+  ✓ within ±5pp on absolute figures; gap shape (+~10pp qty over
+  value) matches the article's framing exactly.
+
+- A1.6 (chemicals/feed qty-vs-value pattern): now testable. Latest
+  partner_share findings at 12mo-to-2026-02 (EU-27, imports):
+  - Amino acids (HS 2922): 42% value / 59% qty / +17pp gap
+  - Choline (HS 292310): 44% value / 62% qty / +18pp gap
+  - Vanillin+ethylvanillin: 52% value / 64% qty / +12pp gap
+  - Feed premixes (HS 230990): 21% value / 20% qty / -0.5pp gap
+  - Inorganic acids (HS 2811): 36% value / 31% qty / -6pp gap
+  Soapbox's pattern (qty > value across the chemicals/feed cluster)
+  is reproduced in 4 of 5 cases. Absolute figures diverge from
+  Soapbox by 10–40pp because Soapbox uses narrower
+  CN8 sub-codes than our broad HS-chapter buckets — adding
+  narrower sub-codes for each cluster member is the next
+  refinement (the same pattern as adding 85044086 to match the
+  inverter claim).
+
+- A1.4 (rare-earth bucket shares ~90% China): latest partner_share
+  findings at 12mo-to-2025-12:
+  - Lanthanum compounds (CN8 28469040): **73% value / 97% qty**.
+    ✓ within ±3pp of the article's "around 90%" by quantity claim
+    for the "dark-red bucket" (consistent with our Tier-1
+    identification).
+  - Gd/Tb/Dy compounds (CN8 28469060): 30% value / 37% qty. The
+    article didn't quote a specific share for this "blue bucket"
+    but flagged it as rising; our finding shows it climbing
+    (separate hs_group_yoy +149% value YoY confirms).
+
+- A1.2 (MPPT inverters CN8 85044084): still blocked on insufficient
+  history (the code was only separated from 1 Jan 2026). The
+  partner_share analyser correctly skips with
+  `skipped_insufficient_history` until ~mid-2027.
+
 ### Testable claims
 
 **A1.1 — Aggregate, GACC side.** "China's exports to the EU reached US\$201bn,

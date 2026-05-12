@@ -72,6 +72,9 @@ python scrape.py --analyse gacc-aggregate-yoy --flow 1         # GACC-only YoY f
 python scrape.py --analyse gacc-aggregate-yoy --flow 2         # same, China imports from each bloc
 python scrape.py --analyse gacc-bilateral-aggregate-yoy --flow 1   # bilateral counterpart: EU bloc + every single-country GACC partner; each finding carries 12mo rolling, YTD cumulative, and single-month YoY operators side-by-side
 python scrape.py --analyse gacc-bilateral-aggregate-yoy --flow 2   # same, China imports from each partner
+python scrape.py --eurostat-world-aggregates-period 2026-02        # pre-populate the denominator (extra-EU totals) for the partner-share metric — backfill before running partner-share
+python scrape.py --analyse partner-share --flow 1                  # China's share of EU-27 extra-EU imports per HS group, by value AND by tonnes (Soapbox "bigger in tonnes than euros" register)
+python scrape.py --analyse partner-share --flow 2                  # same, exports
 
 # LLM-drafted editorial top-lines (consumes the deterministic findings above)
 python scrape.py --analyse llm-framing                        # one narrative per HS group (default qwen3.6:latest)

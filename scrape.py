@@ -164,6 +164,80 @@ def scrape_eurostat(
             db.finish_run(run_id, status="failed", error_message=str(e))
 
 
+def _world_aggregate_hs_prefixes_from_hs_groups() -> tuple[str, ...]:
+    """Read the active `hs_groups.hs_patterns` and convert them to the prefix
+    set the bulk-file streamer can use. Each pattern ends with '%' (SQL LIKE
+    convention); we strip the '%' to get a literal startswith prefix.
+
+    The resulting tuple is passed to `iter_raw_rows(hs_prefixes=...)` which
+    filters via `str.startswith` — so '2922%' becomes '2922' and '85044084%'
+    becomes '85044084'. Eurostat product_nc is zero-padded to 8 chars, so a
+    short prefix like '2922' matches every CN8 sub-code beneath HS chapter
+    2922 as you'd expect.
+    """
+    import psycopg2
+    with psycopg2.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
+        cur.execute("SELECT hs_patterns FROM hs_groups")
+        rows = cur.fetchall()
+    prefixes: set[str] = set()
+    for (patterns,) in rows:
+        for p in (patterns or []):
+            if p.endswith("%"):
+                prefixes.add(p[:-1])
+            else:
+                prefixes.add(p)
+    return tuple(sorted(prefixes))
+
+
+def scrape_eurostat_world_totals(
+    period: date,
+    hs_prefixes: tuple[str, ...] | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Fetch one Eurostat monthly bulk file and populate
+    `eurostat_world_aggregates` with all-partner sums per
+    (reporter, product_nc, flow). Used as the denominator for the
+    partner_share analyser (anomalies.detect_partner_share).
+
+    Separate orchestrator from `scrape_eurostat` because the two have
+    different filters: the per-partner ingest stores rows for CN/HK/MO
+    only (storage-bounded); this one aggregates across all 246 partner
+    codes Eurostat publishes for a focused HS-prefix subset.
+
+    `hs_prefixes`: required in production usage (an unfiltered pass over
+    all CN8 codes would balloon the aggregates table and is rarely the
+    editorial need). Caller should pass the patterns from the active
+    hs_groups set — see `db.list_hs_group_patterns_for_aggregates`.
+    """
+    url = eurostat.bulk_file_url(period)
+    log.info(
+        "Fetching Eurostat bulk file for world-aggregates pass (period=%s, hs_prefixes=%s)",
+        period.strftime("%Y-%m"), hs_prefixes or "ANY",
+    )
+    run_id = db.start_run(url) if not dry_run else None
+    try:
+        response = eurostat.fetch_bulk_file(period)
+        agg_rows = list(
+            eurostat.aggregate_to_world_totals(
+                response.content, period, hs_prefixes=hs_prefixes,
+            )
+        )
+        log.info(
+            "Aggregated to %d world-total rows for %s",
+            len(agg_rows), period.strftime("%Y-%m"),
+        )
+        if dry_run:
+            log.info("Dry run: would upsert %d world-aggregate rows", len(agg_rows))
+            return
+        n = db.bulk_upsert_eurostat_world_aggregates(run_id, agg_rows)
+        log.info("Upserted %d eurostat_world_aggregates rows", n)
+        db.finish_run(run_id, status="success", http_status=response.status_code)
+    except Exception as e:
+        log.exception("Eurostat world-aggregates scrape failed for %s", period)
+        if run_id is not None:
+            db.finish_run(run_id, status="failed", error_message=str(e))
+
+
 def scrape_hmrc(
     period: date,
     country_ids: tuple[int, ...] | None = None,
@@ -251,6 +325,12 @@ def main() -> None:
     p.add_argument("--url", help="Scrape a single GACC URL (index OR release)")
     p.add_argument("--eurostat-period", type=_parse_period, metavar="YYYY-MM",
                    help="Fetch one Eurostat monthly bulk file for the given period")
+    p.add_argument("--eurostat-world-aggregates-period", type=_parse_period, metavar="YYYY-MM",
+                   help="Fetch one Eurostat monthly bulk file and aggregate "
+                        "across all 246 partner codes for the HS prefixes "
+                        "tracked by active hs_groups (or pass --hs-prefix to "
+                        "override). Populates eurostat_world_aggregates — the "
+                        "denominator for the partner_share analyser.")
     p.add_argument("--hmrc-period", type=_parse_period, metavar="YYYY-MM",
                    help="Fetch one HMRC OTS slice for the given period (UK trade with "
                         "non-EU partners CN+HK+MO by default; pre-requires GBP/EUR FX "
@@ -269,7 +349,8 @@ def main() -> None:
     p.add_argument("--analyse",
                    choices=["mirror-trade", "mirror-gap-trends", "hs-group-yoy",
                             "hs-group-trajectory", "gacc-aggregate-yoy",
-                            "gacc-bilateral-aggregate-yoy", "llm-framing"],
+                            "gacc-bilateral-aggregate-yoy", "partner-share",
+                            "llm-framing"],
                    help="Run a deterministic anomaly pass over already-ingested data, "
                         "or 'llm-framing' to generate per-hs-group lead scaffolds "
                         "(anomaly summary + 2-3 picked hypotheses + corroboration steps; "
@@ -449,6 +530,20 @@ def main() -> None:
         log.info("GACC bilateral-aggregate YoY analysis (flow=%s): %s", flow_str, counts)
         return
 
+    if args.analyse == "partner-share":
+        # China's share of EU-27 imports/exports per HS group, by value
+        # AND by quantity_kg. Numerator: eurostat_raw_rows (CN+HK+MO).
+        # Denominator: eurostat_world_aggregates (all 246 partners) —
+        # pre-populate via `--eurostat-world-aggregates-period YYYY-MM`
+        # before running this analyser. Surfaces the Soapbox A1
+        # "China supplied X% of EU imports of Y, bigger in tonnes than
+        # in euros" register.
+        counts = anomalies.detect_partner_share(
+            group_names=args.hs_group, flow=args.flow,
+        )
+        log.info("partner-share analysis (flow=%d): %s", args.flow, counts)
+        return
+
     if args.analyse == "llm-framing":
         counts = llm_framing.detect_llm_framings(
             group_names=args.hs_group,
@@ -488,6 +583,21 @@ def main() -> None:
         hs_prefixes = tuple(args.hs_prefix) if args.hs_prefix else None
         scrape_eurostat(args.eurostat_period, partners=partners,
                         hs_prefixes=hs_prefixes, dry_run=args.dry_run)
+        return
+
+    if args.eurostat_world_aggregates_period:
+        # If the user didn't pass --hs-prefix, derive from active hs_groups
+        # so we only aggregate what the analysers care about.
+        hs_prefixes = (
+            tuple(args.hs_prefix)
+            if args.hs_prefix
+            else _world_aggregate_hs_prefixes_from_hs_groups()
+        )
+        scrape_eurostat_world_totals(
+            args.eurostat_world_aggregates_period,
+            hs_prefixes=hs_prefixes,
+            dry_run=args.dry_run,
+        )
         return
 
     if args.hmrc_period:

@@ -112,6 +112,47 @@ def bulk_insert_eurostat_raw_rows(scrape_run_id: int, raw_rows: list[dict]) -> l
         return [r[0] for r in cur.fetchall()]
 
 
+_EUROSTAT_WORLD_AGG_COLS = (
+    "scrape_run_id", "period", "reporter", "product_nc", "flow",
+    "value_eur", "quantity_kg", "quantity_suppl_unit",
+    "n_partners_summed", "n_raw_rows",
+)
+
+
+def bulk_upsert_eurostat_world_aggregates(
+    scrape_run_id: int, agg_rows: list[dict],
+) -> int:
+    """Upsert pre-summed all-partner totals into eurostat_world_aggregates.
+    Conflict target is the natural key (period, reporter, product_nc, flow);
+    on conflict, value/quantity/n_partners/n_raw_rows + scrape_run_id are
+    updated to the latest computed values. Returns the number of rows
+    affected (Postgres reports inserted+updated as the same)."""
+    if not agg_rows:
+        return 0
+    cols_sql = ", ".join(_EUROSTAT_WORLD_AGG_COLS)
+    placeholders = "(" + ", ".join(["%s"] * len(_EUROSTAT_WORLD_AGG_COLS)) + ")"
+    rows_values = []
+    for r in agg_rows:
+        rows_values.append(tuple([
+            scrape_run_id if c == "scrape_run_id" else r.get(c)
+            for c in _EUROSTAT_WORLD_AGG_COLS
+        ]))
+    set_clause = ", ".join(
+        f"{c} = EXCLUDED.{c}"
+        for c in _EUROSTAT_WORLD_AGG_COLS
+        if c not in ("period", "reporter", "product_nc", "flow")
+    ) + ", computed_at = now()"
+    with transaction() as conn, conn.cursor() as cur:
+        args_str = b",".join(cur.mogrify(placeholders, v) for v in rows_values)
+        cur.execute(
+            f"INSERT INTO eurostat_world_aggregates ({cols_sql}) VALUES "
+            + args_str.decode("utf-8")
+            + " ON CONFLICT (period, reporter, product_nc, flow) DO UPDATE SET "
+            + set_clause
+        )
+        return cur.rowcount
+
+
 def find_or_create_eurostat_release(period: "date", source_url: str) -> int:
     """Resolve the Eurostat natural key (period) to a release id under source='eurostat'.
     GACC-only fields (section_number, currency, release_kind) stay NULL."""

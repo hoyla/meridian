@@ -211,6 +211,88 @@ def iter_observations(
     yield from aggregate_to_observations(period, [(None, r) for r in raws])
 
 
+# EU-27 ISO-2 partner codes. When these appear as PARTNER in a Eurostat
+# bulk file row, the row represents intra-EU trade (one EU member importing
+# from another EU member). For the editorial register Soapbox uses —
+# "China supplied X% of EU imports of Y" — the implicit denominator is
+# **extra-EU imports** (imports from non-EU partners). Including intra-EU
+# in the denominator would conflate "what fraction of EU consumption is
+# Chinese" (much smaller) with "what fraction of non-EU imports is Chinese"
+# (the editorial point). aggregate_to_world_totals filters these out by
+# default so the resulting eurostat_world_aggregates rows are extra-EU
+# totals.
+EU27_PARTNER_CODES: frozenset[str] = frozenset({
+    "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR",
+    "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK",
+    "SI", "ES", "SE",
+})
+
+
+def aggregate_to_world_totals(
+    archive_bytes: bytes,
+    period: date,
+    hs_prefixes: tuple[str, ...] | None = None,
+    reporters: set[str] | None = None,
+    exclude_partners: frozenset[str] | None = None,
+) -> Iterator[dict]:
+    """Stream the bulk file once and emit one aggregate row per
+    (reporter, product_nc, flow) summing across all non-excluded partner
+    codes. The output rows populate `eurostat_world_aggregates` and act
+    as the denominator for the partner_share metric.
+
+    Default `exclude_partners = EU27_PARTNER_CODES` — i.e. the
+    aggregator filters intra-EU trade so the denominator is
+    extra-EU imports (the Soapbox-style "X% of EU imports from outside
+    the EU"). Pass `exclude_partners=frozenset()` to retain intra-EU
+    and get a "X% of EU consumption" denominator instead — a different
+    editorial question, rarely the one journalists ask.
+
+    Memory-conscious: streams via `iter_raw_rows` (which already streams
+    the CSV) and aggregates in a single pass dict-keyed by
+    (reporter, product_nc, flow). For our typical hs_prefixes set (the
+    HS patterns covered by `hs_groups`), the resulting dict is small
+    (low millions of distinct keys at most) and fits in memory.
+
+    `hs_prefixes`: restrict the aggregation to the HS prefixes we care
+    about. None = aggregate ALL HS codes (large memory + storage).
+    `reporters`: restrict the aggregation to specific EU reporters.
+    None = aggregate over every reporter the bulk file contains.
+
+    Each emitted dict has the columns of `eurostat_world_aggregates`
+    (minus the auto-populated id / scrape_run_id / computed_at). Caller
+    inserts via `db.bulk_upsert_eurostat_world_aggregates`.
+    """
+    if exclude_partners is None:
+        exclude_partners = EU27_PARTNER_CODES
+    agg: dict[tuple[str, str, int], dict] = {}
+    partners_seen: dict[tuple[str, str, int], set[str]] = {}
+    for raw in iter_raw_rows(
+        archive_bytes, period, partners=None, reporters=reporters, hs_prefixes=hs_prefixes,
+    ):
+        if raw["partner"] in exclude_partners:
+            continue
+        key = (raw["reporter"], raw["product_nc"], raw["flow"])
+        bucket = agg.setdefault(key, {
+            "period": period.replace(day=1),
+            "reporter": raw["reporter"],
+            "product_nc": raw["product_nc"],
+            "flow": raw["flow"],
+            "value_eur": 0.0,
+            "quantity_kg": 0.0,
+            "quantity_suppl_unit": 0.0,
+            "n_raw_rows": 0,
+        })
+        bucket["value_eur"] += raw.get("value_eur") or 0.0
+        bucket["quantity_kg"] += raw.get("quantity_kg") or 0.0
+        bucket["quantity_suppl_unit"] += raw.get("quantity_suppl_unit") or 0.0
+        bucket["n_raw_rows"] += 1
+        partners_seen.setdefault(key, set()).add(raw["partner"])
+
+    for key, bucket in agg.items():
+        bucket["n_partners_summed"] = len(partners_seen[key])
+        yield bucket
+
+
 def _flow_label(raw: int | str | None) -> str:
     """Eurostat FLOW: 1 = import, 2 = export."""
     return {1: "import", 2: "export"}.get(raw, f"flow_{raw}")

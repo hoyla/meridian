@@ -22,7 +22,8 @@ def _truncate_all(conn) -> None:
     with conn, conn.cursor() as cur:
         cur.execute(
             "TRUNCATE TABLE findings, observations, source_snapshots, "
-            "eurostat_raw_rows, hmrc_raw_rows, brief_runs, scrape_runs, releases "
+            "eurostat_raw_rows, eurostat_world_aggregates, hmrc_raw_rows, "
+            "brief_runs, scrape_runs, releases "
             "RESTART IDENTITY CASCADE"
         )
 

@@ -263,6 +263,52 @@ invisible in active findings. Method bumped
 Where in the findings document: Tier 2 has a dedicated per-aggregate
 state-of-play block alongside the per-HS-group blocks (Phase 6.10).
 
+### `partner_share` / `partner_share_export`
+
+China's share of EU-27 *extra-EU* imports/exports per HS group, by
+value AND by quantity_kg. Added 2026-05-12 after the Soapbox A1 re-
+test confirmed the metric gap: every claim of the form "China
+supplied X% of EU imports of Y" was unverifiable from our DB
+because `eurostat.py` filters at ingest to partner ∈ {CN, HK, MO}
+— we had the numerator but no denominator.
+
+**Numerator**: SUM(value_eur), SUM(quantity_kg) from
+`eurostat_raw_rows` for partner ∈ {CN, HK, MO}, EU-27 reporters
+only, 12mo rolling window.
+
+**Denominator**: SUM(value_eur), SUM(quantity_kg) from
+`eurostat_world_aggregates` — pre-summed at ingest across all
+Eurostat partner codes EXCEPT the 27 EU-27 ISO-2 codes (so the
+denominator is "imports from outside the EU"). Same reporter
+scope, same window.
+
+Why extra-EU and not all-partner: intra-EU trade dwarfs extra-EU
+trade for most HS chapters (German imports from the Netherlands
+exceed German imports from China by an order of magnitude for
+many products). Including intra-EU in the denominator would
+conflate "share of EU consumption" (a very different metric)
+with "share of non-EU imports" (the editorial point). Soapbox
+always means the latter; this analyser matches that convention.
+
+**Why the bulk-file aggregation route**: Eurostat's Comext bulk
+files contain only per-country (ISO-2) rows — no pre-computed
+`EXTRA_EU27` or `WORLD` aggregate codes. The share denominator
+therefore has to be computed by summing across partner codes at
+ingest. The work runs in a single streaming pass through the
+bulk file (~11s per period); the resulting table is filtered to
+just the HS prefixes our hs_groups care about so storage stays
+bounded.
+
+**Findings** carry `share_value`, `share_kg`, and
+`qty_minus_value_pp` (qty share minus value share, in percentage
+points). The gap is the Soapbox-signature "bigger in tonnes than
+in euros" signal: positive gap = unit-price pressure (China is
+shipping more cheaply per kg than the rest-of-world average);
+negative gap = premium pricing.
+
+**Coverage limitation**: EU-27 scope only — there is no HMRC-side
+world-aggregate equivalent yet.
+
 ### `gacc_bilateral_aggregate_yoy` / `gacc_bilateral_aggregate_yoy_import`
 
 Bilateral counterpart to `gacc_aggregate_yoy`. Same GACC-side data,
