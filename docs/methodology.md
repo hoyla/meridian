@@ -260,6 +260,15 @@ overwrote each other on every analyser run — Africa was completely
 invisible in active findings. Method bumped
 `v2_loose_partial_window` → `v3_per_alias_natural_key`.
 
+**YTD + single-month extension 2026-05-12**: each finding now carries
+`ytd_cumulative` and `single_month` sub-fields in `detail.totals`
+alongside the 12mo rolling — mirrors the Phase 6.10 design on
+`hs_group_yoy` and the design on `gacc_bilateral_aggregate_yoy`. Method
+bumped `v3_per_alias_natural_key` →
+`v4_ytd_and_single_month_operators`. The brief's partner-aggregate
+block surfaces all three operators at once so Soapbox-style "China-X
+Jan-N trade +Y%" or single-month claims have direct finding citations.
+
 Where in the findings document: Tier 2 has a dedicated per-aggregate
 state-of-play block alongside the per-HS-group blocks (Phase 6.10).
 

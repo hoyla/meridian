@@ -2596,6 +2596,11 @@ def detect_gacc_aggregate_yoy(
             if not series:
                 counts["skipped_insufficient_history"] += 1
                 continue
+            # YTD observations for the same aggregate label. Used to compute
+            # the YTD-cumulative YoY operator alongside the 12mo rolling.
+            # Helper is shared with the bilateral analyser (same partner-
+            # country label semantics in `observations`).
+            ytd_by_period = _gacc_partner_ytd_by_period(agg["raw_label"], flow=flow)
             eur_by_period: dict[date, float] = {p: e for p, e, _ in series}
             obs_by_period: dict[date, list[int]] = {p: ids for p, _, ids in series}
             periods_sorted = sorted(eur_by_period.keys())
@@ -2643,11 +2648,58 @@ def detect_gacc_aggregate_yoy(
                     counts["skipped_below_threshold"] += 1
                     continue
 
+                # ----- YTD cumulative YoY -----
+                # Compare YTD-at-anchor vs YTD-at-anchor-one-year-earlier.
+                # Null when prior-year YTD is missing (GACC Jan-Feb-combined
+                # gap means early-year anchors often lack a prior-year
+                # comparator). Editorially: Soapbox "Jan-N exports +X% YoY".
+                ytd_block: dict | None = None
+                t_minus_12 = date(t.year - 1, t.month, 1)
+                curr_ytd = ytd_by_period.get(t)
+                prior_ytd = ytd_by_period.get(t_minus_12)
+                if curr_ytd is not None and prior_ytd is not None:
+                    curr_ytd_eur, _ = curr_ytd
+                    prior_ytd_eur, _ = prior_ytd
+                    if prior_ytd_eur != 0:
+                        ytd_yoy = (curr_ytd_eur - prior_ytd_eur) / abs(prior_ytd_eur)
+                        ytd_block = {
+                            "current_eur": curr_ytd_eur,
+                            "prior_eur": prior_ytd_eur,
+                            "delta_eur": curr_ytd_eur - prior_ytd_eur,
+                            "yoy_pct": ytd_yoy,
+                            "months_in_ytd": t.month,
+                            "prior_period": t_minus_12.isoformat(),
+                        }
+
+                # ----- Single-month YoY -----
+                # Anchor month vs same month prior year. Null when the
+                # prior-year monthly is missing. Editorially: Soapbox A3
+                # "EU-X trade Feb 2026 -16.2% YoY" register.
+                sm_block: dict | None = None
+                curr_sm = eur_by_period.get(t)
+                prior_sm = eur_by_period.get(t_minus_12)
+                if curr_sm is not None and prior_sm is not None and prior_sm != 0:
+                    sm_yoy = (curr_sm - prior_sm) / abs(prior_sm)
+                    sm_block = {
+                        "current_eur": curr_sm,
+                        "prior_eur": prior_sm,
+                        "delta_eur": curr_sm - prior_sm,
+                        "yoy_pct": sm_yoy,
+                        "current_period": t.isoformat(),
+                        "prior_period": t_minus_12.isoformat(),
+                    }
+
                 # Collect underlying observation_ids across the full window
-                # so the finding can be traced back to source rows.
+                # so the finding can be traced back to source rows. Also
+                # include the YTD observation ids when present so the
+                # supersede chain spans the same source rows as the body.
                 obs_ids: list[int] = []
                 for p in want_curr + want_prior:
                     obs_ids.extend(obs_by_period.get(p, []))
+                if curr_ytd is not None:
+                    obs_ids.extend(curr_ytd[1])
+                if prior_ytd is not None:
+                    obs_ids.extend(prior_ytd[1])
 
                 action = _insert_gacc_aggregate_yoy_finding(
                     analysis_run_id, agg, t, start_curr, end_curr,
@@ -2657,6 +2709,8 @@ def detect_gacc_aggregate_yoy(
                     partial_window=partial_window,
                     missing_curr=missing_curr,
                     missing_prior=missing_prior,
+                    ytd_block=ytd_block,
+                    sm_block=sm_block,
                 )
                 _tally(counts, action)
 
@@ -2761,6 +2815,8 @@ def _insert_gacc_aggregate_yoy_finding(
     partial_window: bool = False,
     missing_curr: list[date] | None = None,
     missing_prior: list[date] | None = None,
+    ytd_block: dict | None = None,
+    sm_block: dict | None = None,
 ) -> findings_io.EmitAction:
     direction = "up" if yoy_pct > 0 else "down"
     flow_label = "China exports to" if flow == "export" else "China imports from"
@@ -2778,6 +2834,23 @@ def _insert_gacc_aggregate_yoy_finding(
         "",
         f"Rolling 12 months ending {end_curr.strftime('%Y-%m')}:",
         f"  Value:  €{current_eur:,.0f} ({yoy_pct*100:+.2f}% YoY vs €{prior_eur:,.0f})",
+    ]
+    if ytd_block is not None:
+        body_lines += [
+            "",
+            f"Year-to-date through {end_curr.strftime('%Y-%m')}:",
+            f"  Value:  €{ytd_block['current_eur']:,.0f} "
+            f"({ytd_block['yoy_pct']*100:+.2f}% YoY vs €{ytd_block['prior_eur']:,.0f})",
+            f"  ({ytd_block['months_in_ytd']} months cumulative)",
+        ]
+    if sm_block is not None:
+        body_lines += [
+            "",
+            f"Single-month ({end_curr.strftime('%Y-%m')}) vs same month prior year:",
+            f"  Value:  €{sm_block['current_eur']:,.0f} "
+            f"({sm_block['yoy_pct']*100:+.2f}% YoY vs €{sm_block['prior_eur']:,.0f})",
+        ]
+    body_lines += [
         "",
         ("This is GACC-side data only; no Eurostat counterpart exists for "
          "non-EU partner aggregates. Cross-reference with UN Comtrade or "
@@ -2803,7 +2876,7 @@ def _insert_gacc_aggregate_yoy_finding(
         )
 
     detail = {
-        "method": "gacc_aggregate_yoy_v3_per_alias_natural_key",
+        "method": "gacc_aggregate_yoy_v4_ytd_and_single_month_operators",
         "method_query": {
             "source": "observations (source=gacc)",
             "flow": flow,
@@ -2828,6 +2901,15 @@ def _insert_gacc_aggregate_yoy_finding(
             "partial_window": partial_window,
             "missing_months_current": [d.isoformat() for d in (missing_curr or [])],
             "missing_months_prior": [d.isoformat() for d in (missing_prior or [])],
+            # YTD cumulative — Jan..anchor of current year vs same range
+            # prior year. Null when either side is missing (GACC's Jan-Feb-
+            # combined gap means early-year anchors often lack a comparable
+            # prior-year YTD). Soapbox / Merics "Jan-N exports +X% YoY" register.
+            "ytd_cumulative": ytd_block,
+            # Single-month YoY — anchor month vs same month prior year.
+            # Null when prior month is missing. Soapbox A3 register
+            # ("EU-X trade Feb 2026 -16.2% YoY").
+            "single_month": sm_block,
         },
         "monthly_series": [
             {"period": p.isoformat(), "value_eur": e}
@@ -2855,6 +2937,16 @@ def _insert_gacc_aggregate_yoy_finding(
                 "current_eur": round(current_eur, 2),
                 "prior_eur": round(prior_eur, 2),
                 "partial_window": partial_window,
+                # New v4 operators: include in the value signature so a
+                # finding gets superseded when either side moves on a re-run
+                # (otherwise a YTD shift on stable rolling-12mo would not
+                # trigger an update).
+                "ytd_yoy_pct": (
+                    round(ytd_block["yoy_pct"], 6) if ytd_block else None
+                ),
+                "sm_yoy_pct": (
+                    round(sm_block["yoy_pct"], 6) if sm_block else None
+                ),
             },
             observation_ids=sorted(set(obs_ids)),
             score=score,

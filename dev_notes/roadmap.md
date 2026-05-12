@@ -268,17 +268,25 @@ Soapbox's analytical move.
 would need an HMRC-side world aggregate (HMRC ingest stores
 GB+CN/HK/MO only) — forward work.
 
-### ~~Single-month / 2-month YoY operator~~ DONE 2026-05-11
+### ~~Single-month / 2-month YoY operator~~ DONE 2026-05-11/12
 
 Single-month and 2-month-cumulative YoY are now sub-fields on
 every hs_group_yoy finding (`detail.totals.single_month`,
 `detail.totals.two_month_cumulative`). Method bumped v9 → v10.
 Tier 2 render shows the latest-month figure alongside the 12mo
-rolling. **Remaining work**: aggregate-level single-month YoY
-(EU-CN deficit single month) is still derivable only from raw
-rows — extending `gacc_aggregate_yoy` to carry the same
-sub-fields would unblock A3.1 / A3.2 / A3.3 at native cadence
-as named findings rather than raw-row queries.
+rolling.
+
+**Aggregate-level extension shipped 2026-05-12.** The same
+sub-field pattern landed on `gacc_aggregate_yoy[_import]` —
+method bumped `v3_per_alias_natural_key` →
+`v4_ytd_and_single_month_operators`. Each non-EU aggregate finding
+(ASEAN / RCEP / Belt&Road / Africa / Latin America / world Total)
+now carries `ytd_cumulative` and `single_month` sub-fields
+alongside the existing 12mo rolling. The Tier-2 partner-aggregate
+block surfaces all three operators at once so a journalist quoting
+Soapbox A3-style "Jan-N exports +X%" or A3.1-style single-month
+figures has finding-grade citation rather than raw-row queries.
+First run superseded all 464 existing aggregate findings with v4.
 
 ### Per-reporter hs_group rollup
 

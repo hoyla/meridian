@@ -34,7 +34,12 @@ def _section_state_of_play_aggregates(cur) -> _Section:
                  (detail->'windows'->>'current_end')::date AS current_end,
                  (detail->'totals'->>'yoy_pct')::numeric AS yoy_pct,
                  (detail->'totals'->>'current_12mo_eur')::numeric AS cur_eur,
-                 (detail->'totals'->>'partial_window')::boolean AS partial_window
+                 (detail->'totals'->>'partial_window')::boolean AS partial_window,
+                 (detail->'totals'->'ytd_cumulative'->>'yoy_pct')::numeric AS ytd_yoy_pct,
+                 (detail->'totals'->'ytd_cumulative'->>'current_eur')::numeric AS ytd_curr_eur,
+                 (detail->'totals'->'ytd_cumulative'->>'months_in_ytd')::int AS ytd_months,
+                 (detail->'totals'->'single_month'->>'yoy_pct')::numeric AS sm_yoy_pct,
+                 (detail->'totals'->'single_month'->>'current_eur')::numeric AS sm_curr_eur
             FROM findings
            WHERE subkind LIKE 'gacc_aggregate_yoy%%' AND superseded_at IS NULL
         ORDER BY detail->'aggregate'->>'raw_label', subkind,
@@ -91,9 +96,31 @@ def _section_state_of_play_aggregates(cur) -> _Section:
             yoy_v = float(r["yoy_pct"]) * 100 if r["yoy_pct"] is not None else None
             yoy_str = f"{yoy_v:+.1f}%" if yoy_v is not None else "n/a"
             partial = " — partial window" if r["partial_window"] else ""
+
+            # New v4 operators: YTD cumulative + single-month. Surface
+            # alongside the 12mo rolling so a journalist quoting Soapbox's
+            # YTD register ("Jan-N exports +X%") or A3-style single-month
+            # register ("Feb 2026 -16.2%") picks the right cadence at a
+            # glance. Both can be NULL (early-year anchors lack prior-year
+            # comparator under GACC's Jan-Feb-combined gap).
+            ytd_block = ""
+            if r["ytd_yoy_pct"] is not None and r["ytd_curr_eur"] is not None:
+                ytd_v = float(r["ytd_yoy_pct"]) * 100
+                ytd_block = (
+                    f" YTD ({r['ytd_months']}mo): {ytd_v:+.1f}% "
+                    f"to {_fmt_eur(r['ytd_curr_eur'])}."
+                )
+            sm_block = ""
+            if r["sm_yoy_pct"] is not None and r["sm_curr_eur"] is not None:
+                sm_v = float(r["sm_yoy_pct"]) * 100
+                sm_block = (
+                    f" Latest month: {sm_v:+.1f}% to {_fmt_eur(r['sm_curr_eur'])}."
+                )
+
             lines.append(
-                f"  - **{label}**: {yoy_str} YoY to {_fmt_eur(r['cur_eur'])} "
-                f"(12mo to {r['current_end']}).{partial} {_trace_token(r['id'])}"
+                f"  - **{label}**: 12mo rolling {yoy_str} to "
+                f"{_fmt_eur(r['cur_eur'])} (12mo to {r['current_end']})."
+                f"{ytd_block}{sm_block}{partial} {_trace_token(r['id'])}"
             )
         lines.append("")
 

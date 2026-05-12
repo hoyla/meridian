@@ -894,7 +894,15 @@ def test_gacc_aggregate_yoy_emits_finding_for_asean(empty_op_tables, test_db_url
     assert detail["aggregate"]["raw_label"] == "ASEAN"
     # No multi_partner_sum — this analyser doesn't sum Eurostat partners.
     assert "multi_partner_sum" not in detail["caveat_codes"]
-    assert detail["method"] == "gacc_aggregate_yoy_v3_per_alias_natural_key"
+    assert detail["method"] == "gacc_aggregate_yoy_v4_ytd_and_single_month_operators"
+    # v4: the three YoY operators sit side-by-side in detail.totals.
+    # 12mo rolling is always present (the analyser's primary).
+    # ytd_cumulative and single_month are NULL here because the test
+    # fixture only seeds monthly observations (no period_kind='ytd' rows)
+    # — the analyser's helper finds no prior-year YTD to compare against.
+    # Real-world findings carry them when GACC publishes the YTD rows.
+    assert "ytd_cumulative" in detail["totals"]
+    assert "single_month" in detail["totals"]
 
 
 def test_gacc_aggregate_yoy_distinguishes_aggregates_of_same_kind(
