@@ -98,6 +98,20 @@ against the live DB was checked. No claim contradicts our data.
 Coverage gaps surfaced map cleanly to four roadmap items (see
 [roadmap.md "Proposed work order"](roadmap.md#proposed-work-order-post-2026-05-12-a1-re-test)).
 
+**Stage C step-1 shipped 2026-05-12.** Thirteen new `hs_groups`
+seeded as `seed:soapbox_a1_2026_05_12`: amino acids, adipic acid
+(HS 291712, corrected from the earlier 291713 typo), choline,
+vanillin+ethylvanillin, feed premixes, inorganic acids, aldehyde/
+ketone acids, four rare-earth sub-buckets matching the 2023 EU
+CN8 split (28469040/50/60/70 — element labels per Eurostat 2024
+nomenclature), MPPT solar inverters (CN8 85044084 — limited
+history; skipped until 24mo accumulates), Civil aircraft (HS 8802).
+3,995 new YoY findings + 60 new trajectory findings emitted across
+the three comparison scopes × both flows. The qty-vs-value pattern
+Soapbox highlights is now surfaced as `yoy_pct_kg` alongside
+`yoy_pct` on every per-finding row; the absolute *share* of EU
+imports still needs the partner_share analyser (roadmap step 4).
+
 ### Testable claims
 
 **A1.1 — Aggregate, GACC side.** "China's exports to the EU reached US\$201bn,

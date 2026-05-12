@@ -481,7 +481,69 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
   -- mostly bulk/lump) is a much smaller flow and editorially separate.
   ('Natural graphite (HS 250410)',
    'CN8 250410 — natural graphite in powder or flake form. Under China export-licence control since late 2023 on dual-use grounds; supply concentration and policy direction are recurring Soapbox / Reuters / FT story material. Narrower than chapter-level HS 2504 (which also includes lump and other forms).',
-   ARRAY['250410%'], 'seed:soapbox_validation');
+   ARRAY['250410%'], 'seed:soapbox_validation'),
+  -- Added after the 2026-05-12 A1 re-test
+  -- (dev_notes/soapbox-validation-2026-05-11.md#a1-2026-05-11). Soapbox's
+  -- A1 headline analytical move is the "China share of EU imports by qty
+  -- vs value" pattern across less-visible inputs: amino acids, adipic acid,
+  -- choline, vanillin, ethylvanillin, feed premixes, inorganic acids,
+  -- aldehyde/ketone acids. China-side YoY at HS-group granularity is
+  -- directly testable today; the share metric needs the partner_share
+  -- analyser (roadmap step 4). These groups give us the YoY half on the
+  -- next periodic run.
+  ('Amino acids (HS 2922)',
+   'HS 2922 — oxygen-function amino-compounds. Covers lysine, methionine, threonine and the wider amino-acid family used in animal feed, food and pharma. Soapbox A1 (2026-05-11): China = 88% of EU import quantity, 52% of value. Broad chapter — refine to specific CN8 sub-codes if a story rests on one amino acid.',
+   ARRAY['2922%'], 'seed:soapbox_a1_2026_05_12'),
+  ('Adipic acid (HS 291712)',
+   'HS 291712 — adipic acid (hexanedioic acid), its salts and esters. Key feedstock for nylon-66 fibre and polyurethanes; recurring anti-dumping flashpoint. Soapbox A1 cites it in the "highest China shares" cluster.',
+   ARRAY['291712%'], 'seed:soapbox_a1_2026_05_12'),
+  ('Choline (HS 292310)',
+   'HS 292310 — choline and its salts (incl. choline chloride). Feed additive (animal nutrition) and pharma-adjacent input. Soapbox A1: China share larger in tonnes than in euros — the "bigger in tonnes than euros" pattern.',
+   ARRAY['292310%'], 'seed:soapbox_a1_2026_05_12'),
+  ('Vanillin and ethylvanillin (HS 29124100 + 29124200)',
+   'CN8 29124100 (vanillin) + 29124200 (ethylvanillin). Flavouring and fragrance inputs; pharma-adjacent. Soapbox A1 ethylvanillin: 68% qty / 62% value. Sibling codes carried together so the story matches Soapbox''s grouping.',
+   ARRAY['29124100%', '29124200%'], 'seed:soapbox_a1_2026_05_12'),
+  ('Feed premixes (HS 230990)',
+   'HS 230990 — preparations of a kind used in animal feeding (other than dog or cat food). Soapbox A1: China = 50% of EU import quantity / 37% of value. Lower China share than the chemicals above but still meaningfully volume-skewed.',
+   ARRAY['230990%'], 'seed:soapbox_a1_2026_05_12'),
+  ('Inorganic acids (HS 2811)',
+   'HS 2811 — other inorganic acids and other inorganic oxygen compounds of non-metals (broad chapter; mixes acids, oxides, halides). Soapbox A1 "other inorganic acids": 60% qty / 47% value. Refine to specific CN8 sub-codes if a story rests on a particular acid.',
+   ARRAY['2811%'], 'seed:soapbox_a1_2026_05_12'),
+  ('Aldehyde/ketone acids (HS 2918)',
+   'HS 2918 — carboxylic acids with additional oxygen function (broad chapter; covers aldehyde-acids, ketone-acids and related). Soapbox A1 names this as part of the "bigger in tonnes than euros" feed/fragrance/chemical cluster.',
+   ARRAY['2918%'], 'seed:soapbox_a1_2026_05_12'),
+  -- Rare-earth sub-buckets matching the 2023 EU CN8 revision split of
+  -- HS 284690. Soapbox A1 contrasts a "dark-red bucket" (90% China share,
+  -- bulk volume) with a "blue bucket" containing dysprosium and terbium.
+  -- The blue bucket maps cleanly to CN8 28469060 (compounds of gadolinium,
+  -- terbium or dysprosium). Adding all four post-2023 splits so the
+  -- existing broad "Rare-earth materials" group stops conflating heavy and
+  -- light REE flows. Element labels per Eurostat CN8 2024 nomenclature.
+  ('Lanthanum compounds (CN8 28469040)',
+   'CN8 28469040 — lanthanum compounds (inorganic or organic). Bulk-volume light REE used in fluid-cracking catalysts and battery alloys. The dominant tonnage bucket within the post-2023 CN8 284690 split; ~3,700–4,000 t/yr CN→EU in 2023–2025. Editorial label aligns with Soapbox A1''s "dark-red bucket" framing.',
+   ARRAY['28469040%'], 'seed:soapbox_a1_2026_05_12'),
+  ('Praseodymium/neodymium/samarium compounds (CN8 28469050)',
+   'CN8 28469050 — compounds of praseodymium, neodymium or samarium. Neodymium is the key element in NdFeB permanent magnets (EV motors, wind turbines). Smaller tonnage but high editorial weight given the magnet supply-chain story.',
+   ARRAY['28469050%'], 'seed:soapbox_a1_2026_05_12'),
+  ('Gadolinium/terbium/dysprosium compounds (CN8 28469060)',
+   'CN8 28469060 — compounds of gadolinium, terbium or dysprosium. The "blue bucket" Soapbox A1 highlights: Dy and Tb are added in small quantities to NdFeB magnets to maintain coercivity at high temperatures. Small tonnage but rising value (€3.4M 2023 → €11.3M 2025 CN→EU) — the high-end-magnet performance input.',
+   ARRAY['28469060%'], 'seed:soapbox_a1_2026_05_12'),
+  ('Europium/holmium/erbium/thulium/ytterbium/lutetium/yttrium compounds (CN8 28469070)',
+   'CN8 28469070 — compounds of europium, holmium, erbium, thulium, ytterbium, lutetium or yttrium. The other post-2023 heavy-and-yttrium bucket. Yttrium is widely used (phosphors, ceramics, lasers); the heavier elements are smaller flows but strategically tracked.',
+   ARRAY['28469070%'], 'seed:soapbox_a1_2026_05_12'),
+  -- Tier 2 article-exposed gaps. MPPT inverters: CN8 85044084 was only
+  -- introduced from 1 Jan 2026, so the analyser will skip with
+  -- insufficient_history until ~mid-2027. Adding now so the 24mo window
+  -- catches the code's first finding when ready. Civil aircraft: covers
+  -- the EU-side import story (Comac C919 ramp); the article''s Boeing-
+  -- vs-Airbus claim is China-as-importer which our partner-side ingest
+  -- can''t reach, but the EU-side flow is editorially adjacent.
+  ('MPPT solar inverters (CN8 85044084)',
+   'CN8 85044084 — MPPT solar photovoltaic inverters, separated out by the EU from 1 Jan 2026 from the broader HS 850440 bucket. EU Commission flagged China-sourced inverters as critical-infrastructure risk (May 2026). Will skip with insufficient_history until enough months accumulate; included now so the next valid 24mo window picks it up automatically.',
+   ARRAY['85044084%'], 'seed:soapbox_a1_2026_05_12'),
+  ('Civil aircraft (HS 8802)',
+   'HS 8802 — powered aircraft (helicopters, aeroplanes etc.). Captures EU-side imports from China (Comac C919 ramp) and exports to China (Airbus / completion-and-delivery via Tianjin). The article''s "Boeing back in China''s import data" framing concerns China-as-importer which our ingest can''t reach directly; this group covers the EU-side flow.',
+   ARRAY['8802%'], 'seed:soapbox_a1_2026_05_12');
 
 -- Caveats journalists should weigh when reading cross-source findings.
 INSERT INTO caveats (code, summary, detail, applies_to) VALUES

@@ -218,13 +218,22 @@ prompted each addition:
   Pattern: when a Soapbox piece quotes a precise 8-digit code or a
   sub-bracket of an existing group, add the narrower group as a
   sibling so the finding can match the cited figure directly.
-  *Pending (2026-05-12 A1 re-test, roadmap Tier 1):* amino acids
-  (HS 2922), adipic acid (HS 291713), choline (HS 292310), vanillin
-  (HS 29124100 + 29124200), feed premixes (HS 230990), inorganic
-  acids (HS 2811), aldehyde/ketone acids (HS 2918), heavy/light
-  rare-earth sub-buckets (CN8 28469040 / 28469060 / 28469070), MPPT
-  inverters (CN8 85044084), crude oil (HS 2709), civil aircraft
-  (HS 8802), Central Asia `country_aliases` row.
+- `seed:soapbox_a1_2026_05_12` — added after the 2026-05-12 re-test
+  of Soapbox A1 ("China's export surge puts EU trade defence in the
+  spotlight"). Thirteen groups: Amino acids (HS 2922), Adipic acid
+  (HS 291712 — *not* 291713, which is sebacic/azelaic), Choline
+  (HS 292310), Vanillin and ethylvanillin (HS 29124100 + 29124200),
+  Feed premixes (HS 230990), Inorganic acids (HS 2811), Aldehyde/
+  ketone acids (HS 2918), and four rare-earth sub-buckets matching
+  the 2023 EU CN8 split of HS 284690 (Lanthanum 28469040, Pr/Nd/Sm
+  28469050, Gd/Tb/Dy 28469060 — Soapbox's "blue bucket" — and
+  Eu/Ho/Er/Tm/Yb/Lu/Y 28469070); plus MPPT solar inverters (CN8
+  85044084, limited history until ~mid-2027) and Civil aircraft
+  (HS 8802). Crude oil (HS 2709) and a Central Asia `country_aliases`
+  row were considered but dropped — both need ingest-scope expansion
+  to emit anything (China is not a meaningful crude exporter to the
+  EU, and GACC section 4 doesn't break out Central Asian states
+  individually).
 
 When a new article prompts a new group, follow this convention: add
 the row with a `seed:<short_descriptor>` `created_by` value, and

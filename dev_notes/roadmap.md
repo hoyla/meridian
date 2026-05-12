@@ -18,12 +18,19 @@ rework.
 
 Recommended order, cheapest-to-most-impactful-per-hour:
 
-1. **Tier 1 hs_group additions** — chemicals / feed / pharma-adjacent
-   inputs + rare-earth sub-buckets + MPPT inverters / crude oil /
-   aircraft / Central Asia alias. Pure `INSERT INTO hs_groups` rows
-   picked up automatically by `hs_group_yoy` /
-   `hs_group_trajectory` / `gacc_aggregate_yoy`. Zero briefing-pack
-   code change. See "Tier 1 hs_group additions" below.
+1. ~~**Tier 1 hs_group additions**~~ — **DONE 2026-05-12**. Thirteen
+   new `hs_groups` rows shipped (`seed:soapbox_a1_2026_05_12`):
+   seven chemicals/feed/pharma-adjacent groups, four rare-earth
+   sub-buckets matching the 2023 EU CN8 split of HS 284690, plus
+   MPPT solar inverters (CN8 85044084, limited history — will catch
+   when 24mo accumulates) and Civil aircraft (HS 8802). Analysers
+   re-run; 3,995 new YoY findings + 60 new trajectory findings
+   emitted across the three comparison scopes × both flows. Crude
+   oil (HS 2709) and the Central Asia alias dropped from this round
+   — both need ingest-scope expansion to surface anything (China is
+   not a meaningful crude-oil exporter to the EU, and GACC section
+   4 doesn't break out Central Asian states individually). See
+   "Tier 1 hs_group additions" below.
 2. **briefing_pack.py modularisation** — split the 2,001-line file
    into a `briefing_pack/` package. Done *before* the structural
    analyser additions so each new analyser's section lands in its
@@ -82,63 +89,68 @@ self-contained. See
 [`soapbox-validation-2026-05-11.md`](soapbox-validation-2026-05-11.md)
 for the per-claim test that motivates each.
 
-### Tier 1 hs_group additions (proposed step 1 above)
+### Tier 1 hs_group additions — shipped 2026-05-12
 
 Pork offal (HS 0206 swine), Sintered NdFeB magnets (CN8 85051110)
 and Natural graphite (HS 250410) shipped 2026-05-11. The 2026-05-12
-A1 re-test added the following candidates, all with CN-side data
-already in `eurostat_raw_rows` (verified per code, 2025 totals
-shown for sanity):
+A1 re-test added thirteen more, all tagged
+`seed:soapbox_a1_2026_05_12`. Spot-check of latest hs_group_yoy
+findings at current_end=2026-02, scope=eu_27, flow=1 (CN→EU
+imports), `partial_window=false` (numbers from the live DB):
 
 **Chemicals / feed / pharma-adjacent inputs** (the article's "less
-visible inputs" cluster — Soapbox A1 makes the qty-vs-value share
-their headline analytical move):
+visible inputs" cluster):
 
-- **Amino acids (HS 2922)** — 2025 CN→EU value €1.02B / 1,829 rows.
-  Soapbox: 88% qty / 52% value.
-- **Adipic acid (HS 291713)** — 2025 CN→EU €78M / 191 rows.
-- **Choline (HS 292310)** — 2025 CN→EU €10M / 178 rows.
-- **Vanillin + ethylvanillin (HS 29124100 + 29124200)** — 2025 CN→EU
-  €40M + €12M. Soapbox ethylvanillin: 68% qty / 62% value.
-- **Feed premixes (HS 230990)** — 2025 CN→EU €228M / 599 rows.
-  Soapbox: 50% qty / 37% value.
-- **Inorganic acids (HS 2811)** — 2025 CN→EU €167M / 736 rows.
-  Soapbox "other inorganic acids": 60% qty / 47% value.
-- **Aldehyde/ketone acids (HS 2918)** — separate group (Soapbox
-  groups it with the above).
+- **Amino acids (HS 2922)** — id=36. 12mo to 2026-02: €968M,
+  -28.4% YoY value / -22.9% kg.
+- **Adipic acid (HS 291712)** — id=37. €74M, -43.4% / -31.9%.
+  (Roadmap originally proposed 291713 which is sebacic/azelaic;
+  corrected to 291712 during the per-code data verification.)
+- **Choline (HS 292310)** — id=38. €8M, -50.8% / -70.8% (low_base).
+- **Vanillin and ethylvanillin (HS 29124100 + 29124200)** —
+  id=39. €42M, -46.9% / -42.5% (low_base).
+- **Feed premixes (HS 230990)** — id=40. €210M, -36.4% / -30.1%.
+- **Inorganic acids (HS 2811)** — id=41. €171M, +5.0% / +28.3%.
+- **Aldehyde/ketone acids (HS 2918)** — id=42. €663M, +0.4% / +12.1%.
 
-**Rare-earth sub-buckets** (the existing `Rare-earth materials`
-group bulks the pre- and post-2023 CN8 splits together; cn8_revision
-caveat suppresses the seam but the editorial story is in the
-sub-codes):
+**Rare-earth sub-buckets** (post-2023 EU CN8 split of HS 284690;
+element labels per Eurostat 2024 CN8 nomenclature):
 
-- **Light rare-earth compounds (CN8 28469040)** — the "dark red
-  bucket"; 2025 CN→EU 3,740 t / €5.3M. Soapbox: ~90% China share
-  each year 2023-25 (share unverifiable from our data — see step 4).
-- **Heavy rare-earth compounds (CN8 28469060 + 28469070)** —
-  contains Dy/Tb-bearing compounds. 2025 CN→EU 67 t / €11.3M for
-  28469060; 490 t / €13.6M for 28469070 (value rising sharply).
+- **Lanthanum compounds (CN8 28469040)** — id=43. €5M, +5.2% /
+  +7.4% (low_base). Aligns with Soapbox's "dark-red bucket"
+  framing (bulk light-REE volume).
+- **Praseodymium/neodymium/samarium compounds (CN8 28469050)** —
+  id=44. €2M, +25.6% / +12.8% (low_base). Nd is the magnet element.
+- **Gadolinium/terbium/dysprosium compounds (CN8 28469060)** —
+  id=45. €11M, **+149.6% value** / -21.9% kg (low_base). The
+  article's "blue bucket"; price-per-kg surging as Dy/Tb usage in
+  high-end magnets accelerates.
+- **Europium/holmium/erbium/thulium/ytterbium/lutetium/yttrium
+  compounds (CN8 28469070)** — id=46. €16M, +85.0% / +67.5%
+  (low_base). Yttrium dominates by volume; heavier elements small
+  but strategically tracked.
 
-**Tier 2 — additions to fill obvious gaps the article exposed:**
+**Tier 2 article-exposed gaps**:
 
-- **MPPT inverters (CN8 85044084)** — separate code only from 1
-  Jan 2026. Article quotes "more than €220M Jan-Feb 2026"; our
-  CN-side sum is €209.3M (HK adds €23k). Limited history but
-  add now so the next 24mo window catches it.
-- **Crude oil (HS 2709)** — no oil coverage at present. Covers
-  the article's Libya claim and broader China-energy partner
-  picture.
-- **Civil aircraft (HS 8802)** — covers the Boeing/Airbus story.
-  GACC reports section-4 country aggregates so we can answer
-  "China imports more aircraft from US than EU" only at country-
-  aggregate level (which we already have).
+- **MPPT solar inverters (CN8 85044084)** — id=47. **Skipped with
+  insufficient_history** (code separated by the EU only from 1 Jan
+  2026; 24mo window needs ~mid-2027). Included now so the next
+  valid window picks it up automatically.
+- **Civil aircraft (HS 8802)** — id=48. €1.16B, **+57.7%** /
+  +26.7%. Notable mover.
 
-**Central Asia alias** — add `country_aliases` row covering
-KZ+UZ+KG+TJ+TM so `gacc_aggregate_yoy` picks it up. Soapbox A1
-claim "$70bn+, tripled since 2020" becomes directly testable.
+**Dropped from Tier 1**:
 
-Each = one schema row + re-run analysers. Estimated <60 minutes
-total including CN8 sanity-checks per code.
+- **Crude oil (HS 2709)** — CN→EU 2025 was effectively zero
+  (€0.0M / 0.34 t — China is not a meaningful crude exporter to
+  the EU). The article's Libya story is about China-as-importer,
+  which our `partner ∈ {CN, HK, MO}` ingest can't reach. Logged as
+  a data-source-expansion item, not a schema addition.
+- **Central Asia `country_aliases` row** — GACC section 4
+  doesn't break out KZ/UZ/KG/TJ/TM individually (they roll into
+  the existing Belt & Road aggregate). Adding an alias without
+  matching observation rows would emit empty findings. Logged as
+  a data-source-expansion item.
 
 ### EU/bilateral aggregate analyser (`gacc_bilateral_aggregate_yoy`) — proposed step 3 above
 
