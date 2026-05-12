@@ -59,13 +59,13 @@ def _seed_one_finding(conn, subkind: str, group_name: str, detail: dict) -> int:
 
 
 def test_export_produces_xlsx_with_all_tabs(empty_findings, test_db_url, tmp_path):
-    """An empty findings table still produces all 8 tabs — just with no data rows.
+    """An empty findings table still produces all 9 tabs — just with no data rows.
     Tab roster is documented in sheets_export.assemble_sheets()."""
     out = sheets_export.export(out_format="xlsx", out_path=str(tmp_path / "out.xlsx"))
     wb = load_workbook(out)
     expected_tabs = {
         "summary",
-        "hs_yoy_imports", "hs_yoy_exports",
+        "hs_yoy_imports", "hs_yoy_exports", "hs_yoy_reporter_movers",
         "trajectories",
         "mirror_gaps", "mirror_gap_movers",
         "low_base_review",

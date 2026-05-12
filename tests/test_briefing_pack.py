@@ -82,7 +82,8 @@ def _seed_hs_yoy_finding(cur, run_id: int, group_name: str, *,
                         current_eur: float = 1e9,
                         prior_eur: float = 0.7e9,
                         low_base: bool = False,
-                        period: date = date(2026, 2, 1)) -> int:
+                        period: date = date(2026, 2, 1),
+                        per_reporter_breakdown: list[dict] | None = None) -> int:
     cur.execute("SELECT id FROM hs_groups WHERE name = %s", (group_name,))
     hg = cur.fetchone()
     hg_ids = [hg[0]] if hg else []
@@ -108,6 +109,7 @@ def _seed_hs_yoy_finding(cur, run_id: int, group_name: str, *,
             "low_base": low_base,
             "low_base_threshold_eur": 5e7,
         },
+        "per_reporter_breakdown": per_reporter_breakdown or [],
     }
     cur.execute(
         """
@@ -263,6 +265,49 @@ def test_top_n_truncates_movers(empty_findings, test_db_url):
     imports_block = md.split("### EU-27 Imports (CN→reporter)")[1].split("\n### ")[0]
     h4_count = len(re.findall(r"^#### ", imports_block, re.MULTILINE))
     assert h4_count == 3
+
+
+def test_reporter_contributions_block_renders_under_mover(
+    empty_findings, test_db_url,
+):
+    """Phase 6.11: each hs_group_yoy mover renders a per-reporter
+    contributions sub-list when `detail.per_reporter_breakdown` is
+    populated. Top-5 of the breakdown is surfaced inline; zero-delta
+    entries are filtered out so single-reporter UK findings stay quiet."""
+    breakdown = [
+        {
+            "reporter": "DE", "current_eur": 6e8, "prior_eur": 1.2e9,
+            "delta_eur": -6e8, "yoy_pct": -0.5,
+            "current_kg": 6e7, "prior_kg": 1.2e8, "yoy_pct_kg": -0.5,
+            "share_of_group_delta_pct": 2.0,
+        },
+        {
+            "reporter": "FR", "current_eur": 9e8, "prior_eur": 6e8,
+            "delta_eur": 3e8, "yoy_pct": 0.5,
+            "current_kg": 9e7, "prior_kg": 6e7, "yoy_pct_kg": 0.5,
+            "share_of_group_delta_pct": -1.0,
+        },
+    ]
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        _seed_hs_yoy_finding(
+            cur, run, "EV batteries (Li-ion)", yoy_pct=-0.1667,
+            current_eur=1.5e9, prior_eur=1.8e9,
+            per_reporter_breakdown=breakdown,
+        )
+        conn.commit()
+
+    md = briefing_pack.render()
+    # Sub-block heading present
+    assert "**Reporter contributions**" in md
+    # DE entry surfaces its YoY% and share-of-group-delta. Use the prefix
+    # so a future _fmt_eur tweak doesn't break the test.
+    assert "DE: -50.0%" in md
+    assert "+200% of group's Δ" in md
+    # FR also appears with the opposite-sign share.
+    assert "FR: +50.0%" in md
+    assert "-100% of group's Δ" in md
 
 
 def test_permalink_base_changes_trace_token_to_link(

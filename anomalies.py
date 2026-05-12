@@ -1211,54 +1211,121 @@ def _hs_group_top_cn8s(
                 for r in cur.fetchall()]
 
 
-def _hs_group_top_reporters(
-    patterns: list[str], start: date, end: date, flow: int = 1, limit: int = 10,
+def _hs_group_per_reporter_window_totals(
+    patterns: list[str], start: date, end: date, flow: int = 1,
     partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS,
     source: str = "eurostat",
-) -> list[dict]:
-    """Top contributing reporters within a group across [start, end].
-    For source='hmrc' the only reporter is GB, so this returns at most
-    one row but keeps the same shape for downstream consumers."""
+) -> dict[str, tuple[float, float]]:
+    """Sum (value_eur, quantity_kg) per reporter across [start, end] for one
+    hs_group and flow. Returned as {reporter_iso2: (eur, kg)}.
+
+    Phase 6.11 (per-reporter breakdown): the caller in detect_hs_group_yoy
+    invokes this twice per (group, anchor) — once for the current 12mo
+    window, once for the prior. The merged result drives the per-reporter
+    delta + share-of-group-delta surfaced in the finding's detail and the
+    'Reporter contributions' sub-block in the brief.
+
+    For source='hmrc' the only reporter is GB; this returns at most one
+    entry but keeps the same shape so the combined (eu_27_plus_uk) scope
+    can merge dict keys uniformly.
+    """
     like_clause, like_params = _hs_pattern_or_clause(patterns)
     if source == "eurostat":
         sql = f"""
             SELECT reporter,
                    SUM(value_eur) AS total_eur,
-                   SUM(quantity_kg) AS total_kg,
-                   COUNT(*) AS n_raw
+                   SUM(quantity_kg) AS total_kg
               FROM eurostat_raw_rows
              WHERE period >= %s AND period <= %s
                AND flow = %s AND partner = ANY(%s)
                AND {like_clause}
                AND reporter <> ALL(%s)
           GROUP BY reporter
-          ORDER BY SUM(value_eur) DESC NULLS LAST
-             LIMIT %s
             """
-        params = (start, end, flow, list(partners), *like_params, list(EU27_EXCLUDE_REPORTERS), limit)
+        params = (start, end, flow, list(partners), *like_params, list(EU27_EXCLUDE_REPORTERS))
     elif source == "hmrc":
         sql = f"""
             SELECT reporter,
                    SUM(value_eur) AS total_eur,
-                   SUM(net_mass_kg) AS total_kg,
-                   COUNT(*) AS n_raw
+                   SUM(net_mass_kg) AS total_kg
               FROM hmrc_raw_rows
              WHERE period >= %s AND period <= %s
                AND flow = %s AND partner = ANY(%s)
                AND {like_clause}
                AND suppression_index = 0
           GROUP BY reporter
-          ORDER BY SUM(value_eur) DESC NULLS LAST
-             LIMIT %s
             """
-        params = (start, end, flow, list(partners), *like_params, limit)
+        params = (start, end, flow, list(partners), *like_params)
     else:
         raise ValueError(f"unknown source {source!r}")
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(sql, params)
-        return [{"reporter": r[0], "total_eur": float(r[1] or 0),
-                 "total_kg": float(r[2] or 0), "n_raw": int(r[3])}
-                for r in cur.fetchall()]
+        return {
+            r[0]: (float(r[1] or 0), float(r[2] or 0))
+            for r in cur.fetchall()
+        }
+
+
+def _build_per_reporter_breakdown(
+    patterns: list[str], flow: int, partners: tuple[str, ...] | list[str],
+    sources: tuple[str, ...],
+    start_curr: date, end_curr: date, start_prior: date, end_prior: date,
+    group_current_eur: float, group_prior_eur: float,
+    limit: int = 10,
+) -> list[dict]:
+    """Per-reporter current/prior totals + delta + YoY + share-of-group-delta.
+
+    Sorted by abs(delta_eur) desc — the journalist's primary register is
+    "which reporter drove the move", not "which has the biggest absolute
+    flow". A reporter at €60M whose prior was €450M (Germany-shape) ranks
+    above one at €1B flat. Capped at `limit` entries.
+
+    `share_of_group_delta_pct` is delta_reporter / delta_group when the
+    group delta is non-zero. Same sign as the reporter's delta —
+    positive when a reporter contributed to the direction the group
+    moved, negative when it pushed against. NULL when group_delta_eur
+    is 0 (rare; division undefined and the share has no editorial
+    interpretation).
+    """
+    curr_by_reporter: dict[str, tuple[float, float]] = {}
+    prior_by_reporter: dict[str, tuple[float, float]] = {}
+    for src in sources:
+        for r, (eur, kg) in _hs_group_per_reporter_window_totals(
+            patterns, start_curr, end_curr, flow=flow,
+            partners=partners, source=src,
+        ).items():
+            ce, ck = curr_by_reporter.get(r, (0.0, 0.0))
+            curr_by_reporter[r] = (ce + eur, ck + kg)
+        for r, (eur, kg) in _hs_group_per_reporter_window_totals(
+            patterns, start_prior, end_prior, flow=flow,
+            partners=partners, source=src,
+        ).items():
+            pe, pk = prior_by_reporter.get(r, (0.0, 0.0))
+            prior_by_reporter[r] = (pe + eur, pk + kg)
+
+    reporters = set(curr_by_reporter) | set(prior_by_reporter)
+    group_delta = group_current_eur - group_prior_eur
+    out: list[dict] = []
+    for r in reporters:
+        ce, ck = curr_by_reporter.get(r, (0.0, 0.0))
+        pe, pk = prior_by_reporter.get(r, (0.0, 0.0))
+        delta = ce - pe
+        yoy = (delta / abs(pe)) if pe != 0 else None
+        yoy_kg = ((ck - pk) / abs(pk)) if pk != 0 else None
+        share = (delta / group_delta) if group_delta != 0 else None
+        out.append({
+            "reporter": r,
+            "current_eur": ce,
+            "prior_eur": pe,
+            "delta_eur": delta,
+            "yoy_pct": yoy,
+            "current_kg": ck,
+            "prior_kg": pk,
+            "yoy_pct_kg": yoy_kg,
+            "share_of_group_delta_pct": share,
+        })
+    out.sort(key=lambda d: abs(d["delta_eur"]), reverse=True)
+    return out[:limit]
 
 
 def _months_back(period: date, n: int) -> date:
@@ -1455,11 +1522,8 @@ def detect_hs_group_yoy(
                     counts["skipped_below_threshold"] += 1
                     continue
 
-                # For top_cn8s and top_reporters, sum across configured
-                # sources too. Top reporters across scopes: eu_27 yields
-                # EU members; uk yields just GB; combined yields both.
+                # For top_cn8s, sum across configured sources too.
                 top_cn8s_by_code: dict[str, dict] = {}
-                top_reporters_by_code: dict[str, dict] = {}
                 for src in sources:
                     for c in _hs_group_top_cn8s(
                         group.hs_patterns, start_curr, end_curr,
@@ -1472,19 +1536,18 @@ def detect_hs_group_yoy(
                             existing["total_eur"] += c["total_eur"]
                             existing["total_kg"] += c["total_kg"]
                             existing["n_raw"] += c["n_raw"]
-                    for r in _hs_group_top_reporters(
-                        group.hs_patterns, start_curr, end_curr,
-                        flow=flow, partners=partners, source=src,
-                    ):
-                        existing = top_reporters_by_code.get(r["reporter"])
-                        if existing is None:
-                            top_reporters_by_code[r["reporter"]] = dict(r)
-                        else:
-                            existing["total_eur"] += r["total_eur"]
-                            existing["total_kg"] += r["total_kg"]
-                            existing["n_raw"] += r["n_raw"]
                 top_cn8s = sorted(top_cn8s_by_code.values(), key=lambda c: -c["total_eur"])[:10]
-                top_reporters = sorted(top_reporters_by_code.values(), key=lambda r: -r["total_eur"])[:10]
+
+                # Per-reporter breakdown (Phase 6.11): sums each reporter's
+                # current vs prior 12mo windows, ranks by |delta_eur|, attaches
+                # share-of-group-delta. Surfaces "Germany alone accounts for
+                # 66% of the EU-wide drop" story shapes (Soapbox A5.6, A4.5).
+                per_reporter_breakdown = _build_per_reporter_breakdown(
+                    group.hs_patterns, flow, partners, sources,
+                    start_curr, end_curr, start_prior, end_prior,
+                    group_current_eur=current_eur,
+                    group_prior_eur=prior_eur,
+                )
 
                 low_base = (
                     current_eur < low_base_threshold_eur
@@ -1495,7 +1558,7 @@ def detect_hs_group_yoy(
                     start_prior, end_prior,
                     current_eur, prior_eur, yoy_pct_eur,
                     current_kg,  prior_kg,  yoy_pct_kg,
-                    series, top_cn8s, top_reporters, n_by_period,
+                    series, top_cn8s, per_reporter_breakdown, n_by_period,
                     kg_coverage_pct=kg_coverage_pct,
                     flow=flow, low_base=low_base,
                     low_base_threshold_eur=low_base_threshold_eur,
@@ -1548,7 +1611,7 @@ def _insert_hs_group_yoy_finding(
     yoy_pct_kg: float | None,
     series: list[tuple[date, float, float, int, float]],
     top_cn8s: list[dict],
-    top_reporters: list[dict],
+    per_reporter_breakdown: list[dict],
     n_obs_by_period: dict[date, int],
     kg_coverage_pct: float = 1.0,
     flow: int = 1,
@@ -1645,9 +1708,22 @@ def _insert_hs_group_yoy_finding(
         )
         body_lines.append(f"  {c['hs_code']}: €{c['total_eur']:,.0f}, {c['total_kg']:,.0f} kg{unit_str}")
     body_lines.append("")
-    body_lines.append("Top 5 importing EU members in the rolling 12mo window:")
-    for r in top_reporters[:5]:
-        body_lines.append(f"  {r['reporter']}: €{r['total_eur']:,.0f}, {r['total_kg']:,.0f} kg")
+    body_lines.append(
+        "Top 5 reporter contributions to the 12mo YoY (current 12mo vs prior 12mo):"
+    )
+    for r in per_reporter_breakdown[:5]:
+        yoy_str = (
+            f"{r['yoy_pct']*100:+.1f}% YoY" if r["yoy_pct"] is not None
+            else "YoY n/a"
+        )
+        share_str = (
+            f", {r['share_of_group_delta_pct']*100:+.0f}% of group's delta"
+            if r["share_of_group_delta_pct"] is not None else ""
+        )
+        body_lines.append(
+            f"  {r['reporter']}: €{r['current_eur']:,.0f} current "
+            f"vs €{r['prior_eur']:,.0f} prior ({yoy_str}{share_str})"
+        )
     body_lines.append("")
     body_lines.append(
         "Unit prices computed as value/kg from raw rows. Methodological caveats "
@@ -1704,7 +1780,7 @@ def _insert_hs_group_yoy_finding(
 
     sources_used = list(COMPARISON_SCOPE_SOURCES[comparison_scope])
     detail = {
-        "method": "hs_group_yoy_v10_single_month_and_two_month_cumulative",
+        "method": "hs_group_yoy_v11_per_reporter_breakdown",
         "method_query": {
             "sources": sources_used,
             "comparison_scope": comparison_scope,
@@ -1762,7 +1838,12 @@ def _insert_hs_group_yoy_finding(
             if start_prior <= p <= end_curr
         ],
         "top_cn8_codes_in_current_12mo": top_cn8s,
-        "top_reporters_in_current_12mo": top_reporters,
+        # Phase 6.11: per-reporter breakdown with current/prior totals,
+        # delta, YoY, and share-of-group-delta. Surfaces "Germany alone
+        # accounts for 66% of the EU-wide drop" story shapes (Soapbox
+        # A5.6, A4.5). Capped at the top 10 reporters by |delta_eur|;
+        # for the `uk` scope it carries a single GB entry.
+        "per_reporter_breakdown": per_reporter_breakdown,
         "caveat_codes": caveat_codes,
     }
     # Score reflects EUR YoY (the editorial-comparable signal across groups).

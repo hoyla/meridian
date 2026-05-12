@@ -48,15 +48,6 @@ self-contained. See
 [`soapbox-validation-2026-05-11.md`](soapbox-validation-2026-05-11.md)
 for the per-claim test that motivates each.
 
-### Per-reporter hs_group rollup
-
-`hs_group_yoy` aggregates across all EU-27 reporters. Per-reporter
-breakdowns are one query filter away; useful for the
-"Germany-as-bellwether" story shape (e.g. Soapbox A4.5 / A5.6:
-"Germany alone accounts for 66% of the EU-wide drop in car-part
-exports"). Touches `hs_group_yoy` emission logic (method-version
-bump territory) so heavier than the sub-group additions above.
-
 ### Eurostat-side HS-level mirror for "China's exports to EU"
 
 Soapbox routinely quotes GACC-side HS-level figures ("China's

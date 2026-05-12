@@ -107,20 +107,22 @@ def _filter_visible_caveats(codes: list[str] | None) -> list[str]:
 def assemble_sheets() -> list[SheetData]:
     """Build the journalist-facing spreadsheet tabs.
 
-    Tab roster (8):
+    Tab roster (9):
 
     1. summary — wide, one row per HS group, all 3 scopes × 2 flows side
        by side. Best starting place for editorial scanning.
     2. hs_yoy_imports — long, one row per (group, scope), full metric
        set with predictability + fragility annotations.
     3. hs_yoy_exports — same shape, flow=2.
-    4. trajectories — long, one row per (group, scope, flow), shape
+    4. hs_yoy_reporter_movers — long, one row per (group, scope, flow,
+       reporter); contribution + share of group's delta. Phase 6.11.
+    5. trajectories — long, one row per (group, scope, flow), shape
        classification + features.
-    5. mirror_gaps — latest mirror_gap per partner, with per-country
+    6. mirror_gaps — latest mirror_gap per partner, with per-country
        CIF/FOB baseline + excess-over-baseline split.
-    6. mirror_gap_movers — z-score sheet, sorted by |z|.
-    7. low_base_review — findings flagged low_base; pre-quote audit queue.
-    8. predictability_index — per-group YoY predictability (Phase 6.6
+    7. mirror_gap_movers — z-score sheet, sorted by |z|.
+    8. low_base_review — findings flagged low_base; pre-quote audit queue.
+    9. predictability_index — per-group YoY predictability (Phase 6.6
        backtest output) summarised so a journalist can sort/filter on
        which groups give robust headline percentages.
 
@@ -135,6 +137,7 @@ def assemble_sheets() -> list[SheetData]:
     sheets.append(_summary_sheet(predictability))
     sheets.append(_hs_yoy_long_sheet(flow=1, predictability=predictability))
     sheets.append(_hs_yoy_long_sheet(flow=2, predictability=predictability))
+    sheets.append(_hs_yoy_reporter_movers_sheet())
     sheets.append(_trajectories_long_sheet())
     sheets.append(_mirror_gaps_sheet())
     sheets.append(_mirror_gap_movers_sheet())
@@ -338,6 +341,78 @@ def _hs_yoy_long_sheet(
             "narrow. `near_low_base_threshold` = TRUE means the finding "
             "is within 1.5x the low_base threshold; classification is "
             "fragile to small threshold changes."
+        ),
+        headers=headers, rows=rows,
+    )
+
+
+def _hs_yoy_reporter_movers_sheet() -> SheetData:
+    """Long format: one row per (group, scope, flow, reporter, period).
+
+    Phase 6.11. Drawn from `detail.per_reporter_breakdown` on each
+    `hs_group_yoy*` finding. The brief surfaces the top 5 reporters per
+    mover; this tab surfaces the top 10 across every group / scope / flow,
+    making it the right place for "which member state moved the needle on
+    group X" filter-and-sort queries (Soapbox A5.6 / A4.5: "Germany alone
+    accounts for 66% of the EU-wide drop").
+
+    Each row carries the originating finding_id so the spreadsheet pairs
+    one-to-many with the `hs_yoy_imports` / `hs_yoy_exports` tabs."""
+    raw: list[tuple[str, int, dict]] = []
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        for scope in SCOPES:
+            for flow in (1, 2):
+                sk = _yoy_subkind(scope, flow)
+                cur.execute(
+                    """
+                    SELECT DISTINCT ON (detail->'group'->>'name')
+                        id,
+                        detail->'group'->>'name' AS group_name,
+                        (detail->'windows'->>'current_end')::date AS period,
+                        detail->'per_reporter_breakdown' AS breakdown
+                      FROM findings
+                     WHERE subkind = %s AND superseded_at IS NULL
+                  ORDER BY detail->'group'->>'name', (detail->'windows'->>'current_end')::date DESC, id DESC
+                    """,
+                    (sk,),
+                )
+                for r in cur.fetchall():
+                    raw.append((scope, flow, dict(r)))
+
+    headers = [
+        "finding_id", "link", "group", "scope", "flow", "period",
+        "reporter", "rank_by_abs_delta",
+        "current_12mo_eur", "prior_12mo_eur", "delta_eur",
+        "yoy_pct", "yoy_pct_kg", "share_of_group_delta_pct",
+        "current_12mo_kg", "prior_12mo_kg",
+    ]
+    rows: list[list[Any]] = []
+    for scope, flow, r in raw:
+        breakdown = r["breakdown"] or []
+        period_str = r["period"].isoformat() if r["period"] else None
+        for rank, pr in enumerate(breakdown, start=1):
+            rows.append([
+                r["id"], _link_cell(r["id"]), r["group_name"], scope,
+                "import" if flow == 1 else "export", period_str,
+                pr.get("reporter"), rank,
+                _to_float(pr.get("current_eur")),
+                _to_float(pr.get("prior_eur")),
+                _to_float(pr.get("delta_eur")),
+                _to_float(pr.get("yoy_pct")),
+                _to_float(pr.get("yoy_pct_kg")),
+                _to_float(pr.get("share_of_group_delta_pct")),
+                _to_float(pr.get("current_kg")),
+                _to_float(pr.get("prior_kg")),
+            ])
+    return SheetData(
+        name="hs_yoy_reporter_movers",
+        description=(
+            "Per-reporter contributions to each HS group's 12mo YoY. "
+            "One row per (group, scope, flow, reporter); up to 10 reporters "
+            "per finding, ranked by absolute EUR delta. `share_of_group_delta_pct` "
+            "is the reporter's contribution to the group's overall delta — "
+            "positive = pushed in the group's direction, negative = pushed "
+            "against. Filter `scope` / `flow` to narrow."
         ),
         headers=headers, rows=rows,
     )

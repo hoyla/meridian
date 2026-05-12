@@ -65,7 +65,8 @@ def _section_hs_yoy_movers(
                  (detail->'totals'->>'low_base')::boolean AS low_base,
                  (detail->'totals'->>'low_base_threshold_eur')::numeric AS low_base_threshold,
                  detail->'method_query'->'hs_patterns' AS hs_patterns,
-                 detail->'method_query'->'partners' AS partners_used
+                 detail->'method_query'->'partners' AS partners_used,
+                 detail->'per_reporter_breakdown' AS per_reporter_breakdown
             FROM findings
            WHERE subkind = %s AND superseded_at IS NULL
         ORDER BY detail->'group'->>'name', (detail->'windows'->>'current_end')::date DESC, id DESC
@@ -134,6 +135,35 @@ def _section_hs_yoy_movers(
                 f"- **Unit price (€/kg)**: {_fmt_pct(r['unit_price_pct'])}"
                 + (f" — *{decomp}*" if decomp else "")
             )
+        # Phase 6.11: reporter contributions. Surfaces which EU member states
+        # drove the group's headline YoY — answers Soapbox-style "Germany
+        # alone accounts for 66% of the drop" framing. Cap at 5 in the
+        # brief; the full top-10 is in detail.per_reporter_breakdown and
+        # the spreadsheet's hs_yoy_reporter_movers tab.
+        per_rep = r.get("per_reporter_breakdown") or []
+        # Filter to entries that actually moved the needle: skip pure
+        # zero deltas and trivially-tiny ones so the brief stays readable
+        # for UK-scope findings (where the only reporter is GB).
+        per_rep = [pr for pr in per_rep if pr.get("delta_eur") not in (None, 0)]
+        if per_rep:
+            lines.append("- **Reporter contributions**:")
+            for pr in per_rep[:5]:
+                rep = pr["reporter"]
+                yoy = pr.get("yoy_pct")
+                yoy_str = (
+                    f"{float(yoy)*100:+.1f}%" if yoy is not None else "n/a"
+                )
+                share = pr.get("share_of_group_delta_pct")
+                share_str = (
+                    f", {float(share)*100:+.0f}% of group's Δ"
+                    if share is not None else ""
+                )
+                delta = float(pr.get("delta_eur") or 0)
+                lines.append(
+                    f"  - {rep}: {yoy_str} ({_fmt_eur(pr['prior_eur'])} → "
+                    f"{_fmt_eur(pr['current_eur'])}, Δ {_fmt_eur(delta)}"
+                    f"{share_str})"
+                )
         if r['low_base']:
             lines.append(
                 "- ⚠️ **Low-base flag**: prior or current 12mo total below the €50M "

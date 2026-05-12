@@ -28,12 +28,13 @@ def _seed_eurostat_imports(
     conn, hs_code: str, value_per_period: list[tuple[date, float]],
     kg_per_period: list[float] | None = None,
     flow: int = 1,
+    reporter: str = "DE",
 ) -> None:
     """For each (period, value), insert a Eurostat release + a single raw row +
-    a matching aggregated observation, representing DE → CN trade at the
-    given hs_code. flow=1 is import (CN→DE), flow=2 is export (DE→CN). The
-    analyser queries eurostat_raw_rows for value/kg totals, so the raw row
-    carries the kg figure.
+    a matching aggregated observation, representing <reporter> ↔ CN trade at
+    the given hs_code. flow=1 is import (CN→reporter), flow=2 is export
+    (reporter→CN). The analyser queries eurostat_raw_rows for value/kg
+    totals, so the raw row carries the kg figure.
 
     `kg_per_period`: parallel list of kg values; defaults to value/10 (i.e. an
     arbitrary €10/kg unit price) when not specified, so existing tests that
@@ -59,18 +60,18 @@ def _seed_eurostat_imports(
             INSERT INTO eurostat_raw_rows (
                 scrape_run_id, period, reporter, partner, product_nc, flow,
                 value_eur, value_nac, quantity_kg, quantity_suppl_unit
-            ) VALUES (%s, %s, 'DE', 'CN', %s, %s, %s, %s, %s, 0)
+            ) VALUES (%s, %s, %s, 'CN', %s, %s, %s, %s, %s, 0)
             """,
-            (run, period, hs_code, flow, value, value, kg),
+            (run, period, reporter, hs_code, flow, value, value, kg),
         )
         cur.execute(
             """
             INSERT INTO observations (release_id, scrape_run_id, period_kind, flow,
                                       reporter_country, partner_country, hs_code,
                                       value_amount, value_currency, source_row)
-            VALUES (%s, %s, 'monthly', %s, 'DE', 'CN', %s, %s, 'EUR', '{}')
+            VALUES (%s, %s, 'monthly', %s, %s, 'CN', %s, %s, 'EUR', '{}')
             """,
-            (rel, run, flow_label, hs_code, value),
+            (rel, run, flow_label, reporter, hs_code, value),
         )
     conn.commit()
 
@@ -204,10 +205,10 @@ def test_yoy_excludes_gb_reporter_at_all_times(empty_op, test_db_url):
     # and is asserted by the DE-only sums above. Just verify the method
     # tag is present and recognisable as an hs_group_yoy method.
     assert detail["method"].startswith("hs_group_yoy_v")
-    # Top reporters list should not contain GB either.
-    top_reporters = [r["reporter"] for r in detail["top_reporters_in_current_12mo"]]
-    assert "GB" not in top_reporters
-    assert "DE" in top_reporters
+    # Per-reporter breakdown should not contain GB either.
+    reporters = [r["reporter"] for r in detail["per_reporter_breakdown"]]
+    assert "GB" not in reporters
+    assert "DE" in reporters
 
 
 def test_yoy_uk_scope_uses_hmrc_rows_and_distinct_subkind(empty_op, test_db_url):
@@ -391,10 +392,90 @@ def test_yoy_records_per_month_series_and_top_reporters(empty_op, test_db_url):
     assert series[0]["quantity_kg"] > 0
     assert series[0]["unit_price_eur_per_kg"] is not None
 
-    # Top reporter is DE in our seed
-    top = detail["top_reporters_in_current_12mo"]
+    # Top reporter is DE in our seed; new (Phase 6.11) breakdown carries
+    # current/prior/delta/YoY rather than just current 12mo totals.
+    top = detail["per_reporter_breakdown"]
     assert top[0]["reporter"] == "DE"
-    assert top[0]["total_kg"] > 0
+    assert top[0]["current_eur"] > 0
+    assert top[0]["current_kg"] > 0
+    assert top[0]["yoy_pct"] is not None
+    # Solo-reporter group: this single reporter accounts for 100% of the
+    # group's delta. (Sign depends on direction; for the seed +€100 → €200
+    # the share is +1.0.)
+    assert top[0]["share_of_group_delta_pct"] is not None
+    assert abs(top[0]["share_of_group_delta_pct"] - 1.0) < 1e-9
+
+
+def test_yoy_per_reporter_breakdown_attributes_group_delta(empty_op, test_db_url):
+    """Phase 6.11: per-reporter breakdown surfaces the Soapbox "Germany alone
+    accounts for X% of the EU-wide drop" story shape.
+
+    Seed two reporters in the same group, one driving the headline move
+    and one with the opposite sign:
+      DE: prior 100/mo, current 50/mo  → -50% YoY, delta -€600
+      FR: prior 50/mo, current 75/mo   → +50% YoY, delta +€300
+      Group total: prior €1,800, current €1,500. Group delta = -€300.
+      DE share_of_group_delta = -600/-300 = +2.0 (drove the drop)
+      FR share_of_group_delta = +300/-300 = -1.0 (pushed against)
+    """
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_eurostat_imports(
+            conn, "85076010",
+            _make_24_months(date(2024, 1, 1), [100.0] * 12 + [50.0] * 12),
+            reporter="DE",
+        )
+        _seed_eurostat_imports(
+            conn, "85076010",
+            _make_24_months(date(2024, 1, 1), [50.0] * 12 + [75.0] * 12),
+            reporter="FR",
+        )
+
+    anomalies.detect_hs_group_yoy(
+        group_names=["EV batteries (Li-ion)"], yoy_threshold_pct=0.0,
+    )
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT detail FROM findings WHERE subkind='hs_group_yoy' "
+            "  AND (detail->'totals'->>'partial_window')::boolean = false "
+            "ORDER BY (detail->'windows'->>'current_end')::date DESC LIMIT 1"
+        )
+        detail = cur.fetchone()[0]
+
+    assert detail["method"] == "hs_group_yoy_v11_per_reporter_breakdown"
+    # Group-level numbers: current 1,500 vs prior 1,800; delta -300; yoy ≈ -16.67%
+    assert detail["totals"]["current_12mo_eur"] == 1500.0
+    assert detail["totals"]["prior_12mo_eur"] == 1800.0
+    assert abs(detail["totals"]["yoy_pct"] - (-1/6)) < 1e-9
+
+    breakdown = detail["per_reporter_breakdown"]
+    by_rep = {pr["reporter"]: pr for pr in breakdown}
+    assert set(by_rep) == {"DE", "FR"}
+
+    de = by_rep["DE"]
+    assert de["current_eur"] == 600.0
+    assert de["prior_eur"] == 1200.0
+    assert de["delta_eur"] == -600.0
+    assert abs(de["yoy_pct"] - (-0.5)) < 1e-9
+    # DE drove the drop: its delta is twice the group's delta in absolute
+    # value. share = -600 / -300 = +2.0 (same sign as group delta).
+    assert abs(de["share_of_group_delta_pct"] - 2.0) < 1e-9
+
+    fr = by_rep["FR"]
+    assert fr["current_eur"] == 900.0
+    assert fr["prior_eur"] == 600.0
+    assert fr["delta_eur"] == 300.0
+    assert abs(fr["yoy_pct"] - 0.5) < 1e-9
+    # FR pushed against the group move — opposite-sign share.
+    assert abs(fr["share_of_group_delta_pct"] - (-1.0)) < 1e-9
+
+    # Ranking is by abs(delta_eur): DE (|−600|) before FR (|+300|).
+    assert breakdown[0]["reporter"] == "DE"
+    assert breakdown[1]["reporter"] == "FR"
+
+    # Reporter deltas sum to the group delta (cross-check invariant).
+    summed = sum(pr["delta_eur"] for pr in breakdown)
+    assert abs(summed - (-300.0)) < 1e-9
 
 
 def test_yoy_export_flow_isolated_from_import(empty_op, test_db_url):

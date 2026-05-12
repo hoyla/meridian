@@ -10,6 +10,94 @@ to understand how the project got here.
 
 ---
 
+## 2026-05-12 (later) — per-reporter hs_group breakdown (Phase 6.11)
+
+`hs_group_yoy*` findings now carry a top-10 per-reporter breakdown
+ranked by absolute EUR delta, with current/prior/delta/YoY plus
+`share_of_group_delta_pct` (the reporter's contribution to the
+group's overall move, in percentage-point form). Closes the
+Soapbox A4.5 / A5.6 gaps surfaced by the 2026-05-11 validation
+pass:
+
+- **A5.6**: "Germany car-parts -11.1% / to CN -20.1%; Germany alone
+  accounts for ~66% of EU-wide drop." `share_of_group_delta_pct`
+  surfaces the 66% directly.
+- **A4.5**: "Germany dragged Jan 2026 export drop, offset by FR/IT/PL."
+  The ranked breakdown shows DE pushing the group direction at a
+  large share while FR/IT/PL push back at smaller opposite-sign shares.
+
+### Shape
+
+- New analyser helper `_hs_group_per_reporter_window_totals(patterns,
+  start, end, flow, partners, source)` sums `(value_eur, quantity_kg)`
+  per reporter for one window; the existing `_hs_group_top_reporters`
+  is dropped (the new helper, called twice per anchor, is a strict
+  information superset).
+- New helper `_build_per_reporter_breakdown(...)` merges current and
+  prior window dicts, computes per-reporter `delta_eur`, `yoy_pct`,
+  `yoy_pct_kg`, and `share_of_group_delta_pct`, sorts by
+  `abs(delta_eur)`, caps at 10.
+- In the finding `detail`, `top_reporters_in_current_12mo` is replaced
+  with `per_reporter_breakdown`. The shape is a strict superset; no
+  downstream consumer was reading the old field (grepped briefing_pack,
+  sheets_export, llm_framing, tests — only the analyser test asserted
+  on it).
+- Method version: `hs_group_yoy_v10_single_month_and_two_month_cumulative`
+  → `hs_group_yoy_v11_per_reporter_breakdown`. Supersede chain
+  propagates the bump across all 14,800-ish active findings on the
+  next periodic-run.
+
+### Brief render
+
+`briefing_pack/sections/hs_yoy_movers.py` queries the new field and
+renders a `**Reporter contributions**` sub-bullet under each Tier-3
+mover, top 5 reporters per group. Zero-delta entries filtered out
+so single-reporter `_uk*` scopes stay quiet. Share is rendered as
+`+200% of group's Δ` (DE drove twice the group's drop) or
+`-100% of group's Δ` (FR pushed back at the size of the group's
+own move). The deliberate "Δ" + percentage rendering is the same
+register Soapbox uses.
+
+### Spreadsheet
+
+New 9th tab `hs_yoy_reporter_movers` — long-format, one row per
+(group, scope, flow, reporter, period), ranked by `|delta_eur|`.
+Each row carries the originating `finding_id` so the spreadsheet
+pairs one-to-many with `hs_yoy_imports` / `hs_yoy_exports`. Tab
+roster docstring in `sheets_export.assemble_sheets` updated.
+
+### Tests
+
+- `tests/test_hs_groups.py::test_yoy_per_reporter_breakdown_attributes_group_delta`
+  — multi-reporter seed (DE drives the drop, FR pushes against),
+  asserts per-reporter delta / YoY / share + the cross-check
+  invariant that reporter deltas sum to the group delta.
+- `tests/test_briefing_pack.py::test_reporter_contributions_block_renders_under_mover`
+  — seeds a breakdown into a finding's detail, asserts the
+  "Reporter contributions" sub-block + DE/FR YoY% + share strings
+  render.
+- `tests/test_hs_groups.py::test_yoy_records_per_month_series_and_top_reporters`
+  — existing test updated to assert on the new `per_reporter_breakdown`
+  shape (current_eur / prior_eur / yoy_pct /
+  share_of_group_delta_pct).
+- `tests/test_sheets_export.py::test_export_produces_xlsx_with_all_tabs`
+  — expected tab set bumped to 9.
+- Test suite at this commit: 204 passing (+2 vs the 2026-05-12
+  morning state).
+
+### Editorial discipline
+
+Per-reporter sums are queryable from raw rows today; the change is
+**surfacing** the per-reporter contribution as a named finding-grade
+artefact so a journalist can quote "Germany alone explains 66% of
+the drop" with a citable finding ID rather than ad-hoc SQL. The
+universal caveats already applied to `hs_group_yoy*` (CIF/FOB,
+classification drift, CN8 revisions, etc.) carry through unchanged
+— they apply equally to per-reporter sums of the same underlying
+rows.
+
+---
+
 ## 2026-05-12 — Soapbox A1 re-test → four-step feature pass
 
 A re-test of Soapbox A1 ("China's export surge puts EU trade defence

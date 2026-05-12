@@ -198,9 +198,9 @@ flow + scope:
 
 What's in `detail`: window dates, current + prior 12mo EUR + KG
 totals, yoy_pct, yoy_pct_kg, unit_price_pct_change, low_base flag,
-kg_coverage_pct, top contributing CN8 codes, top contributing
-reporter countries. Where in the findings document: per-scope "Top movers"
-sections.
+kg_coverage_pct, top contributing CN8 codes, per-reporter
+breakdown (current/prior/delta/YoY + share-of-group-delta). Where
+in the findings document: per-scope "Top movers" sections.
 
 **Phase 6.10 — single-month + 2-month-cumulative YoY**: every
 `hs_group_yoy*` finding under method `v10` also carries two
@@ -215,6 +215,25 @@ so the Tier 2 render shows BOTH the 12mo and the latest-month YoY
 inline. Method version bump propagates supersedes as usual; older
 v9 findings still render — the brief just omits the "Latest month"
 suffix where the field isn't populated.
+
+**Phase 6.11 — per-reporter breakdown**: every `hs_group_yoy*`
+finding under method `v11` also carries `detail.per_reporter_breakdown`
+— a list of up to 10 entries, one per EU member state (or `GB` under
+the `uk` / `_combined` scopes), ranked by `|delta_eur|` between the
+current and prior 12mo windows. Each entry has `reporter`,
+`current_eur`, `prior_eur`, `delta_eur`, `yoy_pct`,
+`current_kg`, `prior_kg`, `yoy_pct_kg`, and
+`share_of_group_delta_pct` — the reporter's delta divided by the
+group's overall delta, in percentage-point form. Same sign as the
+group delta when a reporter pushed in the headline direction;
+opposite sign when it pushed against. NULL when the group's
+overall delta is zero. Editorial register: Soapbox routinely
+attributes EU-wide moves to a single member state ("Germany alone
+accounts for 66% of the EU-wide drop in car-part exports",
+"Germany dragged the January export drop, offset by FR/IT/PL").
+The brief renders the top 5 reporters under each mover's
+"Reporter contributions" sub-bullet; the full top 10 lives in the
+`hs_yoy_reporter_movers` spreadsheet tab.
 
 ### `hs_group_trajectory` (+ same suffixes as yoy)
 
