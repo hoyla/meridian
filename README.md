@@ -1,6 +1,6 @@
-# gacc
+# Meridian
 
-Ingest China–EU/UK trade statistics from both sides of the customs fence — GACC (China), and Eurostat Comext (EU-27) / HMRC OTS (UK post-Brexit) — into a shared schema, cross-compare them to surface mirror-trade gaps and HS-group trends, and present the most journalistically interesting findings as a three-artefact bundle per export folder: 
+**Meridian** ingests China–EU/UK trade statistics from both sides of the customs fence — GACC (China), and Eurostat Comext (EU-27) / HMRC OTS (UK post-Brexit) — into a shared schema, cross-compares them to surface mirror-trade gaps and HS-group trends, and presents the most journalistically interesting findings as a three-artefact bundle per export folder: 
 - a deterministic Markdown findings document (NotebookLM-ready, no LLM in the loop),
 - an 8-tab spreadsheet for data journalists,
 - and a separate companion leads document where an LLM scaffolds investigation starting points per HS group.

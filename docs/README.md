@@ -1,8 +1,8 @@
 # Docs
 
-Reader-facing documentation for the gacc project. For developer-
-internal notes (current roadmap, historical record, dated analysis
-artefacts) see [`../dev_notes/`](../dev_notes/).
+Reader-facing documentation for **Meridian**. For developer-internal
+notes (current roadmap, historical record, dated analysis artefacts)
+see [`../dev_notes/`](../dev_notes/).
 
 - **[architecture.md](architecture.md)** — system overview. How the
   three sources (GACC / Eurostat / HMRC) flow through three layers
