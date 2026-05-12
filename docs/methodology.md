@@ -199,6 +199,20 @@ kg_coverage_pct, top contributing CN8 codes, top contributing
 reporter countries. Where in the findings document: per-scope "Top movers"
 sections.
 
+**Phase 6.10 — single-month + 2-month-cumulative YoY**: every
+`hs_group_yoy*` finding under method `v10` also carries two
+sub-blocks: `detail.totals.single_month` (latest month vs same
+month a year earlier) and `detail.totals.two_month_cumulative`
+(last two months vs corresponding pair a year earlier). Both
+include current/prior eur+kg and yoy_pct/yoy_pct_kg; either
+yoy_pct is None when the underlying period is missing (we don't
+impute). Editorial register: Soapbox / Lisa routinely quote single-
+period operators ("Feb 2026 vs Feb 2025") rather than 12mo rolling,
+so the Tier 2 render shows BOTH the 12mo and the latest-month YoY
+inline. Method version bump propagates supersedes as usual; older
+v9 findings still render — the brief just omits the "Latest month"
+suffix where the field isn't populated.
+
 ### `hs_group_trajectory` (+ same suffixes as yoy)
 
 Reads `hs_group_yoy*` findings as a time series (one yoy% per
@@ -227,9 +241,23 @@ findings, not over another LLM's interpretation of them.
 
 ### `gacc_aggregate_yoy` / `gacc_aggregate_yoy_import`
 
-Year-on-year movement on GACC's own aggregate trade totals (not HS-
-group-level). Less editorially central than the others; surfaced
-mainly for sanity-checking against published GACC headlines.
+Year-on-year movement on GACC's own partner-aggregate trade totals
+(not HS-group-level). Covers ASEAN, RCEP, Belt & Road, Africa, Latin
+America, world Total. The EU bloc is intentionally excluded — for EU
+we have Eurostat's HS-level data which is editorially richer; see
+`anomalies.py:GACC_AGGREGATE_KINDS`. Findings have the aggregate
+label under `detail.aggregate.raw_label` and the bucket under
+`detail.aggregate.kind` (NOT `detail.group.name` like hs_group_yoy).
+
+**Natural-key fix 2026-05-11**: the key is `(alias_id,
+aggregate_kind, current_end_yyyymm)`. Before the alias_id was added,
+Africa and Latin America (both kind=`region`) collided and silently
+overwrote each other on every analyser run — Africa was completely
+invisible in active findings. Method bumped
+`v2_loose_partial_window` → `v3_per_alias_natural_key`.
+
+Where in the findings document: Tier 2 has a dedicated per-aggregate
+state-of-play block alongside the per-HS-group blocks (Phase 6.10).
 
 ## 2. The three comparison scopes
 

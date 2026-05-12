@@ -175,6 +175,32 @@ The four hs-group passes are scope-aware: re-run them with
 `--comparison-scope eu_27 / uk / eu_27_plus_uk` to fill the findings
 document's three per-scope sections.
 
+### Periodic-run orchestrator (Phase 6.9)
+
+```bash
+scrape.py --periodic-run [--force] [--skip-llm] [--export-dir PATH]
+```
+
+Deployment-agnostic Layer-1 pipeline. Chains the ingest+analyse+render
+steps with idempotency: if the latest Eurostat `releases.period` in
+the DB is no fresher than what the last `trigger='periodic_run'` row
+in `brief_runs` already published, exits cleanly as a no-op. Otherwise
+runs every analyser kind across all scope/flow combos (idempotent
+per-row via the supersede chain), optionally runs `llm-framing`
+(`--skip-llm` to omit), and writes the bundled findings export. Prints
+the new `findings.md` path to stdout (empty string on no-op) so the
+calling wrapper (Routine, GHA cron, etc.) can branch on it.
+
+The orchestrator deliberately does NOT fetch new Eurostat / HMRC
+periods — fetch is the scheduler layer's responsibility. Keeping
+network and analyser as separate concerns means a network failure
+during fetch doesn't leave the pipeline in flight.
+
+Layer 2 (scheduler) is currently a Claude Code Routine
+(`gacc-daily-periodic-run`, cron `0 9 * * *`). Layer 3 (delivery to
+the journalist) is currently manual. See
+`dev_notes/periodic-runs-design-2026-05-11.md`.
+
 ### Export
 
 `briefing_pack.export()` writes a three-artefact bundle per call,
@@ -204,7 +230,28 @@ covers.
 Each export records a row in `brief_runs` so the next export can
 compute its "Changes since previous brief" section. The leads file
 isn't versioned in `brief_runs` (it doesn't need a diff yet — add
-one if a journalist asks for "what leads changed?").
+one if a journalist asks for "what leads changed?"). `brief_runs`
+also stamps the Eurostat `data_period` the export reflects, plus a
+`trigger` column distinguishing `'periodic_run'` (canonical
+subscriber-facing cycle) from `'manual'` (ad-hoc / test / preview).
+The `--no-record` flag (or `record=False` kwarg) produces an
+"unsequenced" export that doesn't insert a row — useful for test or
+preview renders that shouldn't pollute the cycle baseline.
+
+The findings document is structured in **three explicit tiers**
+separated by `---` and named in their `## Tier N — ...` headings:
+
+- **Tier 1 — What's new this cycle**: the diff against the previous
+  `trigger='periodic_run'` row.
+- **Tier 2 — Current state of play**: compact summary, one block
+  per HS group + one per GACC partner aggregate (ASEAN / Africa /
+  Latin America / world Total). Each row shows 12mo rolling YoY AND
+  single-month "Latest month" YoY inline (Phase 6.10).
+- **Tier 3 — Full detail by HS group**: per-finding mover sections.
+
+A reader's-guide section right after the headline names the tiers so
+journalists know where to dive in (regular subscriber: Tier 1; new
+joiner: Tier 2 → Tier 3).
 
 Note: `scope_label` is currently metadata only — the findings document
 and leads still render the full finding set. Scoped *filtering* (only emit
