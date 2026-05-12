@@ -31,10 +31,15 @@ Recommended order, cheapest-to-most-impactful-per-hour:
    not a meaningful crude-oil exporter to the EU, and GACC section
    4 doesn't break out Central Asian states individually). See
    "Tier 1 hs_group additions" below.
-2. **briefing_pack.py modularisation** — split the 2,001-line file
-   into a `briefing_pack/` package. Done *before* the structural
-   analyser additions so each new analyser's section lands in its
-   natural module from day one. See "Refactor backlog" below.
+2. ~~**briefing_pack.py modularisation**~~ — **DONE 2026-05-12**.
+   Split into a `briefing_pack/` package: `_helpers.py` (constants
+   + cross-section utilities), `sections/*.py` (one file per
+   `_section_*` builder), `render.py` (orchestrator), `__init__.py`
+   (re-export shim). Zero behaviour change — test suite passes
+   200/200 identical to pre-refactor. Largest section module is 172
+   lines (`hs_yoy_movers.py`); smallest is 27 (`detail_opener.py`).
+   New sections for steps 3 + 4 below land as new files in
+   `sections/` rather than appends to a 2,000-line monolith.
 3. **`gacc_bilateral_aggregate_yoy` analyser** — emit per-(GACC
    partner, period, period_kind) YoY findings, including the EU
    bloc (currently excluded from `gacc_aggregate_yoy`) and using
@@ -257,48 +262,6 @@ has 648 rows vs 2018 sp=1 has 351. Analyser output is unaffected
 aggregate rollup is 2x inflated. Forward work to dedupe or
 re-ingest 2017 with the v2 parser. Independent of the 000TOTAL
 filter rule resolution from 2026-05-10.
-
-## Refactor backlog
-
-### briefing_pack.py modularisation — proposed step 2 above
-
-[`briefing_pack.py`](../briefing_pack.py) is 2,001 lines: section
-renderers (`_section_*`), DB helpers, formatters, trace-token
-logic, and the `render()` orchestrator all in one file. Adding a
-new section (which the bilateral aggregate analyser and the share
-analyser both need) means appending to the bottom of an
-already-long file.
-
-**Target shape**: split into a `briefing_pack/` package:
-
-- `briefing_pack/__init__.py` — re-exports `render`,
-  `render_leads`, `export`, `is_threshold_fragile`,
-  `_compute_predictability_per_group`, `_ALL_UNIVERSAL_CAVEATS`,
-  `_SCOPE_LABEL`, `_SCOPE_SUBKIND_SUFFIX` (the symbols
-  `sheets_export` and tests currently import).
-- `briefing_pack/_helpers.py` — DB connection, trace tokens,
-  formatters (`_fmt_eur`, `_fmt_pct`, `_fmt_kg`), shared
-  predicates.
-- `briefing_pack/sections/headline.py`, `reader_guide.py`,
-  `diff.py`, `state_of_play.py`, `state_of_play_aggregates.py`,
-  `hs_yoy_movers.py`, `trajectories.py`, `mirror_gaps.py`,
-  `low_base.py`, `llm_narratives.py`, `methodology_footer.py`,
-  `sources_appendix.py`, `about_findings.py` — one section per
-  module.
-- `briefing_pack/render.py` — the orchestrator (current
-  `render()` + `render_leads()` + `export()`).
-
-**Migration plan**: zero behaviour change — the diff is purely
-moves + an `__init__.py` re-export shim so external callers (CLI,
-sheets_export.py, tests, llm_framing.py) don't change. After the
-move, the bilateral-aggregate analyser and the share analyser
-each land as a new file in `sections/` rather than another
-500-line append.
-
-**Doing it now** rather than after the new analysers means: (a)
-each new section lives in its natural module from day one; (b)
-the migration diff stays clean (just moves, no new logic riding
-along); (c) tests written against the new structure stay valid.
 
 ## Methodology depth (pick up if a story warrants it)
 
