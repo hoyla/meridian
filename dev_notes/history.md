@@ -10,6 +10,110 @@ to understand how the project got here.
 
 ---
 
+## 2026-05-12 (post-v11) — orphan hs_group findings supersede + regression guard
+
+The Phase 6.11 v11 re-emit pass made visible a pre-existing pollution
+problem: findings under HS groups that had been deleted or renamed
+during Phase 6.5 (2026-05-10) were still active in the live DB and
+ranked above real stories in any top-movers query — most painfully the
+"Lithium chemicals (carbonate + hydroxide)" findings carrying +2554%
+YoY at 2025 anchors.
+
+### Scope of the stale set
+
+Two failure modes, three groups affected:
+
+- **Deleted**: `Pharmaceutical APIs (broad)` was dropped during
+  Phase 6.5 in favour of three narrower groups (Paracetamol-class
+  amides, Ibuprofen-class monocarboxylic acids, Antibiotics). 526
+  active `hs_group_yoy*` + 5 active `hs_group_trajectory*` findings
+  remained with `hs_group_ids` pointing at a now-deleted row.
+
+- **Renamed in place** (same `hs_groups.id`, different name): two
+  cases.
+  - `Lithium chemicals (carbonate + hydroxide)` → `Lithium hydroxide
+    (battery-grade)` with the pattern set tightened to HS 282520 only.
+    111 yoy + 2 trajectory findings still carrying the old name in
+    `detail.group.name`. Critically, these did NOT collide with the
+    new findings on natural key — the new narrower patterns produce
+    findings for a different set of (anchor) periods, so both streams
+    coexisted as "active" until this cleanup.
+  - `Plastic waste` → `Plastic waste (post-National-Sword residual)`.
+    Yoy findings were already superseded by the v11 pass (same
+    anchor periods produce same natural keys); 5 trajectory findings
+    lingered.
+
+Total: 651 stale findings across 6 yoy subkinds and 6 trajectory
+subkinds.
+
+### Cleanup
+
+Single-shot transactional supersede using a name-equality criterion
+that catches both deletion and rename:
+
+```sql
+UPDATE findings f
+   SET superseded_at = now()
+ WHERE f.superseded_at IS NULL
+   AND (f.subkind LIKE 'hs_group_yoy%' OR f.subkind LIKE 'hs_group_trajectory%')
+   AND array_length(f.hs_group_ids, 1) > 0
+   AND NOT EXISTS (
+       SELECT 1 FROM hs_groups g
+        WHERE g.id = ANY(f.hs_group_ids)
+          AND g.name = f.detail->'group'->>'name'
+   );
+```
+
+No `superseded_by_finding_id` set — these are retirements, not
+revisions; there's no successor.
+
+### Editorial impact
+
+Top-movers query for `hs_group_yoy` at anchors ≥ 2025-09 now reads:
+
+| group | yoy_pct |
+|---|---:|
+| Wind generating sets only | +405% |
+| Civil aircraft (HS 8802) | +213% |
+| Gadolinium/terbium/dysprosium compounds (CN8 28469060) | +208% |
+
+All three are legitimate editorial stories (Tan article narrow wind
+sub-group, Soapbox A1 civil aircraft, Soapbox A1 "blue bucket" heavy
+rare earths). The +2554% Lithium chemicals / +330% Pharma APIs noise
+is gone.
+
+### Regression guard
+
+New live-DB-gated test
+[`tests/test_orphan_findings.py`](../tests/test_orphan_findings.py)
+asserts no active hs_group_yoy* / hs_group_trajectory* finding
+references an `hs_groups` row whose name no longer matches. Skipped
+when `GACC_LIVE_DATABASE_URL` isn't set, same pattern as
+`test_eurostat_scale_reconciliation.py`. The test re-prints the
+cleanup query in its docstring so a future failure walks the next
+developer straight to the fix.
+
+### Forward-work consideration
+
+A more defensive analyser pattern would have `detect_hs_group_yoy`
+sweep for orphans of its own subkind family at the start of each
+run — "any active finding whose hs_group_id is missing from
+hs_groups gets superseded before the new pass begins". Not done in
+this commit because:
+
+1. The natural-key supersede chain already handles the common case
+   where a group's patterns evolve but its identity persists.
+2. The deletion case is rare (Phase 6.5 was a one-off; the project's
+   stable state is "groups grow, don't shrink").
+3. The regression guard catches recurrence at test time — the
+   feedback loop is fast.
+
+If this pattern recurs (more renames or deletions), promote the
+sweep into the analyser. Documented here so future sessions don't
+need to re-derive the trade-off.
+
+---
+
 ## 2026-05-12 (later) — per-reporter hs_group breakdown (Phase 6.11)
 
 `hs_group_yoy*` findings now carry a top-10 per-reporter breakdown
