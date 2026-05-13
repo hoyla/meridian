@@ -619,20 +619,96 @@ def test_universal_caveats_suppressed_inline_in_finding_lines(empty_findings, te
         conn.commit()
 
     leads = briefing_pack.render_leads()
-    # The Investigation leads document's per-finding caveat line shows
-    # surviving caveats only.
-    assert "Caveats from underlying findings:" in leads
-    # Find that line and check it doesn't include the universal codes.
+    # The Investigation leads document's per-finding Provenance bullet
+    # for caveats shows surviving (per-finding-variable) caveats only;
+    # universal caveats are suppressed.
+    assert "Caveats from underlying findings" in leads
     inline_caveat_line = next(
         line for line in leads.splitlines()
-        if line.startswith("*Caveats from underlying findings:")
+        if line.startswith("- *Caveats from underlying findings*:")
     )
     assert "low_kg_coverage" in inline_caveat_line
     assert "cif_fob" not in inline_caveat_line
     assert "currency_timing" not in inline_caveat_line
+    # Caveat codes link to the methodology caveats table.
+    assert "methodology.md#3-caveats-reference" in inline_caveat_line
     # Leads no longer appear in the brief itself.
     md = briefing_pack.render()
-    assert "Caveats from underlying findings:" not in md
+    assert "Caveats from underlying findings" not in md
+
+
+def test_leads_provenance_bullets_and_linkification(empty_findings, test_db_url):
+    """The per-lead Provenance block renders as three labelled bullets
+    (caveats / underlying findings / trace), caveat codes link to the
+    methodology table, and lead-body prose gets first-occurrence
+    glossary links for heavyweight terms like 'mirror gap'."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        cur.execute("SELECT id FROM hs_groups WHERE name = %s", ("EV batteries (Li-ion)",))
+        hg_id = cur.fetchone()[0]
+        detail = {
+            "method": "llm_topline_v2_lead_scaffold",
+            "model": "fake",
+            "group": {"id": hg_id, "name": "EV batteries (Li-ion)",
+                      "hs_patterns": ["8507%"]},
+            "lead_scaffold": {
+                # Body mentions both a glossary term (mirror gap) and a
+                # caveat code (low_base_effect) — both should be linked.
+                # Second sentence repeats "mirror gap" — should NOT be
+                # linked (first occurrence already taken).
+                "anomaly_summary": (
+                    "The mirror gap on EV batteries widened sharply; "
+                    "the low_base_effect caveat applies. A second mirror "
+                    "gap reference here should remain plain."
+                ),
+                "hypotheses": [],
+                "corroboration_steps": [],
+            },
+            "underlying_finding_ids": [101, 102, 103],
+            "caveat_codes": ["low_base_effect", "partial_window"],
+        }
+        cur.execute(
+            """
+            INSERT INTO findings (scrape_run_id, kind, subkind, hs_group_ids,
+                                  natural_key_hash, value_signature, title, body, detail)
+            VALUES (%s, 'llm_topline', 'narrative_hs_group', %s,
+                    'nk-leads-prov', 'sig-leads-prov', 'Lead: test', 'b', %s::jsonb)
+            RETURNING id
+            """,
+            (run, [hg_id], json.dumps(detail)),
+        )
+        lead_id = cur.fetchone()[0]
+        conn.commit()
+
+    leads = briefing_pack.render_leads()
+
+    # Provenance shape: three bullets under a **Provenance:** header.
+    assert "**Provenance:**" in leads
+    assert "- *Caveats from underlying findings*:" in leads
+    assert "- *Underlying findings*: 101, 102, 103" in leads
+    assert f"- *Trace*: `finding/{lead_id}`" in leads
+
+    # Caveat codes in the Provenance block are clickable.
+    caveat_line = next(
+        line for line in leads.splitlines()
+        if line.startswith("- *Caveats from underlying findings*:")
+    )
+    assert "[`low_base_effect`]" in caveat_line
+    assert "[`partial_window`]" in caveat_line
+    assert "methodology.md#3-caveats-reference" in caveat_line
+
+    # Body-level linkification: first occurrence of "mirror gap" linked,
+    # second occurrence plain. low_base_effect in body also linked.
+    anomaly_line = next(
+        line for line in leads.splitlines()
+        if line.startswith("**Anomaly:**")
+    )
+    assert "[mirror gap](" in anomaly_line  # first occurrence linked
+    # Caveat code in body also linked (always, not just first occurrence).
+    assert "[`low_base_effect`]" in anomaly_line
+    # Second "mirror gap" stays plain — count `[mirror gap]` occurrences.
+    assert anomaly_line.count("[mirror gap]") == 1
 
 
 def test_threshold_fragility_annotation_helper():

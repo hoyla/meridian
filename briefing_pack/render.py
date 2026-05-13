@@ -277,13 +277,17 @@ def render_leads(
     )
     lines.append("")
     lines.append(
-        "Each lead carries an `llm_drafted` caveat plus the union of "
-        "caveats on its underlying findings; underlying caveats "
-        "(low_base, partial_window, transshipment_hub, cn8_revision, "
-        "low_kg_coverage, etc.) propagate from the source findings. "
-        "Trace ids point to the lead finding itself; the underlying "
-        "deterministic findings are listed alongside so you can walk the "
-        "chain."
+        "Each lead ends with a **Provenance** block: the per-finding-"
+        "variable caveats that fired on the underlying findings (clickable "
+        "to the methodology table), the underlying finding IDs, and a "
+        "trace token for the lead itself. Within the prose, caveat codes "
+        "link to the methodology caveats reference and jargon terms "
+        "(`mirror gap`, `transshipment`, `CN+HK+MO`, etc.) link to the "
+        "[glossary](https://github.com/hoyla/meridian/blob/main/docs/glossary.md) "
+        "on first occurrence per lead. Family-universal caveats (CIF/FOB, "
+        "CN8 revisions, multi-partner sum, etc.) apply to every finding "
+        "by construction and are described once in `findings.md`'s "
+        "methodology footer rather than repeated here."
     )
     lines.append("")
 
