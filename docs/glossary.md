@@ -316,10 +316,29 @@ See [architecture.md §Append-plus-supersede chain](architecture.md#append-plus-
 ### Tier 1 / 2 / 3
 The three sections of `findings.md`:
 - **Tier 1 — What's new this cycle.** Diff against previous brief.
+  Auto-suppressed on method-bump cycles where ≥95% of supersede
+  pairs are value-identical (renders a one-line "this cycle is
+  plumbing" notice instead of a long churn list).
 - **Tier 2 — Current state of play.** Compact per-HS-group summary.
+  Inline `Trajectory: …` annotations are dropped when shape is
+  `volatile` — absence signals "no useful narrative shape; lean on
+  the headline %".
 - **Tier 3 — Full detail.** Per-finding mover sections.
 
-A regular subscriber reads Tier 1; a new joiner reads Tier 2 → Tier 3.
+The brief opens with [**Top 5 movers this cycle**](#top-movers)
+above Tier 1. A regular subscriber reads Top 5 → Tier 1; a new
+joiner reads Top 5 → Tier 2 → Tier 3.
+
+### Top movers
+The composite-ranked editorial digest at the top of `findings.md`
+and `leads.md`. Filter rules: |yoy_pct| ≥ 10pp, current_12mo_eur
+≥ €100M, not low-base, predictability badge ≠ 🔴, current_end =
+latest anchor across the family (recency filter). Score is
+|yoy_pct| × log10(current_12mo_eur) — rewards "big move on a
+meaningful base" without favouring either dimension alone. Same
+scoring drives the `top_movers_rank` / `top_movers_score`
+columns in `data.xlsx`, so a journalist sorting the spreadsheet
+by score lands on the same picks as the brief's Top 5.
 
 ### Threshold fragility
 A finding whose smaller-of-(current_12mo_eur, prior_12mo_eur)

@@ -11,6 +11,12 @@ re-test (Tier 1 hs_groups, briefing-pack modularisation,
 aggregates) has shipped — see
 [`history.md` § 2026-05-12](history.md#2026-05-12--soapbox-a1-re-test--four-step-feature-pass).
 
+The 2026-05-12/13 polish arc (Phase 6.11 per-reporter breakdown,
+orphan hs_group cleanup, first-export audit fixes, documentation
+pass, leads.md polish, Top-5 movers digest, trajectory-volatile
+suppression, templates pipeline) has also shipped — see
+[`history.md` § 2026-05-12/13](history.md#2026-05-1213--polish-for-first-journalist-handover).
+
 ## Near-term (likely next session)
 
 ### Watch the first 2-3 real cycles + decide delivery vector

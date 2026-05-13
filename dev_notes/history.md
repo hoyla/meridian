@@ -10,6 +10,178 @@ to understand how the project got here.
 
 ---
 
+## 2026-05-12/13 — polish for first journalist handover
+
+A focused arc from "the supersede chain is clean" (post-v11) through
+"ready to send Lisa the first real export pack". One commit per
+discrete improvement; all on `main`, all pushed. Test count grew from
+203 → 217.
+
+### First-export audit + fixes ([`98363dc`](https://github.com/hoyla/meridian/commit/98363dc))
+
+Six small editorial-readability fixes from the 2026-05-12 first-export
+audit pass:
+
+- **Tier 1 method-bump suppression** in `diff.py`: when ≥95% of
+  supersede pairs are value-identical AND no material shifts surfaced,
+  render a one-line "this cycle is a method-version bump, not
+  editorial movement" notice naming the method transitions, instead
+  of dumping a 23,207-line list of new findings.
+- **Predictability badge gate**: 🟢/🟡/🔴 only render when ≥3 (scope,
+  flow) permutations carry T-6 pair data (`PREDICTABILITY_MIN_PAIRS`
+  in `_helpers.py`). Below that the signal is too sparse to support
+  an editorial confidence cue.
+- **LLM prompt fix**: filter universal caveats (`cn8_revision`,
+  `cif_fob`, etc.) out of the typed-facts block in `llm_framing.py`.
+  Rewrite of rule D so the LLM doesn't default to
+  `cn8_reclassification`. Hypothesis-pick distribution rebalanced
+  from 33/99 `cn8_reclassification` to 1/138 — `base_effect` now
+  leads at 28%, grounded in real per-finding `low_base_effect`
+  signal.
+- **Setup hygiene**: `.env.example` updated to `OLLAMA_MODEL=qwen3.6:latest`
+  (was stale `qwen2.5:14b`); README setup notes the `gacc` DB name
+  retained post-rename + the `ollama pull qwen3.6:latest` step.
+- **methodology.md §10 "Known editorial-output limitations"**
+  documenting trajectory-volatile over-firing, LLM catalog skew,
+  predictability sparseness, Tier 1 method-bump suppression,
+  single-month YoY on lumpy categories, and the cross-source caveat.
+- **roadmap.md**: new "Editorial calibration of
+  `low_base_threshold_eur` via shock-validation backtest" section
+  (deferred until a real story rests on the threshold).
+
+### Documentation pass ([`d4a3fe0`](https://github.com/hoyla/meridian/commit/d4a3fe0))
+
+Four shipping changes; zero docs deleted or restructured (the bones
+were sound):
+
+- **New `docs/glossary.md`** — alphabetical, three sections (economic
+  & data terms, sources, system & methodology terms). 42 entries
+  covering mirror trade, CIF/FOB, CN8, EU-27 scopes, the supersede
+  chain, finding IDs, predictability badges, etc. Cross-linked into
+  the other docs on first mention of the most-confusing terms.
+- **TL;DR boxes** at the top of architecture.md, methodology.md, and
+  editorial-sources.md. methodology.md's is audience-keyed.
+- **`docs/README.md` rewritten** from a flat list into a real
+  navigation guide with five reading paths by reader goal.
+- **`/README.md` opens with output** — a real excerpted Tier 2 EV-
+  batteries entry from the post-fix audit export — before
+  stack/setup. Names the three design rules (LLM-free brief and
+  spreadsheet; versioned findings; journalist-editable HS groups).
+
+### leads.md Provenance block + glossary linkification ([`24454ee`](https://github.com/hoyla/meridian/commit/24454ee))
+
+Two readability fixes after the audit read:
+
+- **Provenance block**: per-lead trailing italic text replaced with
+  a labelled `**Provenance:**` block — caveats (clickable to the
+  methodology table), underlying finding IDs, trace token, one
+  bullet each.
+- **Linkification**: caveat codes link to methodology §3 (every
+  occurrence); jargon terms (mirror gap, transshipment, CN+HK+MO,
+  partner share, single-month YoY, 12mo rolling) link to the
+  glossary on first occurrence per lead. Standard journalism-
+  register terms (EU-27, imports, percentages) deliberately not
+  linked. Links resolve to canonical GitHub URLs so leads.md works
+  when shared standalone.
+
+### Top-5 movers editorial digest ([`c4b0bb5`](https://github.com/hoyla/meridian/commit/c4b0bb5) + [`e838f85`](https://github.com/hoyla/meridian/commit/e838f85))
+
+A journalist asked for a "top five" section so they don't have to
+scroll 50 pages of leads.md looking for what's interesting. Sits at
+the top of both findings.md (above Tier 1) and leads.md (above the
+full per-group leads), composite-ranked across the EU-27
+hs_group_yoy* family.
+
+**Scoring rule** in `_compute_top_movers`:
+- |yoy_pct| ≥ 10pp
+- current_12mo_eur ≥ €100M
+- low_base = False
+- predictability badge ≠ 🔴
+- `current_end` = latest anchor across the family (recency filter —
+  caught a stale 2022 MPPT-inverters finding that would otherwise
+  have ranked #1)
+- Score = |yoy_pct| × log10(current_12mo_eur)
+
+**Where it surfaces**:
+- `findings.md`: numbered list above Tier 1, anchor links to Tier 2
+  detail.
+- `leads.md`: same picks intersected with HS groups that have an
+  active `narrative_hs_group` finding (so the count may be less
+  than 5; on the audit-postfix export it's 4 because EV batteries
+  appears as both imports+exports in findings.md's Top 5 but
+  dedups to one lead).
+- `data.xlsx`: new columns. `hs_yoy_imports` / `hs_yoy_exports`
+  carry `top_movers_rank` (1-5 for picks, NULL otherwise) AND
+  `top_movers_score` (composite, computed on every row for long-
+  tail sorting). `summary` tab carries `top_movers_rank_imp` and
+  `top_movers_rank_exp` so the wide view shows at a glance.
+
+The single source of truth (`_compute_top_movers`) drives all three
+surfaces. A journalist sorting the spreadsheet by
+`top_movers_score` desc gets the same ordering as `findings.md`'s
+Top 5.
+
+Companion fix in `e838f85`: new `## Full lead detail by HS group`
+heading above the per-group blocks in `leads.md` — symmetric with
+findings.md's "Tier 3 — Full detail by HS group", visually delimits
+the full body from the Top N digest above it.
+
+### Trajectory volatile suppression ([`3427e30`](https://github.com/hoyla/meridian/commit/3427e30))
+
+The trajectory classifier fires `volatile` on ~68% of HS-group
+series at the current anchor — the underlying data really IS noisy
+at 6mo horizons (Phase 6.6 backtest), but the resulting label
+carries no narrative shape the journalist can lean on. Rendering it
+inline trains the reader to skim past the line.
+
+Fix is rendering-side, not methodology: when a Tier 2 state-of-play
+row's underlying trajectory shape is `volatile`, the inline
+`Trajectory: …` annotation is dropped. Absence signals "no useful
+shape — rely on the headline %, the predictability badge, and the
+absolute figures." Non-volatile shapes (rising / falling / peak-
+and-fall / u-recovery / etc.) still render inline as before.
+
+Scope: Tier 2 ONLY. The Tier 3 trajectory-shape section in
+`findings.md` still surfaces the `Volatile` bucket count for
+completeness; the spreadsheet's `trajectories` tab still carries
+every row (the audit use case wants the full picture even when
+display heuristics suppress it).
+
+Impact on audit-postfix export: 166 of 247 trajectory annotations
+dropped; 81 useful annotations retained.
+
+### Templates pipeline ([`a7b6953`](https://github.com/hoyla/meridian/commit/a7b6953))
+
+Every file dropped into `briefing_pack/templates/` is copied
+verbatim into every export folder by `export()` — filename and all.
+The templates dir's own `README.md` is excluded (it's documentation
+for the dir itself, not template content).
+
+The intended file is `01_Read_Me_First.md` — a per-cycle
+orientation piece. The leading `01_` numeric prefix is a deliberate
+sort-first trick: most file viewers list it above `findings.md`,
+`leads.md`, and `data.xlsx`, so it's the first thing a journalist
+sees when opening the folder.
+
+Workflow: Luke edits the template in place between exports if a
+cycle's framing needs to differ. Commit if persistent, leave
+uncommitted for one-off tweaks.
+
+Implementation: `_copy_export_templates(dest_dir)` in `render.py`
+is idempotent and tolerant — a missing or empty `templates/`
+directory is a no-op. The copy runs after findings.md/leads.md/
+data.xlsx are written.
+
+### Where this leaves us
+
+Test suite: 217 passing (was 203 before the arc started). The
+audit-postfix export at `exports/audit-postfix/` is the regenerated
+substrate for Luke's read-as-Lisa pass before handover. Two audit
+items remain deliberately deferred (read-as-Lisa pass; editorial
+calibration of `low_base_threshold_eur`).
+
+---
+
 ## 2026-05-12 (post-v11) — orphan hs_group findings supersede + regression guard
 
 The Phase 6.11 v11 re-emit pass made visible a pre-existing pollution

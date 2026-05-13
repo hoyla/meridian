@@ -92,7 +92,7 @@ support a `--comparison-scope` flag that picks
                 ┌─────────────┬─────────────┬─────────────────┐
                 ▼             ▼             ▼                 ▼
           findings.md      leads.md     data.xlsx        LLM framing
-          (markdown,       (markdown,   (xlsx, 8 tabs;   (Ollama →
+          (markdown,       (markdown,   (xlsx, 9 tabs;   (Ollama →
            deterministic    LLM-drafted  Google Sheets    structured
            — no LLM in the  leads,       writer stubbed)  JSON, then
            loop;            companion    Same DB          another find-
@@ -223,29 +223,41 @@ the journalist) is currently manual. See
 
 ### Export
 
-`briefing_pack.export()` writes a three-artefact bundle per call,
-into a per-export folder so all three share a single DB snapshot:
+`briefing_pack.export()` writes a four-artefact bundle per call,
+into a per-export folder so all share a single DB snapshot:
 
 ```
 exports/
-  2026-05-10-1747/
-    findings.md     ← deterministic; NotebookLM-ready, no LLM in the loop
-    leads.md     ← LLM lead scaffold (anomaly summary + picked
-                    hypotheses + corroboration steps); cross-
-                    references finding IDs the findings document also surfaces
-    data.xlsx    ← 8-tab spreadsheet for data journalists; LLM-free,
-                    same DB snapshot as findings.md
-  2026-05-10-1830-ev-batteries-li-ion/   ← future scoped export
+  2026-05-13-1745/
+    01_Read_Me_First.md   ← copied verbatim from briefing_pack/templates/;
+                             sorts first in most file viewers (leading 01_).
+                             Custom per-cycle orientation file; the only
+                             artefact a journalist receiving the pack cold
+                             really needs to read first.
+    findings.md           ← deterministic Markdown; NotebookLM-ready, no LLM in the loop.
+                             Top 5 movers above Tier 1/2/3.
+    leads.md              ← LLM lead-scaffold companion. Top N leads at top,
+                             full per-group blocks below. Cross-references the
+                             finding IDs in findings.md.
+    data.xlsx             ← 9-tab spreadsheet, LLM-free. Same DB snapshot.
+  2026-05-13-1830-ev-batteries-li-ion/   ← future scoped export
+    01_Read_Me_First.md
     findings.md
     leads.md
     data.xlsx
 ```
 
-Folder name pattern: `YYYY-MM-DD-HHMM[-slug]/`. The optional slug comes
-from `scope_label` (slugified to kebab-case) when set; full-brief
-exports have no suffix. Each doc surfaces the scope in its header so
-a doc shared standalone still announces what slice of the data it
-covers.
+**Templates pipeline (since 2026-05-13)**: every file dropped into
+`briefing_pack/templates/` (except its own `README.md`) is copied
+verbatim into every export folder, preserving filenames. The intended
+use is a per-cycle orientation piece. Edit the template in place
+between exports if a cycle's framing needs to differ.
+
+Folder name pattern: `YYYY-MM-DD-HHMM[-slug]/`. The optional slug
+comes from `scope_label` (slugified to kebab-case) when set; full-
+brief exports have no suffix. Each doc surfaces the scope in its
+header so a doc shared standalone still announces what slice of the
+data it covers.
 
 Each export records a row in `brief_runs` so the next export can
 compute its "Changes since previous brief" section. The leads file
@@ -258,20 +270,35 @@ The `--no-record` flag (or `record=False` kwarg) produces an
 "unsequenced" export that doesn't insert a row — useful for test or
 preview renders that shouldn't pollute the cycle baseline.
 
-The findings document is structured in **three explicit tiers**
-separated by `---` and named in their `## Tier N — ...` headings:
+The findings document opens with **Top 5 movers this cycle** (the
+composite-ranked editorial digest, since 2026-05-13), then three
+explicit tiers separated by `---` and named in their
+`## Tier N — ...` headings:
 
+- **Top 5 movers this cycle**: composite-ranked
+  (|yoy_pct| × log10(current_12mo_eur)) shortlist filtered to
+  ≥10pp move, ≥€100M current 12mo, not low-base, predictability
+  ≠ 🔴, and `current_end` = latest anchor. Same scoring drives
+  spreadsheet `top_movers_rank` / `top_movers_score` columns and
+  the Top N leads section at the top of `leads.md`.
 - **Tier 1 — What's new this cycle**: the diff against the previous
-  `trigger='periodic_run'` row.
+  `trigger='periodic_run'` row. Auto-suppressed on method-bump
+  cycles (≥95% value-identical supersedes + zero material shifts
+  → one-line "this cycle is plumbing" notice).
 - **Tier 2 — Current state of play**: compact summary, one block
-  per HS group + one per GACC partner aggregate (ASEAN / Africa /
-  Latin America / world Total). Each row shows 12mo rolling YoY AND
-  single-month "Latest month" YoY inline (Phase 6.10).
-- **Tier 3 — Full detail by HS group**: per-finding mover sections.
+  per HS group + one per GACC bilateral partner + one per GACC
+  partner aggregate (ASEAN / Africa / Latin America / world Total).
+  Each row shows 12mo rolling YoY AND single-month "Latest month"
+  YoY inline (Phase 6.10). Trajectory annotations are suppressed
+  inline when shape is `volatile` (since 2026-05-13) — absence
+  signals "no useful narrative shape; rely on the headline %."
+- **Tier 3 — Full detail by HS group**: per-finding mover sections,
+  trajectory shape buckets, mirror gaps, partner share, low-base
+  review.
 
 A reader's-guide section right after the headline names the tiers so
-journalists know where to dive in (regular subscriber: Tier 1; new
-joiner: Tier 2 → Tier 3).
+journalists know where to dive in (regular subscriber: Top 5 →
+Tier 1; new joiner: Top 5 → Tier 2 → Tier 3).
 
 Note: `scope_label` is currently metadata only — the findings document
 and leads still render the full finding set. Scoped *filtering* (only emit
