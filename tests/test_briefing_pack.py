@@ -711,6 +711,142 @@ def test_leads_provenance_bullets_and_linkification(empty_findings, test_db_url)
     assert anomaly_line.count("[mirror gap]") == 1
 
 
+def test_top_movers_filters_and_composite_ranking(empty_findings, test_db_url):
+    """`_compute_top_movers` applies all four filter rules and ranks
+    survivors by |yoy_pct| × log10(current_eur). Seed five candidates
+    crossing each filter and assert the right one(s) survive."""
+    from briefing_pack._helpers import _compute_top_movers
+
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        _seed_eurostat_release(cur, date(2026, 2, 1))
+        # 1. Eligible big mover: +35% on €27B (target rank 1).
+        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)",
+                             yoy_pct=0.35, current_eur=27e9, prior_eur=20e9,
+                             low_base=False)
+        # 2. Eligible smaller-base bigger-move: +40% on €1B (target rank 2).
+        _seed_hs_yoy_finding(cur, run, "Drones and unmanned aircraft",
+                             yoy_pct=0.40, current_eur=1.0e9, prior_eur=0.7e9,
+                             low_base=False)
+        # 3. Excluded: |yoy| < 10pp threshold (+5% on €100B).
+        _seed_hs_yoy_finding(
+            cur, run, "Electrical equipment & machinery (chapters 84-85, broad)",
+            yoy_pct=0.05, current_eur=100e9, prior_eur=95e9, low_base=False,
+        )
+        # 4. Excluded: current < €100M (+30% on €50M).
+        _seed_hs_yoy_finding(cur, run, "Honey",
+                             yoy_pct=0.30, current_eur=50e6, prior_eur=38e6,
+                             low_base=False)
+        # 5. Excluded: low_base = True (+50% on €200M with low_base flag).
+        _seed_hs_yoy_finding(cur, run, "Cotton (raw + woven fabrics)",
+                             yoy_pct=0.50, current_eur=200e6, prior_eur=133e6,
+                             low_base=True)
+        conn.commit()
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor(
+        cursor_factory=psycopg2.extras.DictCursor,
+    ) as cur:
+        # No predictability data seeded → all groups are badge-less,
+        # which is eligible (the filter excludes only 🔴).
+        movers = _compute_top_movers(cur, predictability={})
+
+    names = [m["group_name"] for m in movers]
+    assert "EV batteries (Li-ion)" in names
+    assert "Drones and unmanned aircraft" in names
+    # The three excluded groups must NOT appear.
+    assert "Electrical equipment & machinery (chapters 84-85, broad)" not in names
+    assert "Honey" not in names
+    assert "Cotton (raw + woven fabrics)" not in names
+    # Ranking: EV batteries (0.35 × log10(27e9) ≈ 3.65) beats Drones
+    # (0.40 × log10(1e9) = 3.60). Tight but deterministic.
+    assert names[0] == "EV batteries (Li-ion)"
+    assert names[1] == "Drones and unmanned aircraft"
+
+
+def test_top_movers_excludes_stale_anchors(empty_findings, test_db_url):
+    """Findings whose `current_end` isn't the latest anchor in the
+    hs_group_yoy* family are skipped. Without this filter, a stale 2022
+    finding on a fringe HS code can outrank legitimate 2026 movers.
+    Observed on MPPT solar inverters (CN8 85044084) on the live DB."""
+    from briefing_pack._helpers import _compute_top_movers
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        _seed_eurostat_release(cur, date(2022, 12, 1))
+        _seed_eurostat_release(cur, date(2026, 2, 1))
+        # Stale: large % move on a niche group, 4 years old.
+        _seed_hs_yoy_finding(cur, run, "MPPT solar inverters (CN8 85044084)",
+                             yoy_pct=1.20, current_eur=1.5e9, prior_eur=0.7e9,
+                             low_base=False, period=date(2022, 12, 1))
+        # Current: legitimate mover at the latest anchor.
+        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)",
+                             yoy_pct=0.35, current_eur=27e9, prior_eur=20e9,
+                             low_base=False, period=date(2026, 2, 1))
+        conn.commit()
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor(
+        cursor_factory=psycopg2.extras.DictCursor,
+    ) as cur:
+        movers = _compute_top_movers(cur, predictability={})
+
+    names = [m["group_name"] for m in movers]
+    assert "EV batteries (Li-ion)" in names
+    assert "MPPT solar inverters (CN8 85044084)" not in names
+
+
+def test_top_movers_excludes_red_predictability(empty_findings, test_db_url):
+    """A 🔴 predictability badge excludes the group from top movers even
+    if it would otherwise clear the size/move filters."""
+    from briefing_pack._helpers import _compute_top_movers
+
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        _seed_eurostat_release(cur, date(2026, 2, 1))
+        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)",
+                             yoy_pct=0.35, current_eur=27e9, prior_eur=20e9,
+                             low_base=False)
+        conn.commit()
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor(
+        cursor_factory=psycopg2.extras.DictCursor,
+    ) as cur:
+        # Inject a synthetic 🔴 badge — production code computes this
+        # from T-6 pairs but the filter takes the dict as input.
+        movers = _compute_top_movers(
+            cur, predictability={"EV batteries (Li-ion)": ("🔴", 0.0, 6)},
+        )
+    assert movers == []
+
+
+def test_top_movers_section_renders_above_tier_1(empty_findings, test_db_url):
+    """The Top-N section sits between the reader's guide and Tier 1
+    in the rendered findings.md, and surfaces eligible movers with
+    anchor links."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        _seed_eurostat_release(cur, date(2026, 2, 1))
+        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)",
+                             yoy_pct=0.35, current_eur=27e9, prior_eur=20e9,
+                             low_base=False)
+        conn.commit()
+
+    md = briefing_pack.render()
+    assert "## Top 1 movers this cycle" in md
+    assert "[EV batteries (Li-ion)](#ev-batteries-li-ion)" in md
+    # Order: Top movers comes before Tier 1.
+    assert md.find("## Top 1 movers this cycle") < md.find("## Tier 1")
+
+
+def test_top_movers_section_absent_when_no_candidates(empty_findings, test_db_url):
+    """An empty findings table → no top movers → the section drops out
+    entirely; Tier 1 follows the reader's guide directly."""
+    md = briefing_pack.render()
+    assert "## Top" not in md.split("## Tier 1")[0]
+
+
 def test_threshold_fragility_annotation_helper():
     """Pure-function test: a finding within 1.5x of the threshold (above
     OR below it) gets an annotation; outside that band returns None."""

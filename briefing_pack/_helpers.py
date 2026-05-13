@@ -274,3 +274,129 @@ def _slugify_scope(label: str) -> str:
     s = label.lower().strip()
     s = re.sub(r"[^a-z0-9]+", "-", s)
     return s.strip("-")
+
+
+def _slugify_heading(label: str) -> str:
+    """Approximate GitHub's Markdown heading-anchor slug rule for
+    cross-reference links inside the brief.
+
+    GitHub rules (paraphrased): lowercase, strip punctuation (most
+    symbols → empty), replace spaces with dashes, collapse runs of
+    dashes. Some punctuation (slash, plus, parentheses) leaves
+    double-dashes where the spaces around them collapse together —
+    we mimic this to match observed slugs like
+    `mirror-trade--mirror-gap` and `cif--fob`.
+    """
+    s = label.lower()
+    # Strip punctuation that GitHub drops outright. Keeps letters,
+    # digits, hyphen, and spaces; the space → dash step happens next.
+    s = re.sub(r"[^a-z0-9\s\-]", "", s)
+    # Spaces → dashes. Existing dashes preserved.
+    s = re.sub(r"\s", "-", s)
+    return s.strip("-")
+
+
+# =============================================================================
+# Top-5 movers — composite-ranked editorial digest
+# =============================================================================
+#
+# Scoring constants used by `_compute_top_movers`. The composite rule
+# behind it: surface findings that are likely to be quotable in copy.
+# That means a meaningful move (≥10pp) on a meaningful base (≥€100M
+# current 12mo), filtered against base-effect and predictability
+# concerns. Tuned to land 5–10 candidate rows per cycle on the current
+# DB; if it ever returns 0, the brief just omits the section.
+
+TOP_MOVERS_MIN_YOY_ABS = 0.10           # 10pp absolute move
+TOP_MOVERS_MIN_CURRENT_EUR = 100_000_000  # €100M current 12mo total
+TOP_MOVERS_LIMIT = 5                     # editorial cap
+
+
+def _compute_top_movers(
+    cur, predictability: dict[str, tuple[str, float, int]] | None = None,
+    *, limit: int = TOP_MOVERS_LIMIT,
+) -> list[dict]:
+    """Composite-ranked top movers across the EU-27 hs_group_yoy* family.
+
+    Filters applied in order:
+    1. |yoy_pct| ≥ TOP_MOVERS_MIN_YOY_ABS
+    2. low_base = False
+    3. current_12mo_eur ≥ TOP_MOVERS_MIN_CURRENT_EUR
+    4. predictability badge ≠ 🔴 (groups without enough T-6 data for any
+       badge ARE included — absence of evidence is not evidence of
+       volatility; we just don't have a confidence cue yet)
+
+    Score = |yoy_pct| × log10(current_12mo_eur). Rewards moderate moves
+    on big bases as well as big moves on moderate bases; a 30% move on
+    €27B (EV batteries) and a 40% move on €1B (Drones) both land near
+    score 3.5, which feels editorially right.
+
+    Returns up to `limit` rows as dicts with the headline fields plus
+    `score` (the composite) and `subkind` (the originating subkind so
+    the renderer can label imports vs exports correctly).
+
+    Scope: eu_27 only (`hs_group_yoy` + `hs_group_yoy_export`). UK and
+    combined are deliberately omitted to avoid surfacing the same group
+    three times — UK-specific stories are still visible in Tier 2.
+
+    Recency filter: only findings at the **latest anchor period across
+    the entire family** are considered. A group with findings only at
+    older anchors (e.g. an HS code that became reportable but lacks
+    enough months for the rolling window to reach the current cycle) is
+    silently skipped. Without this filter, stale 2018–2022 anchors on
+    fringe codes could outrank the genuine top movers — observed on
+    MPPT solar inverters (CN8 85044084) which has findings to 2022-12
+    but nothing recent.
+    """
+    import math
+    predictability = predictability or {}
+
+    cur.execute(
+        """
+        SELECT MAX((detail->'windows'->>'current_end')::date)
+          FROM findings
+         WHERE subkind IN ('hs_group_yoy', 'hs_group_yoy_export')
+           AND superseded_at IS NULL
+        """
+    )
+    latest_anchor = cur.fetchone()[0]
+    if latest_anchor is None:
+        return []
+
+    cur.execute(
+        """
+        SELECT id,
+               subkind,
+               detail->'group'->>'name'                          AS group_name,
+               (detail->'totals'->>'yoy_pct')::numeric           AS yoy_pct,
+               (detail->'totals'->>'yoy_pct_kg')::numeric        AS yoy_pct_kg,
+               (detail->'totals'->>'current_12mo_eur')::numeric  AS current_eur,
+               (detail->'totals'->>'prior_12mo_eur')::numeric    AS prior_eur,
+               (detail->'totals'->>'current_12mo_kg')::numeric   AS current_kg,
+               (detail->'totals'->>'low_base')::boolean          AS low_base,
+               (detail->'windows'->>'current_end')::date         AS current_end
+          FROM findings
+         WHERE subkind IN ('hs_group_yoy', 'hs_group_yoy_export')
+           AND superseded_at IS NULL
+           AND (detail->'windows'->>'current_end')::date = %s
+           AND (detail->'totals'->>'low_base')::boolean = false
+           AND (detail->'totals'->>'current_12mo_eur')::numeric >= %s
+           AND abs((detail->'totals'->>'yoy_pct')::numeric) >= %s
+        """,
+        (latest_anchor, TOP_MOVERS_MIN_CURRENT_EUR, TOP_MOVERS_MIN_YOY_ABS),
+    )
+    rows = cur.fetchall()
+
+    scored: list[dict] = []
+    for r in rows:
+        d = dict(r) if not isinstance(r, dict) else dict(r)
+        pred = predictability.get(d["group_name"])
+        if pred is not None and pred[0] == "🔴":
+            continue
+        yoy = abs(float(d["yoy_pct"]))
+        eur = max(float(d["current_eur"]), 1.0)
+        d["score"] = yoy * math.log10(eur)
+        d["predictability"] = pred  # (badge, pct, n) or None
+        scored.append(d)
+    scored.sort(key=lambda x: -x["score"])
+    return scored[:limit]

@@ -22,7 +22,9 @@ from briefing_pack._helpers import (
     DEFAULT_TOP_N,
     _Section,
     _compute_predictability_per_group,
+    _compute_top_movers,
     _conn,
+    _slugify_heading,
     _slugify_scope,
 )
 from briefing_pack.sections.about_findings import _section_about_findings
@@ -30,7 +32,10 @@ from briefing_pack.sections.detail_opener import _section_detail_opener
 from briefing_pack.sections.diff import _section_diff_since_last_brief
 from briefing_pack.sections.headline import _section_headline
 from briefing_pack.sections.hs_yoy_movers import _section_hs_yoy_movers
-from briefing_pack.sections.llm_narratives import _section_llm_narratives
+from briefing_pack.sections.llm_narratives import (
+    _section_llm_narratives,
+    _section_top_leads,
+)
 from briefing_pack.sections.low_base import _section_low_base
 from briefing_pack.sections.methodology_footer import _section_methodology_footer
 from briefing_pack.sections.mirror_gaps import _section_mirror_gaps
@@ -44,6 +49,7 @@ from briefing_pack.sections.state_of_play_aggregates import (
 from briefing_pack.sections.state_of_play_bilaterals import (
     _section_state_of_play_bilaterals,
 )
+from briefing_pack.sections.top_movers import _section_top_movers
 from briefing_pack.sections.trajectories import _section_trajectories
 
 log = logging.getLogger(__name__)
@@ -138,6 +144,17 @@ def render(
         # section. Empty dict on a fresh DB with no T-6 history; the
         # section renderer falls back to no badge in that case.
         predictability = _compute_predictability_per_group(cur)
+
+        # ----- Top-5 movers (editorial digest) -----
+        # Sits above Tier 1 so a journalist opening the brief sees the
+        # composite-ranked shortlist immediately. Empty markdown if no
+        # group passes the filters (≥10pp, ≥€100M, not low-base, badge
+        # ≠ 🔴) — the section drops out of the document entirely in
+        # that case, which is the right behaviour on a fresh DB or any
+        # cycle where every candidate sits in low-base / volatile /
+        # tiny-base territory.
+        top_movers = _compute_top_movers(cur, predictability=predictability)
+        sections.append(_section_top_movers(top_movers))
 
         # ----- Tier 1: what's new this cycle (the diff) -----
         # Excludes narrative_hs_group findings — those live in the companion
@@ -292,6 +309,18 @@ def render_leads(
     lines.append("")
 
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        # Top-5 leads: composite-ranked across hs_group_yoy* (eu_27,
+        # both flows), then intersected with HS groups that have an
+        # active narrative_hs_group finding. Sits above the full per-
+        # group leads body so a journalist opening leads.md sees a
+        # ~5-line digest before the long list.
+        predictability = _compute_predictability_per_group(cur)
+        top_movers = _compute_top_movers(cur, predictability=predictability)
+        top_leads_section = _section_top_leads(cur, top_movers)
+        if top_leads_section.markdown:
+            lines.append(top_leads_section.markdown)
+            lines.append("")
+
         section = _section_llm_narratives(cur)
 
     if not section.markdown:

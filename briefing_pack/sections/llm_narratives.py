@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import re
 
-from briefing_pack._helpers import _ALL_UNIVERSAL_CAVEATS, _Section, _trace_token
+from briefing_pack._helpers import (
+    _ALL_UNIVERSAL_CAVEATS,
+    _Section,
+    _slugify_heading,
+    _trace_token,
+)
 
 
 # Leads are intended to be shared standalone (not relative to a checkout),
@@ -103,6 +108,78 @@ def _linkify_lead_prose(text: str, seen: set[str]) -> str:
     text = _linkify_caveat_codes(text, seen)
     text = _linkify_first_occurrence(text, seen, _GLOSSARY_TERMS)
     return text
+
+
+def _section_top_leads(cur, top_movers: list[dict]) -> _Section:
+    """Top-5 leads at the top of leads.md.
+
+    Pairs the composite-ranked `top_movers` (computed once by
+    `_compute_top_movers` in `_helpers.py`) with each HS group's
+    active `narrative_hs_group` finding. Renders a compact numbered
+    list with anchor links into the full per-group lead bodies
+    below.
+
+    A top mover with no active lead is silently skipped — the
+    section is shorter but never broken. If no movers have leads,
+    returns empty markdown so the caller drops the section.
+    """
+    if not top_movers:
+        return _Section(markdown="")
+
+    # Pull anomaly summaries for every group represented in top_movers.
+    group_names = sorted({m["group_name"] for m in top_movers})
+    cur.execute(
+        """
+        SELECT f.id,
+               f.detail->'group'->>'name'                    AS group_name,
+               f.detail->'lead_scaffold'->>'anomaly_summary' AS anomaly_summary
+          FROM findings f
+         WHERE f.subkind = 'narrative_hs_group'
+           AND f.superseded_at IS NULL
+           AND f.detail->'group'->>'name' = ANY(%s)
+        """,
+        (group_names,),
+    )
+    lead_by_group: dict[str, dict] = {
+        r["group_name"]: dict(r) for r in cur.fetchall()
+    }
+
+    # Match in mover-rank order; skip movers whose HS group has no lead.
+    matched: list[tuple[dict, dict]] = []
+    seen_groups: set[str] = set()
+    for m in top_movers:
+        gn = m["group_name"]
+        if gn in seen_groups:
+            continue
+        lead = lead_by_group.get(gn)
+        if not lead or not lead.get("anomaly_summary"):
+            continue
+        matched.append((m, lead))
+        seen_groups.add(gn)
+    if not matched:
+        return _Section(markdown="")
+
+    lines: list[str] = []
+    lines.append(f"## Top {len(matched)} leads to investigate")
+    lines.append("")
+    lines.append(
+        "*The HS groups whose latest 12mo YoY clears the editorial "
+        "filters (≥10pp move, ≥€100M current, not low-base, not "
+        "predictability 🔴), in composite-rank order. One-liner each, "
+        "with anchor links to the full lead below.*"
+    )
+    lines.append("")
+    for i, (mover, lead) in enumerate(matched, start=1):
+        gn = mover["group_name"]
+        anchor = _slugify_heading(gn)
+        summary = lead["anomaly_summary"].strip()
+        lines.append(
+            f"{i}. **[{gn}](#{anchor})** — {summary} "
+            f"({_trace_token(lead['id'])})"
+        )
+    lines.append("")
+
+    return _Section(markdown="\n".join(lines))
 
 
 def _section_llm_narratives(cur) -> _Section:
