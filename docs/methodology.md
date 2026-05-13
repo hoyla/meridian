@@ -688,18 +688,30 @@ path (some shipped, some not yet).
 Roughly two-thirds of `hs_group_trajectory*` findings classify as
 `volatile (multiple direction changes)`. This is partly correct
 — the Phase 6.6 backtest established that HS-group YoY series are
-noisy at 6-month horizons (31% sign flips, 43% magnitude shifts)
-— but it leaves the journalist with no narrative shape to lean on
-for those groups. The methodology rubric's "Quote with confidence:
-inverse_u_peak / u_recovery / dip_recovery" applies to a smaller
-fraction of the brief than the structure implies. Treat `volatile`
-as "no usable trajectory signal for this group; use the headline %
-and the predictability badge instead."
+noisy at 6-month horizons (31% sign flips, 43% magnitude shifts).
+The classifier is doing its job, but `volatile` carries no
+narrative shape a journalist can lean on; the methodology
+rubric's "Quote with confidence: inverse_u_peak / u_recovery /
+dip_recovery" applies to a smaller fraction of the brief than the
+structure implies.
 
-Mitigation: a smoothing-window knob is exposed
-(`--smooth-window N`); a longer window suppresses some of the
-intra-window volatility but at the cost of slower response to
-real inflections. Production default is 3 months.
+**Rendering fix (Tier 2 only)**: the inline `Trajectory: …`
+annotation on each per-group state-of-play row is suppressed when
+the underlying shape is `volatile`. Absence of the annotation
+means the analyser tried to classify and got no useful narrative
+shape — the journalist's cue to rely on the headline %, the
+predictability badge, and the absolute figures rather than a
+trajectory story. Non-volatile shapes (rising / falling /
+peak-and-fall / u-recovery / etc.) still render inline.
+
+The Tier 3 `Trajectory shapes` section in `findings.md` still
+shows a `Volatile` bucket counting the suppressed entries, and
+the spreadsheet's `trajectories` tab keeps every row regardless
+of shape (the journalist's audit use case wants the full picture
+even when the editorial-display heuristic suppresses it). The
+`--smooth-window N` CLI knob remains available for journalists
+who want to re-run with heavier smoothing; production default
+is 3 months.
 
 ### LLM-lead hypothesis catalog can skew toward universal caveats
 

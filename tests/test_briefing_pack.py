@@ -124,6 +124,35 @@ def _seed_hs_yoy_finding(cur, run_id: int, group_name: str, *,
     return cur.fetchone()[0]
 
 
+def _seed_trajectory_finding(
+    cur, run_id: int, group_name: str, *,
+    shape: str,
+    subkind: str = "hs_group_trajectory",
+    shape_label: str | None = None,
+) -> int:
+    cur.execute("SELECT id FROM hs_groups WHERE name = %s", (group_name,))
+    hg = cur.fetchone()
+    hg_ids = [hg[0]] if hg else []
+    detail = {
+        "method": "hs_group_trajectory_v8_comparison_scope",
+        "group": {"name": group_name, "hs_patterns": ["8507%"]},
+        "shape": shape,
+        "shape_label": shape_label or shape.replace("_", " "),
+        "features": {},
+    }
+    cur.execute(
+        """
+        INSERT INTO findings (scrape_run_id, kind, subkind, observation_ids, hs_group_ids,
+                              score, title, body, detail)
+        VALUES (%s, 'anomaly', %s, '{}', %s, %s, %s, 'b', %s::jsonb)
+        RETURNING id
+        """,
+        (run_id, subkind, hg_ids, 0.5,
+         f"seed traj {shape} {group_name}", json.dumps(detail)),
+    )
+    return cur.fetchone()[0]
+
+
 def _seed_mirror_gap_finding(cur, run_id: int, iso2: str, period: date,
                              gacc_obs_id: int, eu_obs_id: int) -> int:
     detail = {
@@ -845,6 +874,50 @@ def test_top_movers_section_absent_when_no_candidates(empty_findings, test_db_ur
     entirely; Tier 1 follows the reader's guide directly."""
     md = briefing_pack.render()
     assert "## Top" not in md.split("## Tier 1")[0]
+
+
+def test_state_of_play_suppresses_volatile_trajectory_inline(
+    empty_findings, test_db_url,
+):
+    """In Tier 2's per-group block, the inline `Trajectory: …`
+    annotation is dropped when the underlying shape is `volatile`
+    (~68% of HS-group series are classified volatile and the label
+    carries no narrative information — methodology §10).
+
+    A non-volatile shape (e.g. `dip_recovery`) still renders inline."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        _seed_eurostat_release(cur, date(2026, 2, 1))
+        # Volatile group: trajectory line should be SUPPRESSED inline.
+        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)", yoy_pct=0.20)
+        _seed_trajectory_finding(
+            cur, run, "EV batteries (Li-ion)",
+            shape="volatile", shape_label="volatile (multiple direction changes)",
+        )
+        # Non-volatile group: trajectory line should appear.
+        _seed_hs_yoy_finding(cur, run, "Drones and unmanned aircraft", yoy_pct=0.30)
+        _seed_trajectory_finding(
+            cur, run, "Drones and unmanned aircraft",
+            shape="dip_recovery",
+            shape_label="dip-and-recovery (was rising, dipped, now rising again)",
+        )
+        conn.commit()
+
+    md = briefing_pack.render()
+    # Carve out each group's Tier-2 state-of-play block by its `### `
+    # heading. The blocks are separated by `### ` lines under
+    # `## Tier 2 — Current state of play`.
+    tier_2 = md.split("## Tier 2 — Current state of play")[1].split("\n## ")[0]
+    ev_block = tier_2.split("### EV batteries (Li-ion)")[1].split("\n### ")[0]
+    drones_block = tier_2.split("### Drones and unmanned aircraft")[1].split("\n### ")[0]
+    # Volatile suppressed inline: no Trajectory annotation anywhere in
+    # the EV batteries block.
+    assert "Trajectory:" not in ev_block
+    assert "volatile" not in ev_block.lower()
+    # The dip_recovery shape for the other group keeps its label.
+    assert "Trajectory:" in drones_block
+    assert "dip-and-recovery" in drones_block
 
 
 def test_leads_has_full_detail_by_hs_group_heading(empty_findings, test_db_url):

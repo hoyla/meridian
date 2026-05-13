@@ -62,12 +62,19 @@ def _section_state_of_play(
         """
     )
     traj_rows = list(cur.fetchall())
-    # Index trajectories: traj_by_group[group][subkind] -> shape_label
-    traj_by_group: dict[str, dict[str, str]] = {}
+    # Index trajectories: traj_by_group[group][subkind] -> (shape, label)
+    # Carrying both lets us filter on the underlying shape (e.g. drop
+    # `volatile` inline) without losing the human-readable label for the
+    # cases we do render. Methodology.md §10 explains the editorial
+    # rationale for suppressing volatile inline — at HS-group granularity
+    # the classifier fires `volatile` on ~68% of series, which carries no
+    # narrative information; absence here signals "no useful shape to
+    # lean on, rely on the headline %."
+    traj_by_group: dict[str, dict[str, tuple[str, str]]] = {}
     for r in traj_rows:
-        traj_by_group.setdefault(r["group_name"], {})[r["subkind"]] = (
-            r["shape_label"] or r["shape"] or "—"
-        )
+        shape = r["shape"] or ""
+        label = r["shape_label"] or shape or "—"
+        traj_by_group.setdefault(r["group_name"], {})[r["subkind"]] = (shape, label)
 
     # Index yoy: yoy_by_group[group][subkind] -> row
     yoy_by_group: dict[str, dict[str, Any]] = {}
@@ -161,7 +168,18 @@ def _section_state_of_play(
             r = by_subkind.get(sk_yoy)
             if not r:
                 continue
-            traj_label = traj.get(sk_traj)
+            # Resolve the trajectory label, but only render it when the
+            # underlying shape is editorially informative. `volatile`
+            # fires on the majority of HS-group series at this
+            # granularity (Phase 6.6 backtest established the underlying
+            # noise rate); rendering it inline trains the reader to skim
+            # past the line. Drop it instead — absence signals "no
+            # narrative shape; lean on the headline %." Methodology §10.
+            traj_entry = traj.get(sk_traj)
+            if traj_entry is not None and traj_entry[0] != "volatile":
+                traj_label = traj_entry[1]
+            else:
+                traj_label = None
             lines.append(_fmt_yoy_line(label, r, traj_label))
             any_emitted = True
         if not any_emitted:
