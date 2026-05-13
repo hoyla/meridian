@@ -13,6 +13,7 @@ recent periodic-run output, there is nothing new to publish."""
 from __future__ import annotations
 
 import logging
+import shutil
 from datetime import date, datetime
 from pathlib import Path
 
@@ -53,6 +54,40 @@ from briefing_pack.sections.top_movers import _section_top_movers
 from briefing_pack.sections.trajectories import _section_trajectories
 
 log = logging.getLogger(__name__)
+
+
+# Templates dir — files dropped here are copied verbatim into every
+# export folder. Lives next to render.py inside `briefing_pack/` so
+# it's discoverable alongside the package's section modules; this
+# module sits at `briefing_pack/render.py`, so the dir resolves to
+# `__file__/../templates/`.
+_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+# The README in the templates dir is documentation for the dir itself,
+# not template content. Skip it. Any other filename is treated as a
+# template — including hidden files, non-Markdown, anything the user
+# drops in.
+_TEMPLATES_README = "README.md"
+
+
+def _copy_export_templates(dest_dir: Path) -> list[str]:
+    """Copy every file in `templates/` (except its own README.md) into
+    `dest_dir`, preserving filenames. Idempotent and tolerant: if the
+    templates directory is missing or empty, this is a no-op.
+
+    Returns the list of filenames copied (for logging / caller's record).
+    Does not recurse into subdirectories — templates are flat by design.
+    """
+    if not _TEMPLATES_DIR.is_dir():
+        return []
+    copied: list[str] = []
+    for entry in sorted(_TEMPLATES_DIR.iterdir()):
+        if not entry.is_file():
+            continue
+        if entry.name == _TEMPLATES_README:
+            continue
+        shutil.copy2(entry, dest_dir / entry.name)
+        copied.append(entry.name)
+    return copied
 
 
 def latest_eurostat_period() -> date | None:
@@ -466,5 +501,17 @@ def export(
             sheets_export.assemble_sheets(), str(xlsx_path),
         )
         log.info("Wrote spreadsheet to %s", xlsx_path)
+
+    # Copy any per-export templates (e.g. an `01_Read_Me_First.md` intro)
+    # into the bundle folder so a recipient who only receives the
+    # export — not the repo — gets the orientation file alongside the
+    # generated artefacts. Filenames are preserved verbatim (the leading
+    # `01_` is a deliberate sort-first trick most file viewers honour).
+    # Done last so any template-only-mode caller (legacy explicit-paths)
+    # still gets templates if they pass a folder path.
+    if out_path is None:
+        copied = _copy_export_templates(p.parent)
+        for fname in copied:
+            log.info("Copied template %s to %s", fname, p.parent / fname)
 
     return str(p), str(lp)

@@ -376,6 +376,60 @@ def test_export_writes_brief_and_leads_into_folder(
     assert "No active `narrative_hs_group` findings" in leads_content
 
 
+def test_export_copies_templates_into_folder(
+    empty_findings, test_db_url, tmp_path, monkeypatch,
+):
+    """Any file dropped into the repo's `templates/` directory (other
+    than its own README.md) is copied verbatim into every export
+    folder. Filenames are preserved — so a leading `01_` prefix sorts
+    above findings.md / leads.md / data.xlsx in most file viewers."""
+    # Re-point the templates dir at a per-test temp folder so the test
+    # is isolated from whatever is actually in the repo's templates/.
+    fake_templates = tmp_path / "fake_templates"
+    fake_templates.mkdir()
+    (fake_templates / "01_Read_Me_First.md").write_text(
+        "# Read me first\n\nThe intro pack.\n"
+    )
+    (fake_templates / "README.md").write_text(
+        "# This is documentation, NOT a template\n"
+    )
+    # `briefing_pack.render` resolves to the imported function (shadowed
+    # by __init__.py); grab the actual module via sys.modules to patch
+    # its module-level constant.
+    import sys
+    render_mod = sys.modules["briefing_pack.render"]
+    monkeypatch.setattr(render_mod, "_TEMPLATES_DIR", fake_templates)
+
+    out_dir = tmp_path / "20260513-1500"
+    briefing_pack.export(out_dir=str(out_dir))
+
+    # The user-facing template was copied with its original filename.
+    assert (out_dir / "01_Read_Me_First.md").exists()
+    assert (out_dir / "01_Read_Me_First.md").read_text() == (
+        "# Read me first\n\nThe intro pack.\n"
+    )
+    # The templates dir's own README.md is documentation, not a
+    # template; it must NOT propagate into the export.
+    assert not (out_dir / "README.md").exists()
+
+
+def test_export_handles_missing_templates_dir(
+    empty_findings, test_db_url, tmp_path, monkeypatch,
+):
+    """If the templates/ dir is absent, export() still succeeds — the
+    copy step is a no-op rather than a failure. Same for an empty dir."""
+    missing_dir = tmp_path / "does_not_exist"
+    import sys
+    render_mod = sys.modules["briefing_pack.render"]
+    monkeypatch.setattr(render_mod, "_TEMPLATES_DIR", missing_dir)
+    # Should not raise.
+    brief_path, leads_path = briefing_pack.export(
+        out_dir=str(tmp_path / "20260513-1500"),
+    )
+    assert Path(brief_path).exists()
+    assert Path(leads_path).exists()
+
+
 def test_export_legacy_explicit_paths_still_work(
     empty_findings, test_db_url, tmp_path,
 ):
