@@ -159,6 +159,86 @@ def test_hs_yoy_includes_threshold_fragility_flag(
     assert row[headers.index("near_low_base_threshold")] is True
 
 
+def test_top_movers_columns_on_long_format_tab(
+    empty_findings, test_db_url, tmp_path,
+):
+    """The hs_yoy_imports / hs_yoy_exports tabs surface two new top-
+    movers columns: `top_movers_rank` (1-5 for picks, else None) and
+    `top_movers_score` (composite, always populated). The rank only
+    fires for rows that pass the editorial filters."""
+    with psycopg2.connect(test_db_url) as conn:
+        # Pick → big mover at €27B, +35%, eu_27 scope. Eligible.
+        _seed_one_finding(conn, "hs_group_yoy", "EV batteries (Li-ion)", {
+            "windows": {"current_end": "2026-02-01", "current_start": "2026-02-01"},
+            "totals": {"yoy_pct": 0.35, "current_12mo_eur": 27e9, "prior_12mo_eur": 20e9,
+                       "low_base": False, "low_base_threshold_eur": 5e7},
+            "group": {"name": "EV batteries (Li-ion)"},
+        })
+        # Non-pick → fails the €100M filter, but should still get a score.
+        _seed_one_finding(conn, "hs_group_yoy", "Honey", {
+            "windows": {"current_end": "2026-02-01", "current_start": "2026-02-01"},
+            "totals": {"yoy_pct": 0.30, "current_12mo_eur": 50e6, "prior_12mo_eur": 38e6,
+                       "low_base": False, "low_base_threshold_eur": 5e7},
+            "group": {"name": "Honey"},
+        })
+
+    out = sheets_export.export(out_format="xlsx", out_path=str(tmp_path / "out.xlsx"))
+    wb = load_workbook(out)
+    ws = wb["hs_yoy_imports"]
+    headers = [c.value for c in ws[3]]
+    rows = [[c.value for c in r] for r in ws.iter_rows(min_row=4)]
+    assert "top_movers_rank" in headers
+    assert "top_movers_score" in headers
+    by_group = {r[headers.index("group")]: r for r in rows}
+
+    ev_row = by_group["EV batteries (Li-ion)"]
+    assert ev_row[headers.index("top_movers_rank")] == 1
+    assert ev_row[headers.index("top_movers_score")] is not None
+    assert float(ev_row[headers.index("top_movers_score")]) > 0
+
+    honey_row = by_group["Honey"]
+    # Failed the €100M filter — no rank.
+    assert honey_row[headers.index("top_movers_rank")] is None
+    # But the score is computed for the long-tail sort use case.
+    assert honey_row[headers.index("top_movers_score")] is not None
+
+
+def test_top_movers_rank_columns_on_summary_tab(
+    empty_findings, test_db_url, tmp_path,
+):
+    """The summary tab surfaces per-flow rank columns:
+    `top_movers_rank_imp` and `top_movers_rank_exp`. A group with both
+    flows ranked carries values in both; a group with only imports
+    ranked has NULL in exp."""
+    with psycopg2.connect(test_db_url) as conn:
+        # Imports + exports both eligible for the same group.
+        _seed_one_finding(conn, "hs_group_yoy", "EV batteries (Li-ion)", {
+            "windows": {"current_end": "2026-02-01", "current_start": "2026-02-01"},
+            "totals": {"yoy_pct": 0.35, "current_12mo_eur": 27e9, "prior_12mo_eur": 20e9,
+                       "low_base": False, "low_base_threshold_eur": 5e7},
+            "group": {"name": "EV batteries (Li-ion)"},
+        })
+        _seed_one_finding(conn, "hs_group_yoy_export", "EV batteries (Li-ion)", {
+            "windows": {"current_end": "2026-02-01", "current_start": "2026-02-01"},
+            "totals": {"yoy_pct": -0.40, "current_12mo_eur": 5e8, "prior_12mo_eur": 8e8,
+                       "low_base": False, "low_base_threshold_eur": 5e7},
+            "group": {"name": "EV batteries (Li-ion)"},
+        })
+
+    out = sheets_export.export(out_format="xlsx", out_path=str(tmp_path / "out.xlsx"))
+    wb = load_workbook(out)
+    ws = wb["summary"]
+    headers = [c.value for c in ws[3]]
+    rows = [[c.value for c in r] for r in ws.iter_rows(min_row=4)]
+    ev_row = next(r for r in rows
+                  if r[headers.index("group")] == "EV batteries (Li-ion)")
+    assert "top_movers_rank_imp" in headers
+    assert "top_movers_rank_exp" in headers
+    # Both flows passed the filters → both ranks populated.
+    assert ev_row[headers.index("top_movers_rank_imp")] is not None
+    assert ev_row[headers.index("top_movers_rank_exp")] is not None
+
+
 def test_mirror_gaps_includes_cif_fob_baseline_columns(
     empty_findings, test_db_url, tmp_path,
 ):

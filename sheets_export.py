@@ -44,6 +44,7 @@ from briefing_pack import (
     _SCOPE_LABEL,
     _SCOPE_SUBKIND_SUFFIX,
     _compute_predictability_per_group,
+    _compute_top_movers,
     is_threshold_fragile,
 )
 
@@ -129,14 +130,29 @@ def assemble_sheets() -> list[SheetData]:
     The narrative_hs_group findings (LLM-scaffolded leads) are
     intentionally excluded — they live in `leads.md` alongside this
     spreadsheet in the same export folder."""
-    # Compute predictability once and pass into the YoY tabs that need it.
-    with _conn() as conn, conn.cursor() as cur:
+    # Compute predictability + top-5 movers once and pass into the
+    # YoY tabs that surface them.
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         predictability = _compute_predictability_per_group(cur)
+        top_movers_rows = _compute_top_movers(cur, predictability=predictability)
+    # Map finding_id → (rank, score) for direct row lookup in the long
+    # sheets. The summary sheet needs (group_name, flow) → rank lookup
+    # since it's one-row-per-group; build that separately.
+    top_movers_by_id: dict[int, tuple[int, float]] = {
+        m["id"]: (rank, m["score"])
+        for rank, m in enumerate(top_movers_rows, start=1)
+    }
+    top_movers_by_group_flow: dict[tuple[str, int], int] = {}
+    for rank, m in enumerate(top_movers_rows, start=1):
+        flow = 2 if m["subkind"].endswith("_export") else 1
+        top_movers_by_group_flow[(m["group_name"], flow)] = rank
 
     sheets: list[SheetData] = []
-    sheets.append(_summary_sheet(predictability))
-    sheets.append(_hs_yoy_long_sheet(flow=1, predictability=predictability))
-    sheets.append(_hs_yoy_long_sheet(flow=2, predictability=predictability))
+    sheets.append(_summary_sheet(predictability, top_movers_by_group_flow))
+    sheets.append(_hs_yoy_long_sheet(flow=1, predictability=predictability,
+                                      top_movers_by_id=top_movers_by_id))
+    sheets.append(_hs_yoy_long_sheet(flow=2, predictability=predictability,
+                                      top_movers_by_id=top_movers_by_id))
     sheets.append(_hs_yoy_reporter_movers_sheet())
     sheets.append(_trajectories_long_sheet())
     sheets.append(_mirror_gaps_sheet())
@@ -146,7 +162,10 @@ def assemble_sheets() -> list[SheetData]:
     return sheets
 
 
-def _summary_sheet(predictability: dict[str, tuple[str, float, int]]) -> SheetData:
+def _summary_sheet(
+    predictability: dict[str, tuple[str, float, int]],
+    top_movers_by_group_flow: dict[tuple[str, int], int] | None = None,
+) -> SheetData:
     """One row per HS group; all three scopes × both flows side by side
     so a journalist can compare EU-27 / UK / combined views at a glance.
     Trajectory shape (EU-27, both flows) anchors the row's narrative
@@ -155,7 +174,13 @@ def _summary_sheet(predictability: dict[str, tuple[str, float, int]]) -> SheetDa
     Wide-format trade-off: lots of columns, no per-row finding_ids
     (those live in the long-format tabs below). Use this tab for
     scanning; drill to the long tabs for detail.
+
+    `top_movers_by_group_flow` (optional): (group_name, flow) → rank
+    for this cycle's editorial picks. Surfaced as two right-most
+    columns — `top_movers_rank_imp` and `top_movers_rank_exp`. NULL
+    when the group's import / export flow didn't make the picks.
     """
+    top_movers_by_group_flow = top_movers_by_group_flow or {}
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         # Build one CTE per (scope, flow) → 6 CTEs. Each picks the latest
         # finding per group. Then LEFT JOIN them all onto hs_groups so the
@@ -232,7 +257,10 @@ def _summary_sheet(predictability: dict[str, tuple[str, float, int]]) -> SheetDa
                 f"{scope_short}_{flow_short}_eur_12mo",
                 f"{scope_short}_{flow_short}_low_base",
             ])
-    headers.extend(["eu27_imp_trajectory_shape", "eu27_exp_trajectory_shape"])
+    headers.extend([
+        "eu27_imp_trajectory_shape", "eu27_exp_trajectory_shape",
+        "top_movers_rank_imp", "top_movers_rank_exp",
+    ])
 
     rows: list[list[Any]] = []
     for r in raw_rows:
@@ -249,7 +277,11 @@ def _summary_sheet(predictability: dict[str, tuple[str, float, int]]) -> SheetDa
                     _to_float(r[f"{alias}_eur"]),
                     bool(r[f"{alias}_lb"]) if r[f"{alias}_lb"] is not None else None,
                 ])
-        row.extend([r["traj_imp_shape"], r["traj_exp_shape"]])
+        row.extend([
+            r["traj_imp_shape"], r["traj_exp_shape"],
+            top_movers_by_group_flow.get((gn, 1)),  # rank for imports
+            top_movers_by_group_flow.get((gn, 2)),  # rank for exports
+        ])
         rows.append(row)
 
     return SheetData(
@@ -259,9 +291,12 @@ def _summary_sheet(predictability: dict[str, tuple[str, float, int]]) -> SheetDa
             "combined) and both flows (imports / exports) side by side. "
             "Predictability badge: 🟢 = headline % is robust over 6mo, "
             "🟡 = noisy, 🔴 = volatile (lean on trajectory shape instead). "
-            "Companion documents in this folder: findings.md (deterministic "
-            "Markdown rendering of the same findings, NotebookLM-ready) and "
-            "leads.md (LLM-scaffolded investigation starts per HS group)."
+            "`top_movers_rank_imp` / `top_movers_rank_exp` are 1-5 for "
+            "this cycle's editorial picks — the same rows that lead "
+            "`findings.md`; NULL otherwise. Companion documents in this "
+            "folder: findings.md (deterministic Markdown rendering of the "
+            "same findings, NotebookLM-ready) and leads.md (LLM-scaffolded "
+            "investigation starts per HS group)."
         ),
         headers=headers, rows=rows,
     )
@@ -269,11 +304,20 @@ def _summary_sheet(predictability: dict[str, tuple[str, float, int]]) -> SheetDa
 
 def _hs_yoy_long_sheet(
     flow: int, predictability: dict[str, tuple[str, float, int]],
+    top_movers_by_id: dict[int, tuple[int, float]] | None = None,
 ) -> SheetData:
     """Long format: one row per (group, scope), latest period only.
     Three scopes stacked → ~3x rows of the old EU-27-only sheet, with
     `scope` as a filterable column. Adds predictability badge +
-    threshold-fragility flag per row."""
+    threshold-fragility flag + top-movers rank/score per row.
+
+    `top_movers_by_id` (optional): finding_id → (rank, score) for this
+    cycle's Top-5 picks (see briefing_pack._compute_top_movers).
+    Surfaced as `top_movers_rank` (1-5 or empty) and `top_movers_score`
+    (composite numeric, also populated for rows that didn't quite make
+    the cut so the journalist can see the long tail).
+    """
+    top_movers_by_id = top_movers_by_id or {}
     flow_label = "imports (CN→reporter)" if flow == 1 else "exports (reporter→CN)"
     name = f"hs_yoy_{'imports' if flow == 1 else 'exports'}"
     raw_rows: list[tuple] = []
@@ -306,6 +350,7 @@ def _hs_yoy_long_sheet(
             for r in cur.fetchall():
                 raw_rows.append((scope, r))
 
+    import math
     headers = [
         "finding_id", "link", "group", "scope", "period",
         "current_12mo_eur", "prior_12mo_eur", "yoy_pct",
@@ -314,6 +359,7 @@ def _hs_yoy_long_sheet(
         "low_base", "near_low_base_threshold",
         "predictability_badge", "predictability_pct",
         "kg_coverage_pct", "partial_window",
+        "top_movers_rank", "top_movers_score",
         "score",
     ]
     rows = []
@@ -321,6 +367,21 @@ def _hs_yoy_long_sheet(
         pred = predictability.get(r["group_name"])
         badge = pred[0] if pred else ""
         pred_pct = round(pred[1] * 100, 0) if pred else None
+        # Top-movers rank: present only for the 5 picks (eu_27 scope,
+        # both flows, filtered + composite-ranked — see
+        # briefing_pack._compute_top_movers).
+        rank_score = top_movers_by_id.get(r["id"])
+        top_rank = rank_score[0] if rank_score else None
+        # Composite score for every row, even non-picks — lets the
+        # journalist sort by score and see the long tail under the
+        # editorial threshold. NULL when yoy or eur is missing.
+        yoy = r["yoy_pct"]
+        eur = r["current_eur"]
+        top_score: float | None
+        if yoy is not None and eur is not None and float(eur) > 0:
+            top_score = abs(float(yoy)) * math.log10(max(float(eur), 1.0))
+        else:
+            top_score = None
         rows.append([
             r["id"], _link_cell(r["id"]), r["group_name"], scope, r["period"].isoformat(),
             _to_float(r["current_eur"]), _to_float(r["prior_eur"]), _to_float(r["yoy_pct"]),
@@ -331,6 +392,8 @@ def _hs_yoy_long_sheet(
             badge, pred_pct,
             _to_float(r["kg_coverage"]),
             bool(r["partial_window"]) if r["partial_window"] is not None else False,
+            top_rank,
+            round(top_score, 4) if top_score is not None else None,
             _to_float(r["score"]),
         ])
     return SheetData(
@@ -340,7 +403,11 @@ def _hs_yoy_long_sheet(
             "(EU-27 / UK / EU-27 + UK combined). Filter on `scope` to "
             "narrow. `near_low_base_threshold` = TRUE means the finding "
             "is within 1.5x the low_base threshold; classification is "
-            "fragile to small threshold changes."
+            "fragile to small threshold changes. `top_movers_rank` is "
+            "populated (1-5) for the cycle's editorial picks — the same "
+            "rows that lead `findings.md`. `top_movers_score` "
+            "(|yoy_pct| × log10(current_eur)) is computed on every row "
+            "so you can sort by it and see the long tail."
         ),
         headers=headers, rows=rows,
     )

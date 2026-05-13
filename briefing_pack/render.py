@@ -332,12 +332,16 @@ def render_leads(
     else:
         # _section_llm_narratives starts with its own "## Investigation
         # leads" header + intro paragraph; strip those (we provide the
-        # framing here) and keep the per-group blocks.
+        # framing here) and prepend a dedicated section heading so the
+        # full per-group block is visually delimited from any top-level
+        # digest sections (e.g. "Top N leads to investigate") above it.
         body = section.markdown
         marker = "### "
         idx = body.find(marker)
         if idx > 0:
             body = body[idx:]
+        lines.append("## Full lead detail by HS group")
+        lines.append("")
         lines.append(body)
 
     # Endnote on what `finding/N` citations mean — same text as the brief's

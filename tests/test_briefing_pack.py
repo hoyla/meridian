@@ -847,6 +847,49 @@ def test_top_movers_section_absent_when_no_candidates(empty_findings, test_db_ur
     assert "## Top" not in md.split("## Tier 1")[0]
 
 
+def test_leads_has_full_detail_by_hs_group_heading(empty_findings, test_db_url):
+    """leads.md surfaces a `## Full lead detail by HS group` heading
+    above the per-group blocks so the structure is visually delimited
+    from the Top N digest section above it (mirrors findings.md's
+    `## Tier 3 — Full detail by HS group` shape)."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        cur.execute("SELECT id FROM hs_groups WHERE name = %s",
+                    ("EV batteries (Li-ion)",))
+        hg_id = cur.fetchone()[0]
+        detail = {
+            "method": "llm_topline_v2_lead_scaffold",
+            "model": "fake",
+            "group": {"id": hg_id, "name": "EV batteries (Li-ion)",
+                      "hs_patterns": ["8507%"]},
+            "lead_scaffold": {
+                "anomaly_summary": "Test anomaly.",
+                "hypotheses": [],
+                "corroboration_steps": [],
+            },
+            "underlying_finding_ids": [],
+            "caveat_codes": [],
+        }
+        cur.execute(
+            """
+            INSERT INTO findings (scrape_run_id, kind, subkind, hs_group_ids,
+                                  natural_key_hash, value_signature, title, body, detail)
+            VALUES (%s, 'llm_topline', 'narrative_hs_group', %s,
+                    'nk-heading', 'sig-heading', 'Lead: test', 'b', %s::jsonb)
+            """,
+            (run, [hg_id], json.dumps(detail)),
+        )
+        conn.commit()
+
+    leads = briefing_pack.render_leads()
+    assert "## Full lead detail by HS group" in leads
+    # The heading sits above the per-group `### {group}` block.
+    full_detail_idx = leads.find("## Full lead detail by HS group")
+    group_block_idx = leads.find("### EV batteries (Li-ion)")
+    assert full_detail_idx < group_block_idx
+
+
 def test_threshold_fragility_annotation_helper():
     """Pure-function test: a finding within 1.5x of the threshold (above
     OR below it) gets an annotation; outside that band returns None."""
