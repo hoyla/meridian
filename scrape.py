@@ -448,7 +448,26 @@ def main() -> None:
             "--periodic-run (which always records)."
         ),
     )
+    p.add_argument(
+        "--finding-provenance", type=int, metavar="ID",
+        help=(
+            "Generate a per-finding provenance file at "
+            "`provenance/finding-{ID}.md` — source URLs, methodology, "
+            "caveats in plain English, cross-source check. Idempotent: "
+            "skips if the file already exists. Use --force to regenerate. "
+            "Currently the detailed template covers GACC bilateral "
+            "aggregate findings; other subkinds get a stub."
+        ),
+    )
     args = p.parse_args()
+
+    if args.finding_provenance is not None:
+        import provenance
+        path = provenance.generate_for_finding(
+            args.finding_provenance, force=args.force,
+        )
+        print(path)
+        return
 
     if args.periodic_run:
         result = periodic.run_periodic(

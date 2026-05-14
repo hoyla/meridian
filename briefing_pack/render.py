@@ -13,6 +13,7 @@ recent periodic-run output, there is nothing new to publish."""
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 from datetime import date, datetime
 from pathlib import Path
@@ -514,4 +515,55 @@ def export(
         for fname in copied:
             log.info("Copied template %s to %s", fname, p.parent / fname)
 
+        # Generate (or refresh) per-finding provenance for every finding id
+        # cited in the brief or leads, and copy each one into the export
+        # bundle's `provenance/` subdir. A journalist forwarded just the
+        # bundle gets the full audit trail; the canonical files at
+        # `provenance/finding-N.md` are reused across exports so common
+        # findings don't get regenerated on every run.
+        _emit_provenance_bundle(p, lp)
+
     return str(p), str(lp)
+
+
+_FINDING_TOKEN_RE = re.compile(r"\bfinding/(\d+)\b")
+
+
+def _emit_provenance_bundle(brief_path: Path, leads_path: Path) -> None:
+    """Scan the rendered brief + leads for `finding/N` tokens, generate
+    each one's provenance file (idempotent — skips if it already exists),
+    and copy the result into `<export>/provenance/`. Per-finding errors
+    are logged and skipped so a single bad finding can't break the
+    bundle write."""
+    import provenance  # lazy: avoids a circular import at module load
+
+    finding_ids: set[int] = set()
+    for path in (brief_path, leads_path):
+        if not path.exists():
+            continue
+        finding_ids.update(int(m) for m in _FINDING_TOKEN_RE.findall(path.read_text()))
+
+    if not finding_ids:
+        log.info("Provenance: no finding/N tokens found in brief or leads; nothing to bundle")
+        return
+
+    bundle_dir = brief_path.parent / "provenance"
+    written = 0
+    skipped = 0
+    for fid in sorted(finding_ids):
+        try:
+            src = provenance.generate_for_finding(fid, supported_only=True)
+            if src is None:
+                skipped += 1
+                continue
+            bundle_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, bundle_dir / src.name)
+            written += 1
+        except Exception:
+            log.exception("Provenance: failed to bundle finding/%d; skipping", fid)
+    log.info(
+        "Provenance: bundled %d finding files into %s (skipped %d with "
+        "no detailed renderer yet — request via "
+        "`python scrape.py --finding-provenance N` if needed)",
+        written, bundle_dir, skipped,
+    )

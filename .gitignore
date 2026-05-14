@@ -13,5 +13,9 @@ venv/
 # Generated spreadsheet exports — regenerated per run, not tracked.
 exports/
 
+# Per-finding provenance files — generated lazily by provenance.py,
+# copied into each export bundle that cites them.
+provenance/
+
 # Other stuff not to be included in GH repo.
 aob/
