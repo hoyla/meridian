@@ -42,7 +42,17 @@ CREATE TABLE releases (
     unit              TEXT,
     excel_url         TEXT,
     first_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_seen_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    last_seen_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- GACC release pages have been observed self-inconsistent (currency in
+    -- the title disagreeing with the page's "Unit:" annotation); this
+    -- constraint prevents the corrupted state from committing. Other
+    -- sources keep both columns NULL and are unaffected.
+    CONSTRAINT releases_gacc_unit_consistent CHECK (
+            source <> 'gacc'
+         OR unit IS NULL
+         OR (currency = 'CNY' AND unit = 'CNY 100 Million')
+         OR (currency = 'USD' AND unit = 'USD1 Million')
+    )
 );
 -- Per-source natural identity, expressed as partial unique indexes.
 CREATE UNIQUE INDEX uq_releases_gacc

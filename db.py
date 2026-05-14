@@ -230,10 +230,49 @@ def find_or_create_hmrc_release(period: "date", source_url: str) -> int:
         return cur.fetchone()[0]
 
 
+_GACC_CURRENCY_UNIT_PAIRS = {
+    "CNY": "CNY 100 Million",
+    "USD": "USD1 Million",
+}
+
+
+def _assert_currency_unit_consistent(meta: "ReleaseMetadata") -> None:
+    """Refuse to persist a GACC release whose (currency, unit) pair is mismatched.
+
+    Release 184 (2026-05-14 incident) was stored with currency='CNY' but
+    unit='USD1 Million' after a re-scrape against the USD attachment; the
+    aggregate analysers then applied the USD scale to CNY-denominated
+    observations and inflated every bilateral 12mo headline by ~0.6-0.7%.
+
+    `unit` may be NULL for the early-2018 historical releases whose pages
+    omit the annotation entirely — only enforce the pair when both fields
+    are populated. Extend `_GACC_CURRENCY_UNIT_PAIRS` if GACC ever
+    introduces a new (currency, unit) combination.
+    """
+    if meta.unit is None or meta.currency is None:
+        return
+    expected = _GACC_CURRENCY_UNIT_PAIRS.get(meta.currency)
+    if expected is None:
+        raise ValueError(
+            f"GACC release {meta.source_url}: unrecognised currency "
+            f"{meta.currency!r} (expected one of "
+            f"{sorted(_GACC_CURRENCY_UNIT_PAIRS)}). Refusing to persist."
+        )
+    if meta.unit != expected:
+        raise ValueError(
+            f"GACC release {meta.source_url}: currency={meta.currency!r} "
+            f"must pair with unit={expected!r}, got unit={meta.unit!r}. "
+            f"Refusing to persist — see migrations/"
+            f"2026-05-14-fix-release-184-cny-usd-unit-mismatch.sql for the "
+            f"original incident this guard prevents recurring."
+        )
+
+
 def find_or_create_gacc_release(meta: "ReleaseMetadata", release_kind: str) -> int:
     """Resolve the GACC natural key (section_number, currency, period, release_kind) to
     a release id, creating the row if needed and refreshing display fields that may
     have changed since we last saw the page (e.g. revised excel_url)."""
+    _assert_currency_unit_consistent(meta)
     with transaction() as conn, conn.cursor() as cur:
         cur.execute(
             """

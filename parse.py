@@ -235,6 +235,28 @@ def extract_metadata(
     if currency == "RMB":
         currency = "CNY"
 
+    # Force the unit to the canonical form for the title-derived currency,
+    # rather than trusting the page's "Unit:" annotation in isolation.
+    # GACC pages have been observed self-inconsistent (release 184, June
+    # 2025: title "(in CNY)" + Unit: "USD1 Million" + USD-edition excel
+    # link) — see migrations/2026-05-14-fix-release-184-cny-usd-unit-mismatch.sql for the
+    # incident write-up. The CHECK constraint
+    # `releases_gacc_unit_consistent` on the table is the second line of
+    # defence; this parser coercion is the first, and prefers a logged
+    # warning over a hard scrape failure for currencies we recognise.
+    _CANONICAL_GACC_UNIT = {"CNY": "CNY 100 Million", "USD": "USD1 Million"}
+    canonical_unit = _CANONICAL_GACC_UNIT.get(currency)
+    if canonical_unit is not None:
+        if unit is not None and unit != canonical_unit:
+            log.warning(
+                "Release %r has currency %s (from title) but Unit: annotation "
+                "%r on the page; coercing to canonical %r to keep the release "
+                "row internally consistent. If this fires on more than the "
+                "known June 2025 incident, investigate the page.",
+                url, currency, unit, canonical_unit,
+            )
+        unit = canonical_unit
+
     return ReleaseMetadata(
         section_number=section,
         description=description,
