@@ -551,7 +551,367 @@ def _render_stub(finding: dict) -> str:
     )
 
 
+def _render_hs_group_yoy(finding: dict) -> str:
+    """HS group year-on-year (Eurostat / HMRC / combined). Handles all six
+    subkinds — flow ∈ {import, export} × scope ∈ {eu_27, uk, eu_27_plus_uk} —
+    in one renderer; they share the same detail shape and only differ in
+    which source(s) the rows came from."""
+    detail = finding["detail"]
+    totals = detail["totals"]
+    method_q = detail["method_query"]
+    group = detail["group"]
+    flow = method_q["flow"]  # 1 or 2
+    scope = method_q["comparison_scope"]
+    sources = method_q.get("sources", [])
+    partners = method_q.get("partners", [])
+
+    flow_word = "imports from" if flow == 1 else "exports to"
+    scope_word = {
+        "eu_27": "EU-27 (Eurostat)",
+        "uk": "UK (HMRC)",
+        "eu_27_plus_uk": "EU-27 + UK combined (Eurostat + HMRC)",
+    }.get(scope, scope)
+    direction_human = f"{scope_word} {flow_word} China"
+
+    cur_end = totals.get("missing_months_current") and "(partial)" or ""
+
+    parts: list[str] = []
+    parts.append(f"# finding/{finding['id']} — provenance\n")
+    parts.append(_generated_banner(finding["id"]) + "\n")
+    parts.append(f"**{finding['title']}**\n")
+    parts.append(
+        f"This is **{direction_human}**, summed across partners "
+        f"{', '.join(partners) or '(none specified)'} (mainland China plus "
+        f"the Hong Kong and Macau SARs, which Eurostat reports separately "
+        f"but China editorially counts as the same trade envelope).\n"
+    )
+    parts.append(_supersede_status(finding) + "\n")
+    parts.append("")
+
+    # ---- What's in this HS group ------------------------------------------
+    # Luke's pack-review note (2026-05-13-1547_pack-review.txt) flagged that
+    # journalists need an explicit definition of what each group covers.
+    parts.append("## What's in this HS group\n")
+    parts.append(f"**{group['name']}**  \n")
+    desc = (group.get("description") or "").strip()
+    if desc:
+        parts.append(f"{desc}\n")
+    pats = group.get("hs_patterns") or method_q.get("hs_patterns") or []
+    parts.append(
+        f"HS pattern(s) matched: "
+        f"{', '.join(f'`{p}`' for p in pats) or '(none)'}. Each pattern is "
+        f"used as a SQL `LIKE` against the raw row's CN8 code (`product_nc` "
+        f"on Eurostat, `cn8_code` on HMRC). Codes that don't match any "
+        f"pattern aren't in this group's total.\n"
+    )
+    parts.append("")
+
+    # ---- Sources -----------------------------------------------------------
+    parts.append("## Sources\n")
+    parts.append(_hs_group_sources_block(detail, sources))
+    parts.append("")
+
+    # ---- Caveats -----------------------------------------------------------
+    parts.append("## Caveats (plain English)\n")
+    parts.append(_caveat_glossary(detail.get("caveat_codes") or []) + "\n")
+    parts.append(
+        "Family-universal caveats — `cif_fob` (Eurostat imports valued "
+        "CIF, ~5-10% above the goods value alone), `currency_timing` (FX "
+        "applied at the month-of-trade rate, not the contract rate), "
+        "`classification_drift` (CN8 codes evolve over the years; some "
+        "drift is unavoidable), `eurostat_stat_procedure_mix`, "
+        "`multi_partner_sum` (CN+HK+MO summed), `cn8_revision` — apply to "
+        "every hs_group_yoy finding and live in the brief's Methodology "
+        "footer rather than per finding.\n"
+    )
+    parts.append("")
+
+    # ---- Headline arithmetic ----------------------------------------------
+    parts.append("## Headline arithmetic\n")
+    n_cur = totals.get("n_months_used_current", 12 - len(totals.get("missing_months_current") or []))
+    n_pri = totals.get("n_months_used_prior", 12 - len(totals.get("missing_months_prior") or []))
+    parts.append(
+        f"Sum across all matching raw rows (Eurostat / HMRC, summed per "
+        f"month then summed over the window):  \n"
+        f"  **Current ({n_cur}/12 months to {detail['windows']['current_end']})**: "
+        f"{_fmt_eur(totals['current_12mo_eur'])}, "
+        f"{_fmt_kg(totals.get('current_12mo_kg'))}.  \n"
+        f"  **Prior ({n_pri}/12 months)**: "
+        f"{_fmt_eur(totals['prior_12mo_eur'])}, "
+        f"{_fmt_kg(totals.get('prior_12mo_kg'))}.  \n"
+        f"  **YoY (value)**: {_fmt_pct(totals['yoy_pct'])}  \n"
+        f"  **YoY (kg)**: {_fmt_pct(totals.get('yoy_pct_kg') or 0)}  \n"
+        f"  **Unit price change**: {_fmt_pct(totals.get('unit_price_pct_change') or 0)} "
+        f"(€/kg from "
+        f"{(totals.get('prior_unit_price_eur_per_kg') or 0):.2f} → "
+        f"{(totals.get('current_unit_price_eur_per_kg') or 0):.2f})\n"
+    )
+    if totals.get("single_month"):
+        sm = totals["single_month"]
+        parts.append(
+            f"Latest single month ({sm['current_period']}): "
+            f"{_fmt_eur(sm['current_eur'])} vs "
+            f"{_fmt_eur(sm['prior_eur'])} a year earlier "
+            f"→ {_fmt_pct(sm['yoy_pct'])} (kg {_fmt_pct(sm.get('yoy_pct_kg') or 0)}).\n"
+        )
+    if totals.get("two_month_cumulative"):
+        tm = totals["two_month_cumulative"]
+        parts.append(
+            f"Latest two-month cumulative: {_fmt_eur(tm['current_eur'])} vs "
+            f"{_fmt_eur(tm['prior_eur'])} a year earlier "
+            f"→ {_fmt_pct(tm['yoy_pct'])}.\n"
+        )
+    if totals.get("kg_coverage_pct") is not None:
+        cov = totals["kg_coverage_pct"]
+        thresh = totals.get("kg_coverage_threshold", 0.8)
+        cov_note = "above the 80% reliability threshold" if cov >= thresh else (
+            "below the 80% reliability threshold — unit-price moves on this "
+            "finding should be treated as indicative, not quantitative"
+        )
+        parts.append(
+            f"Kilogram coverage: {cov*100:.0f}% of EUR-weighted rows in the "
+            f"current 12mo window carry a quantity_kg value ({cov_note}).\n"
+        )
+    parts.append("")
+
+    # ---- Top reporter contributions ---------------------------------------
+    pr_breakdown = detail.get("per_reporter_breakdown") or []
+    if pr_breakdown:
+        parts.append("## Top reporter contributions to the YoY change\n")
+        parts.append(
+            "Per-reporter slice of the 12-month YoY delta. \"Share of "
+            "group's delta\" is each country's contribution to the "
+            "group-wide value change — useful for spotting when a single "
+            "member state drives the move (e.g. \"Germany alone explains "
+            "60%\"). Negative shares mean the country moved *opposite* to "
+            "the group total.\n"
+        )
+        lines = [
+            "| Reporter | Current 12mo | Prior 12mo | YoY | Share of group's delta |",
+            "|---|---:|---:|---:|---:|",
+        ]
+        for r in pr_breakdown[:10]:
+            lines.append(
+                f"| {r.get('reporter', '?')} "
+                f"| {_fmt_eur(r.get('current_eur') or 0)} "
+                f"| {_fmt_eur(r.get('prior_eur') or 0)} "
+                f"| {_fmt_pct(r.get('yoy_pct') or 0)} "
+                f"| {(r.get('share_of_group_delta_pct') or 0)*100:+.0f}% |"
+            )
+        parts.append("\n".join(lines) + "\n")
+        parts.append("")
+
+    # ---- Top CN8 contributions --------------------------------------------
+    top_cn8 = detail.get("top_cn8_codes_in_current_12mo") or []
+    if top_cn8:
+        parts.append("## Top CN8 codes contributing in the current 12mo window\n")
+        parts.append(
+            "Within the HS pattern(s) above, these CN8 codes (8-digit "
+            "Harmonised System) carried the most EUR value in the current "
+            "12 months. Useful for sanity-checking whether the group's "
+            "headline number is dominated by a single CN8 (which would "
+            "make a future code rename / split a material risk).\n"
+        )
+        lines = [
+            "| CN8 code | Current 12mo | Quantity | Unit price |",
+            "|---|---:|---:|---:|",
+        ]
+        for r in top_cn8[:10]:
+            kg = r.get("total_kg") or 0
+            eur = r.get("total_eur") or 0
+            unit = (eur / kg) if kg else None
+            lines.append(
+                f"| `{r.get('product_nc') or r.get('cn8') or '?'}` "
+                f"| {_fmt_eur(eur)} "
+                f"| {_fmt_kg(kg)} "
+                f"| {f'€{unit:.2f}/kg' if unit else '—'} |"
+            )
+        parts.append("\n".join(lines) + "\n")
+        parts.append("")
+
+    # ---- Methodology ------------------------------------------------------
+    parts.append("## Methodology\n")
+    parts.append(
+        f"Analyser: `{detail['method']}` "
+        f"(`anomalies.detect_hs_group_yoy`). For each calendar month in "
+        f"the rolling-12 window, sums `value_eur` and `quantity_kg` across "
+        f"all raw rows where: (a) `flow = {flow}` (1=import, 2=export), "
+        f"(b) the partner is in `{partners}`, (c) the CN8 code matches at "
+        f"least one HS pattern above. "
+        f"Source = "
+        f"{('Eurostat (`eurostat_raw_rows`)' if 'eurostat' in sources else '')}"
+        f"{(' + ' if len(sources) == 2 else '')}"
+        f"{('HMRC OTS (`hmrc_raw_rows`)' if 'hmrc' in sources else '')}. "
+        f"YoY is `(current_sum - prior_sum) / prior_sum`. The kg and "
+        f"unit-price decomposition is informational; the headline EUR "
+        f"figure is canonical.  \n"
+        f"See [docs/methodology.md §1.1](../docs/methodology.md) for the "
+        f"full description, including unit-price reliability gating and "
+        f"the per-reporter breakdown rules.\n"
+    )
+    parts.append("")
+
+    # ---- Replay -----------------------------------------------------------
+    parts.append("## Appendix — Replay queries (for fact-checkers)\n")
+    flow_cli = 1 if flow == 1 else 2
+    scope_cli = scope
+    parts.append(
+        "```sql\n"
+        f"-- The finding row\n"
+        f"SELECT id, title, body, detail FROM findings WHERE id = {finding['id']};\n\n"
+        f"-- Reproduce the current 12mo total from raw rows "
+        f"(Eurostat side, single source for this finding's scope):\n"
+        + _replay_sql(detail, sources)
+        + "```\n"
+    )
+    parts.append(
+        "To regenerate this finding from scratch (will produce a new "
+        "finding id and supersede the current one if values differ):\n"
+        f"```sh\npython scrape.py --analyse hs-group-yoy --flow {flow_cli} "
+        f"--comparison-scope {scope_cli} "
+        f"--hs-group {group['name']!r}\n```\n"
+    )
+
+    return "\n".join(parts) + "\n"
+
+
+def _hs_group_sources_block(detail: dict, sources: list[str]) -> str:
+    """List the underlying release URLs for the periods touching the 12mo
+    window. For Eurostat: one bulk file per month (each contains all
+    reporters × all partners × all CN8). For HMRC: one OData query per
+    month. The same release URL covers every HS group; this finding picks
+    rows out of it by flow/partner/CN8 filter — those filters are in the
+    methodology section."""
+    start = detail["windows"]["prior_start"]
+    end = detail["windows"]["current_end"]
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT source, period, source_url
+              FROM releases
+             WHERE source = ANY(%s)
+               AND period BETWEEN %s AND %s
+             ORDER BY source, period
+            """,
+            (sources, start, end),
+        )
+        rows = cur.fetchall()
+    by_source: dict[str, list[dict]] = {}
+    for r in rows:
+        by_source.setdefault(r["source"], []).append(r)
+
+    out = []
+    for src in sources:
+        rs = by_source.get(src, [])
+        if not rs:
+            out.append(
+                f"### {src.upper()}\n\n"
+                f"No releases ingested in the window {start} → {end}. "
+                f"The finding's totals would be zero for that source.\n"
+            )
+            continue
+        label = {
+            "eurostat": (
+                "**Eurostat COMEXT** — monthly bulk file containing every "
+                "(EU reporter × world partner × CN8) cell. Each release URL "
+                "below is the canonical 7-zip download for that month; "
+                "filters (flow, partner, CN8 pattern) are applied on read."
+            ),
+            "hmrc": (
+                "**HMRC OTS** — Overseas Trade Statistics via the "
+                "uktradeinfo.com OData REST API. Each URL is the exact "
+                "OData query our scraper used at ingest time; partner "
+                "filter (CN/HK/MO) is encoded in the URL."
+            ),
+        }.get(src, src.upper())
+        out.append(f"### {src.upper()}\n\n{label}\n\n")
+        out.append("| Period | Source release |")
+        out.append("|---|---|")
+        for r in rs:
+            url = r["source_url"]
+            label_text = _short_url_label(src, url)
+            out.append(f"| {r['period'].isoformat()[:7]} | [{label_text}]({url}) |")
+        out.append("")
+    return "\n".join(out)
+
+
+def _short_url_label(source: str, url: str) -> str:
+    """Friendly link text for a release URL. Keeps the table compact; the
+    full URL is still the href.
+    - Eurostat bulk files → the filename, e.g. `full_v2_202506.7z`.
+    - HMRC OData queries → `OTS query (MonthId=YYYYMM)` if MonthId can be parsed.
+    - Fallback → middle-truncated URL."""
+    if source == "eurostat":
+        import urllib.parse
+        downfile = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("downfile", [""])[0]
+        return downfile.rsplit("/", 1)[-1] or url
+    if source == "hmrc":
+        import re
+        m = re.search(r"MonthId eq (\d{6})", url)
+        return f"HMRC OTS OData query (MonthId={m.group(1)})" if m else "HMRC OTS OData query"
+    return url if len(url) <= 80 else url[:38] + "…" + url[-38:]
+
+
+def _replay_sql(detail: dict, sources: list[str]) -> str:
+    """Generate a copy-pasteable SQL block that re-sums the current 12mo
+    total from raw rows. Per source — the journalist can run either / both
+    to verify the headline EUR figure."""
+    method_q = detail["method_query"]
+    flow = method_q["flow"]
+    partners = method_q.get("partners", [])
+    patterns = (detail.get("group") or {}).get("hs_patterns") or method_q.get("hs_patterns") or []
+    start = detail["windows"]["current_start"]
+    end = detail["windows"]["current_end"]
+    like_or = " OR ".join(f"product_nc LIKE '{p}'" for p in patterns) or "TRUE"
+    blocks = []
+    if "eurostat" in sources:
+        blocks.append(
+            f"-- Eurostat side:\n"
+            f"SELECT period, SUM(value_eur) AS eur, SUM(quantity_kg) AS kg\n"
+            f"  FROM eurostat_raw_rows\n"
+            f" WHERE flow = {flow}\n"
+            f"   AND partner = ANY('{{{','.join(partners)}}}')\n"
+            f"   AND ({like_or})\n"
+            f"   AND period BETWEEN '{start}' AND '{end}'\n"
+            f"   AND reporter NOT IN ('GB', 'XI', 'XU')   -- EU-27 excludes UK\n"
+            f" GROUP BY period ORDER BY period;\n\n"
+        )
+    if "hmrc" in sources:
+        # HMRC stores cn8 as cn8_code; build LIKE on that.
+        like_or_hmrc = " OR ".join(f"cn8_code LIKE '{p}'" for p in patterns) or "TRUE"
+        blocks.append(
+            f"-- HMRC side:\n"
+            f"SELECT period, SUM(value_eur) AS eur, SUM(net_mass_kg) AS kg\n"
+            f"  FROM hmrc_raw_rows\n"
+            f" WHERE flow = {flow}\n"
+            f"   AND partner = ANY('{{{','.join(partners)}}}')\n"
+            f"   AND ({like_or_hmrc})\n"
+            f"   AND period BETWEEN '{start}' AND '{end}'\n"
+            f"   AND suppression_index = 0\n"
+            f" GROUP BY period ORDER BY period;\n\n"
+        )
+    return "".join(blocks)
+
+
+def _fmt_kg(v: float | None) -> str:
+    if v is None or v == 0:
+        return "—"
+    if abs(v) >= 1e9:
+        return f"{v/1e9:.2f} bn kg"
+    if abs(v) >= 1e6:
+        return f"{v/1e6:.1f}M kg"
+    if abs(v) >= 1e3:
+        return f"{v/1e3:.0f}k kg"
+    return f"{v:,.0f} kg"
+
+
 _RENDERERS = {
     "gacc_bilateral_aggregate_yoy": _render_gacc_bilateral_aggregate_yoy,
     "gacc_bilateral_aggregate_yoy_import": _render_gacc_bilateral_aggregate_yoy,
+    "hs_group_yoy": _render_hs_group_yoy,
+    "hs_group_yoy_export": _render_hs_group_yoy,
+    "hs_group_yoy_uk": _render_hs_group_yoy,
+    "hs_group_yoy_uk_export": _render_hs_group_yoy,
+    "hs_group_yoy_combined": _render_hs_group_yoy,
+    "hs_group_yoy_combined_export": _render_hs_group_yoy,
 }

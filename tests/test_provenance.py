@@ -197,3 +197,98 @@ def test_supported_only_false_still_writes_a_stub(clean_db, db_conn, provenance_
 def test_unknown_finding_id_raises(clean_db, provenance_dir):
     with pytest.raises(ValueError, match="No finding with id"):
         provenance.generate_for_finding(404_404)
+
+
+def _seed_hs_group_yoy(conn, finding_id: int = 999_002) -> int:
+    """Minimal hs_group_yoy finding (Eurostat scope, flow=1). The renderer
+    queries `releases` for source URLs by source+period range, so we also
+    insert one Eurostat release inside the window."""
+    with conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) "
+            "VALUES ('test://seed-hs', 'success') RETURNING id"
+        )
+        run_id = cur.fetchone()[0]
+
+        cur.execute(
+            """
+            INSERT INTO releases (source, period, source_url)
+            VALUES ('eurostat', '2025-06-01',
+                    'https://ec.europa.eu/eurostat/api/dissemination/files?downfile=comext%2FCOMEXT_DATA%2FPRODUCTS%2Ffull_v2_202506.7z')
+            """
+        )
+
+        detail = {
+            "method": "hs_group_yoy_v11_per_reporter_breakdown",
+            "method_query": {
+                "flow": 1, "sources": ["eurostat"],
+                "partners": ["CN", "HK", "MO"],
+                "comparison_scope": "eu_27", "rolling_window_months": 12,
+                "hs_patterns": ["85044086%"],
+            },
+            "group": {
+                "id": 49,
+                "name": "Photovoltaic inverters (CN8 85044086)",
+                "description": "Test description of PV inverters group.",
+                "hs_patterns": ["85044086%"],
+            },
+            "windows": {
+                "prior_start": "2024-01-01", "prior_end": "2024-12-01",
+                "current_start": "2025-01-01", "current_end": "2025-12-01",
+            },
+            "totals": {
+                "yoy_pct": 0.06, "yoy_pct_kg": 0.097,
+                "current_12mo_eur": 2_028_652_255, "prior_12mo_eur": 1_913_700_366,
+                "current_12mo_kg": 75_896_256, "prior_12mo_kg": 69_184_730,
+                "kg_coverage_pct": 1.0, "kg_coverage_threshold": 0.8,
+                "current_unit_price_eur_per_kg": 26.73,
+                "prior_unit_price_eur_per_kg": 27.66,
+                "unit_price_pct_change": -0.034,
+                "missing_months_current": [], "missing_months_prior": [],
+                "n_months_used_current": 12, "n_months_used_prior": 12,
+                "low_base": False, "partial_window": False,
+            },
+            "monthly_series": [],
+            "caveat_codes": [],
+            "per_reporter_breakdown": [
+                {"reporter": "NL", "current_eur": 1_226_290_742,
+                 "prior_eur": 1_056_888_513, "yoy_pct": 0.16,
+                 "share_of_group_delta_pct": 1.47},
+            ],
+            "top_cn8_codes_in_current_12mo": [
+                {"product_nc": "85044086", "total_eur": 2_028_652_255,
+                 "total_kg": 75_896_256, "n_raw": 350},
+            ],
+        }
+        cur.execute(
+            """
+            INSERT INTO findings (id, scrape_run_id, kind, subkind, title, body,
+                                  detail, observation_ids)
+            VALUES (%s, %s, 'anomaly', 'hs_group_yoy',
+                    'PV inverters test finding', 'test body', %s, '{}')
+            """,
+            (finding_id, run_id, json.dumps(detail)),
+        )
+    return finding_id
+
+
+def test_hs_group_yoy_renderer_emits_group_definition_and_source_urls(
+    clean_db, db_conn, provenance_dir,
+):
+    """The HS-group-yoy renderer must (a) surface the group definition
+    prominently — Luke's 2026-05-13 pack-review note explicitly flagged
+    that journalists need this — and (b) list per-period Eurostat bulk
+    file URLs as the source attribution chain."""
+    finding_id = _seed_hs_group_yoy(db_conn)
+    path = provenance.generate_for_finding(finding_id)
+    assert path is not None
+    text = path.read_text()
+    # Group definition is in the "What's in this HS group" section.
+    assert "What's in this HS group" in text
+    assert "Photovoltaic inverters" in text
+    assert "Test description of PV inverters group." in text
+    assert "`85044086%`" in text
+    # Per-period Eurostat bulk URL appears via the friendly filename label.
+    assert "full_v2_202506.7z" in text
+    # Directionality plain-English present.
+    assert "EU-27 (Eurostat) imports from China" in text
