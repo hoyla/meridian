@@ -158,6 +158,19 @@ python scrape.py --briefing-pack                              # ./exports/YYYY-M
 python scrape.py --briefing-pack --briefing-top-n 20          # 20 movers per flow direction
 python scrape.py --briefing-pack --export-dir exports/today   # explicit output folder
 python scrape.py --briefing-pack --export-scope "EV batteries (Li-ion)"  # adds slug to folder + scope line in docs
+python scrape.py --briefing-pack --with-provenance            # also bundle per-finding provenance for the editorially-fresh subset (~5-15 files in <export>/provenance/)
+
+# Per-finding provenance — journalist-readable audit trail for a single finding
+# (source URLs, FX rates, plain-English caveats, cross-source check). Writes
+# `provenance/finding-{N}.md`. Idempotent: skips if the file already exists; pass
+# --force to regenerate (e.g. after a methodology refresh).
+#
+# Use this when a journalist asks "where exactly did finding/N come from?" — the
+# output is a self-contained Markdown file that can be forwarded directly.
+# Detailed template currently covers the GACC bilateral aggregate and
+# hs_group_yoy* families; other subkinds emit a stub noting "generator pending".
+python scrape.py --finding-provenance 57378                   # writes provenance/finding-57378.md, prints the path
+python scrape.py --finding-provenance 57378 --force           # regenerate even if the file exists
 ```
 
 The two export surfaces share the same underlying data layer: switching between them — or adding a new one — is a thin render shim, not a re-ingest.
@@ -181,6 +194,7 @@ The two export surfaces share the same underlying data layer: switching between 
 | `scripts/`         | One-off analysis scripts (sensitivity sweep, OOS backtest) — not part of the CLI; run directly. |
 | `sheets_export.py` | Export findings to local `.xlsx` (shipped) or Google Sheets (stub, pending service-account creds) |
 | `briefing_pack.py` | Three-artefact export bundle into `./exports/YYYY-MM-DD-HHMM[-slug]/`. `findings.md` is the deterministic NotebookLM-ready findings document (no LLM in the loop). `leads.md` is the LLM lead-scaffold companion (anomaly summaries + picked hypotheses + corroboration steps), kept separate so downstream LLM tools reasoning over them see raw findings, not another LLM's interpretation. `data.xlsx` is the 8-tab spreadsheet for data journalists. All three share a single DB snapshot. |
+| `provenance.py`    | Per-finding provenance file generator. Each call writes `provenance/finding-{N}.md` — a journalist-readable audit trail (source URLs, FX rates, plain-English caveats, cross-source check, replay queries). CLI: `--finding-provenance N`. Frozen-snapshot semantics: idempotent on existing files; pass `--force` to regenerate. The `--briefing-pack --with-provenance` flag opt-in copies the editorially-fresh subset (Tier 1 changes + Top-N movers + Top-N leads, typically ~5-15 files) into the export bundle's `provenance/` subdir. |
 | `sheets_export.py` | 8-tab spreadsheet exporter (xlsx local; Google Sheets writer stubbed pending creds). Tabs: summary (wide, all scopes), hs_yoy_imports/exports (long with scope column), trajectories, mirror_gaps (with per-country CIF/FOB baseline + excess-pp), mirror_gap_movers, low_base_review, predictability_index. Intentionally LLM-free for the same telephone-game reason as the findings document. |
 | `schema.sql`       | Canonical schema (includes lookup-table seeds: hs_groups, country_aliases, caveats, transshipment_hubs, cif_fob_baselines). A fresh setup is `createdb gacc && psql gacc < schema.sql` — no migration replay needed. |
 | `migrations.archived-2026-05-09/` | Historical record of the dev migrations that built up to the current schema. Folded into `schema.sql` on the 2026-05-09 clean-state rebuild; kept for reference but no longer applied. |
