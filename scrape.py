@@ -552,6 +552,42 @@ def main() -> None:
             "DB. No writes."
         ),
     )
+    p.add_argument(
+        "--llm-rejections", action="store_true",
+        help=(
+            "Print recent rows from llm_rejection_log — LLM-framing "
+            "outputs the verifier rejected (parse failure or numeric "
+            "verification failure). Each row shows cluster name, stage, "
+            "reason, detail, and a preview of the rejected prose. Use "
+            "--limit N to control how many rows to show (default 20). "
+            "No writes."
+        ),
+    )
+    p.add_argument(
+        "--periodic-history", action="store_true",
+        help=(
+            "Print recent rows from periodic_run_log — one row per "
+            "`--periodic-run` invocation, including no-ops. Pairs with "
+            "brief_runs (which only has rows for cycles that wrote an "
+            "export). Use --limit N. No writes."
+        ),
+    )
+    p.add_argument(
+        "--emit-history", action="store_true",
+        help=(
+            "Print recent rows from findings_emit_log — one row per "
+            "`detect_X()` analyser invocation, with the emit counts "
+            "(new / confirmed / superseded) the analyser produced. Use "
+            "--limit N. No writes."
+        ),
+    )
+    p.add_argument(
+        "--limit", type=int, default=20, metavar="N",
+        help=(
+            "With --llm-rejections / --periodic-history / --emit-history: "
+            "how many rows to show. Default 20."
+        ),
+    )
     args = p.parse_args()
 
     if args.log_check:
@@ -577,6 +613,24 @@ def main() -> None:
         statuses = routine_log.compute_status()
         lifecycle = routine_log.compute_lifecycle()
         print(routine_log.render_status_table(statuses, lifecycle), end="")
+        return
+
+    if args.llm_rejections:
+        import llm_rejection_log
+        rows = llm_rejection_log.recent_rejections(limit=args.limit)
+        print(llm_rejection_log.render_rejections(rows), end="")
+        return
+
+    if args.periodic_history:
+        import periodic_run_log
+        rows = periodic_run_log.recent_cycles(limit=args.limit)
+        print(periodic_run_log.render_cycles(rows), end="")
+        return
+
+    if args.emit_history:
+        import findings_emit_log
+        rows = findings_emit_log.recent_runs(limit=args.limit)
+        print(findings_emit_log.render_runs(rows), end="")
         return
 
     if args.finding_provenance is not None:

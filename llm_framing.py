@@ -931,6 +931,31 @@ def _persist_lead(
     )
 
 
+def _record_rejection(
+    *, scrape_run_id: int, cluster_name: str, model: str | None,
+    stage: str, reason: str, detail: str, raw_output: str,
+) -> None:
+    """Persist a rejection to llm_rejection_log. Best-effort: a DB write
+    failure here must not abort the LLM run (the verifier warning has
+    already gone to stderr and the rejection itself is per-design)."""
+    try:
+        import llm_rejection_log
+        llm_rejection_log.log_rejection(
+            scrape_run_id=scrape_run_id,
+            cluster_name=cluster_name,
+            model=model,
+            stage=stage,  # type: ignore[arg-type]
+            reason=reason,
+            detail=detail or None,
+            raw_output=raw_output or None,
+        )
+    except Exception:
+        log.exception(
+            "Failed to write llm_rejection_log row (cluster=%r, reason=%r)",
+            cluster_name, reason,
+        )
+
+
 # =============================================================================
 # Top-level orchestrator
 # =============================================================================
@@ -988,6 +1013,15 @@ def detect_llm_framings(
                     "Lead-scaffold parse rejected for %r: %s (%s)",
                     cluster.group_name, parsed.reason, parsed.detail,
                 )
+                _record_rejection(
+                    scrape_run_id=analysis_run_id,
+                    cluster_name=cluster.group_name,
+                    model=model_used,
+                    stage="parse",
+                    reason=parsed.reason,
+                    detail=parsed.detail,
+                    raw_output=raw_output,
+                )
                 counts["skipped_unverified"] += 1
                 continue
 
@@ -996,6 +1030,15 @@ def detect_llm_framings(
                 log.warning(
                     "Lead-scaffold validation rejected for %r: %s (%s)",
                     cluster.group_name, scaffold.reason, scaffold.detail,
+                )
+                _record_rejection(
+                    scrape_run_id=analysis_run_id,
+                    cluster_name=cluster.group_name,
+                    model=model_used,
+                    stage="validate",
+                    reason=scaffold.reason,
+                    detail=scaffold.detail,
+                    raw_output=raw_output,
                 )
                 counts["skipped_unverified"] += 1
                 continue

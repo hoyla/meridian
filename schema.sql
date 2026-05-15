@@ -772,3 +772,64 @@ CREATE TABLE routine_check_log (
 CREATE INDEX idx_routine_check_log_source_checked
     ON routine_check_log (source, checked_at DESC);
 
+-- LLM-framing rejections: every output the verifier rejects (parse fail
+-- or numeric verification fail). Captures raw output + reason + detail
+-- + model so the failed prose is inspectable post-hoc. See
+-- dev_notes/logging-policy.md.
+CREATE TABLE llm_rejection_log (
+    id              BIGSERIAL PRIMARY KEY,
+    rejected_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    scrape_run_id   BIGINT REFERENCES scrape_runs(id),
+    cluster_name    TEXT NOT NULL,
+    model           TEXT,
+    stage           TEXT NOT NULL,
+    reason          TEXT NOT NULL,
+    detail          TEXT,
+    raw_output      TEXT,
+    closest_fact_path  TEXT,
+    closest_fact_value DOUBLE PRECISION,
+    CHECK (stage IN ('parse', 'validate'))
+);
+CREATE INDEX idx_llm_rejection_log_rejected_at
+    ON llm_rejection_log (rejected_at DESC);
+CREATE INDEX idx_llm_rejection_log_cluster
+    ON llm_rejection_log (cluster_name);
+
+-- Periodic-run cycle log: one row per `--periodic-run` invocation,
+-- regardless of whether it wrote a new export or no-op'd. brief_runs
+-- only has rows for cycles that wrote — this captures the no-ops too.
+CREATE TABLE periodic_run_log (
+    id              BIGSERIAL PRIMARY KEY,
+    invoked_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    action_taken    BOOLEAN NOT NULL,
+    reason          TEXT NOT NULL,
+    data_period     DATE,
+    findings_path   TEXT,
+    analyser_counts JSONB,
+    duration_ms     INT,
+    forced          BOOLEAN NOT NULL DEFAULT FALSE,
+    skip_llm        BOOLEAN NOT NULL DEFAULT FALSE,
+    error           TEXT
+);
+CREATE INDEX idx_periodic_run_log_invoked_at
+    ON periodic_run_log (invoked_at DESC);
+
+-- One row per `detect_X()` analyser invocation. Covers periodic-run
+-- cycles AND ad-hoc CLI runs; the scrape_runs row links each entry to
+-- its analyser_run context.
+CREATE TABLE findings_emit_log (
+    id               BIGSERIAL PRIMARY KEY,
+    logged_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    scrape_run_id    BIGINT REFERENCES scrape_runs(id),
+    analyser_method  TEXT NOT NULL,
+    subkind          TEXT NOT NULL,
+    comparison_scope TEXT,
+    flow             INT,
+    counts           JSONB NOT NULL,
+    duration_ms      INT
+);
+CREATE INDEX idx_findings_emit_log_logged_at
+    ON findings_emit_log (logged_at DESC);
+CREATE INDEX idx_findings_emit_log_subkind
+    ON findings_emit_log (subkind, logged_at DESC);
+

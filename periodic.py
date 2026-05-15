@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import time
 from datetime import date
 from typing import Any
 
@@ -99,6 +100,28 @@ def run_periodic(
     separate concerns means a network failure during fetch doesn't leave
     the analyser pipeline in an in-flight state.
     """
+    started_monotonic = time.monotonic()
+
+    def _persist_log(result: "PeriodicRunResult", error: str | None = None) -> None:
+        """Best-effort persistence to periodic_run_log. A failure here
+        never escalates — the caller's PeriodicRunResult is the source
+        of truth for the cycle's outcome."""
+        try:
+            import periodic_run_log
+            periodic_run_log.log_run(
+                action_taken=result.action_taken,
+                reason=result.reason,
+                data_period=result.data_period,
+                findings_path=result.findings_path,
+                analyser_counts=result.analyser_counts or None,
+                duration_ms=int((time.monotonic() - started_monotonic) * 1000),
+                forced=force,
+                skip_llm=skip_llm,
+                error=error,
+            )
+        except Exception:
+            log.exception("Failed to write periodic_run_log row")
+
     latest_data = briefing_pack.latest_eurostat_period()
     latest_published = briefing_pack.latest_recorded_data_period(
         trigger="periodic_run"
@@ -110,16 +133,18 @@ def run_periodic(
     )
 
     if latest_data is None:
-        return PeriodicRunResult(
+        result = PeriodicRunResult(
             action_taken=False,
             reason="no Eurostat data ingested yet; ingest a period first",
             data_period=None,
             findings_path=None,
             leads_path=None,
         )
+        _persist_log(result)
+        return result
 
     if not force and latest_published is not None and latest_published >= latest_data:
-        return PeriodicRunResult(
+        result = PeriodicRunResult(
             action_taken=False,
             reason=(
                 f"data_period {latest_data} already published by a previous "
@@ -130,48 +155,105 @@ def run_periodic(
             findings_path=None,
             leads_path=None,
         )
+        _persist_log(result)
+        return result
 
     # --- Step 2: run all analyser kinds across all scope/flow combos. ---
     counts: dict[str, Any] = {}
 
-    log.info("periodic-run: running mirror-trade and mirror-gap-trends")
-    counts["mirror_trade"] = anomalies.detect_mirror_trade_gaps()
-    counts["mirror_gap_trends"] = anomalies.detect_mirror_gap_trends()
+    def _run_analyser(
+        key: str, subkind: str, fn, *,
+        scope: str | None = None, flow_label: int | str | None = None,
+        **kwargs,
+    ) -> dict[str, Any]:
+        """Invoke an analyser, time it, and persist a findings_emit_log row.
+        `flow_label` is the value to record in findings_emit_log.flow (the
+        analyser's own flow kwarg is in **kwargs, which may be int or str).
+        Best-effort: log failures don't escalate."""
+        log.info("periodic-run: running %s", key)
+        t_start = time.monotonic()
+        result = fn(**kwargs)
+        duration_ms = int((time.monotonic() - t_start) * 1000)
+        try:
+            import findings_emit_log
+            # Coerce flow_label: schema column is INT, but the gacc-aggregate
+            # analysers take flow='export'/'import'. Map those to 2/1 for
+            # storage so the column stays numeric-comparable.
+            flow_int: int | None
+            if flow_label is None:
+                flow_int = None
+            elif isinstance(flow_label, int):
+                flow_int = flow_label
+            else:
+                flow_int = 2 if flow_label == "export" else 1
+            findings_emit_log.log_run(
+                scrape_run_id=None,
+                analyser_method=subkind,
+                subkind=subkind,
+                comparison_scope=scope,
+                flow=flow_int,
+                counts=dict(result) if isinstance(result, dict) else {"raw": str(result)},
+                duration_ms=duration_ms,
+            )
+        except Exception:
+            log.exception("Failed to write findings_emit_log row for %s", key)
+        return result
+
+    counts["mirror_trade"] = _run_analyser(
+        "mirror_trade", "mirror_gap", anomalies.detect_mirror_trade_gaps,
+    )
+    counts["mirror_gap_trends"] = _run_analyser(
+        "mirror_gap_trends", "mirror_gap_zscore", anomalies.detect_mirror_gap_trends,
+    )
 
     for scope in ("eu_27", "uk", "eu_27_plus_uk"):
         for flow in (1, 2):
             key = f"hs_group_yoy_{scope}_flow{flow}"
-            log.info("periodic-run: running %s", key)
-            counts[key] = anomalies.detect_hs_group_yoy(
+            counts[key] = _run_analyser(
+                key, "hs_group_yoy", anomalies.detect_hs_group_yoy,
+                scope=scope, flow_label=flow,
                 flow=flow, comparison_scope=scope,
             )
             traj_key = f"hs_group_trajectory_{scope}_flow{flow}"
-            log.info("periodic-run: running %s", traj_key)
-            counts[traj_key] = anomalies.detect_hs_group_trajectories(
+            counts[traj_key] = _run_analyser(
+                traj_key, "hs_group_trajectory",
+                anomalies.detect_hs_group_trajectories,
+                scope=scope, flow_label=flow,
                 flow=flow, comparison_scope=scope,
             )
 
     for flow_str in ("export", "import"):
         key = f"gacc_aggregate_yoy_{flow_str}"
-        log.info("periodic-run: running %s", key)
-        counts[key] = anomalies.detect_gacc_aggregate_yoy(flow=flow_str)
+        counts[key] = _run_analyser(
+            key, "gacc_aggregate_yoy", anomalies.detect_gacc_aggregate_yoy,
+            flow_label=flow_str,
+            flow=flow_str,
+        )
 
     for flow_str in ("export", "import"):
         key = f"gacc_bilateral_aggregate_yoy_{flow_str}"
-        log.info("periodic-run: running %s", key)
-        counts[key] = anomalies.detect_gacc_bilateral_aggregate_yoy(flow=flow_str)
+        counts[key] = _run_analyser(
+            key, "gacc_bilateral_aggregate_yoy",
+            anomalies.detect_gacc_bilateral_aggregate_yoy,
+            flow_label=flow_str,
+            flow=flow_str,
+        )
 
     # Partner-share runs ONLY if the eurostat_world_aggregates table has
     # data for the latest 12 months — otherwise the analyser skips with
     # `skipped_no_world_data`. The periodic step is light when there's
     # no fresh denominator, heavy when there is.
-    for flow_int in (1, 2):
-        key = f"partner_share_flow{flow_int}"
-        log.info("periodic-run: running %s", key)
-        counts[key] = anomalies.detect_partner_share(flow=flow_int)
+    for flow_int_ in (1, 2):
+        key = f"partner_share_flow{flow_int_}"
+        counts[key] = _run_analyser(
+            key, "partner_share", anomalies.detect_partner_share,
+            flow_label=flow_int_,
+            flow=flow_int_,
+        )
 
     if not skip_llm:
         log.info("periodic-run: running llm-framing")
+        t_start_llm = time.monotonic()
         try:
             counts["llm_framing"] = llm_framing.detect_llm_framings(
                 model=llm_model,
@@ -185,6 +267,18 @@ def run_periodic(
                 "fresh leads", exc,
             )
             counts["llm_framing"] = {"error": str(exc)}
+        try:
+            import findings_emit_log
+            llm_counts = counts["llm_framing"]
+            findings_emit_log.log_run(
+                scrape_run_id=None,
+                analyser_method="llm_topline_v2_lead_scaffold",
+                subkind="narrative_hs_group",
+                counts=llm_counts if isinstance(llm_counts, dict) else {"raw": str(llm_counts)},
+                duration_ms=int((time.monotonic() - t_start_llm) * 1000),
+            )
+        except Exception:
+            log.exception("Failed to write findings_emit_log row for llm_framing")
     else:
         counts["llm_framing"] = {"skipped": True}
 
@@ -196,7 +290,7 @@ def run_periodic(
         trigger="periodic_run",
     )
 
-    return PeriodicRunResult(
+    result = PeriodicRunResult(
         action_taken=True,
         reason=f"new export written for data_period {latest_data}",
         data_period=latest_data,
@@ -204,3 +298,5 @@ def run_periodic(
         leads_path=leads_path,
         analyser_counts=counts,
     )
+    _persist_log(result)
+    return result
