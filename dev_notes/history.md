@@ -10,6 +10,109 @@ to understand how the project got here.
 
 ---
 
+## 2026-05-14/15 — provenance system, groups glossary, bundle rename
+
+A self-contained arc triggered by sending Lisa O'Carroll her first
+real export pack. Lisa wanted full audit-trail provenance for the
+findings she was about to quote; tracing the chain by hand surfaced
+a data-rigor issue that propagated into a wider hardening pass. Test
+count grew from 217 → 241.
+
+### Release-184 unit-field bug + three-layer guard ([`47d1596`](https://github.com/hoyla/meridian/commit/47d1596))
+
+While building the bespoke audit doc for Lisa's bilateral findings,
+discovered that release 184 (June 2025 GACC section-4 page) had
+`currency='CNY'` but `unit='USD1 Million'`, and 180 spurious v=2
+observation rows. The aggregate analysers summed both readings,
+inflating every GACC bilateral 12mo headline by ~0.6-0.7%. Headline
+rounding wasn't affected (€98.63B → €98.01B both read as "almost
+€100bn") but the audit trail wouldn't have survived close scrutiny.
+
+Fix in three layers so this cannot recur silently:
+
+- `parse.py` coerces unit to the canonical form when the page's
+  Unit annotation disagrees with the title-derived currency, with a
+  warning log.
+- `db._assert_currency_unit_consistent` refuses to persist a row
+  whose (currency, unit) pair isn't in `_GACC_CURRENCY_UNIT_PAIRS`.
+- `schema.sql` CHECK constraint `releases_gacc_unit_consistent` as
+  the final SQL-level guarantee.
+
+Migration `2026-05-14-fix-release-184-cny-usd-unit-mismatch.sql`
+corrected the data + added the constraint. Re-ran the bilateral
+and non-EU-bloc aggregate analysers, producing 240+40 supersedes
+per flow direction; everything else was unchanged.
+
+### Per-finding provenance generator ([`d390568`](https://github.com/hoyla/meridian/commit/d390568) + [`cb3b121`](https://github.com/hoyla/meridian/commit/cb3b121) + [`81927ac`](https://github.com/hoyla/meridian/commit/81927ac))
+
+`provenance.py` writes journalist-readable audit-trail files at
+`provenance/finding-N.md`. Each file: source URLs (per-month GACC
+release pages or Eurostat bulk-file URLs or HMRC OData query URLs),
+ECB FX rates used, plain-English glosses of each caveat code,
+cross-source corroboration where available, headline arithmetic
+decomposition, and a fact-checker replay-SQL appendix.
+
+Two entry points:
+
+- CLI on-demand: `python scrape.py --finding-provenance N`.
+- Bundled with `--briefing-pack --with-provenance`, restricted to
+  the editorially-fresh subset (Tier 1 changes + Top-N movers +
+  Top-N leads). Typically ~5-15 files per export.
+
+Frozen-snapshot semantics: idempotent on existing files; pass
+`--force` to regenerate after a methodology refresh. If the finding
+is later superseded, the old file is left in place so a journalist
+re-reading an earlier export sees what they read.
+
+Detailed templates ship for: `gacc_bilateral_aggregate_yoy{,_import}`
+(the first one, modelled on Lisa's hand-built doc); all six
+`hs_group_yoy*` scope/flow variants; all six `hs_group_trajectory*`
+scope/flow variants. Other subkinds emit a stub noting "generator
+pending" with a SQL hint. Extend `provenance._RENDERERS`.
+
+### Bundle filename numeric prefixes ([`17cbde6`](https://github.com/hoyla/meridian/commit/17cbde6))
+
+Lisa was renaming `findings.md`/`leads.md`/`data.xlsx` to
+`02_Leads.md`/`03_Findings.md`/`04_Data.xlsx` before forwarding to
+the desk. Baked the convention into the generator so the rename
+isn't a per-cycle chore. Order reflects Luke's framing in
+`01_Read_Me_First.md` ("This is actually where I suggest you start"):
+
+```
+01_Read_Me_First.md   (template — already prefixed)
+02_Leads.md           (was leads.md)
+03_Findings.md        (was findings.md)
+04_Data.xlsx          (was data.xlsx)
+05_Groups.md          (new — see below)
+```
+
+All cross-document references inside the docs updated to match.
+Standalone groups glossary keeps the un-prefixed dated form
+(`exports/groups-glossary-YYYY-MM-DD.md`) since it leaves a bundle
+on its own.
+
+### HS group glossary (`05_Groups.md`) ([`3076559`](https://github.com/hoyla/meridian/commit/3076559) + [`865a8a8`](https://github.com/hoyla/meridian/commit/865a8a8))
+
+A fifth bundle artefact: a journalist-facing reference doc explaining
+every named HS group. One section per row in `hs_groups`: description,
+HS LIKE patterns, top contributing CN8 codes from the most recent
+active `hs_group_yoy*` finding (with a concentration warning if a
+single CN8 is >80% of the group's value), and sibling groups
+auto-discovered by 4-digit HS prefix overlap. Draft groups
+(`created_by` starting with `draft:`) live in their own section so
+journalists don't quote unvalidated figures.
+
+Motivated by Luke's 2026-05-13 pack-review note flagging that
+journalists hit a mix of obviously-coded ("Plastics — chapter 39"),
+implicitly-coded ("EV batteries (Li-ion)" → HS 850760), and
+apparently-uncoded ("Honey") groups in `03_Findings.md` with no
+upstream reference to orient them.
+
+Also available standalone via `python scrape.py --groups-glossary
+[--out PATH]` for one-off generation between bundle runs.
+
+---
+
 ## 2026-05-12/13 — polish for first journalist handover
 
 A focused arc from "the supersede chain is clean" (post-v11) through

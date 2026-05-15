@@ -17,6 +17,13 @@ pass, leads.md polish, Top-5 movers digest, trajectory-volatile
 suppression, templates pipeline) has also shipped — see
 [`history.md` § 2026-05-12/13](history.md#2026-05-1213--polish-for-first-journalist-handover).
 
+The 2026-05-14/15 arc (release-184 unit-field fix + three-layer
+guard; per-finding provenance generator covering the bilateral,
+hs_group_yoy*, and hs_group_trajectory* families; numeric-prefixed
+bundle filenames; the `05_Groups.md` glossary; the
+`--groups-glossary` CLI) has also shipped — see
+[`history.md` § 2026-05-14/15](history.md#2026-05-1415--provenance-system-groups-glossary-bundle-rename).
+
 ## Near-term (likely next session)
 
 ### Watch the first 2-3 real cycles + decide delivery vector
@@ -134,6 +141,29 @@ The 6.5 promote/drop pass shipped 2026-05-10. A year from now a
 similar pass should re-evaluate what's editorially live. Three
 groups stayed draft (Honey, Polysilicon, Tropical timber) and
 might warrant a second look.
+
+### Provenance renderers for remaining subkinds
+
+The 2026-05-14/15 arc added detailed provenance templates for
+`gacc_bilateral_aggregate_yoy{,_import}`, `hs_group_yoy*` (six
+scope/flow variants), and `hs_group_trajectory*` (six scope/flow
+variants). What stays as a stub for now:
+
+- `mirror_gap*` — per-country CIF/FOB gap. Pick up if a story rests
+  on a specific mirror-gap finding being challenged.
+- `partner_share*` — China's share of EU extra-EU imports. Same
+  trigger.
+- `gacc_aggregate_yoy*` — non-EU bloc YoY (ASEAN, RCEP, etc.).
+- `llm_topline*` — narrative lead scaffold. The verification chain
+  is upstream (each verified number traces back to a deterministic
+  finding); the LLM-prose audit is less pressing than the
+  underlying-finding audit.
+
+Each is ~100 lines of renderer + a focused test, modelled on the
+shape of the corresponding subkind in `provenance.py`. The CLI flag
+`--finding-provenance N` already returns a stub for any of these
+that flags "generator pending"; extend `provenance._RENDERERS` when
+a journalist asks for one specifically.
 
 ## Data sources (deferred until needed)
 
