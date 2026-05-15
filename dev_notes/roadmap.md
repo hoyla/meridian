@@ -35,6 +35,59 @@ years where GACC publishes a separate February (2026 onwards) —
 captured as the "Derive January from Feb release's (ytd − monthly)"
 item below.
 
+## Observability / logging follow-ups (2026-05-15 evening arc)
+
+Four new audit-log surfaces shipped tonight along with
+[`dev_notes/logging-policy.md`](logging-policy.md):
+`routine_check_log` (per-source Routine telemetry + lifecycle
+bookends), `llm_rejection_log`, `periodic_run_log`,
+`findings_emit_log`. CLIs: `--source-status`, `--llm-rejections`,
+`--periodic-history`, `--emit-history`. What's still open:
+
+### Ad-hoc CLI coverage for `findings_emit_log`
+
+Today's integration is in `periodic.run_periodic`'s analyser
+dispatch — so `--periodic-run` cycles write rows, but ad-hoc
+`python scrape.py --analyse hs-group-yoy` from the CLI does not.
+Closing this means instrumenting each `detect_X()` directly (~9
+functions in `anomalies.py` + `llm_framing.detect_llm_framings`).
+The cleanest pattern is a context manager that wraps the body of
+each function: open it after `analysis_run_id` is created, capture
+the returned counts at exit, write the row in `__exit__`. ~half a
+day; deferred until ad-hoc runs become a frequent debugging case.
+
+### Supersede-reason classification
+
+`findings_emit_log` records aggregate counts (`new` / `confirmed`
+/ `superseded`) per analyser invocation, but doesn't distinguish
+*why* a row was superseded — data change vs method-version bump
+vs caveat-list change. Today's only way to tell is to inspect the
+old and new rows' `detail.method` manually.
+
+Implementation sketch: add `supersede_reason TEXT` and
+`prior_value_fields JSONB` to `findings`, populate them in
+`findings_io.emit_finding` on the supersede branch by comparing
+the new `value_fields` against the prior row's. Reasons:
+`method_bump` (only `method` differs), `value_change` (numeric
+fields differ), `caveat_change` (caveat list differs), `mixed`.
+
+Editorial payoff: the brief's Tier 1 method-bump-churn
+auto-suppression in [briefing_pack/sections/diff.py](../briefing_pack/sections/diff.py)
+could use a structured signal instead of inferring from
+value-identity. The first-export audit on 2026-05-12 surfaced this
+as the kind of inference that ought to be explicit.
+
+### Other silent-decision surfaces flagged but deferred
+
+Lower priority — pick up when one of them breaks visibly:
+
+- **Currency-unit guard rejections.** `db._assert_currency_unit_consistent`
+  raises on bad pairs. Adding a log table would capture which
+  release pages tripped it.
+- **Parser anomalies.** Title-format mismatches, unexpected column
+  counts, etc. Most raise today; some `log.warning`. Per-anomaly
+  table if frequency rises.
+
 ## Near-term (likely next session)
 
 ### Watch the first 2-3 real cycles + decide delivery vector
