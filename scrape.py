@@ -497,7 +497,79 @@ def main() -> None:
             "aggregate findings; other subkinds get a stub."
         ),
     )
+    p.add_argument(
+        "--log-check", metavar="SOURCE",
+        help=(
+            "Write one row to routine_check_log. SOURCE is typically "
+            "'eurostat', 'hmrc', or 'gacc'. Pair with --log-result; "
+            "optional --log-period / --log-notes / --log-error / "
+            "--log-duration-ms. Used by the daily Routine prompt to "
+            "record each per-source check (debug-only telemetry; no "
+            "journalist-facing surface reads from this table)."
+        ),
+    )
+    p.add_argument(
+        "--log-result",
+        choices=["new_data", "no_change", "not_yet_eligible", "error"],
+        help="With --log-check: outcome of the check.",
+    )
+    p.add_argument(
+        "--log-period", type=_parse_period, metavar="YYYY-MM",
+        help=(
+            "With --log-check: the period the Routine attempted to fetch "
+            "(Eurostat / HMRC). Omit for GACC index walks where the "
+            "concept doesn't apply."
+        ),
+    )
+    p.add_argument(
+        "--log-notes", metavar="TEXT",
+        help=(
+            "With --log-check: short human-readable note, e.g. "
+            "'walked 9 indexes, no new releases'."
+        ),
+    )
+    p.add_argument(
+        "--log-error", metavar="TEXT",
+        help="With --log-check --log-result error: the error message.",
+    )
+    p.add_argument(
+        "--log-duration-ms", type=int, metavar="N",
+        help="With --log-check: wall-clock duration of the check, milliseconds.",
+    )
+    p.add_argument(
+        "--source-status", action="store_true",
+        help=(
+            "Print a rolled-up debug view of routine_check_log: per "
+            "expected source (eurostat / hmrc / gacc), when last checked, "
+            "when new data last arrived, what's the latest period in the "
+            "DB. No writes."
+        ),
+    )
     args = p.parse_args()
+
+    if args.log_check:
+        if not args.log_result:
+            p.error("--log-check requires --log-result")
+        import routine_log
+        rid = routine_log.log_check(
+            args.log_check,
+            args.log_result,
+            candidate_period=args.log_period,
+            notes=args.log_notes,
+            error=args.log_error,
+            duration_ms=args.log_duration_ms,
+        )
+        log.info(
+            "routine_check_log id=%d (source=%s result=%s)",
+            rid, args.log_check, args.log_result,
+        )
+        return
+
+    if args.source_status:
+        import routine_log
+        statuses = routine_log.compute_status()
+        print(routine_log.render_status_table(statuses), end="")
+        return
 
     if args.finding_provenance is not None:
         import provenance

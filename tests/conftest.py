@@ -23,7 +23,7 @@ def _truncate_all(conn) -> None:
         cur.execute(
             "TRUNCATE TABLE findings, observations, source_snapshots, "
             "eurostat_raw_rows, eurostat_world_aggregates, hmrc_raw_rows, "
-            "brief_runs, scrape_runs, releases "
+            "brief_runs, scrape_runs, routine_check_log, releases "
             "RESTART IDENTITY CASCADE"
         )
 

@@ -746,3 +746,22 @@ CREATE TABLE brief_runs (
 );
 CREATE INDEX idx_brief_runs_generated_at ON brief_runs (generated_at DESC);
 
+-- Daily-Routine per-source check telemetry (debug-only). One row per source
+-- per Routine fire, recording whether the check found new data, found
+-- nothing new, was skipped because the next candidate period isn't due yet
+-- (Eurostat / HMRC), or errored. `python scrape.py --source-status` rolls
+-- this up into a 3-row table; see routine_log.py.
+CREATE TABLE routine_check_log (
+    id               BIGSERIAL PRIMARY KEY,
+    source           TEXT        NOT NULL,
+    checked_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    result           TEXT        NOT NULL,
+    candidate_period DATE,
+    notes            TEXT,
+    error            TEXT,
+    duration_ms      INT,
+    CHECK (result IN ('new_data', 'no_change', 'not_yet_eligible', 'error'))
+);
+CREATE INDEX idx_routine_check_log_source_checked
+    ON routine_check_log (source, checked_at DESC);
+
