@@ -94,7 +94,7 @@ support a `--comparison-scope` flag that picks
                 ┌─────────────┬─────────────┬─────────────────┬─────────────┐
                 ▼             ▼             ▼                 ▼             ▼
         03_Findings.md   02_Leads.md   04_Data.xlsx      05_Groups.md  provenance/
-          (markdown,      (markdown,   (xlsx, 9 tabs;    (markdown,    (markdown,
+          (markdown,      (markdown,   (xlsx, 10 tabs;   (markdown,    (markdown,
            deterministic   LLM-drafted  Google Sheets     HS group      per-finding,
            — no LLM in the leads,       writer stubbed)   reference     opt-in via
            loop;           companion    Same DB           — what each   --with-provenance
@@ -243,7 +243,7 @@ exports/
                              see 01_Read_Me_First.md).
     03_Findings.md        ← deterministic Markdown; NotebookLM-ready, no LLM in the loop.
                              Top N movers above Tier 1/2/3.
-    04_Data.xlsx          ← 9-tab spreadsheet, LLM-free. Same DB snapshot.
+    04_Data.xlsx          ← 10-tab spreadsheet, LLM-free. Same DB snapshot.
     05_Groups.md          ← HS group reference. One section per row in `hs_groups`:
                              description, HS patterns, top contributing CN8 codes,
                              sibling groups. Read once to orient before quoting any

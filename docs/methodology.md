@@ -376,9 +376,10 @@ row but no analyser promoted it to a finding.
   and the supersede-chain trigger.
 - `ytd_cumulative.yoy_pct` — Jan-to-anchor of current year vs same
   range prior year. The Soapbox A1 register: "Jan-Apr exports +19%".
-  Null when the prior-year YTD observation is absent (e.g. anchors
-  in early 2025 where the equivalent prior-year month is missing
-  due to GACC's Jan-Feb-combined Chinese New Year format).
+  Null when the prior-year YTD observation is absent. (As of 2026-05-15
+  the Jan-Feb-combined Chinese-New-Year gap is mostly closed for
+  2020-2025 — see "Jan+Feb combined releases" below — but specific
+  pre-2020 anchors may still lack a comparator.)
 - `single_month.yoy_pct` — anchor month vs same month prior year.
   The Soapbox A3 register: "EU exports to China Feb 2026 -16.2%".
   Null when prior month is missing.
@@ -390,7 +391,49 @@ journalist picks whichever cadence matches the story.
 
 **Natural key**: `(alias_id, current_end_yyyymm)`. Flow direction
 encoded in subkind. Method version
-`gacc_bilateral_aggregate_yoy_v1_eu_and_single_countries`.
+`gacc_bilateral_aggregate_yoy_v2_jan_feb_combined_caveat`.
+
+#### Jan+Feb combined releases (Chinese New Year)
+
+GACC bundles January and February into a single cumulative release
+each Chinese New Year — the publication pattern observed from 2020
+through 2025 (2026 was the exception, publishing a separate February
+release alongside a January YTD). The combined release page has a
+narrower table layout: "Monthly" and "YTD" columns collapse to one
+Jan+Feb cumulative value per flow.
+
+Before 2026-05-15 the parser skipped these pages and the rolling-12mo
+analysers carried a load-bearing `partial_window` caveat (windows
+were comparing 10 or 11 months against 12 or vice versa, which made
+YoYs look ~15-20pp more positive than they should have been). The
+fix:
+
+- The parser recognises the "January-February YYYY" title shape,
+  anchors the release at Feb 1 of the year, and emits one
+  `period_kind='cumulative_jan_feb'` observation per partner × flow.
+  Release kind: `'preliminary_jan_feb'` (distinct from `'preliminary'`)
+  so the natural key on `releases` doesn't collide.
+- The two YoY analysers (`gacc_aggregate_yoy`,
+  `gacc_bilateral_aggregate_yoy`) treat each `cumulative_jan_feb`
+  observation as a **2-month chunk** filling the Jan + Feb gap for
+  its year. Honest accounting: the cumulative is added to the
+  window's sum once and both calendar months are marked covered.
+  The cumulative is NOT split 50/50 across Jan and Feb —
+  interpolation would invent per-month figures the source never
+  asserted.
+- A finding whose window uses a cumulative chunk carries the
+  `jan_feb_combined` caveat code and a `detail.totals.jan_feb_combined_years`
+  list. The brief's Tier 2 row, the `gacc_bilateral_yoy` spreadsheet
+  tab, and the per-finding provenance file all surface this to the
+  journalist.
+
+What this doesn't fix: years where GACC publishes February as a
+separate release (2026 onwards) but no standalone January exists.
+For those, January can be derived as `(Feb release's YTD) − (Feb
+release's Monthly)` — a deterministic, no-interpolation
+calculation that's queued as a follow-up enhancement. Until that
+lands, the rolling-12mo `partial_window` caveat fires on these
+anchors with one missing month on the current side.
 
 Where in the findings document: Tier 2 has a dedicated per-bilateral
 state-of-play block, between the per-HS-group view (narrower) and

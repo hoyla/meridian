@@ -73,6 +73,25 @@ cars), HS-6 (subheading, internationally aligned), HS-8
 HS-6 minimises cross-source divergence for HS-level
 comparisons.
 
+### Jan+Feb combined release
+GACC's Chinese-New-Year publishing pattern: a single cumulative
+release covering both January and February of a given year, rather
+than two separate monthly releases. Observed for 2020-2025. The
+release page is titled "...January-February YYYY (in CCY)" and the
+table publishes one Jan+Feb cumulative value per flow (not separate
+month + YTD columns). The parser stores it as one
+`period_kind='cumulative_jan_feb'` observation per partner × flow,
+anchored at Feb 1 of the year. The two GACC YoY analysers
+(`gacc_aggregate_yoy`, `gacc_bilateral_aggregate_yoy`) treat each
+cumulative as a 2-month chunk filling the window's Jan + Feb gap
+honestly — the value is added once, the two months are marked
+covered, and the cumulative is *not* split 50/50 across Jan and
+Feb (interpolation would invent per-month figures the source never
+asserted). Findings whose windows use one of these chunks carry the
+`jan_feb_combined` caveat code and a `jan_feb_combined_years` list
+in their `detail.totals`. See `methodology.md` § "Jan+Feb combined
+releases" for the full editorial framing.
+
 ### kg coverage
 The fraction of a finding's `value_eur` backed by an actual
 `quantity_kg` measurement. Groups dominated by HS codes whose
