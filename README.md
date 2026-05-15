@@ -154,7 +154,7 @@ python scrape.py --export-sheet --out-path exports/custom.xlsx
 python scrape.py --export-sheet --out-format sheets --spreadsheet-id <ID>   # Google Sheets (pending creds)
 
 # Three-artefact bundle: deterministic brief + LLM leads + data spreadsheet
-python scrape.py --briefing-pack                              # ./exports/YYYY-MM-DD-HHMM/{findings.md, leads.md, data.xlsx}
+python scrape.py --briefing-pack                              # ./exports/YYYY-MM-DD-HHMM/{01_Read_Me_First.md, 02_Leads.md, 03_Findings.md, 04_Data.xlsx, 05_Groups.md}
 python scrape.py --briefing-pack --briefing-top-n 20          # 20 movers per flow direction
 python scrape.py --briefing-pack --export-dir exports/today   # explicit output folder
 python scrape.py --briefing-pack --export-scope "EV batteries (Li-ion)"  # adds slug to folder + scope line in docs

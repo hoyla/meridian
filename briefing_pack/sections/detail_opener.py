@@ -21,7 +21,7 @@ def _section_detail_opener() -> _Section:
         "combination, plus trajectory shape buckets, mirror gaps, and "
         "low-base reviews. Drill in here when you need a citable number, "
         "per-reporter contribution detail, or the per-finding caveat list. "
-        "The same content is in `data.xlsx` if you'd rather sort and filter."
+        "The same content is in `04_Data.xlsx` if you'd rather sort and filter."
     )
     lines.append("")
     return _Section(markdown="\n".join(lines))

@@ -360,13 +360,16 @@ def test_permalink_base_changes_trace_token_to_link(
 def test_export_writes_brief_and_leads_into_folder(
     empty_findings, test_db_url, tmp_path,
 ):
-    """Default export creates a per-export folder with findings.md +
-    leads.md inside. Pair-by-folder is the new convention."""
+    """Default export creates a per-export folder with the numbered
+    bundle files inside. The numeric prefix on each filename is
+    deliberate — most file viewers sort lexically, so the prefixes
+    drive a default reading order (read-me → leads → findings → data
+    → groups)."""
     brief_path, leads_path = briefing_pack.export(
         out_dir=str(tmp_path / "20260510-1200"),
     )
-    assert Path(brief_path).name == "findings.md"
-    assert Path(leads_path).name == "leads.md"
+    assert Path(brief_path).name == "03_Findings.md"
+    assert Path(leads_path).name == "02_Leads.md"
     assert Path(brief_path).parent == Path(leads_path).parent
     brief_content = Path(brief_path).read_text()
     leads_content = Path(leads_path).read_text()
@@ -501,16 +504,18 @@ def test_paired_export_cross_references_each_other(
     )
     brief = Path(brief_path).read_text()
     leads = Path(leads_path).read_text()
-    # Both docs carry an "In this export folder" block listing all three
-    # artefacts. The block names every artefact by filename and marks
-    # the current doc as "(this document)".
+    # Both docs carry an "In this export folder" block listing all four
+    # artefacts. The block names every artefact by filename (with the
+    # numeric reading-order prefix on each) and marks the current doc
+    # as "(this document)".
     for doc in (brief, leads):
         assert "## In this export folder" in doc
-        assert "`findings.md`" in doc
-        assert "`leads.md`" in doc
-        assert "`data.xlsx`" in doc
-    assert "**`findings.md`** — deterministic Markdown findings (this document)" in brief
-    assert "**`leads.md`** — LLM-scaffolded investigation leads (this document)" in leads
+        assert "`03_Findings.md`" in doc
+        assert "`02_Leads.md`" in doc
+        assert "`04_Data.xlsx`" in doc
+        assert "`05_Groups.md`" in doc
+    assert "**`03_Findings.md`** — deterministic Markdown findings (this document)" in brief
+    assert "**`02_Leads.md`** — LLM-scaffolded investigation leads (this " in leads
 
 
 def test_about_findings_endnote_appears_in_both_docs(
@@ -618,7 +623,7 @@ def test_export_records_brief_run(empty_findings, test_db_url, tmp_path):
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
         cur.execute("SELECT output_path, top_n FROM brief_runs ORDER BY id DESC LIMIT 1")
         path, top_n = cur.fetchone()
-    assert path == str(tmp_path / "20260510-1200" / "findings.md")
+    assert path == str(tmp_path / "20260510-1200" / "03_Findings.md")
     assert top_n == 5
 
 

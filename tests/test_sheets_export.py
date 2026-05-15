@@ -381,9 +381,10 @@ def test_briefing_pack_export_also_writes_data_xlsx(
         out_dir=str(tmp_path / "20260510-1200"),
     )
     folder = Path(brief_path).parent
-    assert (folder / "findings.md").exists()
-    assert (folder / "leads.md").exists()
-    assert (folder / "data.xlsx").exists()
+    assert (folder / "03_Findings.md").exists()
+    assert (folder / "02_Leads.md").exists()
+    assert (folder / "04_Data.xlsx").exists()
+    assert (folder / "05_Groups.md").exists()
 
 
 def test_briefing_pack_export_can_disable_spreadsheet(
@@ -403,7 +404,7 @@ def test_briefing_pack_export_can_disable_spreadsheet(
         spreadsheet=False,
     )
     folder = Path(brief_path).parent
-    assert (folder / "data.xlsx").exists() is False
+    assert (folder / "04_Data.xlsx").exists() is False
 
 
 def test_google_sheets_writer_raises_until_wired_up():

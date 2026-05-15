@@ -8,7 +8,10 @@ from briefing_pack._helpers import _Section
 
 
 def _section_headline(
-    cur, companion_filename: str | None = None, scope_label: str | None = None,
+    cur,
+    companion_filename: str | None = None,
+    scope_label: str | None = None,
+    groups_filename: str | None = None,
 ) -> _Section:
     """Top-of-pack scene-setting: schema version, period coverage, finding counts."""
     cur.execute(
@@ -36,16 +39,17 @@ def _section_headline(
     lines.append("into the project's database. A **Sources** appendix at the end lists every third-party ")
     lines.append("URL the findings rest on, with fetch timestamps.")
     lines.append("")
-    leads_ref = f"`{companion_filename}`" if companion_filename else "`leads.md`"
+    leads_ref = f"`{companion_filename}`" if companion_filename else "`02_Leads.md`"
+    groups_ref = f"`{groups_filename}`" if groups_filename else "`05_Groups.md`"
     lines.append("## In this export folder")
     lines.append("")
     lines.append(
-        "This is one of three artefacts generated together from the same DB "
-        "snapshot. All three share the same finding IDs; switch between them "
+        "This is one of four artefacts generated together from the same DB "
+        "snapshot. All four share the same finding IDs; switch between them "
         "depending on what you need."
     )
     lines.append("")
-    lines.append("- **`findings.md`** — deterministic Markdown findings (this document). NotebookLM-ready.")
+    lines.append("- **`03_Findings.md`** — deterministic Markdown findings (this document). NotebookLM-ready.")
     lines.append(
         f"- **{leads_ref}** — LLM-scaffolded investigation leads. One per HS group: "
         "anomaly summary, 2-3 picked hypotheses from a curated catalog, "
@@ -54,9 +58,14 @@ def _section_headline(
         "interpretation."
     )
     lines.append(
-        "- **`data.xlsx`** — 8-tab spreadsheet for data journalists. Same "
+        "- **`04_Data.xlsx`** — 8-tab spreadsheet for data journalists. Same "
         "findings, long-format with filterable scope/flow columns, "
         "predictability badges, CIF/FOB baseline expansion. Also LLM-free."
+    )
+    lines.append(
+        f"- **{groups_ref}** — HS group reference. What each named "
+        "group contains, top contributing CN8 codes, sibling groups. "
+        "Read once before quoting any category figure."
     )
     lines.append("")
     lines.append("## Scope notes")

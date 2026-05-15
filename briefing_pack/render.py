@@ -155,6 +155,7 @@ def render(
     top_n: int = DEFAULT_TOP_N,
     companion_filename: str | None = None,
     scope_label: str | None = None,
+    groups_filename: str | None = None,
 ) -> str:
     """Render the full briefing pack as a single Markdown string.
 
@@ -162,6 +163,11 @@ def render(
     leads document. The headline paragraph cites it directly so a reader
     can find the LLM-scaffolded leads alongside. Set automatically by
     `export()`; pass None for ad-hoc renders that have no paired file.
+
+    `groups_filename` (when provided): the basename of the paired
+    HS-group reference doc. Cited in the headline's "In this export
+    folder" block alongside the leads file. Set automatically by
+    `export()`; pass None for ad-hoc renders.
 
     `scope_label` (when provided): a human-readable scope description
     surfaced in the headline so a brief shared standalone still
@@ -172,7 +178,8 @@ def render(
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         # ----- Front matter: title, reader's guide, scope/caveat setup -----
         sections.append(_section_headline(
-            cur, companion_filename=companion_filename, scope_label=scope_label,
+            cur, companion_filename=companion_filename,
+            groups_filename=groups_filename, scope_label=scope_label,
         ))
         sections.append(_section_reader_guide())
 
@@ -304,7 +311,7 @@ def render_leads(
         "underlying database."
     )
     lines.append("")
-    findings_ref = f"`{companion_filename}`" if companion_filename else "`findings.md`"
+    findings_ref = f"`{companion_filename}`" if companion_filename else "`03_Findings.md`"
     lines.append("## In this export folder")
     lines.append("")
     lines.append(
@@ -319,18 +326,18 @@ def render_leads(
         "underlying numbers any lead below references."
     )
     lines.append(
-        "- **`leads.md`** — LLM-scaffolded investigation leads (this "
+        "- **`02_Leads.md`** — LLM-scaffolded investigation leads (this "
         "document). Kept separate from the findings so a downstream LLM "
         "tool reasoning over them sees raw data, not another LLM's "
         "interpretation."
     )
     lines.append(
-        "- **`data.xlsx`** — 8-tab spreadsheet for data journalists. Same "
+        "- **`04_Data.xlsx`** — 8-tab spreadsheet for data journalists. Same "
         "findings, long-format with filterable scope/flow columns, "
         "predictability badges, CIF/FOB baseline expansion. Also LLM-free."
     )
     lines.append(
-        "- **`groups.md`** — HS group reference. What each named group "
+        "- **`05_Groups.md`** — HS group reference. What each named group "
         "contains, what HS codes feed it, top contributing CN8 codes, "
         "sibling groups. Read once to orient before quoting any "
         "category figure."
@@ -346,7 +353,7 @@ def render_leads(
         "[glossary](https://github.com/hoyla/meridian/blob/main/docs/glossary.md) "
         "on first occurrence per lead. Family-universal caveats (CIF/FOB, "
         "CN8 revisions, multi-partner sum, etc.) apply to every finding "
-        "by construction and are described once in `findings.md`'s "
+        "by construction and are described once in `03_Findings.md`'s "
         "methodology footer rather than repeated here."
     )
     lines.append("")
@@ -466,19 +473,27 @@ def export(
             slug = f"-{_slugify_scope(scope_label)}" if scope_label else ""
             out_dir = f"./exports/{ts}{slug}"
         d = Path(out_dir)
-        p = d / "findings.md"
-        lp = d / "leads.md"
+        # File names carry numeric prefixes so that most file viewers
+        # (Drive, Finder, the GitHub web UI) list them in the order
+        # we'd like a journalist to read them: orientation → leads
+        # (the LLM-scaffolded "start here") → findings (deterministic
+        # detail) → data (the spreadsheet) → groups (the reference
+        # glossary). The `01_Read_Me_First.md` template is copied in
+        # by `_copy_export_templates()` and slots in first.
+        p = d / "03_Findings.md"
+        lp = d / "02_Leads.md"
         if spreadsheet is None:
             spreadsheet = True  # bundle is the default user-facing mode
 
     # Each render gets the OTHER doc's basename as its companion citation.
     brief_basename = p.name
     leads_basename = lp.name
+    groups_basename = "05_Groups.md" if out_path is None else None
 
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(render(
         top_n=top_n, companion_filename=leads_basename,
-        scope_label=scope_label,
+        groups_filename=groups_basename, scope_label=scope_label,
     ))
     if record:
         _record_brief_run(
@@ -506,16 +521,19 @@ def export(
     # programmatic callers using out_path/leads_path don't expect a
     # third file).
     if out_path is None:
-        groups_path = p.parent / "groups.md"
-        groups_path.write_text(render_groups(companion_filename=brief_basename))
+        groups_path = p.parent / "05_Groups.md"
+        groups_path.write_text(render_groups(
+            companion_filename=brief_basename,
+            leads_filename=leads_basename,
+        ))
         log.info("Wrote HS group reference to %s", groups_path)
 
     if spreadsheet:
         # Lazy import — sheets_export imports from this module, so a
         # top-level import would create a cycle. The sheet always lives
-        # next to the brief in the same folder; filename is `data.xlsx`.
+        # next to the brief in the same folder; filename `04_Data.xlsx`.
         import sheets_export
-        xlsx_path = p.parent / "data.xlsx"
+        xlsx_path = p.parent / "04_Data.xlsx"
         sheets_export.XlsxWriter().write(
             sheets_export.assemble_sheets(), str(xlsx_path),
         )

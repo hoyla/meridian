@@ -235,8 +235,11 @@ def _section_for_group(
     return "\n".join(out)
 
 
-def render_groups(companion_filename: str = "findings.md") -> str:
-    """Build the standalone `groups.md` reference for an export bundle.
+def render_groups(
+    companion_filename: str = "03_Findings.md",
+    leads_filename: str = "02_Leads.md",
+) -> str:
+    """Build the standalone `05_Groups.md` reference for an export bundle.
 
     Pulls every row from `hs_groups`, fetches the latest active
     `hs_group_yoy*` finding per group, and renders one section per
@@ -252,9 +255,9 @@ def render_groups(companion_filename: str = "findings.md") -> str:
         f"{datetime.now().strftime('%Y-%m-%d %H:%M')} from the "
         f"`hs_groups` table. Read this once before quoting any "
         f"category figure in [`{companion_filename}`]({companion_filename}) "
-        f"or `leads.md` — it explains what each named group does and "
-        f"does not contain, and points you at sibling groups for "
-        f"adjacent material.*"
+        f"or [`{leads_filename}`]({leads_filename}) — it explains what "
+        f"each named group does and does not contain, and points you at "
+        f"sibling groups for adjacent material.*"
     )
     lines.append("")
     lines.append(
@@ -323,7 +326,7 @@ def render_groups(companion_filename: str = "findings.md") -> str:
         lines.append(
             "These groups are seeded but their HS code selection has "
             "not yet been editorially validated against a real story. "
-            "Figures appear in `findings.md` for transparency but "
+            "Figures appear in `03_Findings.md` for transparency but "
             "should not be quoted without verification. Each will "
             "either be promoted (the `draft:` prefix on `created_by` "
             "removed) or dropped once a journalist tests it in anger."

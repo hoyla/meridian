@@ -114,7 +114,7 @@ def test_draft_groups_in_their_own_section(clean_db, db_conn):
     # And the dedicated draft-section header appears.
     assert "## Draft groups" in text
     # Draft preamble warns against quoting.
-    assert "Figures appear in `findings.md` for transparency" in text
+    assert "Figures appear in `03_Findings.md` for transparency" in text
 
 
 def test_sibling_groups_link_via_4_digit_hs_prefix(clean_db, db_conn):

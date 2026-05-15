@@ -47,7 +47,7 @@ def _section_reader_guide() -> _Section:
         "caveats, top reporters, top CN8 contributors, monthly trajectory series. "
         "Drill in when you need to source a specific number or quote with "
         "confidence. The same data is available in sortable/filterable form "
-        "in the `data.xlsx` companion."
+        "in the `04_Data.xlsx` companion."
     )
     lines.append("")
     lines.append(
