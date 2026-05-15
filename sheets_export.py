@@ -108,7 +108,7 @@ def _filter_visible_caveats(codes: list[str] | None) -> list[str]:
 def assemble_sheets() -> list[SheetData]:
     """Build the journalist-facing spreadsheet tabs.
 
-    Tab roster (9):
+    Tab roster (10):
 
     1. summary — wide, one row per HS group, all 3 scopes × 2 flows side
        by side. Best starting place for editorial scanning.
@@ -119,13 +119,17 @@ def assemble_sheets() -> list[SheetData]:
        reporter); contribution + share of group's delta. Phase 6.11.
     5. trajectories — long, one row per (group, scope, flow), shape
        classification + features.
-    6. mirror_gaps — latest mirror_gap per partner, with per-country
+    6. gacc_bilateral_yoy — one row per (partner, flow) of the GACC-side
+       bilateral aggregate findings (Tier 2 of findings.md in sortable
+       form). Carries visible_caveats + jan_feb_combined_years so
+       Chinese-New-Year combined-release coverage is filterable.
+    7. mirror_gaps — latest mirror_gap per partner, with per-country
        CIF/FOB baseline + excess-over-baseline split.
-    7. mirror_gap_movers — z-score sheet, sorted by |z|.
-    8. low_base_review — findings flagged low_base; pre-quote audit queue.
-    9. predictability_index — per-group YoY predictability (Phase 6.6
-       backtest output) summarised so a journalist can sort/filter on
-       which groups give robust headline percentages.
+    8. mirror_gap_movers — z-score sheet, sorted by |z|.
+    9. low_base_review — findings flagged low_base; pre-quote audit queue.
+    10. predictability_index — per-group YoY predictability (Phase 6.6
+        backtest output) summarised so a journalist can sort/filter on
+        which groups give robust headline percentages.
 
     The narrative_hs_group findings (LLM-scaffolded leads) are
     intentionally excluded — they live in `leads.md` alongside this
@@ -155,6 +159,7 @@ def assemble_sheets() -> list[SheetData]:
                                       top_movers_by_id=top_movers_by_id))
     sheets.append(_hs_yoy_reporter_movers_sheet())
     sheets.append(_trajectories_long_sheet())
+    sheets.append(_gacc_bilateral_yoy_sheet())
     sheets.append(_mirror_gaps_sheet())
     sheets.append(_mirror_gap_movers_sheet())
     sheets.append(_low_base_review_sheet())
@@ -666,6 +671,100 @@ def _mirror_gap_movers_sheet() -> SheetData:
             "Sorted by |z|. High |z| = gap moved unusually for that partner. "
             "z_score >= 1.5 was the analyser threshold; |z| >= 2.5 is "
             "robust, [1.5, 2.0) is marginal — see methodology.md §7."
+        ),
+        headers=headers, rows=rows,
+    )
+
+
+def _gacc_bilateral_yoy_sheet() -> SheetData:
+    """One row per (partner, flow) for the latest gacc_bilateral_aggregate_yoy
+    finding. Carries the same three YoY operators the brief's Tier 2 block
+    surfaces (12mo rolling / YTD / single-month) plus a `visible_caveats`
+    column and an explicit `jan_feb_combined_years` column.
+
+    The `jan_feb_combined` caveat tells the journalist that part of the
+    12mo total came in as a 2-month cumulative chunk (GACC's Chinese-New-
+    Year combined release), not as separate monthly figures. Filtering or
+    sorting the spreadsheet on that column lets a journalist isolate the
+    rows that rest on the cumulative — useful when deciding whether to
+    quote a per-month series claim alongside the 12mo headline."""
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT ON (detail->'partner'->>'raw_label', subkind)
+                   id,
+                   detail->'partner'->>'raw_label' AS partner_label,
+                   detail->'partner'->>'kind' AS partner_kind,
+                   subkind,
+                   (detail->'windows'->>'current_end')::date AS current_end,
+                   (detail->'totals'->>'current_12mo_eur')::numeric AS rolling_curr_eur,
+                   (detail->'totals'->>'prior_12mo_eur')::numeric AS rolling_prior_eur,
+                   (detail->'totals'->>'yoy_pct')::numeric AS rolling_yoy_pct,
+                   (detail->'totals'->'ytd_cumulative'->>'yoy_pct')::numeric AS ytd_yoy_pct,
+                   (detail->'totals'->'ytd_cumulative'->>'current_eur')::numeric AS ytd_curr_eur,
+                   (detail->'totals'->'ytd_cumulative'->>'months_in_ytd')::int AS ytd_months,
+                   (detail->'totals'->'single_month'->>'yoy_pct')::numeric AS sm_yoy_pct,
+                   (detail->'totals'->'single_month'->>'current_eur')::numeric AS sm_curr_eur,
+                   (detail->'totals'->>'partial_window')::boolean AS partial_window,
+                   detail->'totals'->'jan_feb_combined_years' AS jan_feb_combined_years,
+                   detail->'caveat_codes' AS caveat_codes
+              FROM findings
+             WHERE subkind LIKE 'gacc_bilateral_aggregate_yoy%%'
+               AND superseded_at IS NULL
+          ORDER BY detail->'partner'->>'raw_label', subkind,
+                   (detail->'windows'->>'current_end')::date DESC, id DESC
+            """
+        )
+        rows_raw = list(cur.fetchall())
+
+    headers = [
+        "finding_id", "link", "partner", "partner_kind", "flow",
+        "current_end", "rolling_12mo_eur", "rolling_yoy_pct",
+        "ytd_yoy_pct", "ytd_current_eur", "ytd_months",
+        "single_month_yoy_pct", "single_month_current_eur",
+        "partial_window", "jan_feb_combined_years", "visible_caveats",
+    ]
+    rows = []
+    # Sort EU bloc first, then single countries alphabetically — mirrors
+    # the brief's Tier 2 ordering so a journalist switching surfaces sees
+    # the same row order.
+    rows_raw.sort(
+        key=lambda r: (
+            0 if r["partner_kind"] == "eu_bloc" else 1,
+            r["partner_label"] or "",
+            r["subkind"],
+        ),
+    )
+    for r in rows_raw:
+        flow = "export" if r["subkind"] == "gacc_bilateral_aggregate_yoy" else "import"
+        visible = _filter_visible_caveats(r["caveat_codes"] or [])
+        jfc_years = r["jan_feb_combined_years"] or []
+        rows.append([
+            r["id"], _link_cell(r["id"]),
+            r["partner_label"], r["partner_kind"] or "single_country", flow,
+            r["current_end"].isoformat() if r["current_end"] else None,
+            _to_float(r["rolling_curr_eur"]), _to_float(r["rolling_yoy_pct"]),
+            _to_float(r["ytd_yoy_pct"]), _to_float(r["ytd_curr_eur"]),
+            r["ytd_months"],
+            _to_float(r["sm_yoy_pct"]), _to_float(r["sm_curr_eur"]),
+            bool(r["partial_window"]),
+            ", ".join(str(y) for y in jfc_years),
+            ", ".join(visible),
+        ])
+    return SheetData(
+        name="gacc_bilateral_yoy",
+        description=(
+            "GACC-side bilateral YoY for the EU bloc plus every single-"
+            "country GACC partner. China's-perspective flow direction: "
+            "export=China sells to partner, import=China buys from "
+            "partner. Three YoY operators side-by-side: 12mo rolling "
+            "(the analyser's primary), YTD cumulative (Soapbox / Merics "
+            "register: \"China-X trade +Y% Jan-N YoY\"), and single-"
+            "month (Soapbox A3 register). visible_caveats and "
+            "jan_feb_combined_years flag when a row's 12mo total "
+            "includes a Jan+Feb cumulative chunk rather than separate "
+            "monthly figures — see the per-finding provenance file for "
+            "the full editorial guidance."
         ),
         headers=headers, rows=rows,
     )

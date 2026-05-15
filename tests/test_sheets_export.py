@@ -59,7 +59,7 @@ def _seed_one_finding(conn, subkind: str, group_name: str, detail: dict) -> int:
 
 
 def test_export_produces_xlsx_with_all_tabs(empty_findings, test_db_url, tmp_path):
-    """An empty findings table still produces all 9 tabs — just with no data rows.
+    """An empty findings table still produces all 10 tabs — just with no data rows.
     Tab roster is documented in sheets_export.assemble_sheets()."""
     out = sheets_export.export(out_format="xlsx", out_path=str(tmp_path / "out.xlsx"))
     wb = load_workbook(out)
@@ -67,11 +67,71 @@ def test_export_produces_xlsx_with_all_tabs(empty_findings, test_db_url, tmp_pat
         "summary",
         "hs_yoy_imports", "hs_yoy_exports", "hs_yoy_reporter_movers",
         "trajectories",
+        "gacc_bilateral_yoy",
         "mirror_gaps", "mirror_gap_movers",
         "low_base_review",
         "predictability_index",
     }
     assert set(wb.sheetnames) == expected_tabs
+
+
+def test_gacc_bilateral_yoy_tab_surfaces_jan_feb_combined_caveat(
+    empty_findings, test_db_url, tmp_path,
+):
+    """When a gacc_bilateral_aggregate_yoy finding's 12mo window
+    includes a Jan+Feb cumulative chunk, the new gacc_bilateral_yoy tab
+    must surface both the `jan_feb_combined_years` column (machine-
+    readable, filterable) and `visible_caveats` containing
+    `'jan_feb_combined'` (the editorial flag). Regression guard so a
+    future refactor that drops either field fires loudly."""
+    import json as _json
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) "
+            "VALUES ('test://gacc_bilateral_caveat', 'success') RETURNING id"
+        )
+        run_id = cur.fetchone()[0]
+        detail = {
+            "method": "gacc_bilateral_aggregate_yoy_v2_jan_feb_combined_caveat",
+            "method_query": {"flow": "export"},
+            "partner": {"raw_label": "Germany", "kind": "single_country", "alias_id": 1},
+            "windows": {
+                "current_start": "2025-05-01", "current_end": "2026-04-01",
+                "prior_start": "2024-05-01", "prior_end": "2025-04-01",
+            },
+            "totals": {
+                "current_12mo_eur": 98e9, "prior_12mo_eur": 101e9,
+                "yoy_pct": -0.03,
+                "partial_window": True,
+                "missing_months_current": ["2026-01-01"],
+                "missing_months_prior": [],
+                "jan_feb_combined_years": [2025],
+            },
+            "caveat_codes": ["partial_window", "jan_feb_combined"],
+            "monthly_series": [],
+        }
+        cur.execute(
+            "INSERT INTO findings (scrape_run_id, kind, subkind, title, detail) "
+            "VALUES (%s, 'anomaly', 'gacc_bilateral_aggregate_yoy', 'test', %s)",
+            (run_id, _json.dumps(detail)),
+        )
+        conn.commit()
+
+    out = sheets_export.export(out_format="xlsx", out_path=str(tmp_path / "out.xlsx"))
+    wb = load_workbook(out)
+    ws = wb["gacc_bilateral_yoy"]
+    # Row 1 = description, row 2 = blank, row 3 = headers, row 4+ = data.
+    headers = [c.value for c in ws[3]]
+    rows = [[c.value for c in row] for row in ws.iter_rows(min_row=4, values_only=False)]
+    assert "jan_feb_combined_years" in headers
+    assert "visible_caveats" in headers
+    de_rows = [r for r in rows if r[headers.index("partner")] == "Germany"]
+    assert len(de_rows) == 1
+    de = de_rows[0]
+    assert de[headers.index("jan_feb_combined_years")] == "2025"
+    visible = de[headers.index("visible_caveats")] or ""
+    assert "jan_feb_combined" in visible
+    assert "partial_window" in visible
 
 
 def test_summary_picks_latest_per_group_per_scope(empty_findings, test_db_url, tmp_path):
