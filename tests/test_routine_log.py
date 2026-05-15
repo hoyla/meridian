@@ -126,3 +126,83 @@ def test_render_status_table_aligns_and_surfaces_errors(clean_db, test_db_url):
         assert src in out
     # Errors get a trailing line in the extras block.
     assert "HTTP 503" in out
+
+
+# --- Run-level lifecycle (started / completed / error on source='_routine') ---
+
+
+def test_compute_lifecycle_when_never_started(clean_db):
+    lc = routine_log.compute_lifecycle()
+    assert lc.last_started_at is None
+    assert lc.last_finished_at is None
+    assert lc.in_flight is False
+
+
+def test_compute_lifecycle_marks_in_flight_when_no_completion(clean_db):
+    """A 'started' with no later 'completed' / 'error' row → died mid-run."""
+    routine_log.log_check(
+        routine_log.ROUTINE_LIFECYCLE_SOURCE, "started", notes="scheduled fire",
+    )
+    lc = routine_log.compute_lifecycle()
+    assert lc.last_started_at is not None
+    assert lc.in_flight is True
+    assert lc.last_finished_at is None
+
+
+def test_compute_lifecycle_clears_in_flight_after_completed(clean_db):
+    routine_log.log_check(routine_log.ROUTINE_LIFECYCLE_SOURCE, "started")
+    routine_log.log_check(
+        routine_log.ROUTINE_LIFECYCLE_SOURCE, "completed",
+        notes="no-op: data_period 2026-02 unchanged",
+    )
+    lc = routine_log.compute_lifecycle()
+    assert lc.in_flight is False
+    assert lc.last_finished_result == "completed"
+    assert lc.last_finished_error is None
+
+
+def test_compute_lifecycle_records_explicit_error(clean_db):
+    routine_log.log_check(routine_log.ROUTINE_LIFECYCLE_SOURCE, "started")
+    routine_log.log_check(
+        routine_log.ROUTINE_LIFECYCLE_SOURCE, "error",
+        error="orchestrator crashed: psycopg2.OperationalError",
+    )
+    lc = routine_log.compute_lifecycle()
+    assert lc.in_flight is False
+    assert lc.last_finished_result == "error"
+    assert "OperationalError" in (lc.last_finished_error or "")
+
+
+def test_compute_lifecycle_in_flight_when_started_after_previous_completion(clean_db):
+    """A new 'started' after an earlier completed pair → in-flight again."""
+    routine_log.log_check(routine_log.ROUTINE_LIFECYCLE_SOURCE, "started")
+    routine_log.log_check(routine_log.ROUTINE_LIFECYCLE_SOURCE, "completed")
+    routine_log.log_check(routine_log.ROUTINE_LIFECYCLE_SOURCE, "started")
+    lc = routine_log.compute_lifecycle()
+    assert lc.in_flight is True
+
+
+def test_render_status_table_surfaces_in_flight_header(clean_db, test_db_url):
+    _seed_releases(test_db_url)
+    routine_log.log_check(routine_log.ROUTINE_LIFECYCLE_SOURCE, "started")
+    routine_log.log_check("eurostat", "not_yet_eligible", candidate_period=date(2026, 3, 1))
+    # No 'completed' — simulates a Routine that died after step 2.
+
+    out = routine_log.render_status_table(
+        routine_log.compute_status(),
+        routine_log.compute_lifecycle(),
+    )
+    assert "STARTED" in out  # uppercase in header signals the mid-run failure
+    assert "no completion event" in out
+
+
+def test_render_status_table_surfaces_clean_completion_header(clean_db, test_db_url):
+    _seed_releases(test_db_url)
+    routine_log.log_check(routine_log.ROUTINE_LIFECYCLE_SOURCE, "started")
+    routine_log.log_check(routine_log.ROUTINE_LIFECYCLE_SOURCE, "completed")
+    out = routine_log.render_status_table(
+        routine_log.compute_status(),
+        routine_log.compute_lifecycle(),
+    )
+    assert "routine fire: started" in out
+    assert "(completed)" in out

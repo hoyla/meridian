@@ -33,8 +33,18 @@ log = logging.getLogger(__name__)
 # Routine drift (e.g. GACC silently dropped) immediately visible.
 EXPECTED_SOURCES: tuple[str, ...] = ("eurostat", "hmrc", "gacc")
 
+# Reserved source name for whole-Routine lifecycle events. Logged once at
+# the start of a fire (result='started') and once at the end
+# (result='completed' on success, result='error' on an orchestrator-level
+# failure). A 'started' row with no matching 'completed' or 'error' = the
+# Routine died mid-run; rely on the source rows to see how far it got.
+ROUTINE_LIFECYCLE_SOURCE: str = "_routine"
+
 VALID_RESULTS: frozenset[str] = frozenset(
-    {"new_data", "no_change", "not_yet_eligible", "error"}
+    {
+        "new_data", "no_change", "not_yet_eligible", "error",
+        "started", "completed",
+    }
 )
 
 
@@ -75,6 +85,64 @@ class SourceStatus:
     latest_period_in_db: date | None
     notes: str | None
     error: str | None
+
+
+@dataclasses.dataclass(frozen=True)
+class RoutineLifecycle:
+    """Whole-Routine fire-level state. Derived from `_routine` rows.
+
+    A `started` row whose `checked_at` is later than the matching
+    `completed` / `error` row (or has no matching pair) → the Routine
+    died mid-run, before reaching the final bookend.
+    """
+
+    last_started_at: datetime | None
+    last_finished_at: datetime | None      # 'completed' or 'error', whichever is more recent
+    last_finished_result: str | None        # 'completed' | 'error' | None
+    last_finished_error: str | None
+    in_flight: bool                          # last started has no later finished
+
+
+def compute_lifecycle() -> RoutineLifecycle:
+    """Roll up the most recent Routine fire's lifecycle bookends."""
+    with db.transaction() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT MAX(checked_at) FROM routine_check_log
+            WHERE source = %s AND result = 'started'
+            """,
+            (ROUTINE_LIFECYCLE_SOURCE,),
+        )
+        last_started_at = cur.fetchone()[0]
+
+        cur.execute(
+            """
+            SELECT checked_at, result, error
+            FROM routine_check_log
+            WHERE source = %s AND result IN ('completed', 'error')
+            ORDER BY checked_at DESC
+            LIMIT 1
+            """,
+            (ROUTINE_LIFECYCLE_SOURCE,),
+        )
+        finished = cur.fetchone()
+
+    last_finished_at = finished[0] if finished else None
+    last_finished_result = finished[1] if finished else None
+    last_finished_error = finished[2] if finished else None
+
+    in_flight = bool(
+        last_started_at is not None
+        and (last_finished_at is None or last_started_at > last_finished_at)
+    )
+
+    return RoutineLifecycle(
+        last_started_at=last_started_at,
+        last_finished_at=last_finished_at,
+        last_finished_result=last_finished_result,
+        last_finished_error=last_finished_error,
+        in_flight=in_flight,
+    )
 
 
 def compute_status(
@@ -146,9 +214,16 @@ def compute_status(
     return out
 
 
-def render_status_table(statuses: Iterable[SourceStatus]) -> str:
+def render_status_table(
+    statuses: Iterable[SourceStatus],
+    lifecycle: RoutineLifecycle | None = None,
+) -> str:
     """Plain-text aligned table for terminal output. No colour, no unicode
-    box-drawing — designed to be readable in a Routine chat reply too."""
+    box-drawing — designed to be readable in a Routine chat reply too.
+
+    Optional `lifecycle` prepends a one-block header surfacing the most
+    recent Routine fire's bookend state — so a stuck / silently failed
+    run reads immediately above the per-source view."""
     rows = list(statuses)
     if not rows:
         return "(no sources to report)\n"
@@ -173,12 +248,18 @@ def render_status_table(statuses: Iterable[SourceStatus]) -> str:
     ] for row in rows]
 
     widths = [max(len(c) for c in col) for col in zip(*([headers] + body))]
-    lines = [
+    table_lines = [
         "  ".join(h.ljust(w) for h, w in zip(headers, widths)),
         "  ".join("-" * w for w in widths),
     ]
     for row in body:
-        lines.append("  ".join(c.ljust(w) for c, w in zip(row, widths)))
+        table_lines.append("  ".join(c.ljust(w) for c, w in zip(row, widths)))
+
+    lines: list[str] = []
+    if lifecycle is not None:
+        lines.extend(_render_lifecycle_header(lifecycle))
+        lines.append("")
+    lines.extend(table_lines)
 
     extras: list[str] = []
     for row in rows:
@@ -191,3 +272,29 @@ def render_status_table(statuses: Iterable[SourceStatus]) -> str:
         lines.extend(extras)
 
     return "\n".join(lines) + "\n"
+
+
+def _render_lifecycle_header(lifecycle: RoutineLifecycle) -> list[str]:
+    """Lead-in lines describing the last Routine fire's bookend state."""
+
+    def fmt_ts(ts: datetime | None) -> str:
+        return ts.strftime("%Y-%m-%d %H:%M") if ts else "—"
+
+    if lifecycle.last_started_at is None:
+        return ["routine fire: never started"]
+
+    if lifecycle.in_flight:
+        return [
+            f"routine fire: STARTED {fmt_ts(lifecycle.last_started_at)} — no completion event",
+            "  (either still running, or died mid-run before logging completion)",
+        ]
+
+    finished = lifecycle.last_finished_result or "—"
+    line = (
+        f"routine fire: started {fmt_ts(lifecycle.last_started_at)}, "
+        f"finished {fmt_ts(lifecycle.last_finished_at)} ({finished})"
+    )
+    out = [line]
+    if lifecycle.last_finished_error:
+        out.append(f"  last error → {lifecycle.last_finished_error}")
+    return out

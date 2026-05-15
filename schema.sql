@@ -751,6 +751,10 @@ CREATE INDEX idx_brief_runs_generated_at ON brief_runs (generated_at DESC);
 -- nothing new, was skipped because the next candidate period isn't due yet
 -- (Eurostat / HMRC), or errored. `python scrape.py --source-status` rolls
 -- this up into a 3-row table; see routine_log.py.
+-- `source='_routine'` (with result 'started' / 'completed') marks the
+-- bookend events for an entire Routine fire — so a started-without-
+-- completed pair makes mid-run failures unambiguous, distinct from "every
+-- step said no_change" or "Routine never fired at all".
 CREATE TABLE routine_check_log (
     id               BIGSERIAL PRIMARY KEY,
     source           TEXT        NOT NULL,
@@ -760,7 +764,10 @@ CREATE TABLE routine_check_log (
     notes            TEXT,
     error            TEXT,
     duration_ms      INT,
-    CHECK (result IN ('new_data', 'no_change', 'not_yet_eligible', 'error'))
+    CHECK (result IN (
+        'new_data', 'no_change', 'not_yet_eligible', 'error',
+        'started', 'completed'
+    ))
 );
 CREATE INDEX idx_routine_check_log_source_checked
     ON routine_check_log (source, checked_at DESC);

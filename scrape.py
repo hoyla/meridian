@@ -510,8 +510,15 @@ def main() -> None:
     )
     p.add_argument(
         "--log-result",
-        choices=["new_data", "no_change", "not_yet_eligible", "error"],
-        help="With --log-check: outcome of the check.",
+        choices=[
+            "new_data", "no_change", "not_yet_eligible", "error",
+            "started", "completed",
+        ],
+        help=(
+            "With --log-check: outcome of the check. The 'started' / "
+            "'completed' values are reserved for the whole-Routine "
+            "lifecycle bookends — paired with --log-check _routine."
+        ),
     )
     p.add_argument(
         "--log-period", type=_parse_period, metavar="YYYY-MM",
@@ -568,7 +575,8 @@ def main() -> None:
     if args.source_status:
         import routine_log
         statuses = routine_log.compute_status()
-        print(routine_log.render_status_table(statuses), end="")
+        lifecycle = routine_log.compute_lifecycle()
+        print(routine_log.render_status_table(statuses, lifecycle), end="")
         return
 
     if args.finding_provenance is not None:
