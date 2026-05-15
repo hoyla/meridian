@@ -79,7 +79,8 @@ def _section_diff_since_last_brief(cur) -> _Section:
             old.id AS old_id, new.id AS new_id, old.subkind,
             COALESCE(
                 old.detail->'group'->>'name',
-                old.detail->'aggregate'->>'raw_label'
+                old.detail->'aggregate'->>'raw_label',
+                old.detail->'partner'->>'raw_label'
             ) AS group_name,
             old.detail->'windows'->>'current_end' AS window_end,
             (old.detail->'totals'->>'yoy_pct')::numeric AS old_yoy,

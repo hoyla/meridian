@@ -153,6 +153,46 @@ def _seed_trajectory_finding(
     return cur.fetchone()[0]
 
 
+def _seed_gacc_bilateral_aggregate_yoy_finding(
+    cur, run_id: int, partner_label: str, *,
+    subkind: str = "gacc_bilateral_aggregate_yoy_import",
+    yoy_pct: float = 0.10,
+    period: date = date(2025, 10, 1),
+) -> int:
+    """Seed a gacc_bilateral_aggregate_yoy* finding keyed on partner (not
+    hs_group). detail.partner.raw_label is the field the Tier 1 diff
+    renderer must fall through to when group/aggregate names are absent."""
+    prior_end = date(period.year - 1, period.month, 1)
+    prior_start = date(period.year - 2, period.month, 1)
+    detail = {
+        "method": "gacc_bilateral_aggregate_yoy_v2_jan_feb_combined_caveat",
+        "partner": {"raw_label": partner_label, "kind": "single_country"},
+        "windows": {
+            "current_start": prior_end.isoformat(),
+            "current_end": period.isoformat(),
+            "prior_start": prior_start.isoformat(),
+            "prior_end": prior_end.isoformat(),
+        },
+        "totals": {
+            "yoy_pct": yoy_pct,
+            "current_12mo_eur": 1e10,
+            "prior_12mo_eur": 1e10 / (1 + yoy_pct),
+            "partial_window": False,
+        },
+    }
+    cur.execute(
+        """
+        INSERT INTO findings (scrape_run_id, kind, subkind, observation_ids,
+                              score, title, body, detail)
+        VALUES (%s, 'anomaly', %s, '{}', %s, %s, 'b', %s::jsonb)
+        RETURNING id
+        """,
+        (run_id, subkind, abs(yoy_pct),
+         f"seed {subkind} {partner_label}", json.dumps(detail)),
+    )
+    return cur.fetchone()[0]
+
+
 def _seed_mirror_gap_finding(cur, run_id: int, iso2: str, period: date,
                              gacc_obs_id: int, eu_obs_id: int) -> int:
     detail = {
@@ -604,6 +644,44 @@ def test_diff_section_lists_material_yoy_shifts(empty_findings, test_db_url):
     assert "### New findings" in md
     # The pre-marker supersede should NOT show up.
     assert "Solar PV cells & modules" not in md.split("## ")[1]  # rough containment
+
+
+def test_diff_section_renders_partner_label_for_bilateral(empty_findings, test_db_url):
+    """Tier 1 'Material YoY shifts' must show the partner name for
+    gacc_bilateral_aggregate_yoy* findings. These key on (partner, flow)
+    so detail.group.name and detail.aggregate.raw_label are both NULL —
+    the partner label lives at detail.partner.raw_label. Without the
+    fall-through the bold prefix renders as '**None**'."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+
+        # Brief-runs marker first, then the supersede pair after it so the
+        # diff window picks the new finding up.
+        cur.execute(
+            "INSERT INTO brief_runs (generated_at, output_path, top_n) "
+            "VALUES (now() - interval '1 second', '/tmp/prev.md', 10)"
+        )
+
+        old_id = _seed_gacc_bilateral_aggregate_yoy_finding(
+            cur, run, "Germany", yoy_pct=0.222,
+        )
+        new_id = _seed_gacc_bilateral_aggregate_yoy_finding(
+            cur, run, "Germany", yoy_pct=-0.028,
+        )
+        cur.execute(
+            "UPDATE findings SET superseded_at = now(), "
+            "                    superseded_by_finding_id = %s WHERE id = %s",
+            (new_id, old_id),
+        )
+        conn.commit()
+
+    md = briefing_pack.render()
+    assert "### Material YoY shifts" in md
+    # The bold prefix must carry the partner name, not the literal "None"
+    # that COALESCE would produce when both group/aggregate fall-throughs miss.
+    assert "**Germany**" in md
+    assert "**None**" not in md
 
 
 def test_export_records_brief_run(empty_findings, test_db_url, tmp_path):
