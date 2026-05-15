@@ -8,8 +8,8 @@ The intended use is a per-cycle intro file (e.g.
 `01_Read_Me_First.md`) that orients a journalist landing on the
 bundle. The leading `01_` numeric prefix is a deliberate
 sort-first trick — most file viewers will list it above
-`findings.md`, `leads.md`, and `data.xlsx` so it's the first
-thing the reader sees.
+`02_Leads.md`, `03_Findings.md`, `04_Data.xlsx`, and `05_Groups.md`
+so it's the first thing the reader sees.
 
 Edit the file in place between exports if the framing for this
 cycle needs to differ. The version control story is the same as

@@ -30,14 +30,15 @@ or more of these:
    export. No LLM.
 2. **Ongoing trend monitoring** — a journalist has known interests
    and wants to be told when something shifts. Surface: the
-   per-export bundle (`findings.md` + `data.xlsx` + `leads.md`) as
+   per-export bundle (`02_Leads.md` + `03_Findings.md` + `04_Data.xlsx`
+   + `05_Groups.md`, plus optional `provenance/` subdir) as
    a recurring folder drop, eventually plus a digest channel
    (Slack/email — not yet built).
 3. **Lead surfacing** — a journalist wants to be shown patterns they
    didn't know to look for. Surface: the LLM framing layer's
-   `narrative_hs_group` findings (rendered to `leads.md`), plus
+   `narrative_hs_group` findings (rendered to `02_Leads.md`), plus
    optionally NotebookLM as a one-shot exploration tool over the
-   `findings.md` document.
+   `03_Findings.md` document.
 
 This ordering is also the *trust* ordering. Mode 1 is purely
 deterministic and citation-traceable. Mode 2 adds the temporal

@@ -8,9 +8,11 @@ for unfamiliar terms see [glossary.md](glossary.md).
 > **TL;DR.** Three customs sources (GACC / Eurostat / HMRC), three
 > data layers (`raw_rows` → `observations` → `findings`), an
 > append-plus-supersede chain on findings, a per-export folder
-> bundle of three artefacts (`findings.md` + `leads.md` +
-> `data.xlsx`). A daily periodic-run pipeline re-emits the bundle
-> when a new Eurostat release lands; idempotent on no-op days.
+> bundle of five artefacts (`01_Read_Me_First.md` + `02_Leads.md` +
+> `03_Findings.md` + `04_Data.xlsx` + `05_Groups.md`), optionally with
+> a `provenance/` subdir of per-finding audit files. A daily periodic-
+> run pipeline re-emits the bundle when a new Eurostat release lands;
+> idempotent on no-op days.
 >
 > Reading paths:
 > - **Adding a new analyser kind?** Start with
@@ -89,15 +91,15 @@ support a `--comparison-scope` flag that picks
                 │  • append-plus-supersede chain           │
                 └──────────────────────────────────────────┘
                                   │
-                ┌─────────────┬─────────────┬─────────────────┐
-                ▼             ▼             ▼                 ▼
-          findings.md      leads.md     data.xlsx        LLM framing
-          (markdown,       (markdown,   (xlsx, 9 tabs;   (Ollama →
-           deterministic    LLM-drafted  Google Sheets    structured
-           — no LLM in the  leads,       writer stubbed)  JSON, then
-           loop;            companion    Same DB          another find-
-           NotebookLM-      to findings) snapshot;        ing in the
-           ready)                        also LLM-free.   same chain)
+                ┌─────────────┬─────────────┬─────────────────┬─────────────┐
+                ▼             ▼             ▼                 ▼             ▼
+        03_Findings.md   02_Leads.md   04_Data.xlsx      05_Groups.md  provenance/
+          (markdown,      (markdown,   (xlsx, 9 tabs;    (markdown,    (markdown,
+           deterministic   LLM-drafted  Google Sheets     HS group      per-finding,
+           — no LLM in the leads,       writer stubbed)   reference     opt-in via
+           loop;           companion    Same DB           — what each   --with-provenance
+           NotebookLM-     to findings) snapshot;         group         or on-demand via
+           ready)                       also LLM-free.    contains)     --finding-provenance)
 ```
 
 Three layers because each has a distinct concern:
@@ -208,7 +210,7 @@ in `brief_runs` already published, exits cleanly as a no-op. Otherwise
 runs every analyser kind across all scope/flow combos (idempotent
 per-row via the supersede chain), optionally runs `llm-framing`
 (`--skip-llm` to omit), and writes the bundled findings export. Prints
-the new `findings.md` path to stdout (empty string on no-op) so the
+the new `03_Findings.md` path to stdout (empty string on no-op) so the
 calling wrapper (Routine, GHA cron, etc.) can branch on it.
 
 The orchestrator deliberately does NOT fetch new Eurostat / HMRC
@@ -223,29 +225,47 @@ the journalist) is currently manual. See
 
 ### Export
 
-`briefing_pack.export()` writes a four-artefact bundle per call,
+`briefing_pack.export()` writes a five-artefact bundle per call,
 into a per-export folder so all share a single DB snapshot:
 
 ```
 exports/
-  2026-05-13-1745/
+  2026-05-15-1430/
     01_Read_Me_First.md   ← copied verbatim from briefing_pack/templates/;
                              sorts first in most file viewers (leading 01_).
                              Custom per-cycle orientation file; the only
                              artefact a journalist receiving the pack cold
                              really needs to read first.
-    findings.md           ← deterministic Markdown; NotebookLM-ready, no LLM in the loop.
-                             Top 5 movers above Tier 1/2/3.
-    leads.md              ← LLM lead-scaffold companion. Top N leads at top,
+    02_Leads.md           ← LLM lead-scaffold companion. Top N leads at top,
                              full per-group blocks below. Cross-references the
-                             finding IDs in findings.md.
-    data.xlsx             ← 9-tab spreadsheet, LLM-free. Same DB snapshot.
-  2026-05-13-1830-ev-batteries-li-ion/   ← future scoped export
+                             finding IDs in 03_Findings.md. Reading-order first
+                             of the auto-generated artefacts (Luke's framing —
+                             see 01_Read_Me_First.md).
+    03_Findings.md        ← deterministic Markdown; NotebookLM-ready, no LLM in the loop.
+                             Top N movers above Tier 1/2/3.
+    04_Data.xlsx          ← 9-tab spreadsheet, LLM-free. Same DB snapshot.
+    05_Groups.md          ← HS group reference. One section per row in `hs_groups`:
+                             description, HS patterns, top contributing CN8 codes,
+                             sibling groups. Read once to orient before quoting any
+                             category figure.
+    provenance/           ← (opt-in via --with-provenance) per-finding audit
+      finding-57378.md       trail files for the editorially-fresh subset
+      finding-57608.md       (Tier 1 changes + Top movers + Top leads).
+      …                      The long tail is on-demand via the CLI.
+  2026-05-15-1500-ev-batteries-li-ion/   ← future scoped export
     01_Read_Me_First.md
-    findings.md
-    leads.md
-    data.xlsx
+    02_Leads.md
+    03_Findings.md
+    04_Data.xlsx
+    05_Groups.md
 ```
+
+Filenames carry `NN_` prefixes so file viewers (Drive, Finder, GitHub
+web UI) list them lexically in the suggested reading order. The
+numbering reflects Luke's framing in `01_Read_Me_First.md`: orient via
+the read-me, scan the LLM-scaffolded leads, drill into deterministic
+findings, drop into the spreadsheet for filterable detail, and consult
+the group glossary when a category name needs disambiguation.
 
 **Templates pipeline (since 2026-05-13)**: every file dropped into
 `briefing_pack/templates/` (except its own `README.md`) is copied
@@ -280,7 +300,7 @@ explicit tiers separated by `---` and named in their
   ≥10pp move, ≥€100M current 12mo, not low-base, predictability
   ≠ 🔴, and `current_end` = latest anchor. Same scoring drives
   spreadsheet `top_movers_rank` / `top_movers_score` columns and
-  the Top N leads section at the top of `leads.md`.
+  the Top N leads section at the top of `02_Leads.md`.
 - **Tier 1 — What's new this cycle**: the diff against the previous
   `trigger='periodic_run'` row. Auto-suppressed on method-bump
   cycles (≥95% value-identical supersedes + zero material shifts
@@ -309,6 +329,53 @@ cleanly when needed.
 Sheets export ships local `.xlsx`; Google Sheets writer is stubbed
 pending service-account credentials.
 
+### Per-finding provenance (`provenance.py`)
+
+A journalist asking "where exactly did `finding/57378` come from?"
+gets a self-contained Markdown file at `provenance/finding-57378.md`
+listing: every source URL the finding rests on (per-month GACC release
+pages, Eurostat bulk-file URLs, or HMRC OData query URLs), the ECB FX
+rates used, plain-English glosses of each caveat code on the finding,
+a cross-source corroboration block where applicable, the headline
+arithmetic decomposition, and a fact-checker replay-SQL appendix.
+
+Frozen-snapshot semantics: each file is written once at generation
+time and not refreshed. If the finding is later superseded, a fresh
+file is generated for the new finding id; the old one is left in
+place so a journalist re-reading an older export sees what they read.
+Pass `--force` to regenerate.
+
+Two entry points:
+
+- **CLI on-demand**: `python scrape.py --finding-provenance N`. Use
+  when a specific finding gets challenged. Writes to
+  `provenance/finding-N.md` relative to repo root, prints the path.
+- **Bundled with an export (opt-in)**: `python scrape.py --briefing-pack
+  --with-provenance` copies the editorially-fresh subset (Tier 1
+  changes + Top-N movers + Top-N leads, typically ~5-15 files) into
+  the export folder's `provenance/` subdir. Long-tail Tier 2 / Tier 3
+  findings stay on-demand to keep the bundle browsable.
+
+Detailed templates exist for the GACC bilateral aggregate, `hs_group_yoy*`,
+and `hs_group_trajectory*` families; other subkinds get a stub noting
+"generator pending" with a SQL hint for the underlying row. Extend
+`provenance._RENDERERS` to add coverage.
+
+### HS group reference (`05_Groups.md`)
+
+A sister reference document in every export bundle, generated from the
+`hs_groups` table. One section per group: editorial description, HS
+LIKE patterns, top contributing CN8 codes (from the most recent active
+`hs_group_yoy*` finding for the group, with a concentration warning if
+a single code is >80% of the value), and sibling groups (auto-discovered
+by 4-digit HS prefix overlap). Draft groups (`created_by` starting with
+`draft:`) are quarantined in their own section so journalists don't
+quote unvalidated figures.
+
+Also available standalone via `python scrape.py --groups-glossary
+[--out PATH]`, useful for forwarding the glossary between briefing-
+pack runs.
+
 ## Configuration
 
 ### Environment variables
@@ -319,7 +386,7 @@ pending service-account credentials.
 | `GACC_TEST_DATABASE_URL` | Test DB for pytest |
 | `GACC_LIVE_DATABASE_URL` | Optional: lets opt-in tests check the live DB |
 | `LLM_BACKEND` | `ollama` (default) or future alternatives |
-| `GACC_PERMALINK_BASE` | If set, findings.md renders trace tokens as Markdown links to a hosted finding viewer |
+| `GACC_PERMALINK_BASE` | If set, 03_Findings.md renders trace tokens as Markdown links to a hosted finding viewer |
 
 ### Schema-table seeds
 

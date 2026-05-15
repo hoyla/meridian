@@ -704,7 +704,7 @@ predictability badge, and the absolute figures rather than a
 trajectory story. Non-volatile shapes (rising / falling /
 peak-and-fall / u-recovery / etc.) still render inline.
 
-The Tier 3 `Trajectory shapes` section in `findings.md` still
+The Tier 3 `Trajectory shapes` section in `03_Findings.md` still
 shows a `Volatile` bucket counting the suppressed entries, and
 the spreadsheet's `trajectories` tab keeps every row regardless
 of shape (the journalist's audit use case wants the full picture

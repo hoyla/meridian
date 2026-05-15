@@ -12,7 +12,7 @@ the model journalist is Lisa O'Carroll.
 
 ## What the brief looks like
 
-Every export bundle's `findings.md` opens with three tiers (what's
+Every export bundle's `03_Findings.md` opens with three tiers (what's
 new since last time → current state of play → full detail). A
 typical Tier 2 entry for one HS group reads like this:
 
@@ -39,7 +39,7 @@ GACC release page.
 ## Three rules the design follows
 
 - **Brief and spreadsheet are LLM-free.** The LLM lead scaffolds live
-  in a separate `leads.md` — so a downstream LLM tool (NotebookLM,
+  in a separate `02_Leads.md` — so a downstream LLM tool (NotebookLM,
   Claude, etc.) reasoning over the brief sees raw findings, not
   another LLM's interpretation.
 - **Findings are versioned, not over-written.** When data revises or
@@ -148,7 +148,7 @@ python scrape.py --analyse llm-framing --llm-model qwen3.5:14b      # alternativ
 # captures revisions as queryable history (see Design notes below).
 
 # Spreadsheet only (standalone — for spreadsheet-only invocations; the
-# bundled briefing pack already includes data.xlsx in its folder)
+# bundled briefing pack already includes 04_Data.xlsx in its folder)
 python scrape.py --export-sheet                               # local .xlsx, 8 tabs
 python scrape.py --export-sheet --out-path exports/custom.xlsx
 python scrape.py --export-sheet --out-format sheets --spreadsheet-id <ID>   # Google Sheets (pending creds)
@@ -200,7 +200,7 @@ The two export surfaces share the same underlying data layer: switching between 
 | `hypothesis_catalog.py` | 12 standard causal hypotheses for China-EU/UK trade movements. Each entry carries a description (in the LLM prompt) and corroboration steps (attached deterministically post-pick). |
 | `scripts/`         | One-off analysis scripts (sensitivity sweep, OOS backtest) — not part of the CLI; run directly. |
 | `sheets_export.py` | Export findings to local `.xlsx` (shipped) or Google Sheets (stub, pending service-account creds) |
-| `briefing_pack.py` | Three-artefact export bundle into `./exports/YYYY-MM-DD-HHMM[-slug]/`. `findings.md` is the deterministic NotebookLM-ready findings document (no LLM in the loop). `leads.md` is the LLM lead-scaffold companion (anomaly summaries + picked hypotheses + corroboration steps), kept separate so downstream LLM tools reasoning over them see raw findings, not another LLM's interpretation. `data.xlsx` is the 8-tab spreadsheet for data journalists. All three share a single DB snapshot. |
+| `briefing_pack.py` | Five-artefact export bundle into `./exports/YYYY-MM-DD-HHMM[-slug]/`. `03_Findings.md` is the deterministic NotebookLM-ready findings document (no LLM in the loop). `02_Leads.md` is the LLM lead-scaffold companion (anomaly summaries + picked hypotheses + corroboration steps), kept separate so downstream LLM tools reasoning over them see raw findings, not another LLM's interpretation. `04_Data.xlsx` is the 9-tab spreadsheet for data journalists. `05_Groups.md` is the HS group reference (auto-generated from the `hs_groups` table). `01_Read_Me_First.md` is the journalist-facing orientation page copied from the templates directory. Optionally with a `provenance/` subdir when `--with-provenance` is set. All artefacts share a single DB snapshot. |
 | `provenance.py`    | Per-finding provenance file generator. Each call writes `provenance/finding-{N}.md` — a journalist-readable audit trail (source URLs, FX rates, plain-English caveats, cross-source check, replay queries). CLI: `--finding-provenance N`. Frozen-snapshot semantics: idempotent on existing files; pass `--force` to regenerate. The `--briefing-pack --with-provenance` flag opt-in copies the editorially-fresh subset (Tier 1 changes + Top-N movers + Top-N leads, typically ~5-15 files) into the export bundle's `provenance/` subdir. |
 | `sheets_export.py` | 8-tab spreadsheet exporter (xlsx local; Google Sheets writer stubbed pending creds). Tabs: summary (wide, all scopes), hs_yoy_imports/exports (long with scope column), trajectories, mirror_gaps (with per-country CIF/FOB baseline + excess-pp), mirror_gap_movers, low_base_review, predictability_index. Intentionally LLM-free for the same telephone-game reason as the findings document. |
 | `schema.sql`       | Canonical schema (includes lookup-table seeds: hs_groups, country_aliases, caveats, transshipment_hubs, cif_fob_baselines). A fresh setup is `createdb gacc && psql gacc < schema.sql` — no migration replay needed. |
