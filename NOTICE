@@ -1,0 +1,94 @@
+Meridian
+Copyright 2026 Guardian News & Media Limited
+
+Author: Luke Hoyland
+
+This product includes software developed at Guardian News & Media
+Limited, licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The notes below record the attribution requirements of the third-party
+data sources Meridian ingests, so that derived journalism can carry the
+wording each source asks for.
+
+------------------------------------------------------------------------
+Third-party data sources
+------------------------------------------------------------------------
+
+Meridian ingests and re-processes public trade statistics from the
+following sources. Each export bundle written by Meridian carries the
+specific source URLs for the releases it draws on (see "Sources
+appendix" in `03_Findings.md` and the per-finding files under
+`provenance/`). The summary below records the licensing posture for
+each source.
+
+1. Eurostat (European Statistical Office) — Comext bulk files
+
+   Re-use of Eurostat statistical data is permitted under European
+   Commission Decision 2011/833/EU of 12 December 2011 on the reuse of
+   Commission documents, subject to acknowledgement of the source.
+
+   Suggested attribution in derived journalism:
+     "Source: Eurostat (Comext)"
+
+   https://ec.europa.eu/eurostat/about/policies/copyright
+
+2. HM Revenue & Customs (UK) — Overseas Trade Statistics (uktradeinfo)
+
+   HMRC OTS data is published under the Open Government Licence v3.0
+   (OGL v3.0). Re-use is permitted with attribution.
+
+   Required attribution:
+     "Contains HMRC data licensed under the Open Government Licence
+      v3.0."
+
+   https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/
+   https://www.uktradeinfo.com/
+
+3. General Administration of Customs of the People's Republic of China
+   (GACC) — monthly statistical releases
+
+   GACC publishes Chinese customs trade statistics on its public
+   website (english.customs.gov.cn). The releases are official
+   government statistical publications. Meridian fetches the
+   HTML/XLS release pages, preserves the original source URLs in
+   the database, and attributes them in every export.
+
+   Suggested attribution in derived journalism:
+     "Source: General Administration of Customs of the People's
+      Republic of China (GACC)"
+
+   https://english.customs.gov.cn/
+
+4. European Central Bank — euro reference exchange rates
+
+   ECB statistical data is © European Central Bank. Reproduction is
+   authorised provided the source is acknowledged. Meridian fetches
+   end-of-month CNY/EUR, USD/EUR and GBP/EUR rates via the ECB SDW
+   API and uses them for currency conversion in cross-source
+   comparisons.
+
+   Required attribution:
+     "Exchange rates: European Central Bank"
+
+   https://www.ecb.europa.eu/services/disclaimer/html/index.en.html
+
+------------------------------------------------------------------------
+Editorial inspiration
+------------------------------------------------------------------------
+
+Meridian's methodology and HS-group seed list were shaped by the
+reporting at Soapbox Trade (https://soapboxtrade.substack.com/).
+This is an editorial credit, not a licence — Soapbox is not affiliated
+with this project and bears no responsibility for its outputs.
+See `docs/editorial-sources.md` for the full account of which findings
+were validated against which Soapbox pieces.
+
+------------------------------------------------------------------------
+Third-party Python dependencies
+------------------------------------------------------------------------
+
+Meridian depends on the open-source Python packages listed in
+`requirements.txt` and `requirements-dev.txt`. Each package retains
+its own licence; the canonical text is shipped with the package. Run
+`pip show <package>` (or inspect the package on PyPI) for licence and
+copyright details.

@@ -212,6 +212,20 @@ The two export surfaces share the same underlying data layer: switching between 
 
 See docs folder for architecture and details about methodology.
 
+## Licence, attribution, citation
+
+- **Code**: Apache License 2.0 — © Guardian News & Media Limited.
+  See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+- **Data**: Meridian re-uses public trade statistics from Eurostat,
+  HMRC, GACC and the ECB. Each source has its own attribution
+  requirements (HMRC's OGL v3.0 is the strictest — it requires the
+  exact licence acknowledgement when its data is re-published).
+  [NOTICE](NOTICE) lists each source and the wording to carry into
+  derived journalism; every export bundle also carries source URLs in
+  its `03_Findings.md` Sources appendix.
+- **Citing the tool**: see [CITATION.cff](CITATION.cff), or use the
+  "Cite this repository" button on GitHub.
+
 ## Design notes
 
 - **Two-source by design.** GACC and Eurostat ingest into a shared `observations` table with a per-cell view, so any cross-source query (mirror-gap, agg-vs-agg) is just a join. The schema anticipated the second source from the start.

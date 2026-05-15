@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+title: "Meridian: a China–EU/UK trade-statistics monitor for journalists"
+message: >-
+  If you cite findings, methodology, or code derived from this tool,
+  please cite it using the metadata below.
+type: software
+authors:
+  - family-names: Hoyland
+    given-names: Luke
+    affiliation: "Guardian News & Media Limited"
+repository-code: "https://github.com/hoyla/meridian"
+abstract: >-
+  Meridian ingests three customs feeds — GACC (China), Eurostat Comext
+  (EU-27) and HMRC OTS (UK) — into a shared schema, cross-compares
+  them, and writes deterministic Markdown briefs, spreadsheet bundles
+  and LLM-drafted lead scaffolds for newsroom use. Findings are
+  versioned and superseded rather than overwritten so that citation
+  tokens remain stable across re-runs.
+keywords:
+  - journalism
+  - trade-statistics
+  - china
+  - eurostat
+  - hmrc
+  - gacc
+  - data-journalism
+license: Apache-2.0
