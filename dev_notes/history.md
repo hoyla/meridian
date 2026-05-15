@@ -10,6 +10,92 @@ to understand how the project got here.
 
 ---
 
+## 2026-05-15 — Jan+Feb combined-release parser + transparency surfacing
+
+A two-part arc Luke flagged after the morning's batch of work: the
+"missing month" problem (GACC publishes Jan + Feb as a single
+cumulative release each Chinese New Year, leaving the rolling-12mo
+windows missing months and skewing every YoY) and then making the
+handling visible to journalists once fixed. Test count 243 → 244.
+
+### Parser + analyser handling ([`908b1f3`](https://github.com/hoyla/meridian/commit/908b1f3))
+
+The combined release page has a narrower 7-column layout (the
+"Monthly" and "YTD" columns collapse to one Jan+Feb cumulative value
+per flow). New regex `_RELEASE_TITLE_JAN_FEB_RE` recognises the
+"January-February YYYY (in CCY)" title shape; `extract_metadata`
+returns `is_jan_feb_combined=True` and `period` anchored at Feb 1 of
+the year; the body parser emits one observation per partner × flow
+with `period_kind='cumulative_jan_feb'`. The release row gets
+`release_kind='preliminary_jan_feb'` so the natural key on
+`releases` doesn't collide with a hypothetical separate-Feb release.
+
+Both `gacc_aggregate_yoy` and `gacc_bilateral_aggregate_yoy` learned
+to treat each cumulative observation as a 2-month chunk filling the
+window's Jan + Feb gap. Honest accounting via
+`_add_jan_feb_combined_to_window` — the cumulative is added to the
+sum once and both calendar months are marked covered, but the value
+is NOT split 50/50 across Jan and Feb (interpolation would invent
+per-month figures the source never asserted). Backfilled the
+combined releases for 2021-2024 + 2025 from the live GACC site
+(5 releases, 84-90 observations each). 2020's release filed under
+section=3 (GACC numbering inconsistency) so was skipped — separate
+follow-up.
+
+**Editorial impact**: Lisa's four bilateral YoYs moved materially
+because the previous post-184-fix figures had been comparing
+11-month current sums against 10-month prior sums (the prior was
+missing Jan + Feb), which made growth look ~15-20pp more positive
+than reality:
+
+| Finding | Before fix | After backfill |
+|---|---:|---:|
+| Germany imports from China (12mo) | +14.79% | -3.09% |
+| Germany exports to China (12mo)   |  +2.57% | -12.66% |
+| France imports from China (12mo)   | +14.65% | -2.55% |
+| France exports to China (12mo)    | +10.99% |  -4.77% |
+
+Current side still has Jan 2026 missing because 2026 broke the
+combined-release pattern (separate Feb published); the analyser
+doesn't yet derive Jan = `(ytd − monthly)` from that. The
+remaining current-window gap means the "after" YoYs are biased
+slightly low — true 12mo YoY probably sits ~5pp higher than the
+post-fix figure, somewhere between the old and new readings and
+closer to flat than to either extreme. Derive enhancement is
+queued in roadmap.md.
+
+### Transparency surfacing ([`5ae662c`](https://github.com/hoyla/meridian/commit/5ae662c), [`1cd147a`](https://github.com/hoyla/meridian/commit/1cd147a))
+
+Luke's reminder: transparency is good. Surface the handling
+everywhere a journalist might read.
+
+- New `jan_feb_combined` caveat row in the `caveats` table (seeded
+  in `schema.sql` + migrated to live via
+  `2026-05-15-jan-feb-combined-caveat.sql`).
+- Both YoY analysers now accept a `jan_feb_combined_years` list,
+  write it into `detail.totals.jan_feb_combined_years`, append
+  `'jan_feb_combined'` to `caveat_codes`, and add an `ℹ JAN+FEB
+  CUMULATIVE USED` notice to the finding body. Method versions
+  bumped (`v1` → `v2` for bilateral, `v4` → `v5` for non-EU-bloc
+  aggregate) to flush the new metadata through the supersede chain.
+- `briefing_pack/sections/state_of_play_{bilaterals,aggregates}.py`:
+  inline annotation on each affected Tier 2 row reads
+  "— partial window; includes Jan+Feb 2025 cumulative".
+- `provenance.py`: new entry in the caveat glossary; `_sources_table`
+  grows a "Coverage" column so the per-month source-URL chain in a
+  finding's provenance file flags which rows are 2-month
+  cumulatives vs single-month observations.
+- `sheets_export.py`: new `gacc_bilateral_yoy` tab (spreadsheet tab
+  count 9 → 10) with explicit `jan_feb_combined_years` and
+  `visible_caveats` columns. Sortable / filterable.
+
+So a journalist reading any of the bundle's surfaces — the brief
+itself, the spreadsheet, or the per-finding provenance — sees what
+went into the rolling-12mo total at the right level of detail for
+that surface.
+
+---
+
 ## 2026-05-14/15 — provenance system, groups glossary, bundle rename
 
 A self-contained arc triggered by sending Lisa O'Carroll her first

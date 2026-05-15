@@ -24,6 +24,17 @@ bundle filenames; the `05_Groups.md` glossary; the
 `--groups-glossary` CLI) has also shipped — see
 [`history.md` § 2026-05-14/15](history.md#2026-05-1415--provenance-system-groups-glossary-bundle-rename).
 
+The 2026-05-15 Jan+Feb combined-release work (parser handling +
+analyser folds-in + transparency surfacing across the brief, the
+spreadsheet's new `gacc_bilateral_yoy` tab, and per-finding
+provenance) has shipped — see
+[`history.md` § 2026-05-15](history.md#2026-05-15--janfeb-combined-release-parser--transparency-surfacing).
+Closes the long-standing "GACC Jan-Feb cumulative releases"
+forward-work item; the remaining gap is current-side January in
+years where GACC publishes a separate February (2026 onwards) —
+captured as the "Derive January from Feb release's (ytd − monthly)"
+item below.
+
 ## Near-term (likely next session)
 
 ### Watch the first 2-3 real cycles + decide delivery vector
@@ -141,6 +152,51 @@ The 6.5 promote/drop pass shipped 2026-05-10. A year from now a
 similar pass should re-evaluate what's editorially live. Three
 groups stayed draft (Honey, Polysilicon, Tropical timber) and
 might warrant a second look.
+
+### Derive January from Feb release's `(ytd − monthly)`
+
+The 2026-05-15 Jan+Feb combined-release work closes the prior-year
+Jan/Feb gap for 2020-2025 (years where GACC bundled them as a
+single cumulative release). 2026 broke the combined pattern by
+publishing a separate February release with both Monthly and YTD
+columns — meaning January is implicitly available as
+`Feb-release YTD − Feb-release Monthly = 1529.1 − 696.6 = 832.5
+(100M CNY)` for Germany exports in our case. That's a deterministic
+arithmetic identity, not interpolation: the cumulative IS the sum
+of Jan + Feb, and Monthly IS Feb alone, so Jan = ytd − monthly by
+definition.
+
+Implementation sketch:
+- At analyser time (not ingest), in `_gacc_aggregate_per_period_totals`
+  (or a sibling helper), for each year where a Feb-only release
+  has both monthly and YTD observations AND no separate January
+  monthly exists: synthesise a January datapoint with value
+  `ytd − monthly`, anchored at Jan 1 of the year. Source the
+  derivation from both the YTD obs and the monthly obs (carry
+  both obs_ids forward so the finding's provenance file shows the
+  arithmetic chain).
+- Same honest-accounting principle as the combined-release work:
+  no interpolation, no estimation. Just an algebraic identity.
+- Likely needs a new caveat code (`jan_derived_from_feb` or
+  similar) so journalists can see when a window's January is
+  derived rather than directly reported.
+
+Editorial payoff: closes the remaining `partial_window` cases on
+the four Lisa-facing bilateral findings; YoYs would shift by
+roughly +5pp toward what's probably the true 12mo figure.
+
+Roughly half a day's work. Triggered: any cycle where a journalist
+asks why the current-year January is still flagged missing.
+
+### Promote 2020 GACC Jan-Feb release (section=3 → section=4)
+
+The 2020 combined Jan-Feb release was tagged `(3)` rather than
+`(4)` by GACC (their own numbering inconsistency that year). Our
+parser stored the section_number faithfully so the YoY analysers
+skip it. Two options if a story rests on 2020 specifically:
+manual override at ingest, or extend `_infer_section_from_description`
+to take precedence when the prefix and the description disagree.
+~30 minutes of work; deferred until needed.
 
 ### Provenance renderers for remaining subkinds
 
