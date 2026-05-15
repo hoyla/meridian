@@ -98,7 +98,16 @@ def scrape_release(
             len(result.observations), meta.section_number, meta.currency, meta.period.isoformat(),
         )
         if not dry_run:
-            release_id = db.find_or_create_gacc_release(meta, release_kind=release_kind)
+            # Combined Jan+Feb cumulative releases get their own
+            # release_kind so the natural-key on `releases`
+            # (section, currency, period, release_kind) doesn't collide
+            # with a hypothetical separate-February release for the same
+            # year. The period anchor for both is 1 Feb.
+            effective_kind = (
+                "preliminary_jan_feb" if meta.is_jan_feb_combined
+                else release_kind
+            )
+            release_id = db.find_or_create_gacc_release(meta, release_kind=effective_kind)
             counts = db.upsert_observations(run_id, release_id, result.observations)
             log.info("Persisted: %s", counts)
             db.finish_run(run_id, status="success", http_status=response.status_code)

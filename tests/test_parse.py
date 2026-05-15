@@ -240,6 +240,51 @@ def test_metadata_extraction():
     assert meta.excel_url is not None
     assert meta.excel_url.endswith(".xls")
     assert "/" in meta.excel_url and "\\" not in meta.excel_url  # backslashes normalised
+    assert meta.is_jan_feb_combined is False
+
+
+JANFEB_FIXTURE = FIXTURES / "release_section4_by_country_janfeb2025_cny.html"
+JANFEB_URL = "http://english.customs.gov.cn/Statics/2ab97956-c57d-4387-8d60-a141b5a5b48b.html"
+
+
+def test_metadata_recognises_jan_feb_combined_release():
+    """2025-Feb's release on the GACC English site is a combined
+    January-February cumulative release (Chinese New Year shape). The
+    title reads 'China's Total Export & Import Values by Country/Region,
+    January-February 2025 (in CNY)' — parser must:
+      - match the title via `_RELEASE_TITLE_JAN_FEB_RE`
+      - set `is_jan_feb_combined=True`
+      - anchor `period` at Feb 1 of the year (latest month covered)."""
+    soup = BeautifulSoup(JANFEB_FIXTURE.read_bytes(), "lxml")
+    meta = extract_metadata(soup, JANFEB_URL)
+    assert meta.section_number == 4
+    assert meta.currency == "CNY"
+    assert meta.period == date(2025, 2, 1)
+    assert meta.is_jan_feb_combined is True
+
+
+def test_jan_feb_body_emits_cumulative_period_kind():
+    """For the combined Jan-Feb release, the body parser must emit ONE
+    observation per partner × flow with period_kind='cumulative_jan_feb'
+    rather than the usual two ('monthly' + 'ytd'). The combined release
+    publishes Jan + Feb's cumulative in both columns; emitting both as
+    monthly + ytd would double-count it when the windowed analyser sums
+    per-period totals.
+
+    Editorial guarantee: the cumulative value is NOT split 50/50 across
+    January and February — interpolation would invent per-month figures
+    the source never asserted."""
+    obs = parse_html(JANFEB_FIXTURE.read_bytes(), JANFEB_URL).observations
+    de_obs = [o for o in obs if o["partner_country"] == "Germany"]
+    # 3 flows × 1 kind = 3 observations per partner.
+    assert len(de_obs) == 3, f"expected 3 Germany rows, got {len(de_obs)}"
+    kinds = {o["period_kind"] for o in de_obs}
+    assert kinds == {"cumulative_jan_feb"}
+    flows = {o["flow"] for o in de_obs}
+    assert flows == {"total", "export", "import"}
+    # Every cell is the Jan+Feb cumulative — sanity-check the export cell.
+    exp = next(o for o in de_obs if o["flow"] == "export")
+    assert exp["value"] is not None and exp["value"] > 0
 
 
 def test_parses_total_row():

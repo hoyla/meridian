@@ -2682,6 +2682,13 @@ def detect_gacc_aggregate_yoy(
             # Helper is shared with the bilateral analyser (same partner-
             # country label semantics in `observations`).
             ytd_by_period = _gacc_partner_ytd_by_period(agg["raw_label"], flow=flow)
+            # Jan+Feb cumulative observations (released when GACC bundles
+            # Chinese-New-Year months into a single cumulative release).
+            # Each entry covers BOTH January and February of its year as
+            # a 2-month chunk — see `_add_jan_feb_combined_to_window`.
+            jan_feb_by_year = _gacc_jan_feb_cumulatives_by_year(
+                agg["raw_label"], flow=flow,
+            )
             eur_by_period: dict[date, float] = {p: e for p, e, _ in series}
             obs_by_period: dict[date, list[int]] = {p: ids for p, _, ids in series}
             periods_sorted = sorted(eur_by_period.keys())
@@ -2692,17 +2699,16 @@ def detect_gacc_aggregate_yoy(
                 start_prior = _months_back(t, 23)
                 end_prior   = _months_back(t, 12)
 
-                # Walk through the 24-month window. GACC publishes Jan + Feb
-                # as a combined cumulative release (Chinese New Year
-                # disruption), and our parser doesn't yet handle the
-                # "January-February YYYY" title format — so for non-EU
-                # aggregate labels every Jan + Feb is a structural data gap.
-                # Looser tolerance than hs_group_yoy: accept up to 4 missing
-                # months per 24-month window (covers 2 Jan + 2 Feb), set
-                # partial_window when ANY months are missing, and require at
-                # least 8 of 12 months in EACH half so we don't compute YoY
-                # on a half-empty side. Editorially: still useful, but the
-                # caveat carries weight.
+                # Walk through the 24-month window. GACC sometimes publishes
+                # Jan + Feb as a combined cumulative release (Chinese New
+                # Year disruption); when our parser captures one of those
+                # the Jan+Feb chunk fills the window-side gap honestly
+                # (added as a 2-month sum, not split into per-month
+                # estimates). Looser tolerance than hs_group_yoy: accept up
+                # to 4 missing months per 24-month window (covers 2 Jan +
+                # 2 Feb), set partial_window when ANY months are missing,
+                # and require at least 8 of 12 months in EACH half so we
+                # don't compute YoY on a half-empty side.
                 want = []
                 p = start_prior
                 while p <= end_curr:
@@ -2710,8 +2716,29 @@ def detect_gacc_aggregate_yoy(
                     p = _months_back(p, -1)
                 want_curr = [p for p in want if start_curr <= p <= end_curr]
                 want_prior = [p for p in want if start_prior <= p <= end_prior]
-                missing_curr = [p for p in want_curr if p not in eur_by_period]
-                missing_prior = [p for p in want_prior if p not in eur_by_period]
+                # Fold in Jan+Feb cumulative coverage from combined releases
+                # per window-half, separately so the missing-month accounting
+                # stays exact for each half.
+                extra_curr_eur, extra_curr_obs, covered_curr = _add_jan_feb_combined_to_window(
+                    eur_by_period=eur_by_period,
+                    jan_feb_by_year=jan_feb_by_year,
+                    want_months=want_curr,
+                )
+                extra_prior_eur, extra_prior_obs, covered_prior = _add_jan_feb_combined_to_window(
+                    eur_by_period=eur_by_period,
+                    jan_feb_by_year=jan_feb_by_year,
+                    want_months=want_prior,
+                )
+                covered_curr_set = set(covered_curr)
+                covered_prior_set = set(covered_prior)
+                missing_curr = [
+                    p for p in want_curr
+                    if p not in eur_by_period and p not in covered_curr_set
+                ]
+                missing_prior = [
+                    p for p in want_prior
+                    if p not in eur_by_period and p not in covered_prior_set
+                ]
                 n_curr = 12 - len(missing_curr)
                 n_prior = 12 - len(missing_prior)
                 if n_curr < 8 or n_prior < 8:
@@ -2719,8 +2746,14 @@ def detect_gacc_aggregate_yoy(
                     continue
                 partial_window = (len(missing_curr) + len(missing_prior)) > 0
 
-                current_eur = sum(eur_by_period[p] for p in want_curr if p in eur_by_period)
-                prior_eur   = sum(eur_by_period[p] for p in want_prior if p in eur_by_period)
+                current_eur = (
+                    sum(eur_by_period[p] for p in want_curr if p in eur_by_period)
+                    + extra_curr_eur
+                )
+                prior_eur = (
+                    sum(eur_by_period[p] for p in want_prior if p in eur_by_period)
+                    + extra_prior_eur
+                )
                 if prior_eur == 0:
                     counts["skipped_zero_prior"] += 1
                     continue
@@ -2774,9 +2807,13 @@ def detect_gacc_aggregate_yoy(
                 # so the finding can be traced back to source rows. Also
                 # include the YTD observation ids when present so the
                 # supersede chain spans the same source rows as the body.
+                # Jan+Feb combined-release obs ids ride in via
+                # extra_curr_obs / extra_prior_obs.
                 obs_ids: list[int] = []
                 for p in want_curr + want_prior:
                     obs_ids.extend(obs_by_period.get(p, []))
+                obs_ids.extend(extra_curr_obs)
+                obs_ids.extend(extra_prior_obs)
                 if curr_ytd is not None:
                     obs_ids.extend(curr_ytd[1])
                 if prior_ytd is not None:
@@ -2877,6 +2914,97 @@ def _gacc_aggregate_per_period_totals(
             by_period[period] = (old_eur + eur, old_ids + [obs_id])
 
     return [(p, eur, ids) for p, (eur, ids) in sorted(by_period.items())]
+
+
+def _gacc_jan_feb_cumulatives_by_year(
+    aggregate_label: str, flow: str = "export",
+) -> dict[int, tuple[float, list[int]]]:
+    """Returns {year: (eur, [obs_ids])} for each Jan+Feb cumulative release
+    matching the given partner + flow. Same currency / FX convention as
+    `_gacc_aggregate_per_period_totals` so the values are directly
+    comparable in a windowed sum.
+
+    Used by the rolling-12mo analysers to fill the Jan + Feb gap on years
+    that publish a single combined release rather than separate monthly
+    figures. The cumulative value covers both Jan and Feb of the release's
+    year; the caller treats it as a 2-month chunk in the window — NOT as
+    a January or February monthly observation."""
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT r.period, o.value_amount, r.unit, o.id AS obs_id
+              FROM observations o
+              JOIN releases r ON r.id = o.release_id
+             WHERE r.source = 'gacc'
+               AND r.currency = 'CNY'
+               AND o.flow = %s
+               AND o.period_kind = 'cumulative_jan_feb'
+               AND o.partner_country = %s
+               AND o.value_amount IS NOT NULL
+            """,
+            (flow, aggregate_label),
+        )
+        rows = cur.fetchall()
+    by_year: dict[int, tuple[float, list[int]]] = {}
+    for period, value_amount, unit, obs_id in rows:
+        scale, currency = parse_unit_scale(unit)
+        if scale is None:
+            continue
+        ccy = currency or "CNY"
+        fx = lookups.lookup_fx(ccy, "EUR", period)
+        if fx is None:
+            continue
+        eur = float(value_amount) * scale * fx.rate
+        year = period.year
+        existing = by_year.get(year)
+        if existing is None:
+            by_year[year] = (eur, [obs_id])
+        else:
+            old_eur, old_ids = existing
+            by_year[year] = (old_eur + eur, old_ids + [obs_id])
+    return by_year
+
+
+def _add_jan_feb_combined_to_window(
+    *,
+    eur_by_period: dict[date, float],
+    jan_feb_by_year: dict[int, tuple[float, list[int]]],
+    want_months: list[date],
+) -> tuple[float, list[int], list[date]]:
+    """Given an expected list of calendar months `want_months`, return
+    (extra_eur, extra_obs_ids, covered_months) describing how Jan+Feb
+    combined observations fill the window's Jan/Feb gap.
+
+    Honest accounting: each Jan+Feb combined observation covers both
+    January and February of its year. We add the cumulative value to
+    the window once when BOTH calendar months are inside the window AND
+    BOTH are missing from per-month monthlies — and we mark both as
+    covered. We do NOT split the cumulative 50/50; interpolation would
+    invent per-month figures the source never asserted."""
+    extra_eur = 0.0
+    extra_obs: list[int] = []
+    covered: list[date] = []
+    want_set = set(want_months)
+    for year in {m.year for m in want_months}:
+        jan = date(year, 1, 1)
+        feb = date(year, 2, 1)
+        if jan not in want_set or feb not in want_set:
+            continue
+        if jan in eur_by_period or feb in eur_by_period:
+            # A separate monthly observation exists for at least one of
+            # Jan/Feb; skip the combined to avoid double-counting. The
+            # caller's missing-month accounting handles the remaining
+            # gap (where derivation from a separate Feb release is a
+            # potential follow-up enhancement).
+            continue
+        if year not in jan_feb_by_year:
+            continue
+        eur, ids = jan_feb_by_year[year]
+        extra_eur += eur
+        extra_obs.extend(ids)
+        covered.append(jan)
+        covered.append(feb)
+    return extra_eur, extra_obs, covered
 
 
 def _insert_gacc_aggregate_yoy_finding(
@@ -3182,6 +3310,13 @@ def detect_gacc_bilateral_aggregate_yoy(
                 counts["skipped_insufficient_history"] += 1
                 continue
             ytd_by_period = _gacc_partner_ytd_by_period(p["raw_label"], flow=flow)
+            # Jan+Feb cumulative observations (when GACC bundles the
+            # Chinese-New-Year months into one combined release). The
+            # rolling-12mo window uses each as a 2-month chunk filling
+            # the Jan/Feb gap for the release's year.
+            jan_feb_by_year = _gacc_jan_feb_cumulatives_by_year(
+                p["raw_label"], flow=flow,
+            )
             eur_by_period: dict[date, float] = {pd: e for pd, e, _ in monthly_series}
             obs_by_period: dict[date, list[int]] = {pd: ids for pd, _, ids in monthly_series}
             periods_sorted = sorted(eur_by_period.keys())
@@ -3199,16 +3334,42 @@ def detect_gacc_bilateral_aggregate_yoy(
                     pd = _months_back(pd, -1)
                 want_curr = [pd for pd in want if start_curr <= pd <= end_curr]
                 want_prior = [pd for pd in want if start_prior <= pd <= end_prior]
-                missing_curr = [pd for pd in want_curr if pd not in eur_by_period]
-                missing_prior = [pd for pd in want_prior if pd not in eur_by_period]
+                # Jan+Feb cumulative coverage from combined releases per
+                # window-half (so missing-month accounting stays exact).
+                extra_curr_eur, extra_curr_obs, covered_curr = _add_jan_feb_combined_to_window(
+                    eur_by_period=eur_by_period,
+                    jan_feb_by_year=jan_feb_by_year,
+                    want_months=want_curr,
+                )
+                extra_prior_eur, extra_prior_obs, covered_prior = _add_jan_feb_combined_to_window(
+                    eur_by_period=eur_by_period,
+                    jan_feb_by_year=jan_feb_by_year,
+                    want_months=want_prior,
+                )
+                covered_curr_set = set(covered_curr)
+                covered_prior_set = set(covered_prior)
+                missing_curr = [
+                    pd for pd in want_curr
+                    if pd not in eur_by_period and pd not in covered_curr_set
+                ]
+                missing_prior = [
+                    pd for pd in want_prior
+                    if pd not in eur_by_period and pd not in covered_prior_set
+                ]
                 n_curr = 12 - len(missing_curr)
                 n_prior = 12 - len(missing_prior)
                 if n_curr < 8 or n_prior < 8:
                     counts["skipped_insufficient_history"] += 1
                     continue
                 partial_window = (len(missing_curr) + len(missing_prior)) > 0
-                current_eur = sum(eur_by_period[pd] for pd in want_curr if pd in eur_by_period)
-                prior_eur   = sum(eur_by_period[pd] for pd in want_prior if pd in eur_by_period)
+                current_eur = (
+                    sum(eur_by_period[pd] for pd in want_curr if pd in eur_by_period)
+                    + extra_curr_eur
+                )
+                prior_eur = (
+                    sum(eur_by_period[pd] for pd in want_prior if pd in eur_by_period)
+                    + extra_prior_eur
+                )
                 if prior_eur == 0:
                     counts["skipped_zero_prior"] += 1
                     continue
@@ -3257,6 +3418,8 @@ def detect_gacc_bilateral_aggregate_yoy(
                 obs_ids: list[int] = []
                 for pd in want_curr + want_prior:
                     obs_ids.extend(obs_by_period.get(pd, []))
+                obs_ids.extend(extra_curr_obs)
+                obs_ids.extend(extra_prior_obs)
                 if curr_ytd is not None:
                     obs_ids.extend(curr_ytd[1])
                 if prior_ytd is not None:

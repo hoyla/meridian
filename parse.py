@@ -46,6 +46,26 @@ _RELEASE_TITLE_RE = re.compile(
     r"(?:\((?:Only\s+\w+\.?,\s*)?in\s*(?P<currency>CNY|USD|RMB)\)\s*)?$"
 )
 
+# Combined "January-February" cumulative release pattern (Chinese New Year
+# release shape). Some years (2025 confirmed) publish only ONE release
+# covering Jan + Feb together, with both the "Monthly" and "YTD" columns
+# in the body table holding the same Jan+Feb cumulative value. Title shape
+# observed: "(4) China's Total Export & Import Values by Country/Region,
+# January-February 2025 (in CNY)". Hyphen variants seen in the wild: ASCII
+# `-`, en-dash `–`, em-dash `—`. Whitespace around the separator varies.
+# When matched, the parser sets ReleaseMetadata.is_jan_feb_combined and
+# the body parser emits observations under period_kind='cumulative_jan_feb'
+# instead of the usual 'monthly' + 'ytd' pair — see
+# briefing_pack/templates/README.md and `dev_notes/history.md` for the
+# editorial motivation (the rolling-12mo windows previously had to skip
+# Jan / Feb for these years and the YoY caveat was load-bearing).
+_RELEASE_TITLE_JAN_FEB_RE = re.compile(
+    r"^\s*(?:\((?P<section>\d+)\)\s*)?(?P<description>.+?),\s*"
+    r"Jan(?:uary)?\s*[-–—]\s*Feb(?:ruary)?\.?\s*"
+    r"(?P<year>\d{4})\s*"
+    r"(?:\(in\s*(?P<currency>CNY|USD|RMB)\)\s*)?$"
+)
+
 # Some 2018 section-4 release pages reuse the bulletin-row title verbatim
 # with no date in the page title at all (e.g.
 # "China's Total Export & Import Values by Country/Region (in CNY)" for the
@@ -107,6 +127,15 @@ class ReleaseMetadata:
     excel_url: str | None
     source_url: str
     title: str
+    # True when the title matched `_RELEASE_TITLE_JAN_FEB_RE` — a release
+    # that publishes a single Jan+Feb cumulative value rather than the
+    # usual single-month figure. The body parser branches on this to emit
+    # observations with period_kind='cumulative_jan_feb'. `period` itself
+    # is set to Feb 1 of the year (the latest month the release covers);
+    # `release_kind` is set to 'preliminary_jan_feb' by the caller so the
+    # natural-key on `releases` doesn't collide with a hypothetical
+    # separate-Feb release for the same year.
+    is_jan_feb_combined: bool = False
 
 
 @dataclass
@@ -168,8 +197,15 @@ def extract_metadata(
     title = title_el.get_text(strip=True)
     m = _RELEASE_TITLE_RE.match(title)
     period: date | None = None
+    is_jan_feb_combined = False
     if m:
         period = date(int(m.group("year")), _MONTH_ABBREVS[m.group("month")[:3]], 1)
+    elif (mjf := _RELEASE_TITLE_JAN_FEB_RE.match(title)) is not None:
+        # Combined Jan+Feb release (Chinese New Year shape). Period is
+        # anchored at February — the latest month the release covers.
+        m = mjf
+        period = date(int(m.group("year")), 2, 1)
+        is_jan_feb_combined = True
     else:
         # Fall back to the no-date bulletin-row format (some 2018 pages
         # reuse the bulletin title verbatim with no date appended).
@@ -267,6 +303,7 @@ def extract_metadata(
         excel_url=excel_url,
         source_url=url,
         title=title,
+        is_jan_feb_combined=is_jan_feb_combined,
     )
 
 
@@ -314,9 +351,25 @@ def _parse_section_4_by_country(soup: BeautifulSoup, meta: ReleaseMetadata) -> l
     period_iso = meta.period.isoformat()  # e.g. '2026-03-01' for both monthly & YTD anchor
     out: list[ParsedObservation] = []
 
+    # Combined Jan+Feb releases use a narrower 7-column layout (no separate
+    # "monthly" view — both columns would carry the same Jan+Feb sum, so
+    # the page just publishes one). Layout observed on the 2025 release:
+    #   0: partner label
+    #   1: Export & Import (Jan+Feb cumulative total)
+    #   2: Export          (Jan+Feb cumulative)
+    #   3: Import          (Jan+Feb cumulative)
+    #   4,5,6: YoY% for the three flows (derived downstream, not stored)
+    # Regular monthly releases keep the existing 10-column layout below.
+    if meta.is_jan_feb_combined:
+        expected_cells = 7
+        flow_value_idx = [("total", 1), ("export", 2), ("import", 3)]
+    else:
+        expected_cells = 10
+        flow_value_idx = None  # the regular loop uses the monthly/ytd pair below
+
     for tr in table.find_all("tr"):
         cells = tr.find_all("td")
-        if len(cells) != 10:
+        if len(cells) != expected_cells:
             continue
         if any(c.get("colspan") for c in cells):
             continue
@@ -324,6 +377,38 @@ def _parse_section_4_by_country(soup: BeautifulSoup, meta: ReleaseMetadata) -> l
         raw_label = cells[0].get_text()
         label, indent, is_subset = _normalise_partner_label(raw_label)
         if not label:
+            continue
+
+        if meta.is_jan_feb_combined:
+            try:
+                vals = [_parse_number(cells[i].get_text()) for i in (1, 2, 3)]
+            except ValueError:
+                continue
+            source_row = {
+                "raw_label": raw_label,
+                "cumulative_total": vals[0],
+                "cumulative_export": vals[1],
+                "cumulative_import": vals[2],
+            }
+            for (flow, _idx), v in zip(flow_value_idx, vals):
+                if v is None:
+                    continue
+                out.append(
+                    ParsedObservation(
+                        section_number=meta.section_number,
+                        period=period_iso,
+                        period_kind="cumulative_jan_feb",
+                        currency=meta.currency,
+                        unit=meta.unit,
+                        flow=flow,
+                        partner_country=label,
+                        partner_label_raw=raw_label,
+                        partner_indent=indent,
+                        partner_is_subset=is_subset,
+                        value=v,
+                        source_row=source_row,
+                    )
+                )
             continue
 
         try:
