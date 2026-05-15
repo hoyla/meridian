@@ -5,8 +5,8 @@ China–EU/UK beat. Ingests both sides of the customs fence — GACC
 (China), Eurostat Comext (EU-27), HMRC OTS (UK post-Brexit) — into a
 shared schema, cross-compares them, and writes a three-artefact
 bundle per export: a deterministic Markdown brief, an 8-tab
-spreadsheet, and a companion LLM-leads file. The model for what it
-should produce is [Soapbox Trade](https://soapboxtrade.substack.com);
+spreadsheet, and a companion LLM-leads file. The journalism it
+should inform is inspired by the excellent work of [Soapbox Trade](https://soapboxtrade.substack.com);
 the model journalist is Lisa O'Carroll.
 
 ## What the brief looks like
