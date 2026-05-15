@@ -53,6 +53,7 @@ from briefing_pack.sections.state_of_play_bilaterals import (
 )
 from briefing_pack.sections.top_movers import _section_top_movers
 from briefing_pack.sections.trajectories import _section_trajectories
+from briefing_pack.render_groups import render_groups
 
 log = logging.getLogger(__name__)
 
@@ -307,8 +308,8 @@ def render_leads(
     lines.append("## In this export folder")
     lines.append("")
     lines.append(
-        "This is one of three artefacts generated together from the same DB "
-        "snapshot. All three share the same finding IDs; switch between them "
+        "This is one of four artefacts generated together from the same DB "
+        "snapshot. All four share the same finding IDs; switch between them "
         "depending on what you need."
     )
     lines.append("")
@@ -327,6 +328,12 @@ def render_leads(
         "- **`data.xlsx`** — 8-tab spreadsheet for data journalists. Same "
         "findings, long-format with filterable scope/flow columns, "
         "predictability badges, CIF/FOB baseline expansion. Also LLM-free."
+    )
+    lines.append(
+        "- **`groups.md`** — HS group reference. What each named group "
+        "contains, what HS codes feed it, top contributing CN8 codes, "
+        "sibling groups. Read once to orient before quoting any "
+        "category figure."
     )
     lines.append("")
     lines.append(
@@ -492,6 +499,16 @@ def export(
         companion_filename=brief_basename, scope_label=scope_label,
     ))
     log.info("Wrote investigation leads to %s", lp)
+
+    # Sister reference doc: the HS-group glossary. Same folder, same DB
+    # snapshot — read this once to orient before clicking into specific
+    # findings. Lives outside the legacy explicit-paths mode (tests /
+    # programmatic callers using out_path/leads_path don't expect a
+    # third file).
+    if out_path is None:
+        groups_path = p.parent / "groups.md"
+        groups_path.write_text(render_groups(companion_filename=brief_basename))
+        log.info("Wrote HS group reference to %s", groups_path)
 
     if spreadsheet:
         # Lazy import — sheets_export imports from this module, so a

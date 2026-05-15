@@ -60,6 +60,13 @@ from briefing_pack.render import (
     render,
     render_leads,
 )
+# NB: we deliberately do NOT re-export `render_groups` here. The
+# submodule is also named `render_groups`, so a top-level
+# `from briefing_pack.render_groups import render_groups` (the form
+# render.py uses) would shadow the submodule on the package object —
+# `briefing_pack.render_groups` would then resolve to the function
+# rather than the module, breaking `import briefing_pack.render_groups
+# as rg`. Callers reach it via the explicit submodule path instead.
 
 __all__ = [
     # Public API

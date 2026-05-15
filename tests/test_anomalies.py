@@ -358,16 +358,38 @@ def test_mirror_gap_uses_per_partner_cif_fob_override(empty_op_tables, test_db_u
 def test_mirror_gap_skips_unrecognised_unit(empty_op_tables, test_db_url):
     """End-to-end: a GACC release with an unrecognised unit string must NOT
     produce a mirror_gap finding. The skip is tallied under
-    skipped_unrecognised_unit so journalists notice the gap."""
+    skipped_unrecognised_unit so journalists notice the gap.
+
+    The 2026-05-14 `releases_gacc_unit_consistent` CHECK constraint
+    blocks non-canonical unit strings at insert/update time, which is
+    the *first* line of defence. This test pokes through the
+    constraint to verify the analyser's *second* line of defence —
+    the parser-level skip in `_gacc_aggregate_per_period_totals` —
+    fires correctly in case a bad unit somehow slips into the table
+    (manual SQL, schema rollback, future GACC release format we
+    haven't taught the parser yet). Drop + restore the constraint
+    inside the same transaction so other tests see no change."""
     period = date(2025, 12, 1)
     with psycopg2.connect(test_db_url) as conn:
         gacc_obs_id, _ = _seed_one_pair(conn, period)
-        # Mutate the GACC release's unit to something the parser won't handle.
         with conn.cursor() as cur:
+            cur.execute(
+                "ALTER TABLE releases DROP CONSTRAINT "
+                "releases_gacc_unit_consistent"
+            )
             cur.execute(
                 "UPDATE releases SET unit = 'CNY 万' "  # Chinese ten-thousand — not in regex
                 "WHERE source = 'gacc' AND period = %s",
                 (period,),
+            )
+            cur.execute(
+                "ALTER TABLE releases ADD CONSTRAINT "
+                "releases_gacc_unit_consistent CHECK ("
+                "        source <> 'gacc'"
+                "     OR unit IS NULL"
+                "     OR (currency = 'CNY' AND unit = 'CNY 100 Million')"
+                "     OR (currency = 'USD' AND unit = 'USD1 Million')"
+                ") NOT VALID"   # NOT VALID so the pre-existing bad row is allowed
             )
             conn.commit()
 

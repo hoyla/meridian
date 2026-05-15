@@ -720,8 +720,9 @@ def _render_hs_group_yoy(finding: dict) -> str:
             kg = r.get("total_kg") or 0
             eur = r.get("total_eur") or 0
             unit = (eur / kg) if kg else None
+            cn8 = r.get("hs_code") or r.get("product_nc") or r.get("cn8") or "?"
             lines.append(
-                f"| `{r.get('product_nc') or r.get('cn8') or '?'}` "
+                f"| `{cn8}` "
                 f"| {_fmt_eur(eur)} "
                 f"| {_fmt_kg(kg)} "
                 f"| {f'€{unit:.2f}/kg' if unit else '—'} |"
