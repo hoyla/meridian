@@ -397,6 +397,7 @@ def export(
     spreadsheet: bool | None = None,
     trigger: str = "manual",
     record: bool = True,
+    with_provenance: bool = False,
 ) -> tuple[str, str]:
     """Write the findings document AND the companion leads file to disk.
     Returns (findings_path, leads_path).
@@ -515,13 +516,14 @@ def export(
         for fname in copied:
             log.info("Copied template %s to %s", fname, p.parent / fname)
 
-        # Generate (or refresh) per-finding provenance for every finding id
-        # cited in the brief or leads, and copy each one into the export
-        # bundle's `provenance/` subdir. A journalist forwarded just the
-        # bundle gets the full audit trail; the canonical files at
-        # `provenance/finding-N.md` are reused across exports so common
-        # findings don't get regenerated on every run.
-        _emit_provenance_bundle(p, lp)
+        # Provenance bundling is opt-in (--with-provenance on the CLI).
+        # When on, bundle only the editorially-fresh subset — Tier 1
+        # changes, top-5 movers, and the leads.md picks — typically
+        # ~40-60 files per export rather than ~2,000. The long tail of
+        # state-of-play findings stays on-demand via
+        # `python scrape.py --finding-provenance N`.
+        if with_provenance:
+            _emit_provenance_bundle(p, lp)
 
     return str(p), str(lp)
 
@@ -529,22 +531,60 @@ def export(
 _FINDING_TOKEN_RE = re.compile(r"\bfinding/(\d+)\b")
 
 
+def _editorially_fresh_finding_ids(
+    brief_text: str, leads_text: str,
+) -> set[int]:
+    """Extract finding IDs from the editorially-fresh sections of the
+    brief and leads — Tier 1, Top-N movers, and the Top-N leads block —
+    rather than every finding cited anywhere. Most cycles, the long
+    tail of Tier 2 / Tier 3 findings repeats from the previous export;
+    bundling those every time is mostly redundant weight.
+
+    Section boundaries are pinned to the headings the section modules
+    emit (see briefing_pack/sections/{diff,top_movers,llm_narratives}.py).
+    A section that doesn't appear (e.g. method-bump-suppressed Tier 1)
+    contributes nothing — fine, no spurious bundling."""
+    ids: set[int] = set()
+    # Top-N movers in brief: "## Top N movers this cycle" → next "## " or "---"
+    m = re.search(
+        r"^## Top \d+ movers this cycle\b(.*?)(?=^## |^---\s*$)",
+        brief_text, re.DOTALL | re.MULTILINE,
+    )
+    if m:
+        ids.update(int(x) for x in _FINDING_TOKEN_RE.findall(m.group(1)))
+    # Tier 1 in brief: "## Tier 1 —" → "## Tier 2 —" or end of doc
+    m = re.search(
+        r"^## Tier 1 —.*?(?=^## Tier 2 —|\Z)",
+        brief_text, re.DOTALL | re.MULTILINE,
+    )
+    if m:
+        ids.update(int(x) for x in _FINDING_TOKEN_RE.findall(m.group(0)))
+    # Top-N leads in leads.md: "## Top N leads to investigate" → next "## "
+    m = re.search(
+        r"^## Top \d+ leads to investigate\b(.*?)(?=^## )",
+        leads_text, re.DOTALL | re.MULTILINE,
+    )
+    if m:
+        ids.update(int(x) for x in _FINDING_TOKEN_RE.findall(m.group(1)))
+    return ids
+
+
 def _emit_provenance_bundle(brief_path: Path, leads_path: Path) -> None:
-    """Scan the rendered brief + leads for `finding/N` tokens, generate
-    each one's provenance file (idempotent — skips if it already exists),
-    and copy the result into `<export>/provenance/`. Per-finding errors
-    are logged and skipped so a single bad finding can't break the
-    bundle write."""
+    """Generate provenance for the editorially-fresh subset of findings
+    cited in the brief, and copy each one into `<export>/provenance/`.
+    Idempotent at the generator layer (skips finding-N.md files that
+    already exist at the canonical `provenance/` path)."""
     import provenance  # lazy: avoids a circular import at module load
 
-    finding_ids: set[int] = set()
-    for path in (brief_path, leads_path):
-        if not path.exists():
-            continue
-        finding_ids.update(int(m) for m in _FINDING_TOKEN_RE.findall(path.read_text()))
+    brief_text = brief_path.read_text() if brief_path.exists() else ""
+    leads_text = leads_path.read_text() if leads_path.exists() else ""
+    finding_ids = _editorially_fresh_finding_ids(brief_text, leads_text)
 
     if not finding_ids:
-        log.info("Provenance: no finding/N tokens found in brief or leads; nothing to bundle")
+        log.info(
+            "Provenance: no finding/N tokens in the editorially-fresh "
+            "sections (Tier 1 / Top movers / Top leads); nothing to bundle"
+        )
         return
 
     bundle_dir = brief_path.parent / "provenance"
@@ -562,8 +602,8 @@ def _emit_provenance_bundle(brief_path: Path, leads_path: Path) -> None:
         except Exception:
             log.exception("Provenance: failed to bundle finding/%d; skipping", fid)
     log.info(
-        "Provenance: bundled %d finding files into %s (skipped %d with "
-        "no detailed renderer yet — request via "
-        "`python scrape.py --finding-provenance N` if needed)",
+        "Provenance: bundled %d editorially-fresh finding files into %s "
+        "(skipped %d with no detailed renderer yet — request on-demand "
+        "via `python scrape.py --finding-provenance N`)",
         written, bundle_dir, skipped,
     )

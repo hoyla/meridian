@@ -449,6 +449,17 @@ def main() -> None:
         ),
     )
     p.add_argument(
+        "--with-provenance", action="store_true",
+        help=(
+            "With --briefing-pack: also bundle per-finding provenance files "
+            "into the export folder's `provenance/` subdir. Only the "
+            "editorially-fresh subset (Tier 1 changes, top-N movers, top-N "
+            "leads) is bundled — typically ~40-60 files — to keep the "
+            "export browsable. The long tail of state-of-play findings "
+            "stays on-demand via --finding-provenance. Default off."
+        ),
+    )
+    p.add_argument(
         "--finding-provenance", type=int, metavar="ID",
         help=(
             "Generate a per-finding provenance file at "
@@ -586,6 +597,7 @@ def main() -> None:
             scope_label=args.export_scope,
             top_n=args.briefing_top_n,
             record=not args.no_record,
+            with_provenance=args.with_provenance,
         )
         log.info("Wrote briefing pack to %s", brief_path)
         log.info("Wrote investigation leads to %s", leads_path)
