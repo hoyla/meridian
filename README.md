@@ -167,10 +167,17 @@ python scrape.py --briefing-pack --with-provenance            # also bundle per-
 #
 # Use this when a journalist asks "where exactly did finding/N come from?" — the
 # output is a self-contained Markdown file that can be forwarded directly.
-# Detailed template currently covers the GACC bilateral aggregate and
-# hs_group_yoy* families; other subkinds emit a stub noting "generator pending".
+# Detailed templates currently cover the GACC bilateral aggregate, hs_group_yoy*,
+# and hs_group_trajectory* families; other subkinds emit a stub noting
+# "generator pending".
 python scrape.py --finding-provenance 57378                   # writes provenance/finding-57378.md, prints the path
 python scrape.py --finding-provenance 57378 --force           # regenerate even if the file exists
+
+# HS group glossary, standalone — same content as the `05_Groups.md` in a bundle
+# but generated as a one-off dated file, useful for forwarding the glossary by
+# itself between briefing-pack runs.
+python scrape.py --groups-glossary                            # → exports/groups-glossary-YYYY-MM-DD.md
+python scrape.py --groups-glossary --out path/to/groups.md    # explicit output path
 ```
 
 The two export surfaces share the same underlying data layer: switching between them — or adding a new one — is a thin render shim, not a re-ingest.

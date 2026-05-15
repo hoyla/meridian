@@ -460,6 +460,24 @@ def main() -> None:
         ),
     )
     p.add_argument(
+        "--groups-glossary", action="store_true",
+        help=(
+            "Write the HS group reference (`05_Groups.md` in a normal "
+            "bundle) as a standalone, dated file at "
+            "`exports/groups-glossary-YYYY-MM-DD.md`. Use `--out PATH` "
+            "to override. Convenient for forwarding the glossary by "
+            "itself between briefing-pack runs without regenerating "
+            "the full bundle."
+        ),
+    )
+    p.add_argument(
+        "--out", metavar="PATH",
+        help=(
+            "With --groups-glossary: override the default output path. "
+            "Ignored by other commands."
+        ),
+    )
+    p.add_argument(
         "--finding-provenance", type=int, metavar="ID",
         help=(
             "Generate a per-finding provenance file at "
@@ -478,6 +496,19 @@ def main() -> None:
             args.finding_provenance, force=args.force,
         )
         print(path)
+        return
+
+    if args.groups_glossary:
+        from datetime import date as _date
+        from pathlib import Path as _Path
+        import briefing_pack.render_groups as _rg
+        out = _Path(args.out) if args.out else (
+            _Path(f"exports/groups-glossary-{_date.today().isoformat()}.md")
+        )
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(_rg.render_groups())
+        log.info("Wrote groups glossary to %s (%d bytes)", out, out.stat().st_size)
+        print(out)
         return
 
     if args.periodic_run:
