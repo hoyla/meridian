@@ -292,3 +292,106 @@ def test_hs_group_yoy_renderer_emits_group_definition_and_source_urls(
     assert "full_v2_202506.7z" in text
     # Directionality plain-English present.
     assert "EU-27 (Eurostat) imports from China" in text
+
+
+def _seed_hs_group_trajectory(conn, finding_id: int = 999_003) -> int:
+    """Minimal hs_group_trajectory finding with a 7-point series, a
+    classified shape, and two underlying_yoy_finding_ids pointers."""
+    detail = {
+        "method": "hs_group_trajectory_v8_comparison_scope",
+        "flow": 1,
+        "comparison_scope": "eu_27",
+        "shape": "u_recovery",
+        "shape_label": "U-shape recovery (was falling, now rising)",
+        "caveat_codes": [],
+        "underlying_yoy_finding_ids": [999_010, 999_011],
+        "group": {
+            "id": 49,
+            "name": "PV inverters test",
+            "hs_patterns": ["85044086%"],
+        },
+        "series": [
+            {"period": "2025-06-01", "yoy_pct": -0.30,
+             "yoy_pct_kg": -0.20, "current_eur": 1_900_000_000},
+            {"period": "2025-07-01", "yoy_pct": -0.20,
+             "yoy_pct_kg": -0.10, "current_eur": 1_910_000_000},
+            {"period": "2025-08-01", "yoy_pct": -0.10,
+             "yoy_pct_kg": 0.00, "current_eur": 1_920_000_000},
+            {"period": "2025-09-01", "yoy_pct": -0.05,
+             "yoy_pct_kg": 0.03, "current_eur": 1_950_000_000},
+            {"period": "2025-10-01", "yoy_pct": 0.00,
+             "yoy_pct_kg": 0.04, "current_eur": 1_960_000_000},
+            {"period": "2025-11-01", "yoy_pct": 0.03,
+             "yoy_pct_kg": 0.05, "current_eur": 1_980_000_000},
+            {"period": "2025-12-01", "yoy_pct": 0.06,
+             "yoy_pct_kg": 0.10, "current_eur": 2_030_000_000},
+        ],
+        "features": {
+            "n": 7,
+            "first_yoy": -0.30, "first_period": "2025-06-01",
+            "last_yoy": 0.06, "last_period": "2025-12-01",
+            "max_yoy": 0.06, "peak_period": "2025-12-01",
+            "min_yoy": -0.30, "trough_period": "2025-06-01",
+            "mean_yoy": -0.08, "stdev_yoy": 0.13,
+            "sign_changes": 1,
+            "earlier_slope": 0.07, "recent_slope": 0.04,
+        },
+    }
+    with conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) "
+            "VALUES ('test://seed-traj', 'success') RETURNING id"
+        )
+        run_id = cur.fetchone()[0]
+        # A Eurostat release inside the trajectory's source-URL span so
+        # the renderer has at least one row to attribute to.
+        cur.execute(
+            """
+            INSERT INTO releases (source, period, source_url)
+            VALUES ('eurostat', '2025-10-01',
+                    'https://ec.europa.eu/eurostat/api/dissemination/files?downfile=comext%2FCOMEXT_DATA%2FPRODUCTS%2Ffull_v2_202510.7z')
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO findings (id, scrape_run_id, kind, subkind, title,
+                                  detail, observation_ids)
+            VALUES (%s, %s, 'anomaly', 'hs_group_trajectory',
+                    'PV inverters trajectory test', %s, '{}')
+            """,
+            (finding_id, run_id, json.dumps(detail)),
+        )
+    return finding_id
+
+
+def test_hs_group_trajectory_renderer_explains_shape_and_chains_to_underlying(
+    clean_db, db_conn, provenance_dir,
+):
+    """The trajectory renderer must: explain what the shape
+    classification means in plain English (not just the cryptic
+    `u_recovery` code), surface the key series features (peak / trough
+    / sign changes / slopes), render the full per-anchor series table,
+    and link to the underlying YoY findings so a journalist can drill
+    one level deeper into raw-row provenance."""
+    finding_id = _seed_hs_group_trajectory(db_conn)
+    path = provenance.generate_for_finding(finding_id)
+    assert path is not None
+    text = path.read_text()
+    # Shape, both as code and human-readable label.
+    assert "`u_recovery`" in text
+    assert "U-shape recovery" in text
+    # Editorial gloss is in the section, not just the canonical label.
+    assert "fell, hit a trough, and rose" in text
+    # Series features render.
+    assert "Trough" in text and "2025-06-01" in text
+    assert "Peak" in text
+    assert "earlier half" in text  # slope sentence
+    # Underlying YoY chain.
+    assert "[`finding/999010`](finding-999010.md)" in text
+    assert "[`finding/999011`](finding-999011.md)" in text
+    # Series table.
+    assert "## The series" in text
+    assert "| 2025-06-01 |" in text
+    assert "| 2025-12-01 |" in text
+    # Eurostat release URL surfaced as a friendly label.
+    assert "full_v2_202510.7z" in text

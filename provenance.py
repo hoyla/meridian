@@ -906,6 +906,378 @@ def _fmt_kg(v: float | None) -> str:
     return f"{v:,.0f} kg"
 
 
+_TRAJECTORY_SHAPE_EDITORIAL: dict[str, str] = {
+    "flat": (
+        "The 12mo YoY series stays close to zero across every anchor in "
+        "the window — neither a sustained rise nor a sustained fall. "
+        "Quote *as a non-story*: nothing material has shifted at the "
+        "12-month rolling scale. Investigate underlying volumes / unit "
+        "prices for whether something is moving below the aggregate."
+    ),
+    "rising": (
+        "Every (or nearly every) anchor sits above the prior one in YoY "
+        "terms — a sustained positive trend across the series. The "
+        "canonical \"category is growing\" shape."
+    ),
+    "rising_accelerating": (
+        "Rising AND the recent half of the series climbs faster than "
+        "the earlier half — the *rate* of growth is increasing. The "
+        "shape most likely to be the lede of a Soapbox piece."
+    ),
+    "rising_decelerating": (
+        "Rising but the recent half climbs more slowly than the earlier "
+        "half. The growth story is intact but the acceleration has gone "
+        "out of it. Often the shape after a tariff / regulatory shock "
+        "starts to bite."
+    ),
+    "falling": (
+        "Every (or nearly every) anchor sits below the prior one in YoY "
+        "terms — a sustained negative trend. The mirror of 'rising'."
+    ),
+    "falling_accelerating": (
+        "Falling AND the recent half falls faster than the earlier "
+        "half — the rate of decline is increasing. Quote with caution: "
+        "small denominators near zero can produce spurious "
+        "'accelerating' classifications."
+    ),
+    "falling_decelerating": (
+        "Falling but the recent half falls more slowly than the earlier "
+        "half. Often a precursor to a U-shape recovery or a flat-bottom."
+    ),
+    "u_recovery": (
+        "The series fell, hit a trough, and rose — a U shape. Strong "
+        "narrative shape (\"after a slump, X is back\"); also commonly "
+        "associated with policy reversals, COVID-style demand shocks "
+        "unwinding, or supply-chain re-routing settling out."
+    ),
+    "inverse_u_peak": (
+        "The series rose, hit a peak, and fell — an inverted-U. Often "
+        "associated with a one-off demand spike (event, stockpiling) "
+        "having unwound."
+    ),
+    "dip_recovery": (
+        "Was rising, dipped, then resumed rising — a brief interruption "
+        "in an otherwise positive trend. Sometimes a real event, "
+        "sometimes a measurement/revision artefact."
+    ),
+    "failed_recovery": (
+        "Was falling, briefly rose, then resumed falling. A useful "
+        "marker that an apparent turnaround didn't stick."
+    ),
+    "volatile": (
+        "Multiple direction changes in the series — no single shape "
+        "dominates. The brief auto-suppresses the trajectory annotation "
+        "for volatile findings in the inline Tier 2 view; we still "
+        "carry the classification here for audit purposes."
+    ),
+    "insufficient_data": (
+        "Too few anchor windows to classify reliably (typically <6). "
+        "The series exists but no shape claim is made."
+    ),
+}
+
+
+def _render_hs_group_trajectory(finding: dict) -> str:
+    """HS-group trajectory shape (Eurostat / HMRC / combined). Handles
+    all six subkinds — flow × scope — in one renderer; they share the
+    same detail shape and only differ in which source(s) the underlying
+    YoY anchors were built from."""
+    detail = finding["detail"]
+    method_q = detail
+    group = detail["group"]
+    flow = detail.get("flow", 1)
+    scope = detail.get("comparison_scope", "eu_27")
+    shape = detail.get("shape", "?")
+    shape_label = detail.get("shape_label") or shape
+    features = detail.get("features", {})
+    series = detail.get("series") or []
+    underlying = detail.get("underlying_yoy_finding_ids") or []
+
+    flow_word = "imports from" if flow == 1 else "exports to"
+    scope_word = {
+        "eu_27": "EU-27 (Eurostat)",
+        "uk": "UK (HMRC)",
+        "eu_27_plus_uk": "EU-27 + UK combined (Eurostat + HMRC)",
+    }.get(scope, scope)
+    direction_human = f"{scope_word} {flow_word} China"
+
+    # Pick the right source set for the source-URL lookup.
+    sources = ["eurostat"] if scope == "eu_27" else (
+        ["hmrc"] if scope == "uk" else ["eurostat", "hmrc"]
+    )
+
+    parts: list[str] = []
+    parts.append(f"# finding/{finding['id']} — provenance\n")
+    parts.append(_generated_banner(finding["id"]) + "\n")
+    parts.append(f"**{finding['title']}**\n")
+    parts.append(
+        f"This is a **trajectory** finding — a classification of the *shape* "
+        f"of the rolling-12mo YoY series for **{direction_human}** over "
+        f"recent anchor periods. It's not itself a single-window YoY "
+        f"figure; it characterises how the YoY values have moved over a "
+        f"sequence of months."
+    )
+    parts.append("")
+    parts.append(_supersede_status(finding) + "\n")
+    parts.append("")
+
+    # ---- The shape, in plain English ---------------------------------------
+    parts.append("## Trajectory shape\n")
+    parts.append(
+        f"**Classification**: `{shape}` — *{shape_label}*  \n"
+    )
+    editorial = _TRAJECTORY_SHAPE_EDITORIAL.get(
+        shape,
+        "(no editorial gloss for this shape yet — extend "
+        "`provenance._TRAJECTORY_SHAPE_EDITORIAL` if it's worth one.)",
+    )
+    parts.append(f"{editorial}\n")
+    parts.append("")
+    if features:
+        first_yoy = features.get("first_yoy")
+        last_yoy = features.get("last_yoy")
+        max_yoy = features.get("max_yoy")
+        min_yoy = features.get("min_yoy")
+        peak_period = features.get("peak_period")
+        trough_period = features.get("trough_period")
+        first_period = features.get("first_period")
+        last_period = features.get("last_period")
+        sign_changes = features.get("sign_changes")
+        mean_yoy = features.get("mean_yoy")
+        stdev_yoy = features.get("stdev_yoy")
+        slope_earlier = features.get("earlier_slope")
+        slope_recent = features.get("recent_slope")
+        parts.append("**Series features**\n")
+        if first_yoy is not None and first_period:
+            parts.append(
+                f"- First anchor ({first_period}): "
+                f"{_fmt_pct(first_yoy)}  "
+            )
+        if last_yoy is not None and last_period:
+            parts.append(
+                f"- Last anchor ({last_period}): "
+                f"{_fmt_pct(last_yoy)}  "
+            )
+        if max_yoy is not None and peak_period:
+            parts.append(
+                f"- Peak: {_fmt_pct(max_yoy)} in {peak_period}  "
+            )
+        if min_yoy is not None and trough_period:
+            parts.append(
+                f"- Trough: {_fmt_pct(min_yoy)} in {trough_period}  "
+            )
+        if sign_changes is not None:
+            parts.append(
+                f"- Sign changes (zero crossings): {sign_changes}  "
+            )
+        if mean_yoy is not None and stdev_yoy is not None:
+            parts.append(
+                f"- Mean YoY: {_fmt_pct(mean_yoy)} "
+                f"(stdev {_fmt_pct(stdev_yoy)})  "
+            )
+        if slope_earlier is not None and slope_recent is not None:
+            parts.append(
+                f"- Slope: earlier half {slope_earlier:+.4f}/window vs "
+                f"recent half {slope_recent:+.4f}/window — "
+                f"({'accelerating' if abs(slope_recent) > abs(slope_earlier) else 'decelerating'} "
+                f"if same sign)"
+            )
+        parts.append("")
+
+    # ---- What's in this HS group ------------------------------------------
+    parts.append("## What's in this HS group\n")
+    parts.append(f"**{group['name']}**  \n")
+    pats = group.get("hs_patterns") or []
+    parts.append(
+        f"HS pattern(s) matched: "
+        f"{', '.join(f'`{p}`' for p in pats) or '(none)'}. See "
+        f"`05_Groups.md` (or its standalone equivalent) for the full "
+        f"group definition — description, top contributing CN8 codes, "
+        f"and sibling groups.\n"
+    )
+    parts.append("")
+
+    # ---- Underlying YoY findings ------------------------------------------
+    if underlying:
+        parts.append("## Underlying YoY findings\n")
+        parts.append(
+            f"This trajectory rests on {len(underlying)} per-anchor "
+            f"`hs_group_yoy*` findings — one for each rolling-12mo window "
+            f"shown in the series below. Each underlying finding has its "
+            f"own provenance file with the per-month source URLs and the "
+            f"top CN8 / reporter contributions for that anchor. The "
+            f"trajectory's shape is purely derivative: it makes no claim "
+            f"that the underlying YoYs don't already support.\n"
+        )
+        parts.append("")
+        for fid in underlying:
+            parts.append(
+                f"- [`finding/{fid}`](finding-{fid}.md) (run "
+                f"`python scrape.py --finding-provenance {fid}` if the "
+                f"file isn't bundled with this export)"
+            )
+        parts.append("")
+
+    # ---- Sources (release-level) ------------------------------------------
+    parts.append("## Sources\n")
+    parts.append(
+        "Same raw-row sources as the underlying YoY findings — Eurostat "
+        "COMEXT (and/or HMRC OTS for UK / combined scopes), one bulk "
+        "release per month, filtered on read by partner / flow / CN8 "
+        "pattern. The release URLs below cover the full span the "
+        "trajectory's anchors touch.\n"
+    )
+    parts.append(_trajectory_sources_block(detail, sources))
+    parts.append("")
+
+    # ---- Caveats -----------------------------------------------------------
+    parts.append("## Caveats (plain English)\n")
+    parts.append(_caveat_glossary(detail.get("caveat_codes") or []) + "\n")
+    parts.append(
+        "Family-universal caveats apply (`cif_fob`, `currency_timing`, "
+        "`classification_drift`, `eurostat_stat_procedure_mix`, "
+        "`multi_partner_sum`, `cn8_revision`) — see the brief's "
+        "Methodology footer. Trajectory-specific note: classifications "
+        "use a centered 3-period moving-average smoother before shape "
+        "detection, so a single anomalous month rarely tips a series "
+        "from one shape to another.\n"
+    )
+    parts.append("")
+
+    # ---- The series itself -------------------------------------------------
+    if series:
+        parts.append("## The series\n")
+        parts.append(
+            "Each row is one rolling-12mo anchor — the YoY for the "
+            "12 months ending at `period` against the 12 months ending "
+            "a year earlier.\n"
+        )
+        parts.append("")
+        parts.append("| Anchor period | 12mo YoY (value) | 12mo YoY (kg) | Current 12mo |")
+        parts.append("|---|---:|---:|---:|")
+        for s in series:
+            yoy = s.get("yoy_pct")
+            yoy_kg = s.get("yoy_pct_kg")
+            eur = s.get("current_eur") or 0
+            parts.append(
+                f"| {s.get('period', '?')} "
+                f"| {_fmt_pct(yoy) if yoy is not None else '—'} "
+                f"| {_fmt_pct(yoy_kg) if yoy_kg is not None else '—'} "
+                f"| {_fmt_eur(eur)} |"
+            )
+        parts.append("")
+
+    # ---- Methodology ------------------------------------------------------
+    parts.append("## Methodology\n")
+    parts.append(
+        f"Analyser: `{detail.get('method', '?')}` "
+        f"(`anomalies.detect_hs_group_trajectories`). Reads the active "
+        f"`hs_group_yoy*` findings for this group + scope + flow, "
+        f"orders them by anchor period, smooths with a centered "
+        f"3-window moving average, and classifies the smoothed shape "
+        f"using slope-based heuristics (Theil-Sen slope estimator on "
+        f"each half of the series) plus zero-crossing counts. Shape "
+        f"thresholds (`flat_stdev`, `flat_mean_abs_yoy`, "
+        f"`slope_significant`) live in `anomalies.py` and are "
+        f"reproduced in the brief's methodology footer.  \n"
+        f"See [docs/methodology.md §1.2](../docs/methodology.md) for "
+        f"the full description of each shape and when each is editorially "
+        f"meaningful.\n"
+    )
+    parts.append("")
+
+    # ---- Replay -----------------------------------------------------------
+    parts.append("## Appendix — Replay queries (for fact-checkers)\n")
+    flow_cli = 1 if flow == 1 else 2
+    parts.append(
+        "```sql\n"
+        f"-- The trajectory finding row\n"
+        f"SELECT id, title, body, detail FROM findings WHERE id = {finding['id']};\n\n"
+        f"-- Every underlying YoY finding (one per anchor in the series):\n"
+        f"SELECT id, subkind, detail->'totals'->>'current_12mo_eur' AS eur,\n"
+        f"       detail->'windows'->>'current_end' AS anchor\n"
+        f"  FROM findings\n"
+        f" WHERE id = ANY('{{{','.join(str(i) for i in underlying)}}}')\n"
+        f" ORDER BY anchor;\n"
+        "```\n"
+    )
+    parts.append(
+        "To regenerate this trajectory (will produce a new finding id "
+        "and supersede the current one if the shape or features differ):\n"
+        f"```sh\npython scrape.py --analyse hs-group-trajectory --flow "
+        f"{flow_cli} --comparison-scope {scope} "
+        f"--hs-group {group['name']!r}\n```\n"
+    )
+
+    return "\n".join(parts) + "\n"
+
+
+def _trajectory_sources_block(detail: dict, sources: list[str]) -> str:
+    """Source URLs covering the full release span the trajectory anchors
+    touch. Each anchor is a 12mo window, so the span is roughly
+    (first_anchor - 11 months) through last_anchor."""
+    series = detail.get("series") or []
+    if not series:
+        return "*(no anchors in series — nothing to attribute)*"
+    # Span: 11 months before the first anchor, up to the last anchor.
+    first_p = series[0].get("period")
+    last_p = series[-1].get("period")
+    # Compute a date 11 months earlier than first_p for the source range.
+    from datetime import date
+    try:
+        y, m, _ = (int(x) for x in first_p.split("-"))
+        # subtract 11 months
+        y2 = y - 1 if m == 12 else (y if m > 1 else y - 1)
+        m2 = m + 1 if m < 12 else 1  # +1 mod 12, then we'll adjust... easier inline
+        # Simpler: compute via date arithmetic
+        start = date(y, m, 1)
+        for _ in range(11):
+            if start.month == 1:
+                start = date(start.year - 1, 12, 1)
+            else:
+                start = date(start.year, start.month - 1, 1)
+    except Exception:
+        start = first_p
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT source, period, source_url
+              FROM releases
+             WHERE source = ANY(%s)
+               AND period BETWEEN %s AND %s
+             ORDER BY source, period
+            """,
+            (sources, start, last_p),
+        )
+        rows = cur.fetchall()
+    by_source: dict[str, list[dict]] = {}
+    for r in rows:
+        by_source.setdefault(r["source"], []).append(r)
+    out: list[str] = []
+    for src in sources:
+        rs = by_source.get(src, [])
+        if not rs:
+            out.append(
+                f"### {src.upper()}\n\n"
+                f"No releases ingested in the window {start} → {last_p}.\n"
+            )
+            continue
+        out.append(f"### {src.upper()}\n")
+        out.append(
+            f"{len(rs)} monthly releases covering "
+            f"{rs[0]['period']} → {rs[-1]['period']}. Each is filtered "
+            f"on read by partner / flow / CN8 pattern.\n"
+        )
+        out.append("")
+        out.append("| Period | Source release |")
+        out.append("|---|---|")
+        for r in rs:
+            label_text = _short_url_label(src, r["source_url"])
+            out.append(f"| {r['period'].isoformat()[:7]} | [{label_text}]({r['source_url']}) |")
+        out.append("")
+    return "\n".join(out)
+
+
 _RENDERERS = {
     "gacc_bilateral_aggregate_yoy": _render_gacc_bilateral_aggregate_yoy,
     "gacc_bilateral_aggregate_yoy_import": _render_gacc_bilateral_aggregate_yoy,
@@ -915,4 +1287,10 @@ _RENDERERS = {
     "hs_group_yoy_uk_export": _render_hs_group_yoy,
     "hs_group_yoy_combined": _render_hs_group_yoy,
     "hs_group_yoy_combined_export": _render_hs_group_yoy,
+    "hs_group_trajectory": _render_hs_group_trajectory,
+    "hs_group_trajectory_export": _render_hs_group_trajectory,
+    "hs_group_trajectory_uk": _render_hs_group_trajectory,
+    "hs_group_trajectory_uk_export": _render_hs_group_trajectory,
+    "hs_group_trajectory_combined": _render_hs_group_trajectory,
+    "hs_group_trajectory_combined_export": _render_hs_group_trajectory,
 }
