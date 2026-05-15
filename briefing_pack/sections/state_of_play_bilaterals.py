@@ -46,7 +46,8 @@ def _section_state_of_play_bilaterals(cur) -> _Section:
                  (detail->'totals'->'ytd_cumulative'->>'months_in_ytd')::int AS ytd_months,
                  (detail->'totals'->'single_month'->>'yoy_pct')::numeric AS sm_yoy_pct,
                  (detail->'totals'->'single_month'->>'current_eur')::numeric AS sm_curr_eur,
-                 (detail->'totals'->>'partial_window')::boolean AS partial_window
+                 (detail->'totals'->>'partial_window')::boolean AS partial_window,
+                 detail->'totals'->'jan_feb_combined_years' AS jan_feb_combined_years
             FROM findings
            WHERE subkind LIKE 'gacc_bilateral_aggregate_yoy%%' AND superseded_at IS NULL
         ORDER BY detail->'partner'->>'raw_label', subkind,
@@ -122,10 +123,22 @@ def _section_state_of_play_bilaterals(cur) -> _Section:
                 sm_eur = _fmt_eur(r["sm_curr_eur"])
                 sm_block = f" Latest month: {sm_v:+.1f}% to {sm_eur}."
 
-            partial = " — partial window" if r["partial_window"] else ""
+            # Inline annotations for the per-finding caveats most relevant
+            # to a journalist scanning the line. `partial_window` flags that
+            # months are missing; `jan_feb_combined` flags that part of the
+            # window came in as a 2-month cumulative (Chinese-New-Year
+            # combined release) rather than separate monthly figures. The
+            # full caveat text is in the per-finding provenance file.
+            annotations: list[str] = []
+            if r["partial_window"]:
+                annotations.append("partial window")
+            jfc_years = r["jan_feb_combined_years"]
+            if jfc_years:
+                annotations.append(f"includes Jan+Feb {','.join(str(y) for y in jfc_years)} cumulative")
+            suffix = (" — " + "; ".join(annotations)) if annotations else ""
             lines.append(
                 f"  - **{label}**: 12mo rolling {rolling_str} to {rolling_eur} "
-                f"(12mo to {r['current_end']}).{ytd_block}{sm_block}{partial} "
+                f"(12mo to {r['current_end']}).{ytd_block}{sm_block}{suffix} "
                 f"{_trace_token(r['id'])}"
             )
         lines.append("")

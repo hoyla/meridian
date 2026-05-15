@@ -916,7 +916,7 @@ def test_gacc_aggregate_yoy_emits_finding_for_asean(empty_op_tables, test_db_url
     assert detail["aggregate"]["raw_label"] == "ASEAN"
     # No multi_partner_sum — this analyser doesn't sum Eurostat partners.
     assert "multi_partner_sum" not in detail["caveat_codes"]
-    assert detail["method"] == "gacc_aggregate_yoy_v4_ytd_and_single_month_operators"
+    assert detail["method"] == "gacc_aggregate_yoy_v5_jan_feb_combined_caveat"
     # v4: the three YoY operators sit side-by-side in detail.totals.
     # 12mo rolling is always present (the analyser's primary).
     # ytd_cumulative and single_month are NULL here because the test

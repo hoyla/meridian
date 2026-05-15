@@ -2819,6 +2819,9 @@ def detect_gacc_aggregate_yoy(
                 if prior_ytd is not None:
                     obs_ids.extend(prior_ytd[1])
 
+                jan_feb_years_used = sorted(
+                    {m.year for m in covered_curr + covered_prior}
+                )
                 action = _insert_gacc_aggregate_yoy_finding(
                     analysis_run_id, agg, t, start_curr, end_curr,
                     start_prior, end_prior,
@@ -2829,6 +2832,7 @@ def detect_gacc_aggregate_yoy(
                     missing_prior=missing_prior,
                     ytd_block=ytd_block,
                     sm_block=sm_block,
+                    jan_feb_combined_years=jan_feb_years_used,
                 )
                 _tally(counts, action)
 
@@ -3026,6 +3030,7 @@ def _insert_gacc_aggregate_yoy_finding(
     missing_prior: list[date] | None = None,
     ytd_block: dict | None = None,
     sm_block: dict | None = None,
+    jan_feb_combined_years: list[int] | None = None,
 ) -> findings_io.EmitAction:
     direction = "up" if yoy_pct > 0 else "down"
     flow_label = "China exports to" if flow == "export" else "China imports from"
@@ -3075,17 +3080,27 @@ def _insert_gacc_aggregate_yoy_finding(
         body_lines.append("")
         body_lines.append(
             f"⚠ PARTIAL WINDOW: {n_missing} of 24 months missing from this window "
-            f"({missing_strs}). GACC publishes Jan + Feb as a combined "
-            f"cumulative release (Chinese New Year), and our parser doesn't yet "
-            f"handle that format — so every January and February is a "
-            f"structural data gap for non-EU aggregates. Sums are over "
-            f"available months only; treat the YoY as approximate. See "
-            f"caveat 'partial_window' and `dev_notes/forward-work-gacc-2018-parser.md` "
-            f"(the title-format issue is the same one that blocks 2018)."
+            f"({missing_strs}). For 2026 onwards, GACC publishes February as its "
+            f"own release and a January monthly can be derived from "
+            f"(Feb-release YTD − Feb-release Monthly) — that derivation is a "
+            f"separate planned enhancement. Sums are over available data only; "
+            f"treat the YoY as approximate. See caveat 'partial_window'."
+        )
+    if jan_feb_combined_years:
+        caveat_codes.append("jan_feb_combined")
+        years_str = ", ".join(str(y) for y in sorted(jan_feb_combined_years))
+        body_lines.append("")
+        body_lines.append(
+            f"ℹ JAN+FEB CUMULATIVE USED: This rolling-12mo sum includes a "
+            f"Jan+Feb cumulative chunk for year(s) {years_str} — GACC's "
+            f"Chinese-New-Year combined release format. The cumulative is "
+            f"added once as a 2-month sum; the source doesn't publish "
+            f"separate January and February monthly figures for these years "
+            f"and we don't synthesise them. See caveat 'jan_feb_combined'."
         )
 
     detail = {
-        "method": "gacc_aggregate_yoy_v4_ytd_and_single_month_operators",
+        "method": "gacc_aggregate_yoy_v5_jan_feb_combined_caveat",
         "method_query": {
             "source": "observations (source=gacc)",
             "flow": flow,
@@ -3110,6 +3125,11 @@ def _insert_gacc_aggregate_yoy_finding(
             "partial_window": partial_window,
             "missing_months_current": [d.isoformat() for d in (missing_curr or [])],
             "missing_months_prior": [d.isoformat() for d in (missing_prior or [])],
+            # Years that contributed a Jan+Feb cumulative observation
+            # to the windowed sum (GACC's Chinese-New-Year publishing
+            # pattern; see caveat 'jan_feb_combined'). Empty list when
+            # no combined-release coverage was used.
+            "jan_feb_combined_years": sorted(jan_feb_combined_years or []),
             # YTD cumulative — Jan..anchor of current year vs same range
             # prior year. Null when either side is missing (GACC's Jan-Feb-
             # combined gap means early-year anchors often lack a comparable
@@ -3425,6 +3445,9 @@ def detect_gacc_bilateral_aggregate_yoy(
                 if prior_ytd is not None:
                     obs_ids.extend(prior_ytd[1])
 
+                jan_feb_years_used = sorted(
+                    {m.year for m in covered_curr + covered_prior}
+                )
                 action = _insert_gacc_bilateral_aggregate_yoy_finding(
                     analysis_run_id, p, t,
                     start_curr, end_curr, start_prior, end_prior,
@@ -3434,6 +3457,7 @@ def detect_gacc_bilateral_aggregate_yoy(
                     partial_window=partial_window,
                     missing_curr=missing_curr,
                     missing_prior=missing_prior,
+                    jan_feb_combined_years=jan_feb_years_used,
                 )
                 _tally(counts, action)
 
@@ -3472,6 +3496,7 @@ def _insert_gacc_bilateral_aggregate_yoy_finding(
     partial_window: bool = False,
     missing_curr: list[date] | None = None,
     missing_prior: list[date] | None = None,
+    jan_feb_combined_years: list[int] | None = None,
 ) -> findings_io.EmitAction:
     direction = "up" if rolling_yoy > 0 else "down"
     flow_label = "China exports to" if flow == "export" else "China imports from"
@@ -3526,17 +3551,32 @@ def _insert_gacc_bilateral_aggregate_yoy_finding(
         body_lines.append("")
         body_lines.append(
             f"⚠ PARTIAL WINDOW: {n_missing} of 24 months missing from the rolling-12mo window "
-            f"({missing_strs}). GACC publishes Jan + Feb as a combined "
-            f"cumulative release (Chinese New Year), and our parser doesn't yet "
-            f"handle that format — every January is a structural data gap, "
-            f"and February's monthly observation often duplicates the YTD. "
-            f"The YTD operator is unaffected by this gap (read directly from "
-            f"period_kind='ytd' rows). See caveat 'partial_window' and "
-            f"`dev_notes/forward-work-gacc-2018-parser.md`."
+            f"({missing_strs}). For 2026 onwards GACC publishes February as "
+            f"its own release and a January monthly can be derived from "
+            f"(Feb-release YTD − Feb-release Monthly); the derivation is "
+            f"queued as a follow-up. Sums are over available data; treat "
+            f"the YoY as approximate. The YTD operator is unaffected — "
+            f"it reads each year's YTD cell directly. See caveat "
+            f"'partial_window'."
+        )
+    if jan_feb_combined_years:
+        caveat_codes.append("jan_feb_combined")
+        years_str = ", ".join(str(y) for y in sorted(jan_feb_combined_years))
+        body_lines.append("")
+        body_lines.append(
+            f"ℹ JAN+FEB CUMULATIVE USED: This rolling-12mo sum includes a "
+            f"Jan+Feb cumulative chunk for year(s) {years_str} — GACC's "
+            f"Chinese-New-Year combined release format. The cumulative is "
+            f"added once as a 2-month sum; the source doesn't publish "
+            f"separate January and February monthly figures for these "
+            f"years and we don't synthesise them. The 12mo total and YoY "
+            f"are based on honest accounting (full 12 months of data); a "
+            f"per-month series for these years isn't available. See caveat "
+            f"'jan_feb_combined'."
         )
 
     detail = {
-        "method": "gacc_bilateral_aggregate_yoy_v1_eu_and_single_countries",
+        "method": "gacc_bilateral_aggregate_yoy_v2_jan_feb_combined_caveat",
         "method_query": {
             "source": "observations (source=gacc)",
             "flow": flow,
@@ -3565,6 +3605,11 @@ def _insert_gacc_bilateral_aggregate_yoy_finding(
             "partial_window": partial_window,
             "missing_months_current": [d.isoformat() for d in (missing_curr or [])],
             "missing_months_prior": [d.isoformat() for d in (missing_prior or [])],
+            # Years that contributed a Jan+Feb cumulative observation
+            # to the windowed sum (GACC's Chinese-New-Year publishing
+            # pattern; see caveat 'jan_feb_combined'). Empty list when
+            # no combined-release coverage was used.
+            "jan_feb_combined_years": sorted(jan_feb_combined_years or []),
             # YTD cumulative — Jan..anchor of current year vs same range prior
             # year. Null when either side is missing. This is the Soapbox A1
             # editorial register ("Jan-Apr exports +19% YoY").

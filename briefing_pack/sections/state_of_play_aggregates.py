@@ -39,7 +39,8 @@ def _section_state_of_play_aggregates(cur) -> _Section:
                  (detail->'totals'->'ytd_cumulative'->>'current_eur')::numeric AS ytd_curr_eur,
                  (detail->'totals'->'ytd_cumulative'->>'months_in_ytd')::int AS ytd_months,
                  (detail->'totals'->'single_month'->>'yoy_pct')::numeric AS sm_yoy_pct,
-                 (detail->'totals'->'single_month'->>'current_eur')::numeric AS sm_curr_eur
+                 (detail->'totals'->'single_month'->>'current_eur')::numeric AS sm_curr_eur,
+                 detail->'totals'->'jan_feb_combined_years' AS jan_feb_combined_years
             FROM findings
            WHERE subkind LIKE 'gacc_aggregate_yoy%%' AND superseded_at IS NULL
         ORDER BY detail->'aggregate'->>'raw_label', subkind,
@@ -95,7 +96,17 @@ def _section_state_of_play_aggregates(cur) -> _Section:
                 continue
             yoy_v = float(r["yoy_pct"]) * 100 if r["yoy_pct"] is not None else None
             yoy_str = f"{yoy_v:+.1f}%" if yoy_v is not None else "n/a"
-            partial = " — partial window" if r["partial_window"] else ""
+            # Inline annotations for `partial_window` and `jan_feb_combined`
+            # — the two caveats that change how a journalist should read
+            # the headline %. Full caveat text in the per-finding
+            # provenance file.
+            annotations: list[str] = []
+            if r["partial_window"]:
+                annotations.append("partial window")
+            jfc_years = r["jan_feb_combined_years"]
+            if jfc_years:
+                annotations.append(f"includes Jan+Feb {','.join(str(y) for y in jfc_years)} cumulative")
+            suffix = (" — " + "; ".join(annotations)) if annotations else ""
 
             # New v4 operators: YTD cumulative + single-month. Surface
             # alongside the 12mo rolling so a journalist quoting Soapbox's
@@ -120,7 +131,7 @@ def _section_state_of_play_aggregates(cur) -> _Section:
             lines.append(
                 f"  - **{label}**: 12mo rolling {yoy_str} to "
                 f"{_fmt_eur(r['cur_eur'])} (12mo to {r['current_end']})."
-                f"{ytd_block}{sm_block}{partial} {_trace_token(r['id'])}"
+                f"{ytd_block}{sm_block}{suffix} {_trace_token(r['id'])}"
             )
         lines.append("")
 

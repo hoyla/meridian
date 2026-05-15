@@ -679,7 +679,12 @@ INSERT INTO caveats (code, summary, detail, applies_to) VALUES
   ('extra_eu_definitional_drift',
    'Share denominator sums 246 partner reporters whose CN8 mappings drift year-on-year',
    'partner_share findings divide our CN+HK+MO partner sum (eurostat_raw_rows) into an all-partner sum (eurostat_world_aggregates) computed across the 246 ISO-2 partner codes Eurostat publishes. The denominator therefore mixes 246 customs authorities whose own product-classification practices vary slightly across CN8 revisions — a small flow originally booked under one CN8 code in 2024 may appear under a sibling code in 2026, shifting the denominator without any real trade change. The editorial direction of the share (rising, falling, qty>value, etc.) is robust to this drift; the absolute share figure should be quoted with the caveat that "EU imports of HS X" in our data means "the sum across all 246 partner reporters as classified at ingest". Methodologically distinct from cn8_revision, which covers Eurostat''s own revisions on the numerator side.',
-   ARRAY['partner_share', 'partner_share_export']);
+   ARRAY['partner_share', 'partner_share_export']),
+  ('jan_feb_combined',
+   'Rolling-12mo sum includes a Jan+Feb cumulative chunk rather than separate monthly observations',
+   'GACC bundles January and February into a single cumulative release each Chinese New Year (the publication pattern across 2020-2025; 2026 was the recent exception). When the rolling-12mo window covers such a year''s Jan + Feb, the analyser uses the Jan+Feb cumulative value as a single 2-month chunk in the sum. The cumulative is NOT split 50/50 between Jan and Feb — interpolation would invent per-month figures the source never asserted. Editorial implication: the rolling-12mo total and YoY are based on honest accounting (12 months of data, even though some of those months arrive as a 2-month sum), but a per-month series for those years is unavailable from GACC; questions like "what was the Feb 2024 single-month figure?" can''t be answered from the China side without a separate Eurostat / HMRC cross-check. detail.totals.jan_feb_combined_years lists which years contributed a cumulative chunk to this finding''s window.',
+   ARRAY['gacc_bilateral_aggregate_yoy', 'gacc_bilateral_aggregate_yoy_import',
+         'gacc_aggregate_yoy', 'gacc_aggregate_yoy_import']);
 
 -- Phase 2.1: known transshipment hubs. Each row should carry an evidence_url
 -- documenting the editorial basis. These are starting points — journalists

@@ -315,11 +315,13 @@ def _render_gacc_bilateral_aggregate_yoy(finding: dict) -> str:
 
 
 def _sources_table(finding: dict) -> str:
-    """Per-month table: period | source URL | page value | EUR | obs_id."""
-    detail = finding["detail"]
-    monthly_series = detail.get("monthly_series", [])
-    eur_by_period = {m["period"]: m["value_eur"] for m in monthly_series}
+    """Per-month table: period | source URL | page value | EUR | obs_id.
 
+    Includes both regular `monthly` observations AND `cumulative_jan_feb`
+    observations (where GACC published a combined Jan+Feb release for the
+    year). Each cumulative row spans both January and February of its
+    year; the table flags it so a journalist auditing can see *which*
+    rows are 2-month cumulatives rather than single-month figures."""
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
@@ -328,7 +330,7 @@ def _sources_table(finding: dict) -> str:
               FROM observations o JOIN releases r ON r.id = o.release_id
              WHERE o.id = ANY(%s)
                AND r.source = 'gacc' AND r.currency = 'CNY'
-               AND o.period_kind = 'monthly'
+               AND o.period_kind IN ('monthly', 'cumulative_jan_feb')
              ORDER BY r.period, o.id
             """,
             (finding["observation_ids"],),
@@ -336,17 +338,20 @@ def _sources_table(finding: dict) -> str:
         rows = cur.fetchall()
 
     lines = [
-        "| Period | Source release | Page value (100M CNY) | Converted EUR | obs id |",
-        "|---|---|---:|---:|---|",
+        "| Period | Coverage | Source release | Page value (100M CNY) | obs id |",
+        "|---|---|---|---:|---|",
     ]
     for r in rows:
         pd = r["period"].isoformat()
         cny = float(r["value_amount"])
-        eur = eur_by_period.get(r["period"].isoformat()) or eur_by_period.get(r["period"])
-        eur_cell = _fmt_eur(eur) if eur is not None else "—"
+        if r["period_kind"] == "cumulative_jan_feb":
+            coverage = f"**Jan+Feb {r['period'].year}** (2-month cumulative)"
+        else:
+            coverage = "single month"
         lines.append(
-            f"| {pd[:7]} | [{r['title'] or pd}]({r['source_url']}) | "
-            f"{cny:,.1f} | {eur_cell} | `{r['id']}` |"
+            f"| {pd[:7]} | {coverage} | "
+            f"[{r['title'] or pd}]({r['source_url']}) | "
+            f"{cny:,.1f} | `{r['id']}` |"
         )
     return "\n".join(lines)
 
@@ -380,9 +385,24 @@ def _fx_table(finding: dict) -> str:
 _CAVEAT_GLOSSARY: dict[str, str] = {
     "partial_window": (
         "Some months in the 12-month rolling window are missing on the source "
-        "side (typically GACC's combined Jan+Feb release, which this parser "
-        "doesn't yet split). The YoY % is therefore approximate — quote "
-        "`rose roughly N%` rather than implying decimal precision."
+        "side (most commonly January of the latest year, when the separate "
+        "Feb release is published but the implied January figure hasn't yet "
+        "been derived as `ytd − monthly` from it). The YoY % is therefore "
+        "approximate — quote `rose roughly N%` rather than implying decimal "
+        "precision."
+    ),
+    "jan_feb_combined": (
+        "The rolling-12mo sum includes a Jan+Feb cumulative chunk for one "
+        "or more years rather than separate monthly figures — GACC's "
+        "Chinese-New-Year publishing pattern, where January and February "
+        "ship as a single combined release. The cumulative is included as "
+        "a 2-month sum, NOT split 50/50 across the two months "
+        "(interpolation would invent per-month figures the source never "
+        "asserted). The 12mo total is still based on a full 12 months of "
+        "data; quote the headline figure confidently, but be aware a "
+        "per-month series for the affected years isn't available on the "
+        "China side. `detail.totals.jan_feb_combined_years` lists which "
+        "years contributed."
     ),
     "cn8_revision": (
         "The 12-month window spans an annual CN8 (8-digit HS code) revision "
