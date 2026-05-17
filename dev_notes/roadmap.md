@@ -60,19 +60,35 @@ Lower priority — pick up when one of them breaks visibly:
 
 ## Near-term (likely next session)
 
-### Docx + Drive upload spike (Lisa-feedback arc)
+### Docx + Drive upload — v1 and v4 shipped 2026-05-16
 
-Lisa wants charts on top findings. Architecture lands cleanly:
-the `.md` stays text-only (NotebookLM feed), a parallel `.docx`
-carries charts at top-N findings, and both can be pushed to Drive
-via OAuth user credentials on the Guardian Google account
-(sidestepping the service-account block that has parked
-`GoogleSheetsWriter` since 2026-05-09). Spike spec at
-[`2026-05-16_docx-drive-spike.md`](2026-05-16_docx-drive-spike.md)
-— 30 min to verify all three legs (docx → Doc fidelity, xlsx →
-Sheet fidelity, OAuth against Guardian Workspace) before scoping
-the production `drive_export.py` module and per-subkind chart
-recipes.
+Lisa-feedback arc on docx + charts is substantially complete:
+
+- **v1** — `--docx` CLI flag + chart-bearing top-N renderer +
+  xlsx `Charts` tab. Commits `f2b5c1c` → `0b0d88b`.
+- **v4** — full markdown-content parity (the docx now contains
+  the same sections as `03_Findings.md` plus charts at top-N
+  movers via a mistune-based md→docx translator). Commits
+  `713a337` → `f181419`. Design addendum captured in
+  [`2026-05-16_docx-production-module-design.md`](2026-05-16_docx-production-module-design.md).
+
+What's still open from this arc:
+
+- **v2 chart recipes.** `gacc_bilateral_aggregate_yoy*`,
+  `mirror_gap*`, `hs_group_trajectory*`, `partner_share*`. Demand-
+  driven — pick up when Lisa asks for one or a real cycle
+  surfaces a gap.
+- **v3 Drive upload.** Waiting on Guardian GCP project access
+  restoration (requested 2026-05-16; expected early week of
+  2026-05-17). Spike spec at
+  [`2026-05-16_docx-drive-spike.md`](2026-05-16_docx-drive-spike.md)
+  — legs 1 and 2 verified manually; leg 3 (OAuth) deferred to
+  access restoration. When unblocked: ~half-day to graduate
+  `scripts/drive_spike_local.py` into `briefing_pack/drive_export.py`,
+  add `--upload-to-drive` flag, folder hierarchy
+  `Meridian exports / YYYY-MM-DD-HHMM / *.docx, *.xlsx`.
+- **Promote `--docx` from opt-in to default-on.** Defer until
+  Lisa has eyeballed 2-3 real cycles' worth of output.
 
 ### Watch the first 2-3 real cycles + decide delivery vector
 
