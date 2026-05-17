@@ -89,6 +89,12 @@ class MarkdownToDocxTranslator:
         self.doc = doc
         self.chart_for_finding = chart_for_finding
         self.chart_width_mm = chart_width_mm
+        # Track which finding ids have already received an inline chart
+        # in this translation. Top-mover findings typically appear in
+        # several sections of findings.md (Top-N list, Tier 2 state-of-
+        # play, sometimes Tier 1 diff); we only want the chart on the
+        # *first* occurrence, which is the Top-N section.
+        self._charts_emitted: set[int] = set()
         # mistune parser with table support (the briefing pack's tables
         # use the GFM pipe syntax).
         self._parse = mistune.create_markdown(
@@ -342,6 +348,11 @@ class MarkdownToDocxTranslator:
         if m is None:
             return
         finding_id = int(m.group(1))
+        # First-occurrence-only: top movers appear in multiple sections
+        # of findings.md (Top-N, Tier 2 state-of-play, etc.). One chart
+        # per finding, in the section where the reader meets it first.
+        if finding_id in self._charts_emitted:
+            return
         png = self.chart_for_finding(finding_id)
         if not png:
             return
@@ -350,6 +361,7 @@ class MarkdownToDocxTranslator:
         self.doc.add_picture(
             io.BytesIO(png), width=Mm(self.chart_width_mm),
         )
+        self._charts_emitted.add(finding_id)
 
     # ----- inline rendering --------------------------------------------------
 
