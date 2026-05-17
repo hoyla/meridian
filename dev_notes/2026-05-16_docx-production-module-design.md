@@ -356,14 +356,88 @@ v2, v3, v4 from the original phase plan — picked up demand-driven:
   restored. `briefing_pack/drive_export.py` wrapping `files.create`
   with upload-with-conversion. `--upload-to-drive` flag. Folder
   hierarchy `Meridian exports / YYYY-MM-DD-HHMM / *.docx, *.xlsx`.
-- **v4 — full markdown-content parity in the docx.** Only triggered
-  if Lisa says "I want the full Tier 1/2 content in the docx, not
-  just top-N". Refactor toward "each section module gains a
-  `to_docx()` method" — known fork in the road.
+- **v4 — full markdown-content parity in the docx.** Triggered
+  2026-05-16 late evening — see § "v4 addendum" below.
 
 Promotion of `--docx` from opt-in to default-on: defer until Lisa
 has eyeballed 2-3 real cycles' worth of output and confirmed the
 shape works.
+
+## v4 addendum — full markdown-content parity (added 2026-05-16)
+
+### Trigger
+
+Mid-evening 2026-05-16, Luke pointed out that v1's `.docx` is a
+chart-bearing top-N extract, not a `.md`-parallel-with-charts as
+originally intended. The architectural rule was "`.docx` carries
+the same content as `.md` plus charts at top-N". v1 shipped chart
+cards only; the rest of the markdown's structure (Tier 1 diff,
+Tier 2 state-of-play, mirror gaps, methodology footer, sources
+appendix, etc.) doesn't appear in the docx. That's a scope miss
+to fix before v2 chart recipes or any polish work.
+
+### Approach decision
+
+Three implementation paths were considered:
+
+**(A) Each section file gains a `to_docx()` method.** Touches all
+17 section files; each grows a parallel renderer. Most invasive.
+Editorial structure stays in lock-step automatically.
+
+**(B) Markdown → docx translator (pure Python via mistune).** Parse
+the rendered `findings.md` via mistune, walk the AST, emit docx
+blocks via python-docx. No external dependencies beyond the
+already-installed python-docx. Chart injection happens at the AST
+node corresponding to the top-movers section. ~250-400 lines for
+the translator covering our markdown subset (headings, paragraphs,
+bold + italic + code spans, ordered + unordered lists, tables,
+hyperlinks, blockquotes). Existing markdown rendering stays
+canonical; nothing in `briefing_pack/sections/` changes.
+
+**(C) pandoc subprocess.** `pandoc findings.md -o findings.docx
+--reference-doc=template.docx`. Best output quality (pandoc is the
+gold-standard md→docx tool). External binary dependency. Chart
+injection by post-processing the produced docx via python-docx.
+
+**Decision: (B).** Pure-Python, no subprocess dependency, full
+control over output shape, deterministic. Our markdown subset is
+small enough that a focused mistune-based translator stays under
+400 lines. If we later need rich features that the subset can't
+cover, pandoc is still available as a drop-in alternative.
+
+Approach (A) was rejected because touching every section file
+risks the `.md` (NotebookLM feed) for a feature only the `.docx`
+needs. The translator approach keeps the markdown renderers as the
+single source of editorial truth.
+
+### Chart injection
+
+Top movers section's markdown emits a numbered list. The
+translator detects the "Top N movers" `<h2>` and, when processing
+each list item, inserts a chart picture after it. Chart data fetch
+re-uses `_fetch_finding_detail` + `_fetch_monthly_eur_series` from
+v1's `briefing_pack/docx.py`. List items are matched to findings
+via the `finding/{id}` token already present in the markdown
+(stable, deterministic, no parallel data structure needed).
+
+### Out-of-scope details deferred to a future commit
+
+- **HTML embedded in markdown.** If any section ever emits HTML
+  (currently none), the translator passes it through as plain
+  text. Not a real concern given the existing render pipeline.
+- **Tables with cell-level formatting.** Cells render as plain
+  paragraphs; bold/italic inside cells survives but more complex
+  formatting (lists inside cells, nested tables) is unlikely in
+  practice.
+- **Hyperlinks inside list items.** The translator renders the
+  link text; the URL is preserved as a docx hyperlink relationship.
+  Visual fidelity verified after first integration run.
+
+### Status
+
+In progress 2026-05-16 evening — implementation commits land
+incrementally; the design captures the *why*, the commits capture
+the *what*.
 
 After v1 closes, the path forward is unchanged: v2 (more chart
 recipes, demand-driven), v3 (Drive upload, OAuth-gated), v4 (full
