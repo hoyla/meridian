@@ -30,6 +30,7 @@ import briefing_pack
 import briefing_pack.docx as bp_docx
 from tests.test_briefing_pack import (
     _seed_eurostat_release,
+    _seed_gacc_bilateral_aggregate_yoy_finding,
     _seed_hs_yoy_finding,
     _seed_run,
 )
@@ -126,6 +127,173 @@ class TestFlowLabel:
     def test_import_subkind(self):
         assert bp_docx._flow_label_for_subkind("hs_group_yoy") == \
             "EU-27 imports (CN→reporter)"
+
+
+class TestBuildBilateralSummaryBarPng:
+    """Two-bar prior-vs-current chart for gacc_bilateral_aggregate_yoy*
+    findings. Editorial purpose: turn the diff section's percentages
+    into € magnitudes at a glance."""
+
+    def test_returns_png_bytes(self):
+        png = bp_docx._build_bilateral_summary_bar_png(
+            partner_label="Germany",
+            subkind="gacc_bilateral_aggregate_yoy",
+            current_end=date(2026, 2, 1),
+            current_eur=8.34e9,
+            prior_eur=14.07e9,
+            yoy_pct=-0.407,
+        )
+        assert png.startswith(b"\x89PNG\r\n\x1a\n")
+        assert len(png) > 5_000
+
+    def test_handles_positive_yoy(self):
+        png = bp_docx._build_bilateral_summary_bar_png(
+            partner_label="ASEAN",
+            subkind="gacc_bilateral_aggregate_yoy_import",
+            current_end=date(2026, 2, 1),
+            current_eur=12.0e9, prior_eur=10.0e9, yoy_pct=0.20,
+        )
+        assert png.startswith(b"\x89PNG\r\n\x1a\n")
+
+    def test_handles_zero_prior(self):
+        """Edge case — a partner with no prior period flow (e.g. a
+        new aggregate). Chart still produces, prior bar at 0."""
+        png = bp_docx._build_bilateral_summary_bar_png(
+            partner_label="X",
+            subkind="gacc_bilateral_aggregate_yoy",
+            current_end=date(2026, 2, 1),
+            current_eur=1e9, prior_eur=0.0, yoy_pct=999.0,
+        )
+        assert png is not None
+
+    def test_deterministic(self):
+        kwargs = dict(
+            partner_label="Germany",
+            subkind="gacc_bilateral_aggregate_yoy",
+            current_end=date(2026, 2, 1),
+            current_eur=8.34e9, prior_eur=14.07e9, yoy_pct=-0.407,
+        )
+        a = bp_docx._build_bilateral_summary_bar_png(**kwargs)
+        b = bp_docx._build_bilateral_summary_bar_png(**kwargs)
+        assert hashlib.sha256(a).hexdigest() == hashlib.sha256(b).hexdigest()
+
+
+class TestComputeTopBilateralMovers:
+    """Integration tests against the test DB for the
+    _compute_top_bilateral_movers selector."""
+
+    def test_empty_db_returns_empty(self, empty_findings, test_db_url):
+        with psycopg2.connect(test_db_url) as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            assert bp_docx._compute_top_bilateral_movers(cur, limit=5) == []
+
+    def test_respects_5pp_threshold(self, empty_findings, test_db_url):
+        """Findings with |yoy_pct| < 5% must be excluded — matches
+        Tier 1 diff's material-shift cutoff."""
+        with psycopg2.connect(test_db_url) as conn:
+            cur = conn.cursor()
+            run = _seed_run(cur)
+            _seed_gacc_bilateral_aggregate_yoy_finding(
+                cur, run, "Germany", yoy_pct=0.30,
+                period=date(2026, 2, 1),
+            )
+            _seed_gacc_bilateral_aggregate_yoy_finding(
+                cur, run, "France", yoy_pct=0.02,  # below threshold
+                period=date(2026, 2, 1),
+            )
+            conn.commit()
+        with psycopg2.connect(test_db_url) as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            results = bp_docx._compute_top_bilateral_movers(cur, limit=5)
+        partners = [r["partner_label"] for r in results]
+        assert "Germany" in partners
+        assert "France" not in partners
+
+    def test_ranks_by_absolute_yoy(self, empty_findings, test_db_url):
+        """A -40% move ranks above a +30% move; absolute value matters,
+        not sign."""
+        with psycopg2.connect(test_db_url) as conn:
+            cur = conn.cursor()
+            run = _seed_run(cur)
+            _seed_gacc_bilateral_aggregate_yoy_finding(
+                cur, run, "DropPartner", yoy_pct=-0.40,
+                period=date(2026, 2, 1),
+            )
+            _seed_gacc_bilateral_aggregate_yoy_finding(
+                cur, run, "RisePartner", yoy_pct=0.30,
+                period=date(2026, 2, 1),
+            )
+            conn.commit()
+        with psycopg2.connect(test_db_url) as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            results = bp_docx._compute_top_bilateral_movers(cur, limit=5)
+        assert results[0]["partner_label"] == "DropPartner"
+        assert results[1]["partner_label"] == "RisePartner"
+
+    def test_only_latest_anchor(self, empty_findings, test_db_url):
+        """Older-anchor findings excluded — only the latest cycle's
+        bilaterals are charted."""
+        with psycopg2.connect(test_db_url) as conn:
+            cur = conn.cursor()
+            run = _seed_run(cur)
+            _seed_gacc_bilateral_aggregate_yoy_finding(
+                cur, run, "OldPartner", yoy_pct=0.50,
+                period=date(2025, 8, 1),  # older
+            )
+            _seed_gacc_bilateral_aggregate_yoy_finding(
+                cur, run, "NewPartner", yoy_pct=0.10,
+                period=date(2026, 2, 1),  # latest
+            )
+            conn.commit()
+        with psycopg2.connect(test_db_url) as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            results = bp_docx._compute_top_bilateral_movers(cur, limit=5)
+        partners = [r["partner_label"] for r in results]
+        assert "NewPartner" in partners
+        assert "OldPartner" not in partners
+
+    def test_respects_limit(self, empty_findings, test_db_url):
+        with psycopg2.connect(test_db_url) as conn:
+            cur = conn.cursor()
+            run = _seed_run(cur)
+            for i, p in enumerate(["A", "B", "C", "D", "E"]):
+                _seed_gacc_bilateral_aggregate_yoy_finding(
+                    cur, run, p, yoy_pct=0.10 + i * 0.05,
+                    period=date(2026, 2, 1),
+                )
+            conn.commit()
+        with psycopg2.connect(test_db_url) as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            results = bp_docx._compute_top_bilateral_movers(cur, limit=3)
+        assert len(results) == 3
+
+
+def test_render_findings_docx_injects_chart_for_bilateral_finding(
+    empty_findings, test_db_url, tmp_path,
+):
+    """A material-shift bilateral finding seeded → its
+    `finding/N` token in the markdown's Tier 1 diff triggers chart
+    injection. We verify end-to-end that bilaterals get charts
+    alongside top-mover hs_group_yoy findings."""
+    out_path = tmp_path / "bilateral.docx"
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        _seed_eurostat_release(cur, date(2026, 2, 1))
+        # Seed a bilateral with a strong YoY so it passes the 5pp
+        # filter + ranks high.
+        _seed_gacc_bilateral_aggregate_yoy_finding(
+            cur, run, "Germany", yoy_pct=-0.31, period=date(2026, 2, 1),
+        )
+        # Also need at least one current-cycle eurostat release for
+        # render() to produce a sensible markdown shape.
+        conn.commit()
+
+    bp_docx.render_findings_docx(out_path)
+    doc = Document(str(out_path))
+
+    # At least one chart for the seeded bilateral finding
+    assert _count_images(doc) >= 1
 
 
 class TestBuildPerReporterBarPng:

@@ -238,6 +238,80 @@ def _build_chart_png(
     return buf.read()
 
 
+def _build_bilateral_summary_bar_png(
+    *,
+    partner_label: str,
+    subkind: str,
+    current_end: date,
+    current_eur: float,
+    prior_eur: float,
+    yoy_pct: float,
+) -> bytes:
+    """Render a two-bar prior-vs-current 12mo chart for a
+    `gacc_bilateral_aggregate_yoy*` finding.
+
+    Shape: two grouped bars (Prior 12mo in grey, Current 12mo in red),
+    with the YoY % in the title and the partner label as the main
+    label. Editorial purpose: when a partner's bilateral flow flips
+    direction or moves materially, this gives Lisa the magnitude in
+    one glance alongside the headline percentage.
+
+    Simpler than the hs_group_yoy line chart because:
+    - Bilateral findings are headline-figure findings (one number);
+      a trajectory chart would require new SQL against GACC
+      observations.
+    - The diff section already says "+22% → -2.8%"; this chart turns
+      those abstract percentages into € magnitudes.
+    """
+    flow_human = (
+        "imports from China"
+        if subkind.endswith("_import")
+        else "exports to China"
+    )
+    direction = "↑" if (current_eur or 0) > (prior_eur or 0) else "↓"
+
+    max_val = max(prior_eur or 0.0, current_eur or 0.0, 0.0)
+    scale, unit_label = _pick_eur_scale(max_val)
+    prior_scaled = (prior_eur or 0.0) / scale
+    current_scaled = (current_eur or 0.0) / scale
+
+    fig, ax = plt.subplots(figsize=(5.5, 2.8), dpi=150)
+    bars = ax.bar(
+        ["Prior 12mo", "Current 12mo"],
+        [prior_scaled, current_scaled],
+        color=["#888888", "#cc3333"],
+        width=0.5,
+    )
+    # Annotate each bar with its value
+    for bar, value in zip(bars, [prior_scaled, current_scaled]):
+        ax.annotate(
+            f"{value:.2f}",
+            xy=(bar.get_x() + bar.get_width() / 2, bar.get_height()),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center", va="bottom",
+            fontsize=9,
+        )
+    yoy_str = f"{yoy_pct * 100:+.1f}%"
+    ax.set_title(
+        f"{partner_label} {flow_human} — "
+        f"YoY {yoy_str} {direction} (12mo to {current_end:%Y-%m})",
+        fontsize=10, loc="left",
+    )
+    ax.set_ylabel(unit_label, fontsize=9)
+    ax.tick_params(axis="y", labelsize=8)
+    ax.grid(True, axis="y", alpha=0.3)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
 def _build_per_reporter_bar_png(
     *,
     breakdown: list[dict],
@@ -394,7 +468,82 @@ def _build_top_mover_charts(
 
         if per_finding:
             charts[m["id"]] = per_finding
+
+    # Bilateral findings (gacc_bilateral_aggregate_yoy*) get a simple
+    # two-bar prior-vs-current chart each. They're the other family
+    # that turns up frequently in Lisa's Tier 1 diff reading.
+    bilaterals = _compute_top_bilateral_movers(cur, limit=top_n)
+    for b in bilaterals:
+        try:
+            png = _build_bilateral_summary_bar_png(
+                partner_label=b["partner_label"] or "(unlabelled)",
+                subkind=b["subkind"],
+                current_end=b["current_end"],
+                current_eur=float(b["current_eur"] or 0.0),
+                prior_eur=float(b["prior_eur"] or 0.0),
+                yoy_pct=float(b["yoy_pct"] or 0.0),
+            )
+        except (TypeError, ValueError) as exc:
+            log.warning(
+                "Skipping bilateral chart for finding %s: %s", b["id"], exc,
+            )
+            continue
+        charts.setdefault(b["id"], []).append(png)
+
     return charts
+
+
+def _compute_top_bilateral_movers(cur, *, limit: int) -> list[dict]:
+    """Top-N `gacc_bilateral_aggregate_yoy*` findings at the latest
+    anchor across the family, ranked by absolute YoY %.
+
+    Filter mirrors the briefing pack's Tier 1 diff material-shift
+    threshold (≥5pp move). Both flow directions (export from China,
+    import to China) included; ranking is by |yoy_pct| so a strong
+    move in either direction surfaces.
+
+    Returns dicts with the fields needed to render the summary bar:
+    id, subkind, partner_label, yoy_pct, current_eur, prior_eur,
+    current_end.
+    """
+    cur.execute(
+        """
+        SELECT MAX((detail->'windows'->>'current_end')::date)
+          FROM findings
+         WHERE subkind IN (
+                 'gacc_bilateral_aggregate_yoy',
+                 'gacc_bilateral_aggregate_yoy_import'
+             )
+           AND superseded_at IS NULL
+        """
+    )
+    latest = cur.fetchone()[0]
+    if latest is None:
+        return []
+
+    cur.execute(
+        """
+        SELECT id,
+               subkind,
+               detail->'partner'->>'raw_label'                  AS partner_label,
+               (detail->'totals'->>'yoy_pct')::numeric          AS yoy_pct,
+               (detail->'totals'->>'current_12mo_eur')::numeric AS current_eur,
+               (detail->'totals'->>'prior_12mo_eur')::numeric   AS prior_eur,
+               (detail->'windows'->>'current_end')::date        AS current_end
+          FROM findings
+         WHERE subkind IN (
+                 'gacc_bilateral_aggregate_yoy',
+                 'gacc_bilateral_aggregate_yoy_import'
+             )
+           AND superseded_at IS NULL
+           AND (detail->'windows'->>'current_end')::date = %s
+           AND abs((detail->'totals'->>'yoy_pct')::numeric) >= 0.05
+         ORDER BY abs((detail->'totals'->>'yoy_pct')::numeric) DESC
+         LIMIT %s
+        """,
+        (latest, limit),
+    )
+    return [dict(r) for r in cur.fetchall()]
 
 
 # ---------------------------------------------------------------------------
