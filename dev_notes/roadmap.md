@@ -5,36 +5,6 @@ What's still open. For history of what shipped, see
 the original Phase 1–6 plan, look at the git log around
 `8f18e68`–`5d0e23e` (2026-05-09 to 2026-05-10).
 
-The four-step feature pass triggered by the 2026-05-12 Soapbox A1
-re-test (Tier 1 hs_groups, briefing-pack modularisation,
-`gacc_bilateral_aggregate_yoy`, `partner_share` + extra-EU
-aggregates) has shipped — see
-[`history.md` § 2026-05-12](history.md#2026-05-12--soapbox-a1-re-test--four-step-feature-pass).
-
-The 2026-05-12/13 polish arc (Phase 6.11 per-reporter breakdown,
-orphan hs_group cleanup, first-export audit fixes, documentation
-pass, leads.md polish, Top-5 movers digest, trajectory-volatile
-suppression, templates pipeline) has also shipped — see
-[`history.md` § 2026-05-12/13](history.md#2026-05-1213--polish-for-first-journalist-handover).
-
-The 2026-05-14/15 arc (release-184 unit-field fix + three-layer
-guard; per-finding provenance generator covering the bilateral,
-hs_group_yoy*, and hs_group_trajectory* families; numeric-prefixed
-bundle filenames; the `05_Groups.md` glossary; the
-`--groups-glossary` CLI) has also shipped — see
-[`history.md` § 2026-05-14/15](history.md#2026-05-1415--provenance-system-groups-glossary-bundle-rename).
-
-The 2026-05-15 Jan+Feb combined-release work (parser handling +
-analyser folds-in + transparency surfacing across the brief, the
-spreadsheet's new `gacc_bilateral_yoy` tab, and per-finding
-provenance) has shipped — see
-[`history.md` § 2026-05-15](history.md#2026-05-15--janfeb-combined-release-parser--transparency-surfacing).
-Closes the long-standing "GACC Jan-Feb cumulative releases"
-forward-work item; the remaining gap is current-side January in
-years where GACC publishes a separate February (2026 onwards) —
-captured as the "Derive January from Feb release's (ytd − monthly)"
-item below.
-
 ## Observability / logging follow-ups (2026-05-15 evening arc)
 
 Four new audit-log surfaces shipped tonight along with
@@ -89,6 +59,20 @@ Lower priority — pick up when one of them breaks visibly:
   table if frequency rises.
 
 ## Near-term (likely next session)
+
+### Docx + Drive upload spike (Lisa-feedback arc)
+
+Lisa wants charts on top findings. Architecture lands cleanly:
+the `.md` stays text-only (NotebookLM feed), a parallel `.docx`
+carries charts at top-N findings, and both can be pushed to Drive
+via OAuth user credentials on the Guardian Google account
+(sidestepping the service-account block that has parked
+`GoogleSheetsWriter` since 2026-05-09). Spike spec at
+[`2026-05-16_docx-drive-spike.md`](2026-05-16_docx-drive-spike.md)
+— 30 min to verify all three legs (docx → Doc fidelity, xlsx →
+Sheet fidelity, OAuth against Guardian Workspace) before scoping
+the production `drive_export.py` module and per-subkind chart
+recipes.
 
 ### Watch the first 2-3 real cycles + decide delivery vector
 
