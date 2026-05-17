@@ -234,18 +234,24 @@ _TINY_PNG = (
 class TestChartInjection:
     def test_chart_injects_after_list_item_with_finding_token(self):
         """A list item carrying `finding/N` triggers a picture insert
-        when chart_for_finding returns bytes."""
+        when chart_for_finding returns a non-empty list."""
         md = "- **Item** — finding/42 token here\n"
         doc = _translate(
-            md, chart_for_finding=lambda fid: _TINY_PNG if fid == 42 else None,
+            md,
+            chart_for_finding=lambda fid: [_TINY_PNG] if fid == 42 else [],
         )
         assert _images(doc) == 1
 
     def test_chart_skipped_when_no_finding_token(self):
         md = "- **Item** — no token here\n"
         doc = _translate(
-            md, chart_for_finding=lambda fid: _TINY_PNG,
+            md, chart_for_finding=lambda fid: [_TINY_PNG],
         )
+        assert _images(doc) == 0
+
+    def test_chart_skipped_when_lookup_returns_empty(self):
+        md = "- **Item** — finding/42 here\n"
+        doc = _translate(md, chart_for_finding=lambda fid: [])
         assert _images(doc) == 0
 
     def test_chart_skipped_when_lookup_returns_none(self):
@@ -254,17 +260,28 @@ class TestChartInjection:
         assert _images(doc) == 0
 
     def test_chart_first_occurrence_only(self):
-        """The same finding mentioned in two list items → chart inserts
-        only after the first. Real-world: top movers appear in both the
-        Top-N section AND in Tier 2 state-of-play."""
+        """The same finding mentioned in two list items → chart set
+        inserts only after the first. Real-world: top movers appear
+        in both the Top-N section AND in Tier 2 state-of-play."""
         md = (
             "- **First mention** — finding/99 ...\n"
             "- **Second mention** — finding/99 again ...\n"
         )
         doc = _translate(
-            md, chart_for_finding=lambda fid: _TINY_PNG,
+            md, chart_for_finding=lambda fid: [_TINY_PNG],
         )
         assert _images(doc) == 1
+
+    def test_multiple_charts_per_finding(self):
+        """A finding can have multiple charts — lookup returns a list
+        and the translator inserts each one after the first occurrence
+        of the finding's list item."""
+        md = "- **Item** — finding/77 ...\n"
+        doc = _translate(
+            md,
+            chart_for_finding=lambda fid: [_TINY_PNG, _TINY_PNG, _TINY_PNG],
+        )
+        assert _images(doc) == 3
 
     def test_chart_not_inserted_when_callable_is_none(self):
         md = "- **Item** — finding/42\n"

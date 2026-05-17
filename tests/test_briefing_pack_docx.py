@@ -128,6 +128,74 @@ class TestFlowLabel:
             "EU-27 imports (CN→reporter)"
 
 
+class TestBuildPerReporterBarPng:
+    """Per-reporter grouped-bar chart for top movers — answers
+    'which country is driving the move?' alongside the trajectory
+    line chart."""
+
+    def _breakdown(self) -> list[dict]:
+        return [
+            {"reporter": "Germany", "current_eur": 4.21e9, "prior_eur": 2.48e9,
+             "yoy_pct": -0.41, "share_of_group_delta_pct": 0.42},
+            {"reporter": "France", "current_eur": 1.92e9, "prior_eur": 1.13e9,
+             "yoy_pct": -0.41, "share_of_group_delta_pct": 0.18},
+            {"reporter": "Italy", "current_eur": 0.85e9, "prior_eur": 0.51e9,
+             "yoy_pct": -0.40, "share_of_group_delta_pct": 0.08},
+        ]
+
+    def test_returns_png_bytes(self):
+        png = bp_docx._build_per_reporter_bar_png(
+            breakdown=self._breakdown(),
+            group_name="Finished cars (broad)",
+            flow_label="EU-27 exports (reporter→CN)",
+        )
+        assert png is not None
+        assert png.startswith(b"\x89PNG\r\n\x1a\n")
+        assert len(png) > 5_000
+
+    def test_returns_none_on_empty_breakdown(self):
+        assert bp_docx._build_per_reporter_bar_png(
+            breakdown=[],
+            group_name="X",
+            flow_label="Y",
+        ) is None
+
+    def test_returns_none_when_all_rows_have_no_values(self):
+        assert bp_docx._build_per_reporter_bar_png(
+            breakdown=[
+                {"reporter": "DE", "current_eur": None, "prior_eur": None},
+                {"reporter": "FR", "current_eur": None, "prior_eur": None},
+            ],
+            group_name="X",
+            flow_label="Y",
+        ) is None
+
+    def test_top_k_cap(self):
+        """Even with more reporters available, the chart selects top-K
+        by absolute delta. We can't introspect the chart pixels from
+        a test, but we can call with K=2 and verify the chart still
+        produces (i.e., doesn't error on slicing)."""
+        breakdown = self._breakdown() * 3  # 9 rows
+        png = bp_docx._build_per_reporter_bar_png(
+            breakdown=breakdown,
+            group_name="X",
+            flow_label="Y",
+            top_k=2,
+        )
+        assert png is not None
+        assert png.startswith(b"\x89PNG\r\n\x1a\n")
+
+    def test_deterministic(self):
+        kwargs = dict(
+            breakdown=self._breakdown(),
+            group_name="Finished cars",
+            flow_label="EU-27 exports (reporter→CN)",
+        )
+        a = bp_docx._build_per_reporter_bar_png(**kwargs)
+        b = bp_docx._build_per_reporter_bar_png(**kwargs)
+        assert hashlib.sha256(a).hexdigest() == hashlib.sha256(b).hexdigest()
+
+
 class TestBuildChartPng:
     def _series(self) -> dict[date, float]:
         return {
@@ -358,6 +426,40 @@ def test_render_findings_docx_injects_chart_for_top_mover(
     doc = Document(str(out_path))
 
     assert _count_images(doc) == 1
+
+
+def test_render_findings_docx_injects_per_reporter_bar_chart(
+    empty_findings, test_db_url, tmp_path,
+):
+    """A top mover whose detail carries `per_reporter_breakdown` gets
+    a second chart (the per-reporter grouped bar) alongside the
+    trajectory line chart — answers 'which country is driving the
+    move?' alongside the headline trajectory."""
+    out_path = tmp_path / "two-charts.docx"
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        _seed_eurostat_release(cur, date(2026, 2, 1))
+        _seed_chart_capable_finding(
+            cur, run, "EV batteries (Li-ion)",
+            yoy_pct=0.345, current_eur=27.25e9, prior_eur=20.27e9,
+            per_reporter_breakdown=[
+                {"reporter": "Germany", "current_eur": 12e9, "prior_eur": 9e9,
+                 "yoy_pct": 0.33, "share_of_group_delta_pct": 0.43},
+                {"reporter": "France", "current_eur": 5e9, "prior_eur": 4e9,
+                 "yoy_pct": 0.25, "share_of_group_delta_pct": 0.14},
+                {"reporter": "Italy", "current_eur": 3e9, "prior_eur": 2.5e9,
+                 "yoy_pct": 0.20, "share_of_group_delta_pct": 0.07},
+            ],
+        )
+        _seed_eurostat_raw_rows_for_finding(cur, run, hs_pattern="8507%")
+        conn.commit()
+
+    bp_docx.render_findings_docx(out_path)
+    doc = Document(str(out_path))
+
+    # Two charts for this single finding: trajectory line + reporter bar
+    assert _count_images(doc) == 2
 
 
 def test_render_findings_docx_skips_chart_for_finding_without_raw_rows(

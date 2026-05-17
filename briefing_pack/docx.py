@@ -238,34 +238,124 @@ def _build_chart_png(
     return buf.read()
 
 
+def _build_per_reporter_bar_png(
+    *,
+    breakdown: list[dict],
+    group_name: str,
+    flow_label: str,
+    top_k: int = 5,
+) -> bytes | None:
+    """Render a grouped-bar chart of the top-K reporters by absolute
+    YoY delta (current_eur - prior_eur), prior 12mo vs current 12mo.
+
+    Answers Lisa's likely "which country is driving the move?"
+    follow-up to the trajectory chart. Data source: the finding's
+    `per_reporter_breakdown` field (populated by Phase 6.11 in
+    `anomalies._build_per_reporter_breakdown`).
+
+    Returns None if no reporter rows have usable values; caller skips
+    the chart in that case.
+    """
+    # Filter and rank by absolute delta
+    rows = []
+    for r in breakdown:
+        cur_eur = r.get("current_eur")
+        prior_eur = r.get("prior_eur")
+        if cur_eur is None and prior_eur is None:
+            continue
+        cur_eur = float(cur_eur or 0.0)
+        prior_eur = float(prior_eur or 0.0)
+        delta = abs(cur_eur - prior_eur)
+        rows.append({
+            "reporter": r.get("reporter") or "?",
+            "current_eur": cur_eur,
+            "prior_eur": prior_eur,
+            "delta": delta,
+        })
+    if not rows:
+        return None
+    rows.sort(key=lambda r: -r["delta"])
+    rows = rows[:top_k]
+
+    labels = [r["reporter"] for r in rows]
+    prior_vals = [r["prior_eur"] for r in rows]
+    current_vals = [r["current_eur"] for r in rows]
+
+    max_val = max(prior_vals + current_vals + [0.0])
+    scale, unit_label = _pick_eur_scale(max_val)
+    prior_scaled = [v / scale for v in prior_vals]
+    current_scaled = [v / scale for v in current_vals]
+
+    fig, ax = plt.subplots(figsize=(7.5, 3.2), dpi=150)
+    x = list(range(len(labels)))
+    width = 0.36
+    ax.bar(
+        [i - width / 2 for i in x], prior_scaled, width,
+        label="Prior 12mo", color="#888888",
+    )
+    ax.bar(
+        [i + width / 2 for i in x], current_scaled, width,
+        label="Current 12mo", color="#cc3333",
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=9)
+    ax.set_title(
+        f"{group_name} — top reporter contributions ({flow_label})",
+        fontsize=11, loc="left",
+    )
+    ax.set_ylabel(unit_label, fontsize=9)
+    ax.tick_params(axis="y", labelsize=8)
+    ax.grid(True, axis="y", alpha=0.3)
+    ax.legend(loc="best", fontsize=8, frameon=False)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
 # ---------------------------------------------------------------------------
 # Top-movers chart lookup — pre-compute PNGs keyed by finding_id
 # ---------------------------------------------------------------------------
 
 def _build_top_mover_charts(
     cur, top_n: int,
-) -> dict[int, bytes]:
-    """Compute the top-N movers and build a chart PNG for each, keyed
-    by finding id. The translator's chart_for_finding callable does
-    O(1) lookups against this dict during the markdown walk.
+) -> dict[int, list[bytes]]:
+    """Compute the top-N movers and build a *set* of charts for each,
+    keyed by finding id. Each value is a list of PNG bytes — the
+    translator inserts each chart in order after the first occurrence
+    of the finding's list item.
 
-    Returns {finding_id: png_bytes} for every mover where the chart
-    data fetch succeeded. Movers with missing detail / no underlying
-    raw rows are silently absent — the translator simply doesn't
-    inject a chart for those (matching v1's defensive behaviour).
+    Currently each top mover gets up to two charts:
+    1. Rolling-12mo line chart (prior vs current 12mo monthly series).
+    2. Per-reporter grouped bar chart (top reporter contributions to
+       the YoY delta) — only if the finding's
+       `detail.per_reporter_breakdown` has data.
+
+    Movers with missing detail / no underlying raw rows have an empty
+    list entry; the translator simply doesn't inject anything for
+    those.
     """
     predictability = _compute_predictability_per_group(cur)
     movers = _compute_top_movers(
         cur, predictability=predictability, limit=top_n,
     )
 
-    charts: dict[int, bytes] = {}
+    charts: dict[int, list[bytes]] = {}
     for m in movers:
         current_end = m["current_end"]
         flow_label = _flow_label_for_subkind(m["subkind"])
         detail = _fetch_finding_detail(cur, m["id"])
         if not detail:
             continue
+
+        per_finding: list[bytes] = []
+
+        # Chart 1 — rolling-12mo line chart
         method_q = detail.get("method_query", {})
         hs_patterns = (
             method_q.get("hs_patterns")
@@ -274,25 +364,36 @@ def _build_top_mover_charts(
         )
         flow = int(method_q.get("flow") or 0)
         partners = method_q.get("partners") or []
-        if not (hs_patterns and flow and partners):
-            continue
-        series = _fetch_monthly_eur_series(
-            cur,
-            hs_patterns=hs_patterns,
-            flow=flow,
-            partners=partners,
-            start=_months_back(current_end, 23),
-            end=current_end,
-        )
-        if not series:
-            continue
-        png = _build_chart_png(
-            current_end=current_end,
-            monthly_eur=series,
-            group_name=m["group_name"],
-            flow_label=flow_label,
-        )
-        charts[m["id"]] = png
+        if hs_patterns and flow and partners:
+            series = _fetch_monthly_eur_series(
+                cur,
+                hs_patterns=hs_patterns,
+                flow=flow,
+                partners=partners,
+                start=_months_back(current_end, 23),
+                end=current_end,
+            )
+            if series:
+                per_finding.append(_build_chart_png(
+                    current_end=current_end,
+                    monthly_eur=series,
+                    group_name=m["group_name"],
+                    flow_label=flow_label,
+                ))
+
+        # Chart 2 — per-reporter grouped bar chart
+        breakdown = detail.get("per_reporter_breakdown") or []
+        if breakdown:
+            bar_png = _build_per_reporter_bar_png(
+                breakdown=breakdown,
+                group_name=m["group_name"],
+                flow_label=flow_label,
+            )
+            if bar_png is not None:
+                per_finding.append(bar_png)
+
+        if per_finding:
+            charts[m["id"]] = per_finding
     return charts
 
 
@@ -368,10 +469,13 @@ def render_findings_docx(
     translator.translate(markdown)
 
     doc.save(str(out_path))
+    total_charts = sum(len(v) for v in charts_by_id.values())
     log.info(
-        "Wrote findings docx to %s (%d charts injected, %d markdown chars)",
+        "Wrote findings docx to %s (%d findings charted, "
+        "%d total charts, %d markdown chars)",
         out_path,
         len(charts_by_id),
+        total_charts,
         len(markdown),
     )
     return out_path

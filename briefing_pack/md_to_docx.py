@@ -60,9 +60,11 @@ log = logging.getLogger(__name__)
 _FINDING_TOKEN_RE = re.compile(r"\bfinding/(\d+)\b")
 
 
-# Type alias: callable that takes a finding id and returns PNG bytes
-# (or None if no chart is available for that finding).
-ChartLookup = Callable[[int], bytes | None]
+# Type alias: callable that takes a finding id and returns a list of
+# PNG bytes — one per chart to inject for that finding, in document
+# order. Returning an empty list (or None) means no chart for that
+# finding.
+ChartLookup = Callable[[int], list[bytes] | None]
 
 
 class MarkdownToDocxTranslator:
@@ -350,18 +352,24 @@ class MarkdownToDocxTranslator:
         finding_id = int(m.group(1))
         # First-occurrence-only: top movers appear in multiple sections
         # of findings.md (Top-N, Tier 2 state-of-play, etc.). One chart
-        # per finding, in the section where the reader meets it first.
+        # set per finding, in the section where the reader meets it
+        # first.
         if finding_id in self._charts_emitted:
             return
-        png = self.chart_for_finding(finding_id)
-        if not png:
+        pngs = self.chart_for_finding(finding_id)
+        if not pngs:
             return
+        # Mark as emitted before inserting so a callable that throws
+        # mid-insert doesn't double-fire on a later occurrence.
+        self._charts_emitted.add(finding_id)
         import io
         from docx.shared import Mm
-        self.doc.add_picture(
-            io.BytesIO(png), width=Mm(self.chart_width_mm),
-        )
-        self._charts_emitted.add(finding_id)
+        for png in pngs:
+            if not png:
+                continue
+            self.doc.add_picture(
+                io.BytesIO(png), width=Mm(self.chart_width_mm),
+            )
 
     # ----- inline rendering --------------------------------------------------
 
