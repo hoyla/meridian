@@ -469,6 +469,16 @@ def main() -> None:
         ),
     )
     p.add_argument(
+        "--docx", action="store_true",
+        help=(
+            "With --briefing-pack: also write a parallel `03_Findings.docx` "
+            "to the export folder — the Lisa-facing surface that carries "
+            "charts on top of the editorial top-N movers. The .md remains "
+            "canonical (NotebookLM feed); the .docx is additive. Default off "
+            "pending Lisa's review of the first cycles."
+        ),
+    )
+    p.add_argument(
         "--groups-glossary", action="store_true",
         help=(
             "Write the HS group reference (`05_Groups.md` in a normal "
@@ -772,6 +782,7 @@ def main() -> None:
             top_n=args.briefing_top_n,
             record=not args.no_record,
             with_provenance=args.with_provenance,
+            docx=args.docx,
         )
         log.info("Wrote briefing pack to %s", brief_path)
         log.info("Wrote investigation leads to %s", leads_path)

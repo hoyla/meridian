@@ -412,6 +412,7 @@ def export(
     trigger: str = "manual",
     record: bool = True,
     with_provenance: bool = False,
+    docx: bool = False,
 ) -> tuple[str, str]:
     """Write the findings document AND the companion leads file to disk.
     Returns (findings_path, leads_path).
@@ -456,6 +457,12 @@ def export(
     advance any cycle and should not appear in the "Tier 1 — what's new
     since the previous export" baseline. The bundle itself is still
     written normally; only the audit row is skipped.
+
+    `docx=True` also writes a parallel `03_Findings.docx` to the same
+    folder — the Lisa-facing surface that carries charts (see
+    `briefing_pack/docx.py`). The .md remains canonical (NotebookLM
+    feed); the .docx is additive. Default off pending Lisa's review of
+    the first cycles; will be promoted to default-on once stable.
     """
     if out_path is not None or leads_path is not None:
         # Legacy explicit-paths mode. Both must be given.
@@ -538,6 +545,19 @@ def export(
             sheets_export.assemble_sheets(), str(xlsx_path),
         )
         log.info("Wrote spreadsheet to %s", xlsx_path)
+
+    if docx and out_path is None:
+        # Parallel Lisa-facing surface. Sits next to 03_Findings.md
+        # using the same numeric prefix — same conceptual document,
+        # different format. python-docx is a soft dependency; import
+        # lazily so callers that don't pass docx=True don't need it
+        # installed.
+        from briefing_pack.docx import render_top_movers_docx
+        docx_path = p.parent / "03_Findings.docx"
+        render_top_movers_docx(
+            docx_path, top_n=top_n, scope_label=scope_label,
+        )
+        log.info("Wrote findings docx to %s", docx_path)
 
     # Copy any per-export templates (e.g. an `01_Read_Me_First.md` intro)
     # into the bundle folder so a recipient who only receives the
