@@ -161,6 +161,90 @@ class MarkdownToDocxTranslator:
         pBdr.append(bottom)
         pPr.append(pBdr)
 
+    def _block_table(self, node: dict) -> None:
+        """GFM pipe table. mistune emits `table` with `table_head` and
+        `table_body` children. The head's children are `table_cell`
+        directly; the body's are `table_row` wrappers around cells.
+
+        Output: a python-docx Table with the Light Grid style, bold
+        header row, and inline content per cell preserving bold /
+        italic / link runs. Column-align attrs are honoured via the
+        paragraph's alignment.
+        """
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        # Collect rows: first the header (one row), then body rows.
+        header_cells: list[dict] = []
+        body_rows: list[list[dict]] = []
+        for child in node.get("children") or []:
+            ctype = child.get("type")
+            if ctype == "table_head":
+                # Head children are table_cell nodes directly.
+                header_cells = [
+                    c for c in (child.get("children") or [])
+                    if c.get("type") == "table_cell"
+                ]
+            elif ctype == "table_body":
+                for row in child.get("children") or []:
+                    if row.get("type") != "table_row":
+                        continue
+                    body_rows.append([
+                        c for c in (row.get("children") or [])
+                        if c.get("type") == "table_cell"
+                    ])
+
+        n_cols = max(
+            len(header_cells),
+            max((len(r) for r in body_rows), default=0),
+        )
+        if n_cols == 0:
+            return
+
+        table = self.doc.add_table(rows=1 + len(body_rows), cols=n_cols)
+        try:
+            table.style = "Light Grid Accent 1"
+        except KeyError:
+            # Style not available in some docx templates — fall back to
+            # whatever the default is; the table still renders.
+            pass
+
+        align_map = {
+            "left": WD_ALIGN_PARAGRAPH.LEFT,
+            "center": WD_ALIGN_PARAGRAPH.CENTER,
+            "right": WD_ALIGN_PARAGRAPH.RIGHT,
+        }
+
+        # Header
+        for col_idx, cell_node in enumerate(header_cells):
+            if col_idx >= n_cols:
+                break
+            cell = table.rows[0].cells[col_idx]
+            # Replace the auto-inserted empty paragraph
+            cell.text = ""
+            p = cell.paragraphs[0]
+            align = (cell_node.get("attrs") or {}).get("align")
+            if align in align_map:
+                p.alignment = align_map[align]
+            self._render_inline_into_paragraph(
+                cell_node.get("children") or [], p, force_bold=True,
+            )
+
+        # Body
+        for row_idx, row_cells in enumerate(body_rows):
+            docx_row = table.rows[1 + row_idx]
+            for col_idx, cell_node in enumerate(row_cells):
+                if col_idx >= n_cols:
+                    break
+                cell = docx_row.cells[col_idx]
+                cell.text = ""
+                p = cell.paragraphs[0]
+                align = (cell_node.get("attrs") or {}).get("align")
+                if align in align_map:
+                    p.alignment = align_map[align]
+                self._render_inline_into_paragraph(
+                    cell_node.get("children") or [], p,
+                )
+
     def _block_block_code(self, node: dict) -> None:
         """Fenced code block. Renders as a paragraph in a monospace
         font; preserves leading whitespace by using soft breaks for
