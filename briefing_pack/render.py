@@ -553,13 +553,15 @@ def export(
     if docx and out_path is None:
         # Parallel Lisa-facing surface. Sits next to 03_Findings.md
         # using the same numeric prefix — same conceptual document,
-        # different format. python-docx is a soft dependency; import
-        # lazily so callers that don't pass docx=True don't need it
-        # installed.
-        from briefing_pack.docx import render_top_movers_docx
+        # different format. python-docx + mistune are soft dependencies;
+        # import lazily so callers that don't pass docx=True don't need
+        # them installed.
+        from briefing_pack.docx import render_findings_docx
         docx_path = p.parent / "03_Findings.docx"
-        render_top_movers_docx(
+        render_findings_docx(
             docx_path, top_n=top_n, scope_label=scope_label,
+            companion_filename=leads_basename,
+            groups_filename=groups_basename,
         )
         log.info("Wrote findings docx to %s", docx_path)
 

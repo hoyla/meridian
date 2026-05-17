@@ -369,7 +369,3 @@ def render_findings_docx(
     return out_path
 
 
-# Back-compat alias for the v1 entry-point name. Existing callers in
-# briefing_pack/render.py and tests will be migrated to the new name
-# in subsequent commits.
-render_top_movers_docx = render_findings_docx

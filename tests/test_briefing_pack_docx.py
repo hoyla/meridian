@@ -264,9 +264,18 @@ def _seed_eurostat_raw_rows_for_finding(
         )
 
 
-def test_render_top_movers_docx_smoke(empty_findings, test_db_url, tmp_path):
+def _count_images(doc: Document) -> int:
+    return sum(
+        1 for p in doc.paragraphs
+        for r in p.runs
+        if r.element.xpath(".//w:drawing")
+    )
+
+
+def test_render_findings_docx_smoke(empty_findings, test_db_url, tmp_path):
     """Seed one eligible mover + its raw rows, render, and assert the
-    docx file is produced and opens as a valid Document."""
+    docx file is produced and opens as a valid Document with the full
+    findings.md content rendered into it."""
     out_path = tmp_path / "smoke.docx"
     with psycopg2.connect(test_db_url) as conn:
         cur = conn.cursor()
@@ -279,21 +288,24 @@ def test_render_top_movers_docx_smoke(empty_findings, test_db_url, tmp_path):
         _seed_eurostat_raw_rows_for_finding(cur, run, hs_pattern="8507%")
         conn.commit()
 
-    result = bp_docx.render_top_movers_docx(out_path)
+    result = bp_docx.render_findings_docx(out_path)
     assert result == out_path
     assert out_path.exists()
 
     doc = Document(str(out_path))
-    # Title + Generated line + H1 + preamble + per-mover (H2, paragraph, image)
-    assert len(doc.paragraphs) >= 7
+    # v4: full markdown content → many paragraphs (period coverage,
+    # scope notes, findings inventory, top movers, methodology footer,
+    # etc.) plus at least one chart for the seeded mover.
+    assert len(doc.paragraphs) > 20
 
 
-def test_render_top_movers_docx_structure_one_mover(
+def test_render_findings_docx_full_content_parity(
     empty_findings, test_db_url, tmp_path,
 ):
-    """Single mover → exactly 1 H2 + 1 inline image + headline figure
-    text present."""
-    out_path = tmp_path / "structure.docx"
+    """v4 contract: the docx contains the same content as findings.md.
+    Verify by checking that several known sections from the markdown's
+    structural skeleton appear as headings in the docx."""
+    out_path = tmp_path / "parity.docx"
     with psycopg2.connect(test_db_url) as conn:
         cur = conn.cursor()
         run = _seed_run(cur)
@@ -301,75 +313,60 @@ def test_render_top_movers_docx_structure_one_mover(
         _seed_chart_capable_finding(
             cur, run, "EV batteries (Li-ion)",
             yoy_pct=0.345, current_eur=27.25e9, prior_eur=20.27e9,
-            low_base=False,
         )
         _seed_eurostat_raw_rows_for_finding(cur, run, hs_pattern="8507%")
         conn.commit()
 
-    bp_docx.render_top_movers_docx(out_path)
+    bp_docx.render_findings_docx(out_path)
     doc = Document(str(out_path))
 
-    # Title paragraph
-    assert doc.paragraphs[0].text == "Meridian — Findings"
-    assert doc.paragraphs[0].style.name == "Title"
-
-    # Exactly one H2 (the mover)
-    h2s = [p for p in doc.paragraphs if p.style.name == "Heading 2"]
-    assert len(h2s) == 1
-    assert "EV batteries (Li-ion)" in h2s[0].text
-
-    # Exactly one inline image (the chart)
-    images = [
-        p for p in doc.paragraphs
-        for r in p.runs
-        if r.element.xpath(".//w:drawing")
+    headings = [
+        p.text.strip()
+        for p in doc.paragraphs
+        if p.style and p.style.name.startswith("Heading")
     ]
-    assert len(images) == 1
+    # The renderer always emits these structural sections regardless
+    # of content. Catches regressions where the translator stops
+    # walking blocks midway.
+    assert any("Scope notes" in h for h in headings), \
+        f"expected 'Scope notes' heading, got: {headings[:20]}"
+    assert any("Findings included" in h for h in headings), \
+        f"expected 'Findings included' heading, got: {headings[:20]}"
+    assert any("Methodology" in h for h in headings), \
+        f"expected a Methodology heading, got: {headings[:20]}"
 
-    # The headline figure ("to €27.25B") should appear in a paragraph
-    all_text = " ".join(p.text for p in doc.paragraphs)
-    assert "+34.5%" in all_text
-    assert "€27" in all_text  # tolerates €27.25B / €27.2B formatting
 
-
-def test_render_top_movers_docx_empty_branch(
+def test_render_findings_docx_injects_chart_for_top_mover(
     empty_findings, test_db_url, tmp_path,
 ):
-    """No movers pass the editorial filter → docx has title + single
-    italic 'no movers' paragraph (and no H1/H2/images)."""
-    out_path = tmp_path / "empty.docx"
-    # empty_findings already truncates the relevant tables; do NOT
-    # seed anything.
+    """A seeded top mover with underlying raw rows → exactly one chart
+    image in the docx (the one in the Top-N section; first-occurrence-
+    only guard prevents duplicates in Tier 2 state-of-play)."""
+    out_path = tmp_path / "chart.docx"
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        _seed_eurostat_release(cur, date(2026, 2, 1))
+        _seed_chart_capable_finding(
+            cur, run, "EV batteries (Li-ion)",
+            yoy_pct=0.345, current_eur=27.25e9, prior_eur=20.27e9,
+        )
+        _seed_eurostat_raw_rows_for_finding(cur, run, hs_pattern="8507%")
+        conn.commit()
 
-    bp_docx.render_top_movers_docx(out_path)
+    bp_docx.render_findings_docx(out_path)
     doc = Document(str(out_path))
 
-    # No Heading 1 or Heading 2
-    h1s = [p for p in doc.paragraphs if p.style.name == "Heading 1"]
-    h2s = [p for p in doc.paragraphs if p.style.name == "Heading 2"]
-    assert h1s == []
-    assert h2s == []
-
-    # No inline images
-    images = [
-        p for p in doc.paragraphs
-        for r in p.runs
-        if r.element.xpath(".//w:drawing")
-    ]
-    assert images == []
-
-    # Empty-message present
-    all_text = " ".join(p.text for p in doc.paragraphs)
-    assert "No top-mover findings" in all_text
+    assert _count_images(doc) == 1
 
 
-def test_render_top_movers_docx_chart_unavailable_branch(
+def test_render_findings_docx_skips_chart_for_finding_without_raw_rows(
     empty_findings, test_db_url, tmp_path,
 ):
-    """Finding seeded but no eurostat_raw_rows — chart can't be built;
-    renderer falls through to the 'Chart unavailable' italic
-    paragraph instead of raising. Real-world case: a finding whose
-    underlying raw rows have been purged or never ingested."""
+    """A finding seeded without underlying eurostat_raw_rows → no
+    chart injected (chart-data fetch returns None; translator's
+    chart_for_finding lookup returns None; no picture added).
+    The rest of the markdown still renders normally."""
     out_path = tmp_path / "no-chart.docx"
     with psycopg2.connect(test_db_url) as conn:
         cur = conn.cursor()
@@ -379,34 +376,25 @@ def test_render_top_movers_docx_chart_unavailable_branch(
             cur, run, "EV batteries (Li-ion)",
             yoy_pct=0.35, current_eur=27e9, prior_eur=20e9, low_base=False,
         )
-        # Deliberately no _seed_eurostat_raw_rows_for_finding call.
+        # Deliberately no raw rows + no chart_capable_finding patching,
+        # so method_query lacks flow/partners — chart fetch returns None.
         conn.commit()
 
-    bp_docx.render_top_movers_docx(out_path)
+    bp_docx.render_findings_docx(out_path)
     doc = Document(str(out_path))
 
-    # H2 is still there
-    h2s = [p for p in doc.paragraphs if p.style.name == "Heading 2"]
-    assert len(h2s) == 1
-
-    # But no inline image
-    images = [
-        p for p in doc.paragraphs
-        for r in p.runs
-        if r.element.xpath(".//w:drawing")
-    ]
-    assert images == []
-
-    # The "Chart unavailable" line is present
-    all_text = " ".join(p.text for p in doc.paragraphs)
-    assert "Chart unavailable" in all_text
+    assert _count_images(doc) == 0
+    # But the document still has substantive content
+    assert len(doc.paragraphs) > 10
 
 
-def test_render_top_movers_docx_respects_top_n(
+def test_render_findings_docx_respects_top_n_for_charts(
     empty_findings, test_db_url, tmp_path,
 ):
-    """`top_n=2` caps the number of mover cards even when more findings
-    pass the filter."""
+    """`top_n=2` caps the number of charts (not headings — headings
+    come from the markdown's structural skeleton). The .md still
+    renders all eligible movers in its Top-N section; only the chart
+    insertion is bounded by `top_n`."""
     out_path = tmp_path / "topn.docx"
     with psycopg2.connect(test_db_url) as conn:
         cur = conn.cursor()
@@ -427,22 +415,38 @@ def test_render_top_movers_docx_respects_top_n(
         _seed_eurostat_raw_rows_for_finding(cur, run, hs_pattern="8507%")
         conn.commit()
 
-    bp_docx.render_top_movers_docx(out_path, top_n=2)
+    bp_docx.render_findings_docx(out_path, top_n=2)
     doc = Document(str(out_path))
 
-    h2s = [p for p in doc.paragraphs if p.style.name == "Heading 2"]
-    assert len(h2s) == 2
+    assert _count_images(doc) == 2
 
 
-def test_render_top_movers_docx_applies_page_setup(
+def test_render_findings_docx_renders_with_no_findings(
+    empty_findings, test_db_url, tmp_path,
+):
+    """Empty DB — markdown render still emits its framing sections
+    (period coverage, scope notes, etc.) so the docx is non-empty
+    even when no top movers exist. No charts in this case."""
+    out_path = tmp_path / "empty.docx"
+    # empty_findings has truncated tables; no seeds.
+
+    bp_docx.render_findings_docx(out_path)
+    doc = Document(str(out_path))
+
+    # Framing content present (markdown always emits these)
+    assert len(doc.paragraphs) > 5
+    # No charts because no top movers
+    assert _count_images(doc) == 0
+
+
+def test_render_findings_docx_applies_page_setup(
     empty_findings, test_db_url, tmp_path,
 ):
     """A4 + 10mm margins must reach the saved .docx — these were the
     fix that prompted the spike, and a regression here would put us
     back to US Letter / 1-inch margins for Lisa."""
     out_path = tmp_path / "pagesetup.docx"
-    # Empty branch is enough — page setup applies regardless of content.
-    bp_docx.render_top_movers_docx(out_path)
+    bp_docx.render_findings_docx(out_path)
     doc = Document(str(out_path))
 
     section = doc.sections[0]
