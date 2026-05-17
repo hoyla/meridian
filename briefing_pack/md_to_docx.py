@@ -47,7 +47,9 @@ from typing import Callable
 
 import mistune
 from docx import Document
-from docx.shared import Pt
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+from docx.shared import Pt, RGBColor
 
 log = logging.getLogger(__name__)
 
@@ -126,11 +128,294 @@ class MarkdownToDocxTranslator:
             return
         handler(node)
 
-    # Stubs filled in by subsequent commits.
+    # ----- block handlers ---------------------------------------------------
+
     def _block_blank_line(self, node: dict) -> None:
         # mistune emits these between blocks; python-docx handles
         # paragraph spacing via styles, so we drop them.
         pass
+
+    def _block_heading(self, node: dict) -> None:
+        level = (node.get("attrs") or {}).get("level", 1)
+        # python-docx: level 0 is Title, 1-9 are Heading 1-9
+        # Cap at level 9 so we don't error on absurd inputs.
+        docx_level = max(0, min(9, level))
+        heading_p = self.doc.add_heading(level=docx_level)
+        self._render_inline_into_paragraph(node.get("children") or [], heading_p)
+
+    def _block_paragraph(self, node: dict) -> None:
+        p = self.doc.add_paragraph()
+        self._render_inline_into_paragraph(node.get("children") or [], p)
+
+    def _block_thematic_break(self, node: dict) -> None:
+        # Horizontal rule. python-docx doesn't have a first-class API
+        # for this; emit a bottom-bordered empty paragraph.
+        p = self.doc.add_paragraph()
+        pPr = p._p.get_or_add_pPr()
+        pBdr = OxmlElement("w:pBdr")
+        bottom = OxmlElement("w:bottom")
+        bottom.set(qn("w:val"), "single")
+        bottom.set(qn("w:sz"), "6")
+        bottom.set(qn("w:space"), "1")
+        bottom.set(qn("w:color"), "auto")
+        pBdr.append(bottom)
+        pPr.append(pBdr)
+
+    def _block_block_code(self, node: dict) -> None:
+        """Fenced code block. Renders as a paragraph in a monospace
+        font; preserves leading whitespace by using soft breaks for
+        embedded newlines."""
+        text = node.get("raw") or ""
+        p = self.doc.add_paragraph()
+        for i, line in enumerate(text.splitlines()):
+            if i > 0:
+                p.add_run().add_break()
+            run = p.add_run(line)
+            run.font.name = "Courier New"
+            run.font.size = Pt(9)
+
+    def _block_block_quote(self, node: dict) -> None:
+        """Block quote — each contained block emitted as an italic
+        indented paragraph. Nested blocks (rare) flatten into the
+        same indent level."""
+        for child in node.get("children") or []:
+            if child.get("type") == "paragraph":
+                p = self.doc.add_paragraph()
+                p.paragraph_format.left_indent = Pt(18)
+                # Inline children emitted with italic flag forced.
+                self._render_inline_into_paragraph(
+                    child.get("children") or [], p, force_italic=True,
+                )
+            else:
+                # Anything other than a paragraph inside a quote — pass
+                # through plain text as a fallback.
+                text = self._collect_plain_text(child).strip()
+                if text:
+                    p = self.doc.add_paragraph(text)
+                    p.paragraph_format.left_indent = Pt(18)
+                    for r in p.runs:
+                        r.italic = True
+
+    def _block_list(self, node: dict) -> None:
+        """Ordered or unordered list. Iterates list_item children and
+        emits each as a styled paragraph. Nested lists are handled
+        recursively (each nested list emits at the same flat level —
+        python-docx's first-class list nesting requires deeper XML
+        plumbing than this v1 needs)."""
+        attrs = node.get("attrs") or {}
+        ordered = attrs.get("ordered", False)
+        style_name = "List Number" if ordered else "List Bullet"
+        for child in node.get("children") or []:
+            if child.get("type") != "list_item":
+                continue
+            self._render_list_item(child, style_name=style_name)
+
+    def _render_list_item(self, node: dict, *, style_name: str) -> None:
+        """Emit a list_item as a list-styled paragraph. The item's
+        block_text holds the inline content; nested lists become
+        subsequent paragraphs (flat for v1)."""
+        for sub in node.get("children") or []:
+            t = sub.get("type")
+            if t == "block_text":
+                p = self.doc.add_paragraph(style=style_name)
+                self._render_inline_into_paragraph(
+                    sub.get("children") or [], p,
+                )
+                # After writing the item's prose, look for a finding/N
+                # token and inject a chart if the lookup provides one.
+                self._maybe_inject_chart_after_item(sub)
+            elif t == "paragraph":
+                # Multi-paragraph list item — second paragraph onward
+                # gets the same list style.
+                p = self.doc.add_paragraph(style=style_name)
+                self._render_inline_into_paragraph(
+                    sub.get("children") or [], p,
+                )
+            elif t == "list":
+                # Nested list — recurse. python-docx doesn't carry
+                # depth automatically; the nested list paragraphs use
+                # the same style. Visual fidelity is acceptable for our
+                # use case (single-level nesting in the existing pack).
+                self._block_list(sub)
+            else:
+                # Unknown sub-element — fall back to plain text.
+                text = self._collect_plain_text(sub).strip()
+                if text:
+                    self.doc.add_paragraph(text, style=style_name)
+
+    def _maybe_inject_chart_after_item(self, block_text_node: dict) -> None:
+        """Scan the item's text for a finding/N token; if found, ask
+        the chart-lookup callable for PNG bytes and insert as a
+        picture in the current paragraph flow.
+
+        Chart sits on its own paragraph immediately after the list
+        item's prose paragraph, which the docx renderer for top-N
+        movers expects."""
+        if self.chart_for_finding is None:
+            return
+        text = self._collect_plain_text(block_text_node)
+        m = _FINDING_TOKEN_RE.search(text)
+        if m is None:
+            return
+        finding_id = int(m.group(1))
+        png = self.chart_for_finding(finding_id)
+        if not png:
+            return
+        import io
+        from docx.shared import Mm
+        self.doc.add_picture(
+            io.BytesIO(png), width=Mm(self.chart_width_mm),
+        )
+
+    # ----- inline rendering --------------------------------------------------
+
+    def _render_inline_into_paragraph(
+        self, children: list[dict], paragraph, *,
+        force_italic: bool = False,
+        force_bold: bool = False,
+    ) -> None:
+        """Walk inline AST nodes and add corresponding runs to the
+        target paragraph. Style flags compose: a `<strong>` inside a
+        block_quote (force_italic) yields bold+italic runs, matching
+        the markdown's nested emphasis semantics."""
+        for child in children:
+            self._render_inline_node(
+                child, paragraph,
+                bold=force_bold, italic=force_italic, code=False,
+                link_url=None,
+            )
+
+    def _render_inline_node(
+        self, node: dict, paragraph, *,
+        bold: bool, italic: bool, code: bool, link_url: str | None,
+    ) -> None:
+        t = node.get("type", "")
+        if t == "text":
+            text = node.get("raw") or ""
+            if not text:
+                return
+            if link_url:
+                self._add_hyperlink_run(
+                    paragraph, text, link_url,
+                    bold=bold, italic=italic, code=code,
+                )
+            else:
+                run = paragraph.add_run(text)
+                run.bold = bold
+                run.italic = italic
+                if code:
+                    run.font.name = "Courier New"
+        elif t == "strong":
+            for sub in node.get("children") or []:
+                self._render_inline_node(
+                    sub, paragraph,
+                    bold=True, italic=italic, code=code, link_url=link_url,
+                )
+        elif t == "emphasis":
+            for sub in node.get("children") or []:
+                self._render_inline_node(
+                    sub, paragraph,
+                    bold=bold, italic=True, code=code, link_url=link_url,
+                )
+        elif t == "codespan":
+            text = node.get("raw") or ""
+            run = paragraph.add_run(text)
+            run.font.name = "Courier New"
+            run.bold = bold
+            run.italic = italic
+        elif t == "link":
+            url = (node.get("attrs") or {}).get("url", "")
+            for sub in node.get("children") or []:
+                self._render_inline_node(
+                    sub, paragraph,
+                    bold=bold, italic=italic, code=code, link_url=url,
+                )
+        elif t == "softbreak":
+            paragraph.add_run(" ")
+        elif t == "linebreak":
+            paragraph.add_run().add_break()
+        elif t == "strikethrough":
+            for sub in node.get("children") or []:
+                run_p = paragraph.add_run()
+                # Apply strikethrough via XML — not exposed as a
+                # first-class python-docx attribute on Font.
+                rPr = run_p._element.get_or_add_rPr()
+                strike = OxmlElement("w:strike")
+                strike.set(qn("w:val"), "true")
+                rPr.append(strike)
+                # Render the sub-content into this same paragraph;
+                # post-style applied above.
+                self._render_inline_node(
+                    sub, paragraph,
+                    bold=bold, italic=italic, code=code, link_url=link_url,
+                )
+        else:
+            # Unknown inline — fall back to its plain text. Keeps
+            # forward compatibility if mistune introduces new node
+            # types or sections start emitting features we haven't
+            # taught the translator.
+            text = self._collect_plain_text(node)
+            if text:
+                run = paragraph.add_run(text)
+                run.bold = bold
+                run.italic = italic
+                if code:
+                    run.font.name = "Courier New"
+
+    def _add_hyperlink_run(
+        self, paragraph, text: str, url: str, *,
+        bold: bool, italic: bool, code: bool,
+    ) -> None:
+        """Insert a clickable hyperlink run into a paragraph.
+
+        python-docx lacks a first-class hyperlink API, so we construct
+        the underlying OOXML directly: a `w:hyperlink` element wrapping
+        a `w:r` run, with the relationship stored in the document's
+        relationships table.
+        """
+        part = paragraph.part
+        r_id = part.relate_to(
+            url,
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+            is_external=True,
+        )
+        hyperlink = OxmlElement("w:hyperlink")
+        hyperlink.set(qn("r:id"), r_id)
+
+        run_el = OxmlElement("w:r")
+        rPr = OxmlElement("w:rPr")
+        # Apply hyperlink style + colour + underline
+        rStyle = OxmlElement("w:rStyle")
+        rStyle.set(qn("w:val"), "Hyperlink")
+        rPr.append(rStyle)
+        color = OxmlElement("w:color")
+        color.set(qn("w:val"), "0563C1")
+        rPr.append(color)
+        u = OxmlElement("w:u")
+        u.set(qn("w:val"), "single")
+        rPr.append(u)
+        if bold:
+            b = OxmlElement("w:b")
+            rPr.append(b)
+        if italic:
+            i = OxmlElement("w:i")
+            rPr.append(i)
+        if code:
+            rFonts = OxmlElement("w:rFonts")
+            rFonts.set(qn("w:ascii"), "Courier New")
+            rFonts.set(qn("w:hAnsi"), "Courier New")
+            rPr.append(rFonts)
+        run_el.append(rPr)
+
+        text_el = OxmlElement("w:t")
+        text_el.set(qn("xml:space"), "preserve")
+        text_el.text = text
+        run_el.append(text_el)
+
+        hyperlink.append(run_el)
+        paragraph._p.append(hyperlink)
+
+    # ----- helpers ----------------------------------------------------------
 
     def _collect_plain_text(self, node: dict) -> str:
         """Recursively concatenate `raw` from every text-like descendant.
