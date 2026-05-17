@@ -19,3 +19,7 @@ provenance/
 
 # Other stuff not to be included in GH repo.
 aob/
+
+# Postgres dumps — defensive: backups live in ~/meridian-backups/, but
+# never accidentally commit one if it ends up inside the repo.
+*.dump
