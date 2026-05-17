@@ -43,6 +43,7 @@ from briefing_pack import (
     _ALL_UNIVERSAL_CAVEATS,
     _SCOPE_LABEL,
     _SCOPE_SUBKIND_SUFFIX,
+    DEFAULT_TOP_N,
     _compute_predictability_per_group,
     _compute_top_movers,
     is_threshold_fragile,
@@ -888,9 +889,21 @@ def _to_float(v: Any) -> float | None:
 class XlsxWriter:
     """Render SheetData list to a local .xlsx via openpyxl. The format is
     structurally identical to what GoogleSheetsWriter will push, so the
-    iteration on data shape during prototyping carries over directly."""
+    iteration on data shape during prototyping carries over directly.
 
-    def write(self, sheets: list[SheetData], dest: str) -> str:
+    `charts=True` additionally appends a "Charts" tab carrying the
+    top-N movers' 24-month monthly series with native openpyxl
+    LineChart objects anchored next to each block. The Charts tab is
+    the spreadsheet counterpart to the docx output's per-mover chart
+    cards — same data, same ordering. Lisa-facing surface only; if
+    `--docx` isn't requested, no Charts tab is written and the
+    spreadsheet is structurally identical to prior cycles.
+    """
+
+    def write(
+        self, sheets: list[SheetData], dest: str, *,
+        charts: bool = False, charts_top_n: int = DEFAULT_TOP_N,
+    ) -> str:
         from openpyxl import Workbook
         from openpyxl.styles import Font
         from openpyxl.utils import get_column_letter
@@ -917,10 +930,223 @@ class XlsxWriter:
                 )
                 ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 2, 60)
 
+        if charts:
+            _add_charts_tab(wb, top_n=charts_top_n)
+
         out_path = Path(dest)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         wb.save(out_path)
         return str(out_path)
+
+
+# ---------------------------------------------------------------------------
+# Charts tab — companion to briefing_pack.docx output
+# ---------------------------------------------------------------------------
+
+# Mirrors `briefing_pack.docx._EU27_EXCLUDE_REPORTERS`. Hardcoded rather
+# than imported from anomalies to keep sheets_export's dependency
+# surface stable.
+_CHARTS_EU27_EXCLUDE_REPORTERS = ("GB",)
+
+
+def _charts_months_back(d: date, n: int) -> date:
+    """Same as `briefing_pack.docx._months_back`; duplicated here to keep
+    sheets_export from depending on the docx module's private helpers.
+    Both are 4-line pure functions; refactor to a shared helper if a
+    third consumer appears."""
+    total = d.year * 12 + (d.month - 1) - n
+    return date(total // 12, (total % 12) + 1, 1)
+
+
+_CHARTS_MONTH_LABEL = {
+    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+    7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
+}
+
+
+def _fetch_chart_series_for_finding(
+    cur, finding_id: int, current_end: date,
+) -> tuple[list[date], list[float | None], list[float | None]] | None:
+    """Fetch a top-mover's 24-month series and split into (months,
+    prior_values, current_values) ready for the Charts tab + LineChart.
+
+    Returns None if the finding's detail is missing the
+    `method_query.{flow,partners,hs_patterns}` fields, or if no
+    underlying eurostat_raw_rows are present — caller writes a
+    "(chart unavailable)" marker in that case.
+
+    Layout matches the docx renderer: 24 months total. Prior values
+    populate months [0..11] (months -23 to -12 from current_end);
+    current values populate months [12..23] (months -11 to 0). Other
+    cells are None (so openpyxl skips them in the LineChart).
+    """
+    cur.execute("SELECT detail FROM findings WHERE id = %s", (finding_id,))
+    row = cur.fetchone()
+    if row is None:
+        return None
+    detail = row[0] if not isinstance(row, dict) else row["detail"]
+    method_q = (detail or {}).get("method_query", {})
+    hs_patterns = (
+        method_q.get("hs_patterns")
+        or detail.get("group", {}).get("hs_patterns")
+        or []
+    )
+    flow = int(method_q.get("flow") or 0)
+    partners = method_q.get("partners") or []
+    if not (hs_patterns and flow and partners):
+        return None
+
+    start = _charts_months_back(current_end, 23)
+    like_clause = "(" + " OR ".join(
+        ["product_nc LIKE %s"] * len(hs_patterns)
+    ) + ")"
+    sql = f"""
+        SELECT date_trunc('month', period)::date AS month,
+               SUM(value_eur)::float8 AS value_eur
+          FROM eurostat_raw_rows
+         WHERE period >= %s AND period <= %s
+           AND flow = %s
+           AND partner = ANY(%s)
+           AND {like_clause}
+           AND reporter <> ALL(%s)
+      GROUP BY 1
+      ORDER BY 1
+    """
+    params = (
+        start, current_end, flow, list(partners),
+        *hs_patterns,
+        list(_CHARTS_EU27_EXCLUDE_REPORTERS),
+    )
+    cur.execute(sql, params)
+    monthly = {r[0]: float(r[1] or 0.0) for r in cur.fetchall()}
+    if not monthly:
+        return None
+
+    # Build the 24-month axis ending at current_end inclusive.
+    months: list[date] = []
+    cur_m = date(start.year, start.month, 1)
+    end_m = date(current_end.year, current_end.month, 1)
+    while cur_m <= end_m:
+        months.append(cur_m)
+        cur_m = (
+            date(cur_m.year + 1, 1, 1) if cur_m.month == 12
+            else date(cur_m.year, cur_m.month + 1, 1)
+        )
+
+    values = [monthly.get(m) for m in months]
+    prior = values[:12] + [None] * 12
+    current = [None] * 12 + values[12:]
+    return months, prior, current
+
+
+def _add_charts_tab(wb, *, top_n: int = DEFAULT_TOP_N) -> None:
+    """Append a "Charts" tab to `wb` with one block per top mover.
+
+    Block layout (per mover):
+        Row 0: bold heading row "EV batteries (Li-ion) — EU-27 imports
+               (CN→reporter): +34.5% to €27.25B"
+        Row 1: bold column headers "Month | Prior 12mo (€) | Current
+               12mo (€)"
+        Rows 2..25: 24 data rows (month label, prior eur, current eur)
+        Plus a LineChart anchored at column E aligned with row 0,
+        sized to cover ~22 rows.
+        Then 2 blank rows before the next mover's block.
+
+    Each block is ~28 rows; 10 movers ≈ 280 rows. The tab is the
+    spreadsheet counterpart to the docx top-N section.
+    """
+    from openpyxl.chart import LineChart, Reference
+    from openpyxl.styles import Font
+
+    ws = wb.create_sheet(title="Charts")
+    ws["A1"] = (
+        "Top-N movers monthly EUR series — prior 12mo vs current 12mo."
+        " Companion to 03_Findings.docx."
+    )
+    ws["A1"].font = Font(italic=True)
+
+    with _conn() as conn, conn.cursor(
+        cursor_factory=psycopg2.extras.DictCursor,
+    ) as cur:
+        predictability = _compute_predictability_per_group(cur)
+        movers = _compute_top_movers(
+            cur, predictability=predictability, limit=top_n,
+        )
+
+        # Start blocks at row 3 (after the description + blank row).
+        block_start = 3
+        for m in movers:
+            current_end = m["current_end"]
+            is_export = m["subkind"].endswith("_export")
+            flow_label = (
+                "EU-27 exports (reporter→CN)" if is_export
+                else "EU-27 imports (CN→reporter)"
+            )
+            pred = m.get("predictability")
+            badge = f" {pred[0]}" if pred is not None else ""
+
+            # Heading row
+            ws.cell(
+                row=block_start, column=1,
+                value=f"{m['group_name']}{badge} — {flow_label}",
+            ).font = Font(bold=True)
+
+            # Column headers
+            hdr_row = block_start + 1
+            ws.cell(row=hdr_row, column=1, value="Month").font = Font(bold=True)
+            ws.cell(row=hdr_row, column=2, value="Prior 12mo (€)").font = Font(bold=True)
+            ws.cell(row=hdr_row, column=3, value="Current 12mo (€)").font = Font(bold=True)
+
+            # Data
+            series = _fetch_chart_series_for_finding(
+                cur, m["id"], current_end,
+            )
+            if series is None:
+                ws.cell(
+                    row=hdr_row + 1, column=1,
+                    value="(Chart unavailable — underlying observations not fetchable.)"
+                ).font = Font(italic=True)
+                block_start = hdr_row + 4
+                continue
+
+            months, prior, current = series
+            for offset, (mo, p, c) in enumerate(zip(months, prior, current)):
+                data_row = hdr_row + 1 + offset
+                ws.cell(
+                    row=data_row, column=1,
+                    value=f"{_CHARTS_MONTH_LABEL[mo.month]} {mo.year % 100:02d}",
+                )
+                ws.cell(row=data_row, column=2, value=p)
+                ws.cell(row=data_row, column=3, value=c)
+
+            # Native LineChart anchored to the right of the data.
+            chart = LineChart()
+            chart.title = f"{m['group_name']} — {flow_label}"
+            chart.y_axis.title = "€"
+            chart.x_axis.title = "Month"
+            chart.height = 10  # default unit ≈ rows of 18pt
+            chart.width = 18
+            data_ref = Reference(
+                ws,
+                min_col=2, max_col=3,
+                min_row=hdr_row, max_row=hdr_row + 24,
+            )
+            cat_ref = Reference(
+                ws,
+                min_col=1,
+                min_row=hdr_row + 1, max_row=hdr_row + 24,
+            )
+            chart.add_data(data_ref, titles_from_data=True)
+            chart.set_categories(cat_ref)
+            ws.add_chart(chart, f"E{block_start}")
+
+            # Next block: skip past the 24 data rows + 2 blank rows.
+            block_start = hdr_row + 25 + 2
+
+    # Roughly readable column widths
+    ws.column_dimensions["A"].width = 14
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 18
 
 
 class GoogleSheetsWriter:

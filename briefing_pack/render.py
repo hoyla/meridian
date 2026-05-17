@@ -539,10 +539,14 @@ def export(
         # Lazy import — sheets_export imports from this module, so a
         # top-level import would create a cycle. The sheet always lives
         # next to the brief in the same folder; filename `04_Data.xlsx`.
+        # When docx=True, also writes a "Charts" tab with the top-N
+        # movers' monthly series + native LineCharts — spreadsheet
+        # counterpart to the docx chart cards.
         import sheets_export
         xlsx_path = p.parent / "04_Data.xlsx"
         sheets_export.XlsxWriter().write(
             sheets_export.assemble_sheets(), str(xlsx_path),
+            charts=docx, charts_top_n=top_n,
         )
         log.info("Wrote spreadsheet to %s", xlsx_path)
 

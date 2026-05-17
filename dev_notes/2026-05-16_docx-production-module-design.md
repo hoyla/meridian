@@ -311,29 +311,59 @@ Update this doc's "Status" line below when work starts.
 
 ## Status
 
-**v1 slice steps 1–4 + 6 landed 2026-05-16**:
-[`f2b5c1c`](https://github.com/hoyla/meridian/commit/f2b5c1c)
-(stub module + `--docx` CLI flag) and
-[`d3f3bfc`](https://github.com/hoyla/meridian/commit/d3f3bfc)
-(24-month rolling-window charts). End-to-end run produces a real
-dress-rehearsal docx against today's DB; round-trip through Drive
-→ Google Docs verified for real-data charts (not just spike-synthetic).
+**v1 COMPLETE — 2026-05-16.** Five commits land the whole slice:
 
-What remains in v1, in priority order:
-- **Step 5 — tests + determinism.** ~12-18 new tests, focused per
-  pure function (`_pick_eur_scale`, `_months_back`, `_month_iter`,
-  `_flow_label_for_subkind`, `_build_chart_png`) plus structural
-  assertions on the full docx render. Determinism: docx-internal
-  timestamps and openpyxl metadata aren't byte-stable across runs,
-  so the test bar is *structural* (same data → same paragraph count,
-  heading texts, image count) plus SHA256 stability of the chart
-  PNG bytes specifically (matplotlib Agg is deterministic per host).
-- **Xlsx Charts tab.** sheets_export.py extension to add a `Charts`
-  tab with native LineCharts for the top-N movers. Same data, same
-  ordering, mirrors the docx layout.
-- **Test for the empty-movers branch.** Cycles where no group passes
-  the editorial filter — handled in the renderer but not yet covered
-  by a test.
+- [`f2b5c1c`](https://github.com/hoyla/meridian/commit/f2b5c1c) —
+  stub module + `--docx` CLI flag
+- [`d3f3bfc`](https://github.com/hoyla/meridian/commit/d3f3bfc) —
+  24-month rolling-window charts in the docx
+- [`eaf37cd`](https://github.com/hoyla/meridian/commit/eaf37cd) —
+  docx tests (24 new)
+- This commit (Charts tab) — native LineCharts in `04_Data.xlsx`
+  + 7 new tests
+
+End-to-end run (`python scrape.py --briefing-pack --no-record
+--docx`) produces a real dress-rehearsal bundle against today's DB:
+`03_Findings.docx` with 10 mover cards + matplotlib charts, plus
+`04_Data.xlsx` with a `Charts` tab carrying the same 10 movers as
+native openpyxl LineCharts (editable in Google Sheets). Both
+surfaces round-trip cleanly through Drive → Google Docs / Sheets
+(verified 2026-05-16 evening with real-data content, not just
+spike-synthetic).
+
+Test suite: 304 passing (up from 273 pre-slice), 5 skipped, 0
+regressions. Coverage spans pure-function units (`_pick_eur_scale`,
+`_months_back`, `_month_iter`, `_flow_label_for_subkind`,
+`_build_chart_png`) and integration paths (smoke / structure /
+empty-movers / chart-unavailable / `top_n` truncation / page-setup
+preservation / xlsx Charts tab presence + data layout + native
+chart count).
+
+Determinism handled per the design's "structural-stability +
+chart-bytes SHA256" approach — docx-internal and xlsx-internal
+timestamps don't round-trip byte-identically and that's
+acknowledged rather than chased.
+
+## What's next
+
+v2, v3, v4 from the original phase plan — picked up demand-driven:
+
+- **v2 — more chart recipes.** `gacc_bilateral_aggregate_yoy*`,
+  `mirror_gap*`, `hs_group_trajectory*`, `partner_share*`. Add when
+  Lisa asks for a specific story type or a real cycle surfaces
+  a gap.
+- **v3 — Drive upload.** Picks up once GCP project access is
+  restored. `briefing_pack/drive_export.py` wrapping `files.create`
+  with upload-with-conversion. `--upload-to-drive` flag. Folder
+  hierarchy `Meridian exports / YYYY-MM-DD-HHMM / *.docx, *.xlsx`.
+- **v4 — full markdown-content parity in the docx.** Only triggered
+  if Lisa says "I want the full Tier 1/2 content in the docx, not
+  just top-N". Refactor toward "each section module gains a
+  `to_docx()` method" — known fork in the road.
+
+Promotion of `--docx` from opt-in to default-on: defer until Lisa
+has eyeballed 2-3 real cycles' worth of output and confirmed the
+shape works.
 
 After v1 closes, the path forward is unchanged: v2 (more chart
 recipes, demand-driven), v3 (Drive upload, OAuth-gated), v4 (full
