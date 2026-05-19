@@ -31,7 +31,7 @@ def empty_findings(test_db_url):
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
         cur.execute(
             "TRUNCATE findings, observations, source_snapshots, eurostat_raw_rows, "
-            "scrape_runs, releases RESTART IDENTITY CASCADE"
+            "scrape_runs, releases, brief_runs RESTART IDENTITY CASCADE"
         )
     yield
 
@@ -682,6 +682,111 @@ def test_diff_section_renders_partner_label_for_bilateral(empty_findings, test_d
     # that COALESCE would produce when both group/aggregate fall-throughs miss.
     assert "**Germany**" in md
     assert "**None**" not in md
+
+
+def test_diff_section_lead_in_cites_previous_export_folder(empty_findings, test_db_url):
+    """The Tier 1 lead-in should cite the previous export's folder name
+    (parsed from brief_runs.output_path) so the reader can navigate to
+    it directly — not just a timestamp."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO brief_runs (generated_at, output_path, top_n) "
+            "VALUES (now() - interval '1 second', "
+            "        '/work/exports/2026-05-15-1811/03_Findings.md', 10)"
+        )
+        conn.commit()
+
+    md = briefing_pack.render()
+    assert "`2026-05-15-1811`" in md
+
+
+def test_diff_section_lead_in_names_new_source_releases(empty_findings, test_db_url):
+    """When new releases (GACC / Eurostat / HMRC) have arrived since the
+    previous export, Tier 1 should name them in the lead-in so the
+    reader sees the editorial *trigger* for the new export, not just
+    the resulting delta."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO brief_runs (generated_at, output_path, top_n) "
+            "VALUES (now() - interval '1 second', "
+            "        '/work/exports/2026-05-15-1811/03_Findings.md', 10)"
+        )
+        _seed_eurostat_release(cur, date(2026, 3, 1))
+        _seed_gacc_release(cur, date(2026, 4, 1))
+        conn.commit()
+
+    md = briefing_pack.render()
+    assert "New source data since then" in md
+    assert "Eurostat March 2026" in md
+    assert "GACC April 2026 (monthly)" in md
+
+
+def test_leads_doc_carries_why_this_export_paragraph(empty_findings, test_db_url):
+    """The leads doc — the surface we tell journalists to read first —
+    should also carry the "why this export" framing, not just the
+    findings Tier 1. When new source data has arrived since the previous
+    export, name it; when nothing new has arrived, call out the rerun
+    explicitly. Both forms cite the previous export's folder name."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO brief_runs (generated_at, output_path, top_n) "
+            "VALUES (now() - interval '1 second', "
+            "        '/work/exports/2026-05-15-1811/03_Findings.md', 10)"
+        )
+        _seed_eurostat_release(cur, date(2026, 3, 1))
+        conn.commit()
+
+    leads = briefing_pack.render_leads()
+    assert "`2026-05-15-1811`" in leads
+    assert "Eurostat March 2026" in leads
+
+
+def test_leads_doc_flags_rerun_when_no_new_releases(empty_findings, test_db_url):
+    """When no new GACC/Eurostat/HMRC data has arrived since the previous
+    export, the leads doc must say so — so a journalist opening it first
+    doesn't infer fresh source figures behind a same-snapshot rerun."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO brief_runs (generated_at, output_path, top_n) "
+            "VALUES (now() - interval '1 second', "
+            "        '/work/exports/2026-05-15-1811/03_Findings.md', 10)"
+        )
+        conn.commit()
+
+    leads = briefing_pack.render_leads()
+    assert "rerun against the same source snapshot" in leads
+    assert "`2026-05-15-1811`" in leads
+
+
+def test_leads_doc_omits_why_paragraph_on_first_export(empty_findings, test_db_url):
+    """No previous brief → no "why this export" framing to render. The
+    leads doc should still render cleanly without it."""
+    leads = briefing_pack.render_leads()
+    assert "rerun against the same source snapshot" not in leads
+    assert "New source data since then" not in leads
+
+
+def test_diff_section_lead_in_flags_rerun_when_no_new_releases(empty_findings, test_db_url):
+    """When no new source data has arrived since the previous export,
+    Tier 1 should call that out explicitly — so the reader doesn't
+    misread a rerun against the same DB snapshot as fresh figures."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO brief_runs (generated_at, output_path, top_n) "
+            "VALUES (now() - interval '1 second', "
+            "        '/work/exports/2026-05-15-1811/03_Findings.md', 10)"
+        )
+        conn.commit()
+
+    md = briefing_pack.render()
+    assert "No new GACC / Eurostat / HMRC release" in md
+    assert "rerun against the same source snapshot" in md
+    assert "`2026-05-15-1811`" in md
 
 
 def test_export_records_brief_run(empty_findings, test_db_url, tmp_path):

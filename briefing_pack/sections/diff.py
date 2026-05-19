@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from briefing_pack._helpers import _Section, _trace_token
+from briefing_pack._helpers import (
+    _Section,
+    _format_new_releases_phrase,
+    _new_releases_since,
+    _prev_export_folder,
+    _prev_export_ref,
+    _source_data_sentence,
+    _trace_token,
+)
 
 
 # A method-version bump (e.g. v10 → v11) causes every active hs_group_yoy*
@@ -37,9 +45,13 @@ def _section_diff_since_last_brief(cur) -> _Section:
     count rather than per-row to keep the section terse — the journalist
     can drill into the per-finding sections below once they know what's
     new."""
-    cur.execute("SELECT MAX(generated_at) FROM brief_runs")
+    cur.execute(
+        "SELECT generated_at, output_path FROM brief_runs "
+        "ORDER BY generated_at DESC LIMIT 1"
+    )
     row = cur.fetchone()
     prev_at = row[0] if row else None
+    prev_output_path = row[1] if row else None
     if prev_at is None:
         first_export_lines = [
             "---",
@@ -123,6 +135,16 @@ def _section_diff_since_last_brief(cur) -> _Section:
     total_new = sum(n for _, n in new_by_subkind)
     n_pairs = len(pairs)
 
+    # Why-this-export framing: the source releases (if any) that arrived
+    # since the previous brief, and the folder name of that previous
+    # export — woven into each branch's lead-in below so the reader sees
+    # the editorial *trigger* alongside the *delta*.
+    new_releases = _new_releases_since(cur, prev_at)
+    new_releases_phrase = _format_new_releases_phrase(new_releases)
+    prev_folder = _prev_export_folder(prev_output_path)
+    prev_ref = _prev_export_ref(prev_at, prev_folder)
+    source_sentence = _source_data_sentence(new_releases_phrase)
+
     lines: list[str] = []
     lines.append("---")
     lines.append("")
@@ -141,7 +163,7 @@ def _section_diff_since_last_brief(cur) -> _Section:
 
     if is_method_bump_churn:
         lines.append(
-            f"*Previous findings export generated {prev_at:%Y-%m-%d %H:%M %Z}. "
+            f"*{prev_ref}. {source_sentence} "
             f"**This cycle is a method-version bump, not editorial movement.** "
             f"{n_pairs:,} findings superseded their predecessors with no "
             f"material YoY change (all shifts under "
@@ -160,7 +182,7 @@ def _section_diff_since_last_brief(cur) -> _Section:
 
     if not new_by_subkind and not significant:
         lines.append(
-            f"*Previous findings export generated {prev_at:%Y-%m-%d %H:%M %Z}. "
+            f"*{prev_ref}. {source_sentence} "
             f"**Nothing material has changed since then** — no new findings, "
             f"no YoY shifts > 5pp, no direction flips. The Tier 2 summary "
             f"below is still the current picture.*"
@@ -169,7 +191,7 @@ def _section_diff_since_last_brief(cur) -> _Section:
         return _Section(markdown="\n".join(lines))
 
     lines.append(
-        f"*Previous findings export generated {prev_at:%Y-%m-%d %H:%M %Z}. "
+        f"*{prev_ref}. {source_sentence} "
         f"The lists below reflect findings that have been added or whose "
         f"value has materially shifted since then. New findings without a "
         f"comparable predecessor — e.g. a new HS group, a new period anchor — "

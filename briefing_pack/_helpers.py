@@ -13,6 +13,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import psycopg2
@@ -123,6 +124,125 @@ def _release_ids_for_observations(cur, obs_ids: list[int]) -> set[int]:
         (obs_ids,),
     )
     return {r[0] for r in cur.fetchall()}
+
+
+# Export-trigger framing — shared by the findings Tier 1 lead-in and the
+# leads doc's "Why this export" paragraph. Both surfaces need to name the
+# previous export (folder + timestamp) and either cite the new source
+# releases that triggered this cycle or call out a rerun-without-new-data
+# explicitly. Centralised here so the two docs stay phrased consistently.
+_SOURCE_LABELS = {"gacc": "GACC", "eurostat": "Eurostat", "hmrc": "HMRC"}
+
+
+def _prev_export_folder(output_path: str | None) -> str | None:
+    """Derive the parent folder name from a recorded brief_runs.output_path
+    (which points at `…/03_Findings.md`). Returns None for legacy / test
+    paths that don't follow the standard layout — the caller falls back to
+    citing the timestamp alone."""
+    if not output_path:
+        return None
+    name = Path(output_path).parent.name
+    if not name or name in {".", "..", "tmp", "exports"}:
+        return None
+    return name
+
+
+def _new_releases_since(cur, prev_at) -> list[dict]:
+    """Source releases first seen between the previous brief and now.
+
+    Drives the export-trigger framing — a new GACC monthly, a new
+    Eurostat period, etc. Used both to (a) cite the substantive trigger
+    when there is one and (b) call out explicitly when a rerun has no
+    new source data behind it (so the reader doesn't assume movement
+    they're seeing reflects fresh figures)."""
+    cur.execute(
+        """
+        SELECT source, period, release_kind
+          FROM releases
+         WHERE first_seen_at > %s
+         ORDER BY source, period DESC, release_kind
+        """,
+        (prev_at,),
+    )
+    return list(cur.fetchall())
+
+
+def _format_new_releases_phrase(rows: list[dict]) -> str:
+    """Render the rowset from `_new_releases_since` as a one-line phrase
+    suitable for embedding in the lead-in. Returns '' if the rowset is
+    empty.
+
+    Example: ``GACC March 2026 (preliminary), February 2026 (monthly);
+    Eurostat March 2026``."""
+    if not rows:
+        return ""
+    by_source: dict[str, list[dict]] = {}
+    for r in rows:
+        by_source.setdefault(r["source"], []).append(r)
+    parts: list[str] = []
+    for src in ("gacc", "eurostat", "hmrc"):
+        if src not in by_source:
+            continue
+        bits: list[str] = []
+        for r in by_source[src]:
+            period_str = r["period"].strftime("%B %Y")
+            if r["release_kind"]:
+                bits.append(f"{period_str} ({r['release_kind']})")
+            else:
+                bits.append(period_str)
+        parts.append(f"{_SOURCE_LABELS[src]} {', '.join(bits)}")
+    return "; ".join(parts)
+
+
+def _prev_export_ref(prev_at, prev_folder: str | None) -> str:
+    """Lead-in reference to the previous export — includes the folder
+    name when available so the reader can navigate straight to it. The
+    timestamp is always present; the folder is only added when the
+    recorded output_path follows the standard `exports/<ts>/` layout."""
+    ts = f"{prev_at:%Y-%m-%d %H:%M %Z}"
+    if prev_folder:
+        return f"Previous findings export `{prev_folder}` generated {ts}"
+    return f"Previous findings export generated {ts}"
+
+
+def _source_data_sentence(new_releases_phrase: str) -> str:
+    """One-sentence framing of *why* this export exists. Either names
+    the new source releases that triggered it, or — when nothing new has
+    arrived — calls out explicitly that this is a rerun against the same
+    DB snapshot, so the reader doesn't misread mechanical churn as fresh
+    figures. Assumes the caller has already cited the previous export
+    (folder + timestamp) immediately before, so no further folder-ref is
+    needed here."""
+    if new_releases_phrase:
+        return f"New source data since then: {new_releases_phrase}."
+    return (
+        "**No new GACC / Eurostat / HMRC release has been published "
+        "since then** — this is a rerun against the same source snapshot."
+    )
+
+
+def _why_this_export_paragraph(cur) -> str:
+    """Standalone one-paragraph "why this export" framing for surfaces
+    that don't have a Tier 1 diff section (notably `02_Leads.md`). Returns
+    an italicised markdown paragraph, or '' if there is no previous brief
+    to compare against. Phrasing is kept consistent with the findings
+    doc's Tier 1 lead-in so the two surfaces don't disagree about what
+    triggered the cycle."""
+    cur.execute(
+        "SELECT generated_at, output_path FROM brief_runs "
+        "ORDER BY generated_at DESC LIMIT 1"
+    )
+    row = cur.fetchone()
+    if row is None or row[0] is None:
+        return ""
+    prev_at, prev_output_path = row[0], row[1]
+    prev_folder = _prev_export_folder(prev_output_path)
+    prev_ref = _prev_export_ref(prev_at, prev_folder)
+    new_releases = _new_releases_since(cur, prev_at)
+    source_sentence = _source_data_sentence(
+        _format_new_releases_phrase(new_releases),
+    )
+    return f"*{prev_ref}. {source_sentence}*"
 
 
 _SCOPE_LABEL = {

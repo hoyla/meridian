@@ -28,6 +28,7 @@ from briefing_pack._helpers import (
     _conn,
     _slugify_heading,
     _slugify_scope,
+    _why_this_export_paragraph,
 )
 from briefing_pack.sections.about_findings import _section_about_findings
 from briefing_pack.sections.detail_opener import _section_detail_opener
@@ -311,6 +312,20 @@ def render_leads(
         "underlying database."
     )
     lines.append("")
+
+    # "Why this export" framing: name the source release that triggered
+    # the new cycle, or — when it's a rerun against the same snapshot —
+    # say so explicitly. Leads is the doc we tell journalists to read
+    # first, so the trigger needs to surface here too, not just in the
+    # findings doc's Tier 1. Empty string on a first-ever export.
+    with _conn() as conn, conn.cursor(
+        cursor_factory=psycopg2.extras.DictCursor
+    ) as cur:
+        why_paragraph = _why_this_export_paragraph(cur)
+    if why_paragraph:
+        lines.append(why_paragraph)
+        lines.append("")
+
     findings_ref = f"`{companion_filename}`" if companion_filename else "`03_Findings.md`"
     lines.append("## In this export folder")
     lines.append("")
@@ -502,18 +517,6 @@ def export(
         top_n=top_n, companion_filename=leads_basename,
         groups_filename=groups_basename, scope_label=scope_label,
     ))
-    if record:
-        _record_brief_run(
-            out_path=str(p),
-            top_n=top_n,
-            data_period=latest_eurostat_period(),
-            trigger=trigger,
-        )
-    else:
-        log.info(
-            "Skipping brief_runs insert (record=False) — this export is "
-            "unsequenced and will not appear in the cycle history."
-        )
     log.info("Wrote briefing pack to %s", p)
 
     lp.parent.mkdir(parents=True, exist_ok=True)
@@ -576,6 +579,26 @@ def export(
         copied = _copy_export_templates(p.parent)
         for fname in copied:
             log.info("Copied template %s to %s", fname, p.parent / fname)
+
+    # Record AFTER all rendering: every artefact in the bundle (.md,
+    # .docx, leads, xlsx) calls the Tier 1 diff comparator, which reads
+    # `SELECT MAX(generated_at) FROM brief_runs`. Inserting the brief_runs
+    # row before all renders finish would cause the later renders (notably
+    # .docx) to see the just-inserted row as their own predecessor and
+    # compare against themselves. Recording last keeps every artefact
+    # in this bundle pointing at the same prior cycle.
+    if record:
+        _record_brief_run(
+            out_path=str(p),
+            top_n=top_n,
+            data_period=latest_eurostat_period(),
+            trigger=trigger,
+        )
+    else:
+        log.info(
+            "Skipping brief_runs insert (record=False) — this export is "
+            "unsequenced and will not appear in the cycle history."
+        )
 
         # Provenance bundling is opt-in (--with-provenance on the CLI).
         # When on, bundle only the editorially-fresh subset — Tier 1
