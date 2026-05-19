@@ -60,7 +60,10 @@ def _is_index_url(url: str) -> bool:
     return "/statics/report/preliminary" in url.lower() or "/statics/report/monthly" in url.lower()
 
 
-def scrape_index(url: str, release_kind: str, dry_run: bool = False) -> None:
+def scrape_index(
+    url: str, release_kind: str, dry_run: bool = False,
+    *, force_refetch: bool = False,
+) -> None:
     log.info("Fetching index %s", url)
     response = api_client.fetch(url)
     discovered = api_client.discover_release_urls(response.content, url)
@@ -73,6 +76,7 @@ def scrape_index(url: str, release_kind: str, dry_run: bool = False) -> None:
             rel["url"], release_kind=release_kind, dry_run=dry_run,
             expected_currency=rel.get("currency"),
             expected_period=expected_period,
+            force_refetch=force_refetch,
         )
 
 
@@ -80,7 +84,13 @@ def scrape_release(
     url: str, release_kind: str = "preliminary", dry_run: bool = False,
     *, expected_currency: str | None = None,
     expected_period: date | None = None,
+    force_refetch: bool = False,
 ) -> None:
+    if not force_refetch and not dry_run:
+        prior = db.gacc_release_url_already_processed(url)
+        if prior is not None:
+            log.info("Skipping %s (already %s; --force-refetch to retry)", url, prior)
+            return
     log.info("Fetching release %s", url)
     run_id = db.start_run(url) if not dry_run else None
     try:
@@ -317,16 +327,25 @@ def _parse_period(s: str) -> date:
     return date(int(s[:4]), int(s[4:]), 1)
 
 
-def run_scrape(urls: list[str] | None = None, dry_run: bool = False) -> None:
+def run_scrape(
+    urls: list[str] | None = None, dry_run: bool = False,
+    *, force_refetch: bool = False,
+) -> None:
     if urls:
         for url in urls:
             if _is_index_url(url):
-                scrape_index(url, release_kind="preliminary", dry_run=dry_run)
+                scrape_index(
+                    url, release_kind="preliminary", dry_run=dry_run,
+                    force_refetch=force_refetch,
+                )
             else:
-                scrape_release(url, dry_run=dry_run)
+                scrape_release(url, dry_run=dry_run, force_refetch=force_refetch)
         return
     for index_url, release_kind in SEED_INDEXES:
-        scrape_index(index_url, release_kind=release_kind, dry_run=dry_run)
+        scrape_index(
+            index_url, release_kind=release_kind, dry_run=dry_run,
+            force_refetch=force_refetch,
+        )
 
 
 def main() -> None:
@@ -424,6 +443,15 @@ def main() -> None:
     p.add_argument("--z-threshold", type=float, default=1.5, metavar="Z",
                    help="Minimum |z| to emit a trend finding (default: 1.5)")
     p.add_argument("--dry-run", action="store_true", help="Fetch + parse but don't write to DB")
+    p.add_argument(
+        "--force-refetch", action="store_true",
+        help=(
+            "GACC walker: bypass the dedup guard and re-fetch every release "
+            "URL the index pages enumerate, even ones already terminally "
+            "processed (success / no_parser). Use after shipping a new HTML "
+            "parser to convert prior 'no_parser' URLs into 'success'."
+        ),
+    )
     p.add_argument(
         "--periodic-run", action="store_true",
         help=(
@@ -820,7 +848,11 @@ def main() -> None:
         scrape_hmrc(args.hmrc_period, dry_run=args.dry_run)
         return
 
-    run_scrape(urls=[args.url] if args.url else None, dry_run=args.dry_run)
+    run_scrape(
+        urls=[args.url] if args.url else None,
+        dry_run=args.dry_run,
+        force_refetch=args.force_refetch,
+    )
 
 
 if __name__ == "__main__":

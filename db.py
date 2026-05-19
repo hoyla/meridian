@@ -65,6 +65,30 @@ def finish_run(
         )
 
 
+def gacc_release_url_already_processed(url: str) -> str | None:
+    """Return the terminal status ('success' or 'no_parser') of the most recent
+    scrape_runs row for this URL, or None if no terminal row exists.
+
+    Used by the GACC walker to skip re-fetching URLs that already have a
+    deterministic outcome. 'failed' is intentionally excluded — those are
+    transient errors worth retrying on the next walk.
+    """
+    with transaction() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status
+              FROM scrape_runs
+             WHERE source_url = %s
+               AND status IN ('success', 'no_parser')
+             ORDER BY started_at DESC
+             LIMIT 1
+            """,
+            (url,),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
 def save_snapshot(run_id: int, response: FetchResult) -> int:
     with transaction() as conn, conn.cursor() as cur:
         cur.execute(
