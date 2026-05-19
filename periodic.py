@@ -74,6 +74,7 @@ def run_periodic(
     top_n: int = briefing_pack.DEFAULT_TOP_N,
     llm_model: str | None = None,
     skip_llm: bool = False,
+    docx: bool = True,
 ) -> PeriodicRunResult:
     """Run the full periodic cycle end-to-end.
 
@@ -283,11 +284,17 @@ def run_periodic(
         counts["llm_framing"] = {"skipped": True}
 
     # --- Step 3: write the findings-export bundle. ---
+    # `docx=True` by default: periodic-run is the canonical Lisa-facing
+    # cycle, so the .docx chart-bearing surface should always be emitted
+    # alongside the .md (NotebookLM-facing) and .xlsx (data-facing)
+    # files. Callers in tests or one-off scripts can pass docx=False if
+    # the python-docx soft dependency isn't available.
     log.info("periodic-run: writing findings export")
     findings_path, leads_path = briefing_pack.export(
         out_dir=out_dir,
         top_n=top_n,
         trigger="periodic_run",
+        docx=docx,
     )
 
     result = PeriodicRunResult(
