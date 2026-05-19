@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -116,6 +117,15 @@ class OllamaBackend:
     def __init__(self, model: str = DEFAULT_OLLAMA_MODEL):
         self.model = model
 
+    # Retry 4 attempts with backoff 0/2/5/15s. Covers transient daemon
+    # states during model load (503/504) and brief windows after an
+    # in-RAM eviction. It does NOT mask a configuration-level 404 — if
+    # OLLAMA_HOST resolves to a different listener than the host-native
+    # daemon, every attempt 404s in 22s. See dev_notes/2026-05-19_ollama_404.md
+    # for the host-resolution gotcha that motivated tightening .env.
+    _RETRY_DELAYS_S: tuple[int, ...] = (0, 2, 5, 15)
+    _RETRY_STATUSES: frozenset[int] = frozenset({404, 408, 503, 504})
+
     def generate(self, system: str, prompt: str) -> str:
         # Imported lazily so unit tests with a FakeBackend don't need ollama
         # available at import time.
@@ -133,14 +143,36 @@ class OllamaBackend:
                 "num_predict": 1200,   # JSON envelope + 3 hypotheses with rationales fits comfortably
             },
         }
-        # `think=False` is supported by recent ollama python lib versions for
-        # thinking models. Older versions / non-thinking models may not
-        # accept it; we degrade gracefully.
-        try:
-            response = ollama.chat(think=False, **kwargs)
-        except (TypeError, ValueError):
-            response = ollama.chat(**kwargs)
-        return response.message.content or ""
+        last_err: Exception | None = None
+        for attempt, delay in enumerate(self._RETRY_DELAYS_S):
+            if delay:
+                time.sleep(delay)
+            try:
+                # `think=False` is supported by recent ollama python lib versions
+                # for thinking models. Older versions / non-thinking models may
+                # not accept it; we degrade gracefully.
+                try:
+                    response = ollama.chat(think=False, **kwargs)
+                except (TypeError, ValueError):
+                    response = ollama.chat(**kwargs)
+                return response.message.content or ""
+            except ollama.ResponseError as e:
+                if e.status_code not in self._RETRY_STATUSES:
+                    raise
+                last_err = e
+                next_delay = (
+                    self._RETRY_DELAYS_S[attempt + 1]
+                    if attempt + 1 < len(self._RETRY_DELAYS_S) else None
+                )
+                if next_delay is not None:
+                    log.warning(
+                        "Ollama transient error (attempt %d/%d, status %d): %s; "
+                        "retrying in %ds",
+                        attempt + 1, len(self._RETRY_DELAYS_S),
+                        e.status_code, str(e)[:120], next_delay,
+                    )
+        assert last_err is not None
+        raise last_err
 
 
 # =============================================================================
