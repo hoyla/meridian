@@ -978,6 +978,75 @@ def test_gacc_aggregate_yoy_distinguishes_aggregates_of_same_kind(
     assert abs(by_label["Latin America"] - 1.40) < 1e-9
 
 
+def test_gacc_aggregate_per_period_totals_dedups_versioned_rows(
+    empty_op_tables, test_db_url,
+):
+    """Regression for the 2026-05-19 release-184 recurrence: two
+    observations with the same natural key (release_id, partner_country,
+    period_kind, flow, hs_code) but different version_seen carrying
+    identical value_amount must contribute the value ONCE, not twice.
+
+    Pre-fix behavior (sum-and-append in `_gacc_aggregate_per_period_totals`)
+    inflated Thailand's rolling 12mo by exactly the duplicated month's
+    value, flipping its YoY from -0.3% to +9.5%. This test locks in the
+    DISTINCT-ON dedup so a future double-version artefact can't recur."""
+    period = date(2025, 6, 1)
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO releases (source, section_number, currency, period,
+                                  release_kind, source_url, unit, title,
+                                  description)
+            VALUES ('gacc', 4, 'CNY', %s, 'preliminary',
+                    'http://example/dup.html', 'CNY 100 Million', 't', 'd')
+            RETURNING id
+            """,
+            (period,),
+        )
+        rel_id = cur.fetchone()[0]
+        # Same scrape_run for both rows (the bug's exact shape — two
+        # version_seen on the same (release_id, natural-key) tuple).
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) VALUES "
+            "('http://example/dup.html', 'success') RETURNING id"
+        )
+        run_id = cur.fetchone()[0]
+        for version in (1, 3):
+            cur.execute(
+                "INSERT INTO observations (release_id, scrape_run_id, "
+                "    period_kind, flow, partner_country, value_amount, "
+                "    value_currency, version_seen, source_row) "
+                "VALUES (%s, %s, 'monthly', 'import', 'Thailand', 358.4, "
+                "        'CNY', %s, '{}')",
+                (rel_id, run_id, version),
+            )
+        cur.execute(
+            "INSERT INTO fx_rates (currency_from, currency_to, rate_date, "
+            "    rate, rate_source, rate_source_url, notes) "
+            "VALUES ('CNY', 'EUR', %s, 0.125, 'test', 'http://example/fx', 't') "
+            "ON CONFLICT (currency_from, currency_to, rate_date, rate_source) "
+            "DO NOTHING",
+            (period,),
+        )
+        conn.commit()
+
+    totals = anomalies._gacc_aggregate_per_period_totals(
+        "Thailand", flow="import",
+    )
+    assert len(totals) == 1
+    p, eur, ids = totals[0]
+    assert p == period
+    # 358.4 × 1e8 (CNY 100M scale) × 0.125 (FX) = 4.48e9 EUR.
+    # If the dedup were missing, both versions would sum → 8.96e9.
+    assert abs(eur - 4_480_000_000.0) < 1.0, (
+        f"expected single-count €4.48B, got €{eur:.2f} — duplicate "
+        f"version_seen rows are being summed, not deduped"
+    )
+    # The higher-version row should win.
+    assert len(ids) == 1
+
+
 def test_gacc_aggregate_yoy_skips_when_no_history(empty_op_tables, test_db_url):
     """Aggregate label with only 6 months of data shouldn't produce a finding
     (insufficient for a 24-month YoY window). Counter to the inverse case

@@ -376,24 +376,38 @@ def _select_gacc_export_rows(period: date | None) -> list[dict]:
         where = "AND r.period = %s"
         params = (period,)
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        # DISTINCT ON dedup so a re-scrape that bumped version_seen on a
+        # row (without changing its content, or with the bad content the
+        # parser now rejects) doesn't produce two mirror-gap findings for
+        # the same observation. See `_gacc_aggregate_per_period_totals`
+        # for the full rationale.
         cur.execute(
             f"""
-            SELECT
-                o.id           AS obs_id,
-                o.partner_country,
-                o.value_amount,
-                o.value_currency,
-                r.period,
-                r.unit
-              FROM observations o
-              JOIN releases r ON r.id = o.release_id
-             WHERE r.source = 'gacc'
-               AND o.flow = 'export'
-               AND o.period_kind = 'monthly'
-               AND o.partner_country != 'Total'
-               AND o.value_amount IS NOT NULL
-               {where}
-          ORDER BY r.period, o.partner_country
+            SELECT obs_id, partner_country, value_amount, value_currency,
+                   period, unit
+            FROM (
+                SELECT DISTINCT ON (
+                           o.release_id, o.partner_country, o.period_kind,
+                           o.flow, o.hs_code
+                       )
+                       o.id           AS obs_id,
+                       o.partner_country,
+                       o.value_amount,
+                       o.value_currency,
+                       r.period,
+                       r.unit
+                  FROM observations o
+                  JOIN releases r ON r.id = o.release_id
+                 WHERE r.source = 'gacc'
+                   AND o.flow = 'export'
+                   AND o.period_kind = 'monthly'
+                   AND o.partner_country != 'Total'
+                   AND o.value_amount IS NOT NULL
+                   {where}
+              ORDER BY o.release_id, o.partner_country, o.period_kind,
+                       o.flow, o.hs_code, o.version_seen DESC
+            ) latest
+            ORDER BY period, partner_country
             """,
             params,
         )
@@ -2867,22 +2881,38 @@ def _gacc_aggregate_per_period_totals(
     GACC bloc total may differ from sum-of-individual-members on the same
     release if GACC reports a Total cell using different rounding."""
     with _conn() as conn, conn.cursor() as cur:
+        # DISTINCT ON takes the most recent version_seen per natural key.
+        # Versioned re-scrapes of the same release (incl. content-identical
+        # ones that the upsert path failed to deduplicate — see release 184,
+        # 2026-05-19) would otherwise be summed by the per-period loop below
+        # and double-count. The dedup key is the observation natural key
+        # plus release_id, so a future preliminary-then-revised release for
+        # the same period (different release_ids) still contributes both
+        # rows and the Python loop merges them.
         cur.execute(
             """
-            SELECT
-                r.period,
-                o.value_amount,
-                r.unit,
-                o.id AS obs_id
-              FROM observations o
-              JOIN releases r ON r.id = o.release_id
-             WHERE r.source = 'gacc'
-               AND r.currency = 'CNY'
-               AND o.flow = %s
-               AND o.period_kind = 'monthly'
-               AND o.partner_country = %s
-               AND o.value_amount IS NOT NULL
-          ORDER BY r.period, o.id
+            SELECT period, value_amount, unit, obs_id FROM (
+                SELECT DISTINCT ON (
+                           o.release_id, o.partner_country, o.period_kind,
+                           o.flow, o.hs_code
+                       )
+                       r.period,
+                       o.value_amount,
+                       r.unit,
+                       o.id AS obs_id,
+                       o.version_seen
+                  FROM observations o
+                  JOIN releases r ON r.id = o.release_id
+                 WHERE r.source = 'gacc'
+                   AND r.currency = 'CNY'
+                   AND o.flow = %s
+                   AND o.period_kind = 'monthly'
+                   AND o.partner_country = %s
+                   AND o.value_amount IS NOT NULL
+              ORDER BY o.release_id, o.partner_country, o.period_kind,
+                       o.flow, o.hs_code, o.version_seen DESC
+            ) latest
+            ORDER BY period, obs_id
             """,
             (flow, aggregate_label),
         )
@@ -2910,10 +2940,8 @@ def _gacc_aggregate_per_period_totals(
         if existing is None:
             by_period[period] = (eur, [obs_id])
         else:
-            # Multiple observations for the same period (e.g. preliminary +
-            # revised release). Sum and append — version_seen would handle
-            # this more cleanly, but for aggregate-level totals the sum is
-            # already small so this rarely matters editorially.
+            # Two release_ids contributing to the same period (e.g. a future
+            # revised release alongside the preliminary). Sum and append.
             old_eur, old_ids = existing
             by_period[period] = (old_eur + eur, old_ids + [obs_id])
 
@@ -2934,17 +2962,30 @@ def _gacc_jan_feb_cumulatives_by_year(
     year; the caller treats it as a 2-month chunk in the window — NOT as
     a January or February monthly observation."""
     with _conn() as conn, conn.cursor() as cur:
+        # See `_gacc_aggregate_per_period_totals` for the DISTINCT-ON
+        # dedup rationale — same shape, different period_kind.
         cur.execute(
             """
-            SELECT r.period, o.value_amount, r.unit, o.id AS obs_id
-              FROM observations o
-              JOIN releases r ON r.id = o.release_id
-             WHERE r.source = 'gacc'
-               AND r.currency = 'CNY'
-               AND o.flow = %s
-               AND o.period_kind = 'cumulative_jan_feb'
-               AND o.partner_country = %s
-               AND o.value_amount IS NOT NULL
+            SELECT period, value_amount, unit, obs_id FROM (
+                SELECT DISTINCT ON (
+                           o.release_id, o.partner_country, o.period_kind,
+                           o.flow, o.hs_code
+                       )
+                       r.period,
+                       o.value_amount,
+                       r.unit,
+                       o.id AS obs_id
+                  FROM observations o
+                  JOIN releases r ON r.id = o.release_id
+                 WHERE r.source = 'gacc'
+                   AND r.currency = 'CNY'
+                   AND o.flow = %s
+                   AND o.period_kind = 'cumulative_jan_feb'
+                   AND o.partner_country = %s
+                   AND o.value_amount IS NOT NULL
+              ORDER BY o.release_id, o.partner_country, o.period_kind,
+                       o.flow, o.hs_code, o.version_seen DESC
+            ) latest
             """,
             (flow, aggregate_label),
         )
@@ -3217,18 +3258,31 @@ def _gacc_partner_ytd_by_period(
     period_kind='ytd' observations. Same currency + FX convention as
     `_gacc_aggregate_per_period_totals` so values are directly comparable."""
     with _conn() as conn, conn.cursor() as cur:
+        # DISTINCT ON dedup — same rationale as
+        # `_gacc_aggregate_per_period_totals`.
         cur.execute(
             """
-            SELECT r.period, o.value_amount, r.unit, o.id AS obs_id
-              FROM observations o
-              JOIN releases r ON r.id = o.release_id
-             WHERE r.source = 'gacc'
-               AND r.currency = 'CNY'
-               AND o.flow = %s
-               AND o.period_kind = 'ytd'
-               AND o.partner_country = %s
-               AND o.value_amount IS NOT NULL
-          ORDER BY r.period, o.id
+            SELECT period, value_amount, unit, obs_id FROM (
+                SELECT DISTINCT ON (
+                           o.release_id, o.partner_country, o.period_kind,
+                           o.flow, o.hs_code
+                       )
+                       r.period,
+                       o.value_amount,
+                       r.unit,
+                       o.id AS obs_id
+                  FROM observations o
+                  JOIN releases r ON r.id = o.release_id
+                 WHERE r.source = 'gacc'
+                   AND r.currency = 'CNY'
+                   AND o.flow = %s
+                   AND o.period_kind = 'ytd'
+                   AND o.partner_country = %s
+                   AND o.value_amount IS NOT NULL
+              ORDER BY o.release_id, o.partner_country, o.period_kind,
+                       o.flow, o.hs_code, o.version_seen DESC
+            ) latest
+            ORDER BY period, obs_id
             """,
             (flow, partner_label),
         )

@@ -271,25 +271,33 @@ def extract_metadata(
     if currency == "RMB":
         currency = "CNY"
 
-    # Force the unit to the canonical form for the title-derived currency,
-    # rather than trusting the page's "Unit:" annotation in isolation.
-    # GACC pages have been observed self-inconsistent (release 184, June
-    # 2025: title "(in CNY)" + Unit: "USD1 Million" + USD-edition excel
-    # link) — see migrations/2026-05-14-fix-release-184-cny-usd-unit-mismatch.sql for the
-    # incident write-up. The CHECK constraint
-    # `releases_gacc_unit_consistent` on the table is the second line of
-    # defence; this parser coercion is the first, and prefers a logged
-    # warning over a hard scrape failure for currencies we recognise.
+    # Defend against GACC pages where the title's currency disagrees with
+    # the page's "Unit:" annotation — release 184 (June 2025) is the
+    # archetypal incident: title "(in CNY)" + Unit: "USD1 Million" + USD-
+    # edition excel link, with the table cells carrying USD-million values
+    # the parser would otherwise file as CNY-100-million. Coercing only
+    # the metadata (as we did between 2026-05-14 and 2026-05-19) keeps the
+    # release row's CHECK constraint happy but lets the bad cell values
+    # propagate into observations and downstream findings — see
+    # migrations/2026-05-14-fix-release-184-cny-usd-unit-mismatch.sql and
+    # migrations/2026-05-19-reject-mismatched-gacc-currency-unit-pages.sql
+    # for the recurrence. Raise here so the scrape lands as
+    # status='failed' and no observations get inserted for the bad URL;
+    # the canonical sibling URL (whose title and Unit row agree) supplies
+    # the period. Older releases that omit the Unit row entirely fall
+    # through unchanged.
     _CANONICAL_GACC_UNIT = {"CNY": "CNY 100 Million", "USD": "USD1 Million"}
     canonical_unit = _CANONICAL_GACC_UNIT.get(currency)
     if canonical_unit is not None:
         if unit is not None and unit != canonical_unit:
-            log.warning(
-                "Release %r has currency %s (from title) but Unit: annotation "
-                "%r on the page; coercing to canonical %r to keep the release "
-                "row internally consistent. If this fires on more than the "
-                "known June 2025 incident, investigate the page.",
-                url, currency, unit, canonical_unit,
+            raise ValueError(
+                f"GACC page {url} self-inconsistent: title declares "
+                f"currency {currency!r} but the page's Unit: row reads "
+                f"{unit!r}. Refusing to ingest cell values that don't "
+                f"match the title's currency; the table values are likely "
+                f"in {unit!r}, not in the canonical {canonical_unit!r} "
+                f"for {currency}. See migrations/2026-05-14- and "
+                f"migrations/2026-05-19- for the incident history."
             )
         unit = canonical_unit
 
