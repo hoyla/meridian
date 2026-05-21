@@ -446,16 +446,14 @@ def test_export_copies_templates_into_folder(
     out_dir = tmp_path / "20260513-1500"
     briefing_pack.export(out_dir=str(out_dir))
 
-    # The user-facing template was copied (original filename) into the
-    # markdown subfolder; the .docx version is the top-level surface.
-    md_dir = out_dir / "Markdown versions for use with LLMs etc"
-    assert (md_dir / "01_Read_Me_First.md").exists()
-    assert (md_dir / "01_Read_Me_First.md").read_text() == (
+    # The user-facing template was copied with its original filename.
+    # (Quick pack, docx=False → flat layout: artefacts at the folder root.)
+    assert (out_dir / "01_Read_Me_First.md").exists()
+    assert (out_dir / "01_Read_Me_First.md").read_text() == (
         "# Read me first\n\nThe intro pack.\n"
     )
     # The templates dir's own README.md is documentation, not a
     # template; it must NOT propagate into the export.
-    assert not (md_dir / "README.md").exists()
     assert not (out_dir / "README.md").exists()
 
 
@@ -504,9 +502,7 @@ def test_export_default_folder_uses_minute_timestamp(
     by pointing the cwd at tmp_path and checking the folder shape."""
     monkeypatch.chdir(tmp_path)
     brief_path, leads_path = briefing_pack.export()
-    # brief_path lives in the markdown subfolder; the export folder is its
-    # grandparent.
-    folder = Path(brief_path).parent.parent
+    folder = Path(brief_path).parent
     # Folder lives under ./exports/ relative to cwd
     assert folder.parent.name == "exports"
     # Folder name matches YYYY-MM-DD-HHMM (no scope suffix on default)
@@ -522,7 +518,7 @@ def test_export_scope_label_adds_slug_suffix_and_header_line(
     brief_path, leads_path = briefing_pack.export(
         scope_label="EV batteries (Li-ion)",
     )
-    folder = Path(brief_path).parent.parent  # brief lives in the md subfolder
+    folder = Path(brief_path).parent
     assert folder.name.endswith("-ev-batteries-li-ion")
     assert "*Scope: **EV batteries (Li-ion)**.*" in Path(brief_path).read_text()
     assert "*Scope: **EV batteries (Li-ion)**.*" in Path(leads_path).read_text()
@@ -811,10 +807,7 @@ def test_export_records_brief_run(empty_findings, test_db_url, tmp_path):
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
         cur.execute("SELECT output_path, top_n FROM brief_runs ORDER BY id DESC LIMIT 1")
         path, top_n = cur.fetchone()
-    assert path == str(
-        tmp_path / "20260510-1200"
-        / "Markdown versions for use with LLMs etc" / "03_Findings.md"
-    )
+    assert path == str(tmp_path / "20260510-1200" / "03_Findings.md")
     assert top_n == 5
 
 
