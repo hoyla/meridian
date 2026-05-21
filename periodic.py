@@ -71,18 +71,31 @@ class PeriodicRunResult:
     """Top-level export-folder path when action_taken (the dir to hand to
     `--upload-to-drive`), else None."""
 
+    new_data: str | None = None
+    """One-line phrase naming the source releases (GACC / Eurostat / HMRC)
+    first seen since the previous cycle, e.g. 'GACC March 2026
+    (preliminary); Eurostat March 2026'. Empty string when nothing new has
+    arrived (a forced rerun). None when not computed."""
+
     def summary(self) -> str:
         """Human-readable per-run report for the scheduled Routine to
-        surface. When a briefing was generated it includes the exact manual
-        command to publish it to Drive — we deliberately do NOT auto-upload
-        (the shared folder is journalist-facing and the format is still
-        under review)."""
+        surface. When a briefing was generated it includes which sources
+        brought new data and the exact manual command to publish it to
+        Drive — we deliberately do NOT auto-upload (the shared folder is
+        journalist-facing and the format is still under review)."""
         if not self.action_taken:
             return f"Periodic run: no new briefing this cycle — {self.reason}"
         lines = [
             f"Periodic run: new briefing generated for data period "
             f"{self.data_period}."
         ]
+        if self.new_data:
+            lines.append(f"  New source data since the last cycle: {self.new_data}.")
+        elif self.new_data == "":
+            lines.append(
+                "  No new source releases since the last cycle "
+                "(forced rerun against the same data)."
+            )
         if self.bundle_dir:
             lines.append(f"  Bundle written to: {self.bundle_dir}")
             lines.append("  To publish it to Google Drive, run:")
@@ -314,6 +327,31 @@ def run_periodic(
     # alongside the .md (NotebookLM-facing) and .xlsx (data-facing)
     # files. Callers in tests or one-off scripts can pass docx=False if
     # the python-docx soft dependency isn't available.
+    # Which sources brought new data this cycle, for the run summary.
+    # Compute BEFORE export() records this run's brief_runs row — at this
+    # point the latest brief_runs row is still the previous cycle. Reuses
+    # the same release-detection the docs' "why this export" framing uses.
+    new_data_phrase = ""
+    try:
+        import psycopg2.extras
+        from briefing_pack._helpers import (
+            _conn, _format_new_releases_phrase, _new_releases_since,
+        )
+        with _conn() as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.DictCursor,
+        ) as cur:
+            cur.execute(
+                "SELECT generated_at FROM brief_runs "
+                "ORDER BY generated_at DESC LIMIT 1"
+            )
+            prev = cur.fetchone()
+            if prev and prev[0] is not None:
+                new_data_phrase = _format_new_releases_phrase(
+                    _new_releases_since(cur, prev[0])
+                )
+    except Exception:
+        log.exception("periodic-run: failed to compute new-data phrase")
+
     log.info("periodic-run: writing findings export")
     findings_path, leads_path = briefing_pack.export(
         out_dir=out_dir,
@@ -340,6 +378,7 @@ def run_periodic(
         leads_path=leads_path,
         analyser_counts=counts,
         bundle_dir=bundle_dir,
+        new_data=new_data_phrase,
     )
     _persist_log(result)
     return result
