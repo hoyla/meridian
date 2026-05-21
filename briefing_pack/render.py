@@ -26,6 +26,7 @@ from briefing_pack._helpers import (
     _compute_predictability_per_group,
     _compute_top_movers,
     _conn,
+    _in_this_export_folder_md,
     _slugify_heading,
     _slugify_scope,
     _why_this_export_paragraph,
@@ -326,37 +327,7 @@ def render_leads(
         lines.append(why_paragraph)
         lines.append("")
 
-    findings_ref = f"`{companion_filename}`" if companion_filename else "`03_Findings.md`"
-    lines.append("## In this export folder")
-    lines.append("")
-    lines.append(
-        "This is one of four artefacts generated together from the same DB "
-        "snapshot. All four share the same finding IDs; switch between them "
-        "depending on what you need."
-    )
-    lines.append("")
-    lines.append(
-        f"- **{findings_ref}** — deterministic Markdown findings. "
-        "NotebookLM-ready, no LLM in the loop. Cite this for the "
-        "underlying numbers any lead below references."
-    )
-    lines.append(
-        "- **`02_Leads.md`** — LLM-scaffolded investigation leads (this "
-        "document). Kept separate from the findings so a downstream LLM "
-        "tool reasoning over them sees raw data, not another LLM's "
-        "interpretation."
-    )
-    lines.append(
-        "- **`04_Data.xlsx`** — 8-tab spreadsheet for data journalists. Same "
-        "findings, long-format with filterable scope/flow columns, "
-        "predictability badges, CIF/FOB baseline expansion. Also LLM-free."
-    )
-    lines.append(
-        "- **`05_Groups.md`** — HS group reference. What each named group "
-        "contains, what HS codes feed it, top contributing CN8 codes, "
-        "sibling groups. Read once to orient before quoting any "
-        "category figure."
-    )
+    lines.append(_in_this_export_folder_md(current="02_Leads"))
     lines.append("")
     lines.append(
         "Each lead ends with a **Provenance** block: the per-finding-"
@@ -368,7 +339,7 @@ def render_leads(
         "[glossary](https://github.com/hoyla/meridian/blob/main/docs/glossary.md) "
         "on first occurrence per lead. Family-universal caveats (CIF/FOB, "
         "CN8 revisions, multi-partner sum, etc.) apply to every finding "
-        "by construction and are described once in `03_Findings.md`'s "
+        "by construction and are described once in the **03_Findings** "
         "methodology footer rather than repeated here."
     )
     lines.append("")
@@ -559,14 +530,30 @@ def export(
         # different format. python-docx + mistune are soft dependencies;
         # import lazily so callers that don't pass docx=True don't need
         # them installed.
-        from briefing_pack.docx import render_findings_docx
-        docx_path = p.parent / "03_Findings.docx"
+        from briefing_pack.docx import (
+            render_findings_docx, render_groups_docx,
+            render_leads_docx, render_readme_docx,
+        )
         render_findings_docx(
-            docx_path, top_n=top_n, scope_label=scope_label,
+            p.parent / "03_Findings.docx", top_n=top_n, scope_label=scope_label,
             companion_filename=leads_basename,
             groups_filename=groups_basename,
         )
-        log.info("Wrote findings docx to %s", docx_path)
+        render_leads_docx(
+            p.parent / "02_Leads.docx", scope_label=scope_label,
+            companion_filename=brief_basename,
+        )
+        render_groups_docx(
+            p.parent / "05_Groups.docx",
+            companion_filename=brief_basename, leads_filename=leads_basename,
+        )
+        readme_src = _TEMPLATES_DIR / "01_Read_Me_First.md"
+        if readme_src.exists():
+            render_readme_docx(p.parent / "01_Read_Me_First.docx", readme_src)
+        log.info(
+            "Wrote house-styled docx: findings, leads, groups"
+            "%s", ", read-me" if readme_src.exists() else "",
+        )
 
     # Copy any per-export templates (e.g. an `01_Read_Me_First.md` intro)
     # into the bundle folder so a recipient who only receives the

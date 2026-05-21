@@ -252,6 +252,51 @@ _SCOPE_LABEL = {
 }
 _SCOPE_SUBKIND_SUFFIX = {"eu_27": "", "uk": "_uk", "eu_27_plus_uk": "_combined"}
 
+# ---------------------------------------------------------------------------
+# Shared "In this export folder" listing
+# ---------------------------------------------------------------------------
+# One canonical artefact listing, used by BOTH the findings and the leads
+# documents so the two never drift. Names carry no file extension: in the
+# delivered Drive folder each is a native Google Doc / Sheet for human
+# readers, and the plain markdown / spreadsheet copies live in a subfolder.
+_EXPORT_ARTEFACTS = [
+    ("02_Leads",
+     "LLM-scaffolded investigation leads, one per HS group: a one-sentence "
+     "anomaly summary, 2–3 hypotheses from a curated catalog, and concrete "
+     "corroboration steps. Kept separate from the findings so a downstream "
+     "LLM tool reasoning over them sees raw data, not another LLM's "
+     "interpretation."),
+    ("03_Findings",
+     "the deterministic findings — no LLM in the loop. Cite this for the "
+     "underlying numbers behind any lead."),
+    ("04_Data",
+     "a multi-tab spreadsheet for data journalists: the same findings in "
+     "long, filterable form with scope/flow columns, predictability badges, "
+     "and CIF/FOB baseline expansion."),
+    ("05_Groups",
+     "the HS group reference — what each named group contains, its top "
+     "contributing CN8 codes, and sibling groups. Read once before quoting "
+     "any category figure."),
+]
+
+
+def _in_this_export_folder_md(current: str | None = None) -> str:
+    """The shared "In this export folder" section. `current` (e.g.
+    "03_Findings") marks which artefact is the document being read."""
+    lines = ["## In this export folder", ""]
+    lines.append(
+        "This is one of four documents generated together from the same "
+        "database snapshot. All four share the same finding IDs, so you can "
+        "move freely between them."
+    )
+    lines.append("")
+    for name, desc in _EXPORT_ARTEFACTS:
+        marker = " *(this document)*" if name == current else ""
+        lines.append(f"- **{name}**{marker} — {desc}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 # Phase 6 transparency annotations.
 #
 # Predictability: for each HS group, pair its `hs_group_yoy*` finding at

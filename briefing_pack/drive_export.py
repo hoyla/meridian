@@ -254,6 +254,71 @@ def mint_heading_anchors(docs, doc_id: str) -> int:
     return len(targets)
 
 
+def fix_internal_heading_links(docs, doc_id: str) -> int:
+    """Repoint in-document links (e.g. the Groups "Quick index") at the real
+    headings. Markdown `#slug` links convert to dangling bookmark links on
+    import; rewrite each to a native `headingId` link. The link's display
+    text is the group name, which equals the heading text — so we match on
+    text, with a prefix fallback for headings that carry a suffix (e.g. a
+    draft marker). Must run after `mint_heading_anchors`. Returns the number
+    of links repointed."""
+    doc = docs.documents().get(documentId=doc_id).execute()
+
+    heading_id_by_text: dict[str, str] = {}
+    for el in doc.get("body", {}).get("content", []):
+        para = el.get("paragraph")
+        if not para:
+            continue
+        style = para.get("paragraphStyle", {})
+        hid = style.get("headingId")
+        if not (style.get("namedStyleType", "").startswith("HEADING_") and hid):
+            continue
+        text = "".join(
+            e.get("textRun", {}).get("content", "")
+            for e in para.get("elements", [])
+        ).strip()
+        if text:
+            heading_id_by_text.setdefault(text, hid)
+    headings = list(heading_id_by_text.items())
+
+    def _resolve(link_text: str) -> str | None:
+        if link_text in heading_id_by_text:
+            return heading_id_by_text[link_text]
+        # Heading carries a parenthetical suffix the link omits (e.g. a
+        # "(draft …)" marker). The " (" boundary avoids matching a longer
+        # sibling name that merely shares a prefix.
+        prefix = link_text + " ("
+        hits = [hid for text, hid in headings if text.startswith(prefix)]
+        return hits[0] if len(hits) == 1 else None
+
+    requests: list[dict] = []
+    for el in doc.get("body", {}).get("content", []):
+        para = el.get("paragraph")
+        if not para:
+            continue
+        for e in para.get("elements", []):
+            tr = e.get("textRun")
+            if not tr:
+                continue
+            link = tr.get("textStyle", {}).get("link") or {}
+            # Only internal-intent links (dangling bookmark or "#…" url) —
+            # leave external https links and existing headingId links alone.
+            if not (link.get("bookmarkId") or link.get("url", "").startswith("#")):
+                continue
+            hid = _resolve(tr.get("content", "").strip())
+            if not hid:
+                continue
+            requests.append({"updateTextStyle": {
+                "range": {"startIndex": e["startIndex"], "endIndex": e["endIndex"]},
+                "textStyle": {"link": {"headingId": hid}},
+                "fields": "link",
+            }})
+
+    if requests:
+        _run_batches(docs, doc_id, requests)
+    return len(requests)
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -307,8 +372,9 @@ def export_bundle_to_drive(
         entry = {"id": file_id, "link": link}
         if target_mime == GDOC_MIME:
             entry["anchors_minted"] = mint_heading_anchors(docs, file_id)
-            log.info("  %s -> Doc %s (%d anchors minted)",
-                     name, file_id, entry["anchors_minted"])
+            entry["links_fixed"] = fix_internal_heading_links(docs, file_id)
+            log.info("  %s -> Doc %s (%d anchors minted, %d internal links fixed)",
+                     name, file_id, entry["anchors_minted"], entry["links_fixed"])
         else:
             log.info("  %s -> Sheet %s", name, file_id)
         results["docs"][name] = entry

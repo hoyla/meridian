@@ -94,11 +94,30 @@ What's still open from this arc:
   as now → Drive upload-with-conversion → batched Docs-API
   "style-flip" pass (`HEADING_n` → `NORMAL_TEXT` → back) to mint the
   `#heading=` nav anchors that `.docx` import omits; charts ride along
-  in the conversion for free. When built: ~half-day to graduate
-  `scripts/drive_spike_local.py` into `briefing_pack/drive_export.py`,
-  add `--upload-to-drive` flag, folder hierarchy
-  `Meridian exports / YYYY-MM-DD-HHMM / *.docx, *.xlsx`, plus the
-  anchor-minting pass.
+  in the conversion for free.
+
+  **Built 2026-05-21** — `briefing_pack/drive_export.py`. Uploads the
+  full bundle: all four `.docx` → native Google Docs and `04_Data.xlsx`
+  → a Sheet, running the batched style-flip anchor pass on each Doc, plus
+  `fix_internal_heading_links` (repoints in-document links — e.g. the
+  Groups "Quick index" — at the real headings via `headingId`). Raw
+  `.md`/`.xlsx` copies go to a "Markdown versions for use with LLMs etc"
+  subfolder. Idempotent (match-by-name, update in place); parent folder
+  via `MERIDIAN_DRIVE_PARENT_ID` (works with a user-created folder by ID
+  under `drive.file`). House styling (heading sizes, tinted metadata
+  sections) shared across all Docs.
+
+  Remaining:
+  - **Cross-*document* links.** Sibling references (e.g. "see
+    03_Findings" in the Groups intro) don't link across Docs — Google
+    drops the relative `.md` hrefs on import, leaving plain text. To make
+    them clickable in Drive, map each sibling artefact to its uploaded
+    Doc ID and set the link target as a post-upload step (the export
+    already returns every Doc ID, so the mapping is in hand).
+  - **`--upload-to-drive` CLI wiring** into the export / periodic path
+    (currently invoked via `python -m briefing_pack.drive_export`).
+  - **Sharing with Lisa** — set Drive permissions on the app-created
+    files (doable within `drive.file`).
 - **Promote `--docx` from opt-in to default-on.** Defer until
   Lisa has eyeballed 2-3 real cycles' worth of output.
 

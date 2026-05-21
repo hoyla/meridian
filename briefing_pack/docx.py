@@ -93,6 +93,16 @@ _METADATA_SECTION_HEADINGS = {
     "How to read this findings document",
     "About the finding/N citations",
 }
+# Per-file metadata sets for the other house-styled Docs. Leads mirrors the
+# Findings treatment (orientation block + citation endnote); Groups tints
+# only its navigation index; Read_Me_First gets none (it is all orientation).
+_LEADS_METADATA_HEADINGS = {
+    "In this export folder",
+    "About the finding/N citations",
+}
+_GROUPS_METADATA_HEADINGS = {
+    "Quick index",
+}
 _METADATA_SHADE_FILL = "EEF2F7"  # light blue-grey callout tint
 
 # EU-27 reporter exclusion (matches anomalies.EU27_EXCLUDE_REPORTERS).
@@ -590,6 +600,37 @@ def _apply_heading_styles(doc: Document) -> None:
     doc.styles["Heading 4"].font.italic = True
 
 
+def render_markdown_to_docx(
+    markdown: str,
+    out_path: str | Path,
+    *,
+    metadata_section_headings: set[str] | None = None,
+    chart_for_finding=None,
+    chart_width_mm: int = _CHART_WIDTH_MM,
+) -> Path:
+    """Translate a rendered markdown string into a house-styled `.docx`:
+    A4 + 10mm margins, the larger heading sizes, and tinted metadata
+    sections. Shared by every briefing-pack Doc so they all carry the same
+    styling. `chart_for_finding` is Findings-only; the others pass none."""
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    doc = Document()
+    _apply_page_setup(doc)
+    _apply_heading_styles(doc)
+
+    translator = MarkdownToDocxTranslator(
+        doc,
+        chart_for_finding=chart_for_finding,
+        chart_width_mm=chart_width_mm,
+        shaded_section_headings=metadata_section_headings or set(),
+        shade_fill=_METADATA_SHADE_FILL,
+    )
+    translator.translate(markdown)
+    doc.save(str(out_path))
+    return out_path
+
+
 def render_findings_docx(
     out_path: str | Path,
     *,
@@ -598,27 +639,16 @@ def render_findings_docx(
     companion_filename: str | None = None,
     groups_filename: str | None = None,
 ) -> Path:
-    """Render the full findings.md content into a docx at `out_path`,
-    with charts inserted after each top-N mover's list item.
-
-    v4 — full markdown-content parity. The docx now contains the same
-    sections as the markdown (period coverage, top movers, Tier 1
-    diff, Tier 2 state-of-play, low base, mirror gaps, partner share,
-    trajectories, methodology footer, sources appendix) plus charts
-    at the top-N movers' list items.
-
-    Returns the resolved Path of the written file.
-    """
+    """Render the full findings.md content into a house-styled docx at
+    `out_path`, with charts inserted after each top-N mover's list item.
+    Same content as the .md (Tier 1 diff, Tier 2 state-of-play, mirror
+    gaps, partner share, trajectories, methodology footer, sources
+    appendix) plus charts at the top-N movers."""
     # Lazy import to avoid the briefing_pack → docx → md_to_docx →
     # briefing_pack import cycle that would otherwise trip on module
     # initialisation.
     from briefing_pack.render import render
 
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # 1. Render the canonical markdown. Same call the .md write path uses,
-    # so the .docx and .md stay in lock-step content-wise.
     markdown = render(
         top_n=top_n,
         companion_filename=companion_filename,
@@ -626,38 +656,68 @@ def render_findings_docx(
         scope_label=scope_label,
     )
 
-    # 2. Pre-compute chart PNGs for the top movers, keyed by finding_id.
-    # The translator's chart-lookup callable will fire on each
-    # finding/N token it encounters in a list item.
+    # Pre-compute chart PNGs for the top movers, keyed by finding_id.
     with _conn() as conn, conn.cursor(
         cursor_factory=psycopg2.extras.DictCursor,
     ) as cur:
         charts_by_id = _build_top_mover_charts(cur, top_n=top_n)
 
-    # 3. Translate markdown → docx with chart injection.
-    doc = Document()
-    _apply_page_setup(doc)
-    _apply_heading_styles(doc)
-
-    translator = MarkdownToDocxTranslator(
-        doc,
+    path = render_markdown_to_docx(
+        markdown, out_path,
+        metadata_section_headings=_METADATA_SECTION_HEADINGS,
         chart_for_finding=charts_by_id.get,
-        chart_width_mm=_CHART_WIDTH_MM,
-        shaded_section_headings=_METADATA_SECTION_HEADINGS,
-        shade_fill=_METADATA_SHADE_FILL,
     )
-    translator.translate(markdown)
-
-    doc.save(str(out_path))
     total_charts = sum(len(v) for v in charts_by_id.values())
     log.info(
         "Wrote findings docx to %s (%d findings charted, "
         "%d total charts, %d markdown chars)",
-        out_path,
-        len(charts_by_id),
-        total_charts,
-        len(markdown),
+        path, len(charts_by_id), total_charts, len(markdown),
     )
-    return out_path
+    return path
+
+
+def render_leads_docx(
+    out_path: str | Path,
+    *,
+    scope_label: str | None = None,
+    companion_filename: str | None = None,
+) -> Path:
+    """House-styled docx of the investigation-leads document."""
+    from briefing_pack.render import render_leads
+
+    markdown = render_leads(
+        companion_filename=companion_filename, scope_label=scope_label,
+    )
+    return render_markdown_to_docx(
+        markdown, out_path,
+        metadata_section_headings=_LEADS_METADATA_HEADINGS,
+    )
+
+
+def render_groups_docx(
+    out_path: str | Path,
+    *,
+    companion_filename: str | None = None,
+    leads_filename: str | None = None,
+) -> Path:
+    """House-styled docx of the HS-group reference document."""
+    from briefing_pack.render_groups import render_groups
+
+    markdown = render_groups(
+        companion_filename=companion_filename, leads_filename=leads_filename,
+    )
+    return render_markdown_to_docx(
+        markdown, out_path,
+        metadata_section_headings=_GROUPS_METADATA_HEADINGS,
+    )
+
+
+def render_readme_docx(out_path: str | Path, readme_md_path: str | Path) -> Path:
+    """House-styled docx of the static Read-Me-First template. No metadata
+    tint — the whole document is orientation."""
+    markdown = Path(readme_md_path).read_text()
+    return render_markdown_to_docx(
+        markdown, out_path, metadata_section_headings=set(),
+    )
 
 
