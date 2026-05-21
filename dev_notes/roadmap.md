@@ -80,15 +80,25 @@ What's still open from this arc:
   Three families still deferred: `mirror_gap*`,
   `hs_group_trajectory*`, `partner_share*`. Demand-driven from
   here — wait for Lisa's reaction before committing to more.
-- **v3 Drive upload.** Waiting on Guardian GCP project access
-  restoration (requested 2026-05-16; expected early week of
-  2026-05-17). Spike spec at
+- **v3 Drive upload.** GCP access restored 2026-05-21; OAuth
+  (`drive.file`) + Drive API + Docs API enabled in the
+  `investigations-tools` project. Desktop-app client at
+  `~/.config/meridian/client_secret.json`, token at
+  `~/.config/meridian/google-token.json` (both outside the repo, chmod 600).
+  Spike spec at
   [`2026-05-16_docx-drive-spike.md`](2026-05-16_docx-drive-spike.md)
-  — legs 1 and 2 verified manually; leg 3 (OAuth) deferred to
-  access restoration. When unblocked: ~half-day to graduate
+  — legs 1 and 2 verified manually; **leg 3 (OAuth) + the
+  heading-anchor approach verified 2026-05-21** via
+  `scripts/drive_heading_anchor_test.py` (see that note's
+  "Heading-anchor result" section). Decided flow: generate the `.docx`
+  as now → Drive upload-with-conversion → batched Docs-API
+  "style-flip" pass (`HEADING_n` → `NORMAL_TEXT` → back) to mint the
+  `#heading=` nav anchors that `.docx` import omits; charts ride along
+  in the conversion for free. When built: ~half-day to graduate
   `scripts/drive_spike_local.py` into `briefing_pack/drive_export.py`,
   add `--upload-to-drive` flag, folder hierarchy
-  `Meridian exports / YYYY-MM-DD-HHMM / *.docx, *.xlsx`.
+  `Meridian exports / YYYY-MM-DD-HHMM / *.docx, *.xlsx`, plus the
+  anchor-minting pass.
 - **Promote `--docx` from opt-in to default-on.** Defer until
   Lisa has eyeballed 2-3 real cycles' worth of output.
 

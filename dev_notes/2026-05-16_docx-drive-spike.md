@@ -214,17 +214,60 @@ Test artefacts: `scripts/drive_spike_local.py` (generator),
 `exports/spike-2026-05-16/04_Data_test.xlsx`. Both gitignored
 (exports/ is gitignored).
 
+## Heading-anchor result (2026-05-21)
+
+**Leg 3 PASSED** and a separate, initially-unforeseen problem was
+found and solved: Google Docs' `.docx` import does not produce the
+`#heading=h.xxxx` in-document navigation anchors, even though it maps
+the paragraphs to heading styles (so the outline sidebar populates).
+Markdown import does produce them. Cause: the anchor is a Google-
+internal `headingId`, not anything stored in the file — Google's
+editor mints it only when a heading paragraph is *created/edited
+through the editor*. No `.docx` (or pandoc) encoding can pre-supply
+it.
+
+Two prerequisites this work added beyond the original spec:
+- **Google Docs API** must be enabled (the original note called it
+  optional — Drive alone handled upload-conversion). The anchor fix
+  needs it.
+- A docx-side bug was fixed first: the markdown→docx translator
+  stamped explicit `<w:b w:val="0"/>` on heading runs, overriding the
+  Heading style's bold. Fixed in `briefing_pack/md_to_docx.py`
+  (`_apply_emphasis`: set bold/italic only when True, else inherit).
+  That fixed the *visual* styling but not the anchors.
+
+Empirical test (`scripts/drive_heading_anchor_test.py`): upload the
+test `.docx`, convert, then probe four programmatic "touches" on
+separate headings and re-read each `headingId`. Result on a 292-
+heading doc (0/292 anchored on import):
+
+| Touch | Operation | Mints anchor? |
+|---|---|---|
+| A content-edit | insert a char then delete it | **no** |
+| B style-reapply | re-apply the SAME `namedStyleType` | **no** (no real change) |
+| C style-flip | `HEADING_n` → `NORMAL_TEXT` → back | **yes** |
+| D recreate | delete paragraph + re-insert + restyle | **yes** |
+
+**Decision: use Touch C.** It changes the style (a real edit, so it
+mints) but never alters paragraph length, so a batched pass over all
+headings needs no index math and can't contaminate neighbours. D also
+works but deletes the paragraph mark, which merges the heading into
+the following paragraph and makes it inherit e.g. list/bullet
+membership (observed live: a recreated heading picked up the next
+paragraph's bullet). C is clean by construction. Verified end-to-end
+in the browser 2026-05-21: a C-flipped heading gains its `#heading=`
+fragment and ToC/outline navigation jumps to it.
+
 ## What remains
 
-- **Leg 3 — OAuth on Guardian Google account**: blocked on GCP
-  project access restoration (requested 2026-05-16; expected back
-  early week of 2026-05-17). When access returns, follow the Setup
-  section above to register Meridian as a new OAuth client within
-  the existing investigations-tools project, then write
-  `scripts/drive_spike.py` (the full version, ~30 min) that uploads
-  the same two test files via the API rather than by hand.
-- **Production module design**: after the OAuth leg passes,
-  graduate the approach into a real `drive_export.py` module,
-  wired into the briefing-pack pipeline behind a `--upload-to-drive`
-  flag. Per-subkind chart recipes for the bilateral and hs_group_yoy
+- **Production module**: graduate into `briefing_pack/drive_export.py`,
+  wired into the pipeline behind `--upload-to-drive`. Flow: generate
+  `.docx` as now → Drive upload-with-conversion → read all heading
+  paragraphs → one batched Docs-API pass setting them all to
+  `NORMAL_TEXT`, then one setting each back to its original
+  `HEADING_n` (indices are stable across both, since style changes
+  don't alter length; chunk into ~100-request batches if needed) →
+  optionally set Pageless. Folder hierarchy
+  `Meridian exports / YYYY-MM-DD-HHMM / *.docx, *.xlsx`.
+- **Per-subkind chart recipes** for the bilateral and hs_group_yoy
   families come next.

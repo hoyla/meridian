@@ -389,6 +389,22 @@ class MarkdownToDocxTranslator:
                 link_url=None,
             )
 
+    @staticmethod
+    def _apply_emphasis(run, *, bold: bool, italic: bool) -> None:
+        """Set bold/italic only when True; otherwise leave unset so the
+        run inherits from its paragraph style.
+
+        Setting `run.bold = False` writes an explicit `<w:b w:val="0"/>`
+        into the run — direct character formatting that *overrides* the
+        style. On a Heading paragraph that defeats the style's own bold,
+        so the heading text renders un-bold (visible when Google Docs
+        imports the .docx). Inheriting keeps heading runs clean.
+        """
+        if bold:
+            run.bold = True
+        if italic:
+            run.italic = True
+
     def _render_inline_node(
         self, node: dict, paragraph, *,
         bold: bool, italic: bool, code: bool, link_url: str | None,
@@ -405,8 +421,7 @@ class MarkdownToDocxTranslator:
                 )
             else:
                 run = paragraph.add_run(text)
-                run.bold = bold
-                run.italic = italic
+                self._apply_emphasis(run, bold=bold, italic=italic)
                 if code:
                     run.font.name = "Courier New"
         elif t == "strong":
@@ -425,8 +440,7 @@ class MarkdownToDocxTranslator:
             text = node.get("raw") or ""
             run = paragraph.add_run(text)
             run.font.name = "Courier New"
-            run.bold = bold
-            run.italic = italic
+            self._apply_emphasis(run, bold=bold, italic=italic)
         elif t == "link":
             url = (node.get("attrs") or {}).get("url", "")
             for sub in node.get("children") or []:
@@ -461,8 +475,7 @@ class MarkdownToDocxTranslator:
             text = self._collect_plain_text(node)
             if text:
                 run = paragraph.add_run(text)
-                run.bold = bold
-                run.italic = italic
+                self._apply_emphasis(run, bold=bold, italic=italic)
                 if code:
                     run.font.name = "Courier New"
 
