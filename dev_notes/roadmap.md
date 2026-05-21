@@ -116,8 +116,10 @@ What's still open from this arc:
     already returns every Doc ID, so the mapping is in hand).
   - **`--upload-to-drive` CLI wiring** into the export / periodic path
     (currently invoked via `python -m briefing_pack.drive_export`).
-  - **Sharing with Lisa** — set Drive permissions on the app-created
-    files (doable within `drive.file`).
+
+  Sharing needs no work: export folders inherit permissions from the
+  `MERIDIAN_DRIVE_PARENT_ID` parent, which is already shared with Lisa and
+  colleagues.
 - **Promote `--docx` from opt-in to default-on.** Defer until
   Lisa has eyeballed 2-3 real cycles' worth of output.
 

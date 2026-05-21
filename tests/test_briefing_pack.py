@@ -446,13 +446,16 @@ def test_export_copies_templates_into_folder(
     out_dir = tmp_path / "20260513-1500"
     briefing_pack.export(out_dir=str(out_dir))
 
-    # The user-facing template was copied with its original filename.
-    assert (out_dir / "01_Read_Me_First.md").exists()
-    assert (out_dir / "01_Read_Me_First.md").read_text() == (
+    # The user-facing template was copied (original filename) into the
+    # markdown subfolder; the .docx version is the top-level surface.
+    md_dir = out_dir / "Markdown versions for use with LLMs etc"
+    assert (md_dir / "01_Read_Me_First.md").exists()
+    assert (md_dir / "01_Read_Me_First.md").read_text() == (
         "# Read me first\n\nThe intro pack.\n"
     )
     # The templates dir's own README.md is documentation, not a
     # template; it must NOT propagate into the export.
+    assert not (md_dir / "README.md").exists()
     assert not (out_dir / "README.md").exists()
 
 
@@ -501,7 +504,9 @@ def test_export_default_folder_uses_minute_timestamp(
     by pointing the cwd at tmp_path and checking the folder shape."""
     monkeypatch.chdir(tmp_path)
     brief_path, leads_path = briefing_pack.export()
-    folder = Path(brief_path).parent
+    # brief_path lives in the markdown subfolder; the export folder is its
+    # grandparent.
+    folder = Path(brief_path).parent.parent
     # Folder lives under ./exports/ relative to cwd
     assert folder.parent.name == "exports"
     # Folder name matches YYYY-MM-DD-HHMM (no scope suffix on default)
@@ -517,7 +522,7 @@ def test_export_scope_label_adds_slug_suffix_and_header_line(
     brief_path, leads_path = briefing_pack.export(
         scope_label="EV batteries (Li-ion)",
     )
-    folder = Path(brief_path).parent
+    folder = Path(brief_path).parent.parent  # brief lives in the md subfolder
     assert folder.name.endswith("-ev-batteries-li-ion")
     assert "*Scope: **EV batteries (Li-ion)**.*" in Path(brief_path).read_text()
     assert "*Scope: **EV batteries (Li-ion)**.*" in Path(leads_path).read_text()
@@ -544,18 +549,18 @@ def test_paired_export_cross_references_each_other(
     )
     brief = Path(brief_path).read_text()
     leads = Path(leads_path).read_text()
-    # Both docs carry an "In this export folder" block listing all four
-    # artefacts. The block names every artefact by filename (with the
-    # numeric reading-order prefix on each) and marks the current doc
-    # as "(this document)".
+    # Both docs carry one shared "In this export folder" block listing the
+    # four artefacts by name (no file extension — in the delivered folder
+    # each is a native Google Doc/Sheet), with the current doc marked
+    # "(this document)".
     for doc in (brief, leads):
         assert "## In this export folder" in doc
-        assert "`03_Findings.md`" in doc
-        assert "`02_Leads.md`" in doc
-        assert "`04_Data.xlsx`" in doc
-        assert "`05_Groups.md`" in doc
-    assert "**`03_Findings.md`** — deterministic Markdown findings (this document)" in brief
-    assert "**`02_Leads.md`** — LLM-scaffolded investigation leads (this " in leads
+        assert "**02_Leads**" in doc
+        assert "**03_Findings**" in doc
+        assert "**04_Data**" in doc
+        assert "**05_Groups**" in doc
+    assert "**03_Findings** *(this document)*" in brief
+    assert "**02_Leads** *(this document)*" in leads
 
 
 def test_about_findings_endnote_appears_in_both_docs(
@@ -806,7 +811,10 @@ def test_export_records_brief_run(empty_findings, test_db_url, tmp_path):
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
         cur.execute("SELECT output_path, top_n FROM brief_runs ORDER BY id DESC LIMIT 1")
         path, top_n = cur.fetchone()
-    assert path == str(tmp_path / "20260510-1200" / "03_Findings.md")
+    assert path == str(
+        tmp_path / "20260510-1200"
+        / "Markdown versions for use with LLMs etc" / "03_Findings.md"
+    )
     assert top_n == 5
 
 

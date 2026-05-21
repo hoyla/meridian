@@ -25,6 +25,7 @@ from briefing_pack._helpers import (
     _Section,
     _compute_predictability_per_group,
     _compute_top_movers,
+    _MARKDOWN_SUBFOLDER,
     _conn,
     _in_this_export_folder_md,
     _slugify_heading,
@@ -473,8 +474,14 @@ def export(
         # detail) → data (the spreadsheet) → groups (the reference
         # glossary). The `01_Read_Me_First.md` template is copied in
         # by `_copy_export_templates()` and slots in first.
-        p = d / "03_Findings.md"
-        lp = d / "02_Leads.md"
+        # Bundle layout mirrors the Drive upload: the human-facing
+        # documents (.docx / .xlsx — Google Docs/Sheet once uploaded) sit
+        # at the top of the folder; the plain markdown + spreadsheet copies
+        # for LLM use live in a subfolder. drive_export.py mirrors this
+        # exact shape to Drive.
+        md_dir = d / _MARKDOWN_SUBFOLDER
+        p = md_dir / "03_Findings.md"
+        lp = md_dir / "02_Leads.md"
         if spreadsheet is None:
             spreadsheet = True  # bundle is the default user-facing mode
 
@@ -517,12 +524,20 @@ def export(
         # movers' monthly series + native LineCharts — spreadsheet
         # counterpart to the docx chart cards.
         import sheets_export
-        xlsx_path = p.parent / "04_Data.xlsx"
+        # Folder mode: the xlsx sits at the top of the bundle (it becomes a
+        # Google Sheet on upload), with a duplicate copy in the markdown
+        # subfolder so that folder is self-contained for downstream
+        # consumers. Legacy explicit-paths mode keeps it beside the brief.
+        xlsx_path = (p.parent.parent if out_path is None else p.parent) / "04_Data.xlsx"
         sheets_export.XlsxWriter().write(
             sheets_export.assemble_sheets(), str(xlsx_path),
             charts=docx, charts_top_n=top_n,
         )
         log.info("Wrote spreadsheet to %s", xlsx_path)
+        if out_path is None:
+            import shutil
+            shutil.copy2(xlsx_path, p.parent / "04_Data.xlsx")
+            log.info("Copied spreadsheet into %s/", _MARKDOWN_SUBFOLDER)
 
     if docx and out_path is None:
         # Parallel Lisa-facing surface. Sits next to 03_Findings.md
@@ -534,22 +549,25 @@ def export(
             render_findings_docx, render_groups_docx,
             render_leads_docx, render_readme_docx,
         )
+        # The styled .docx are the top-level, human-facing surface (p.parent
+        # is the markdown subfolder, so p.parent.parent is the bundle root).
+        top_dir = p.parent.parent
         render_findings_docx(
-            p.parent / "03_Findings.docx", top_n=top_n, scope_label=scope_label,
+            top_dir / "03_Findings.docx", top_n=top_n, scope_label=scope_label,
             companion_filename=leads_basename,
             groups_filename=groups_basename,
         )
         render_leads_docx(
-            p.parent / "02_Leads.docx", scope_label=scope_label,
+            top_dir / "02_Leads.docx", scope_label=scope_label,
             companion_filename=brief_basename,
         )
         render_groups_docx(
-            p.parent / "05_Groups.docx",
+            top_dir / "05_Groups.docx",
             companion_filename=brief_basename, leads_filename=leads_basename,
         )
         readme_src = _TEMPLATES_DIR / "01_Read_Me_First.md"
         if readme_src.exists():
-            render_readme_docx(p.parent / "01_Read_Me_First.docx", readme_src)
+            render_readme_docx(top_dir / "01_Read_Me_First.docx", readme_src)
         log.info(
             "Wrote house-styled docx: findings, leads, groups"
             "%s", ", read-me" if readme_src.exists() else "",

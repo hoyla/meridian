@@ -134,14 +134,25 @@ def _release_ids_for_observations(cur, obs_ids: list[int]) -> set[int]:
 _SOURCE_LABELS = {"gacc": "GACC", "eurostat": "Eurostat", "hmrc": "HMRC"}
 
 
+# Subfolder holding the plain markdown / spreadsheet copies of the bundle,
+# alongside the top-level .docx/.xlsx (which become Google Docs/Sheet once
+# uploaded). Keep in sync with `briefing_pack.drive_export.MARKDOWN_SUBFOLDER`.
+_MARKDOWN_SUBFOLDER = "Markdown versions for use with LLMs etc"
+
+
 def _prev_export_folder(output_path: str | None) -> str | None:
-    """Derive the parent folder name from a recorded brief_runs.output_path
-    (which points at `…/03_Findings.md`). Returns None for legacy / test
+    """Derive the export-folder name from a recorded brief_runs.output_path.
+    New bundles record the findings markdown inside the markdown subfolder
+    (`…/<ts>/<subfolder>/03_Findings.md`); older runs recorded it at the
+    bundle root (`…/<ts>/03_Findings.md`). Returns None for legacy / test
     paths that don't follow the standard layout — the caller falls back to
     citing the timestamp alone."""
     if not output_path:
         return None
-    name = Path(output_path).parent.name
+    parent = Path(output_path).parent
+    if parent.name == _MARKDOWN_SUBFOLDER:
+        parent = parent.parent
+    name = parent.name
     if not name or name in {".", "..", "tmp", "exports"}:
         return None
     return name

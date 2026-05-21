@@ -66,6 +66,8 @@ GDOC_MIME = "application/vnd.google-apps.document"
 GSHEET_MIME = "application/vnd.google-apps.spreadsheet"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 
+# Keep in sync with `briefing_pack.render._MARKDOWN_SUBFOLDER` — the local
+# bundle uses the same subfolder name, and this mirrors it to Drive.
 MARKDOWN_SUBFOLDER = "Markdown versions for use with LLMs etc"
 
 # How many updateParagraphStyle requests to send per batchUpdate when
@@ -384,11 +386,14 @@ def export_bundle_to_drive(
         drive, MARKDOWN_SUBFOLDER, export_folder_id,
     )
     results["markdown_folder_id"] = md_folder_id
-    for p in sorted(bundle_dir.iterdir()):
-        if p.is_file() and p.suffix.lower() in _RAW_SUFFIXES:
-            file_id = _upsert_raw(drive, p, p.name, md_folder_id)
-            results["raw"][p.name] = file_id
-            log.info("  raw %s -> file %s", p.name, file_id)
+    # Mirror the bundle's local markdown subfolder (same name) into Drive.
+    local_md_dir = bundle_dir / MARKDOWN_SUBFOLDER
+    if local_md_dir.is_dir():
+        for p in sorted(local_md_dir.iterdir()):
+            if p.is_file() and p.suffix.lower() in _RAW_SUFFIXES:
+                file_id = _upsert_raw(drive, p, p.name, md_folder_id)
+                results["raw"][p.name] = file_id
+                log.info("  raw %s -> file %s", p.name, file_id)
 
     return results
 
