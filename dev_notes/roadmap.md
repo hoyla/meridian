@@ -149,6 +149,38 @@ What's still open from this arc:
 - **Promote `--docx` from opt-in to default-on.** Defer until
   Lisa has eyeballed 2-3 real cycles' worth of output.
 
+### Test coverage catch-up (flagged 2026-05-21)
+
+The Drive-export + bundle-restructure arc moved fast and the tests didn't
+keep pace — coverage is leaning on manual round-trips and live-Drive
+checks rather than the suite. Honest-accounting items, roughly in priority
+order:
+
+- **`drive_export.py` has no unit tests.** Its deterministic logic is
+  currently only exercised against live Drive. Add mocked-service tests
+  (stub the Drive/Docs `build()` services) for: folder find-or-create and
+  `_upsert` idempotency (update-in-place vs create); the heading-anchor
+  flip request shape (`mint_heading_anchors` builds the two NORMAL_TEXT→
+  HEADING_n batches); `fix_internal_heading_links` matching (link text →
+  `headingId`, including the `" ("` draft-suffix prefix fallback); and the
+  `export_bundle_to_drive` orchestration walk (which files convert vs go
+  raw). `get_credentials(interactive=False)` raising `TokenUnusableError`
+  is already covered by a quick check but deserves a real test.
+- **No `docx=True` bundle-structure test.** The mirror-Drive layout
+  (top-level `.docx`/`.xlsx` + the `Markdown versions…` subfolder, xlsx
+  duplicated) was verified by hand only. The DB-gated `test_briefing_pack`
+  cases exercise the `docx=False` flat layout; add a `docx=True` case
+  asserting the subfolder structure + `_bundle_root` round-trip.
+- **Periodic run summary.** `PeriodicRunResult.summary()` is unit-tested
+  ad hoc; fold those into the suite, and add a DB-backed test that
+  `new_data` is populated from real `releases` rows (and is `None`, not
+  `""`, on a query failure).
+- **DB-gated tests skip silently.** They need `GACC_TEST_DATABASE_URL`
+  (→ `gacc_test`); without it the suite reports a pile of skips that reads
+  like "no DB tests" (cost an hour today). Consider a CI step / a Make
+  target / a conftest warning so a bare `pytest` makes the skip obvious,
+  and so these run in CI rather than only when remembered locally.
+
 ### Watch the first 2-3 real cycles + decide delivery vector
 
 Periodic-run **pipeline + Routine** shipped 2026-05-11 (Phase 6.9 /
