@@ -95,28 +95,65 @@ _RAW_SUFFIXES = (".md", ".xlsx")
 # Auth
 # ---------------------------------------------------------------------------
 
-def get_credentials() -> Credentials:
-    """InstalledAppFlow with token persistence. First run opens a browser
-    for consent; later runs read (and silently refresh) the saved token."""
+class TokenUnusableError(RuntimeError):
+    """Raised (only when interactive=False) when the saved OAuth token is
+    missing or can't be silently refreshed — so an unattended caller fails
+    loud instead of blocking on a browser consent prompt."""
+
+
+_REAUTH_HINT = (
+    "Re-authorise once, interactively, by running the upload by hand: "
+    "`python scrape.py --upload-to-drive <bundle_dir>`."
+)
+
+
+def get_credentials(*, interactive: bool = True) -> Credentials:
+    """Load (and silently refresh) the persisted OAuth credentials.
+
+    `interactive` (default True): if there is no usable token, open a
+    browser for consent (the manual / first-run path). Set `interactive=
+    False` for unattended callers (a scheduled run): instead of opening a
+    browser — which would hang with no one to click it — raise
+    `TokenUnusableError` so the caller can fail loud and notify.
+    """
     creds: Credentials | None = None
     if TOKEN.exists():
         creds = Credentials.from_authorized_user_file(str(TOKEN), SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+    if creds and creds.valid:
+        return creds
+
+    # Try a silent refresh first (the common case — access token expired
+    # but the refresh token is still good).
+    if creds and creds.expired and creds.refresh_token:
+        try:
             creds.refresh(Request())
-        else:
-            if not CLIENT_SECRET.exists():
-                raise FileNotFoundError(
-                    f"OAuth client secret not found at {CLIENT_SECRET}. "
-                    "Download a Desktop-app client from the GCP console and "
-                    "save it there."
-                )
-            flow = InstalledAppFlow.from_client_secrets_file(
-                str(CLIENT_SECRET), SCOPES,
+        except Exception as exc:  # RefreshError etc. — token revoked/invalid
+            if not interactive:
+                raise TokenUnusableError(
+                    f"Google OAuth token could not be refreshed ({exc}). "
+                    + _REAUTH_HINT
+                ) from exc
+            creds = None  # fall through to the interactive flow
+
+    if not creds or not creds.valid:
+        if not interactive:
+            raise TokenUnusableError(
+                "No usable Google OAuth token (missing or unrefreshable). "
+                + _REAUTH_HINT
             )
-            creds = flow.run_local_server(port=0)
-        TOKEN.write_text(creds.to_json())
-        os.chmod(TOKEN, 0o600)
+        if not CLIENT_SECRET.exists():
+            raise FileNotFoundError(
+                f"OAuth client secret not found at {CLIENT_SECRET}. "
+                "Download a Desktop-app client from the GCP console and "
+                "save it there."
+            )
+        flow = InstalledAppFlow.from_client_secrets_file(
+            str(CLIENT_SECRET), SCOPES,
+        )
+        creds = flow.run_local_server(port=0)
+
+    TOKEN.write_text(creds.to_json())
+    os.chmod(TOKEN, 0o600)
     return creds
 
 
@@ -330,6 +367,7 @@ def export_bundle_to_drive(
     *,
     folder_name: str | None = None,
     parent_id: str | None = None,
+    interactive: bool = True,
 ) -> dict:
     """Upload a local briefing-pack bundle to Drive. Returns a result dict
     with the export folder id, per-Doc/Sheet ids + links, and the raw-file
@@ -339,7 +377,12 @@ def export_bundle_to_drive(
     optionally nests the export folder under an existing Drive folder; it
     defaults to the `MERIDIAN_DRIVE_PARENT_ID` env var. The parent may be a
     folder you created by hand — under `drive.file` the app can't *read* it
-    but can *write into it* by ID, which is all we need."""
+    but can *write into it* by ID, which is all we need.
+
+    `interactive` is forwarded to `get_credentials`: leave True for a
+    hand-run upload (may open a browser to re-auth); pass False for an
+    unattended caller so a dead token raises `TokenUnusableError` rather
+    than blocking on a consent prompt."""
     bundle_dir = Path(bundle_dir)
     if not bundle_dir.is_dir():
         raise NotADirectoryError(f"Not a bundle directory: {bundle_dir}")
@@ -347,7 +390,7 @@ def export_bundle_to_drive(
     if parent_id is None:
         parent_id = os.environ.get("MERIDIAN_DRIVE_PARENT_ID") or None
 
-    creds = get_credentials()
+    creds = get_credentials(interactive=interactive)
     drive = build("drive", "v3", credentials=creds)
     docs = build("docs", "v1", credentials=creds)
 

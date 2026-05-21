@@ -28,6 +28,7 @@ import dataclasses
 import logging
 import time
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import anomalies
@@ -65,6 +66,30 @@ class PeriodicRunResult:
     analyser_counts: dict[str, Any] = dataclasses.field(default_factory=dict)
     """Per-analyser-step result dicts, keyed by step name. Useful for
     surfacing in routine logs without re-reading the export bundle."""
+
+    bundle_dir: str | None = None
+    """Top-level export-folder path when action_taken (the dir to hand to
+    `--upload-to-drive`), else None."""
+
+    def summary(self) -> str:
+        """Human-readable per-run report for the scheduled Routine to
+        surface. When a briefing was generated it includes the exact manual
+        command to publish it to Drive — we deliberately do NOT auto-upload
+        (the shared folder is journalist-facing and the format is still
+        under review)."""
+        if not self.action_taken:
+            return f"Periodic run: no new briefing this cycle — {self.reason}"
+        lines = [
+            f"Periodic run: new briefing generated for data period "
+            f"{self.data_period}."
+        ]
+        if self.bundle_dir:
+            lines.append(f"  Bundle written to: {self.bundle_dir}")
+            lines.append("  To publish it to Google Drive, run:")
+            lines.append(
+                f"    python scrape.py --upload-to-drive {self.bundle_dir}"
+            )
+        return "\n".join(lines)
 
 
 def run_periodic(
@@ -297,6 +322,16 @@ def run_periodic(
         docx=docx,
     )
 
+    # The top-level export folder is what `--upload-to-drive` takes. With
+    # docx=True the findings .md lives in the markdown subfolder, so step up
+    # past it; otherwise the .md is already at the folder root.
+    from briefing_pack._helpers import _MARKDOWN_SUBFOLDER
+    _fp = Path(findings_path)
+    bundle_dir = str(
+        _fp.parent.parent if _fp.parent.name == _MARKDOWN_SUBFOLDER
+        else _fp.parent
+    )
+
     result = PeriodicRunResult(
         action_taken=True,
         reason=f"new export written for data_period {latest_data}",
@@ -304,6 +339,7 @@ def run_periodic(
         findings_path=findings_path,
         leads_path=leads_path,
         analyser_counts=counts,
+        bundle_dir=bundle_dir,
     )
     _persist_log(result)
     return result
