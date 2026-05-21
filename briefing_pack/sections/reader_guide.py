@@ -55,4 +55,31 @@ def _section_reader_guide() -> _Section:
         "heading so it's easy to scan to where you want to land.*"
     )
     lines.append("")
+    lines.append("### Predictability badges")
+    lines.append("")
+    lines.append(
+        "Some HS-group findings carry a 🟢 / 🟡 / 🔴 badge scoring how "
+        "*stable* the group's year-on-year signal has been. Each (scope, flow) "
+        "view of the group is compared with its reading six months earlier and "
+        "counts as **persistent** if the direction didn't flip and the rate "
+        "moved by less than 5 percentage points:"
+    )
+    lines.append("")
+    lines.append(
+        "- 🟢 **Reliable** — at least 67% of views persistent; the move has held up."
+    )
+    lines.append(
+        "- 🟡 **Mixed** — 33–67% persistent; treat with some caution."
+    )
+    lines.append(
+        "- 🔴 **Volatile** — under 33% persistent; noise-dominated at the "
+        "year-on-year level, so weight the headline figure accordingly."
+    )
+    lines.append("")
+    lines.append(
+        "**No badge** means there were too few comparable views (fewer than "
+        "three) to score — which is *not* the same as a red badge; it just "
+        "means there isn't yet enough history to judge."
+    )
+    lines.append("")
     return _Section(markdown="\n".join(lines))

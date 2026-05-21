@@ -87,10 +87,20 @@ class MarkdownToDocxTranslator:
         *,
         chart_for_finding: ChartLookup | None = None,
         chart_width_mm: int = 190,
+        shaded_section_headings: set[str] | None = None,
+        shade_fill: str = "EEF2F7",
     ) -> None:
         self.doc = doc
         self.chart_for_finding = chart_for_finding
         self.chart_width_mm = chart_width_mm
+        # Metadata-section shading: any section whose heading text is in this
+        # set (plus everything under it until the next same-or-higher heading)
+        # is rendered with a `shade_fill` background, marking it as
+        # orientation material distinct from the briefing's findings.
+        self._shaded_headings = shaded_section_headings or set()
+        self._shade_fill = shade_fill
+        self._shade_active = False
+        self._shade_level = 0
         # Track which finding ids have already received an inline chart
         # in this translation. Top-mover findings typically appear in
         # several sections of findings.md (Top-N list, Tier 2 state-of-
@@ -126,6 +136,11 @@ class MarkdownToDocxTranslator:
     def _handle_block(self, node: dict) -> None:
         t = node.get("type", "")
         handler = getattr(self, f"_block_{t}", None)
+        # Snapshot the body-paragraph count so that, if we're inside a
+        # shaded metadata section, every paragraph this block appends can be
+        # tinted afterwards — centralising shading instead of threading it
+        # through each block handler.
+        before = len(self.doc.paragraphs)
         if handler is None:
             # Unknown block — pass through as plain paragraph if we can
             # extract any text. Real-world cases: future markdown features
@@ -133,8 +148,11 @@ class MarkdownToDocxTranslator:
             text = self._collect_plain_text(node)
             if text.strip():
                 self.doc.add_paragraph(text)
-            return
-        handler(node)
+        else:
+            handler(node)
+        if self._shade_active:
+            for p in self.doc.paragraphs[before:]:
+                self._apply_shading(p)
 
     # ----- block handlers ---------------------------------------------------
 
@@ -145,11 +163,35 @@ class MarkdownToDocxTranslator:
 
     def _block_heading(self, node: dict) -> None:
         level = (node.get("attrs") or {}).get("level", 1)
+        # Metadata-section shading transitions, decided BEFORE the heading
+        # paragraph is created so `_handle_block` shades (or doesn't) the
+        # heading itself correctly:
+        #  - a heading whose text is in the metadata set opens/refreshes a
+        #    shaded section at its level (and is itself shaded);
+        #  - a non-metadata heading at the same-or-higher level closes the
+        #    section (and is NOT shaded);
+        #  - a deeper heading inside the section stays shaded.
+        text = self._collect_plain_text(node).strip()
+        if text in self._shaded_headings:
+            self._shade_active = True
+            self._shade_level = level
+        elif self._shade_active and level <= self._shade_level:
+            self._shade_active = False
         # python-docx: level 0 is Title, 1-9 are Heading 1-9
         # Cap at level 9 so we don't error on absurd inputs.
         docx_level = max(0, min(9, level))
         heading_p = self.doc.add_heading(level=docx_level)
         self._render_inline_into_paragraph(node.get("children") or [], heading_p)
+
+    def _apply_shading(self, paragraph) -> None:
+        """Give a paragraph a solid background fill (the metadata-section
+        tint) via `w:shd` on its paragraph properties."""
+        pPr = paragraph._p.get_or_add_pPr()
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:val"), "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"), self._shade_fill)
+        pPr.append(shd)
 
     def _block_paragraph(self, node: dict) -> None:
         p = self.doc.add_paragraph()

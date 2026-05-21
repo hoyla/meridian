@@ -75,6 +75,26 @@ _MARGIN_MM = 10          # all four sides
 _BODY_FONT_PT = 11
 _CHART_WIDTH_MM = 190    # 210 - 2×10 usable width
 
+# Heading point sizes for the docx styles. Google Docs honours the docx
+# Heading style's run properties on import (verified by the bold fix), so
+# setting size on the style carries through to the converted Doc.
+_HEADING_SIZES_PT = {1: 18, 2: 15, 3: 13, 4: 13}
+
+# "Metadata" sections — orientation / how-to-read material, functionally
+# distinct from the briefing's actual findings. The docx renders them with
+# a tinted background so a reader can tell them apart from content. Matched
+# against each heading's plain text; codespans collapse to their raw text
+# (e.g. "About the `finding/N` citations" → "About the finding/N citations").
+_METADATA_SECTION_HEADINGS = {
+    "In this export folder",
+    "Scope notes",
+    "Period coverage",
+    "Findings included",
+    "How to read this findings document",
+    "About the finding/N citations",
+}
+_METADATA_SHADE_FILL = "EEF2F7"  # light blue-grey callout tint
+
 # EU-27 reporter exclusion (matches anomalies.EU27_EXCLUDE_REPORTERS).
 _EU27_EXCLUDE_REPORTERS = ("GB",)
 
@@ -562,6 +582,14 @@ def _apply_page_setup(doc: Document) -> None:
     doc.styles["Normal"].font.size = Pt(_BODY_FONT_PT)
 
 
+def _apply_heading_styles(doc: Document) -> None:
+    """Bump heading sizes per the reporting team's request; keep Heading 4
+    italic (its template default, restated so it survives the size set)."""
+    for level, size in _HEADING_SIZES_PT.items():
+        doc.styles[f"Heading {level}"].font.size = Pt(size)
+    doc.styles["Heading 4"].font.italic = True
+
+
 def render_findings_docx(
     out_path: str | Path,
     *,
@@ -609,11 +637,14 @@ def render_findings_docx(
     # 3. Translate markdown → docx with chart injection.
     doc = Document()
     _apply_page_setup(doc)
+    _apply_heading_styles(doc)
 
     translator = MarkdownToDocxTranslator(
         doc,
         chart_for_finding=charts_by_id.get,
         chart_width_mm=_CHART_WIDTH_MM,
+        shaded_section_headings=_METADATA_SECTION_HEADINGS,
+        shade_fill=_METADATA_SHADE_FILL,
     )
     translator.translate(markdown)
 
