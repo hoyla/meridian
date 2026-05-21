@@ -28,12 +28,16 @@ import dataclasses
 import logging
 import time
 from datetime import date
-from pathlib import Path
 from typing import Any
 
 import anomalies
 import briefing_pack
 import llm_framing
+
+from briefing_pack._helpers import (
+    _bundle_root,
+    _new_data_phrase_since_last_brief,
+)
 
 log = logging.getLogger(__name__)
 
@@ -328,29 +332,14 @@ def run_periodic(
     # files. Callers in tests or one-off scripts can pass docx=False if
     # the python-docx soft dependency isn't available.
     # Which sources brought new data this cycle, for the run summary.
-    # Compute BEFORE export() records this run's brief_runs row — at this
-    # point the latest brief_runs row is still the previous cycle. Reuses
-    # the same release-detection the docs' "why this export" framing uses.
-    new_data_phrase = ""
+    # Compute BEFORE export() records this run's brief_runs row, so the
+    # latest row is still the previous cycle. None (not "") on failure, so
+    # the summary stays silent rather than falsely reporting a forced rerun.
     try:
-        import psycopg2.extras
-        from briefing_pack._helpers import (
-            _conn, _format_new_releases_phrase, _new_releases_since,
-        )
-        with _conn() as conn, conn.cursor(
-            cursor_factory=psycopg2.extras.DictCursor,
-        ) as cur:
-            cur.execute(
-                "SELECT generated_at FROM brief_runs "
-                "ORDER BY generated_at DESC LIMIT 1"
-            )
-            prev = cur.fetchone()
-            if prev and prev[0] is not None:
-                new_data_phrase = _format_new_releases_phrase(
-                    _new_releases_since(cur, prev[0])
-                )
+        new_data_phrase = _new_data_phrase_since_last_brief()
     except Exception:
         log.exception("periodic-run: failed to compute new-data phrase")
+        new_data_phrase = None
 
     log.info("periodic-run: writing findings export")
     findings_path, leads_path = briefing_pack.export(
@@ -360,15 +349,8 @@ def run_periodic(
         docx=docx,
     )
 
-    # The top-level export folder is what `--upload-to-drive` takes. With
-    # docx=True the findings .md lives in the markdown subfolder, so step up
-    # past it; otherwise the .md is already at the folder root.
-    from briefing_pack._helpers import _MARKDOWN_SUBFOLDER
-    _fp = Path(findings_path)
-    bundle_dir = str(
-        _fp.parent.parent if _fp.parent.name == _MARKDOWN_SUBFOLDER
-        else _fp.parent
-    )
+    # The top-level export folder is what `--upload-to-drive` takes.
+    bundle_dir = str(_bundle_root(findings_path))
 
     result = PeriodicRunResult(
         action_taken=True,
