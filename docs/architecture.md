@@ -267,6 +267,21 @@ the read-me, scan the LLM-scaffolded leads, drill into deterministic
 findings, drop into the spreadsheet for filterable detail, and consult
 the group glossary when a category name needs disambiguation.
 
+The layout above is the quick `--briefing-pack` shape (markdown only).
+With `docx=True` (the default in scheduled/periodic runs) the documents
+are additionally rendered as styled Word files and the folder is
+**restructured to mirror the Google Drive upload**: the `.docx` (and
+`04_Data.xlsx`) sit at the top level, and the raw `.md` files plus a
+duplicate `04_Data.xlsx` move into a `Markdown versions for use with LLMs
+etc/` subfolder. `briefing_pack/drive_export.py` then uploads that bundle
+to Drive — top-level `.docx` convert to native Google Docs and the xlsx to
+a Sheet; heading navigation anchors are minted (Google's `.docx` import
+omits the `headingId`s, so a batched style-flip pass forces them);
+in-document links (e.g. the Groups "Quick index") are repointed via
+`headingId`; and the markdown subfolder is mirrored. OAuth scope is
+`drive.file`; the target parent folder comes from `MERIDIAN_DRIVE_PARENT_ID`
+and export folders inherit its sharing.
+
 **Templates pipeline (since 2026-05-13)**: every file dropped into
 `briefing_pack/templates/` (except its own `README.md`) is copied
 verbatim into every export folder, preserving filenames. The intended
@@ -326,8 +341,11 @@ findings for one HS group, only one comparison scope) is forward
 work; the naming convention is in place so scoped exports can land
 cleanly when needed.
 
-Sheets export ships local `.xlsx`; Google Sheets writer is stubbed
-pending service-account credentials.
+Sheets export ships local `.xlsx`. The in-place `GoogleSheetsWriter`
+(service-account, writing into an existing spreadsheet) remains stubbed
+pending credentials; but the Drive delivery path (`drive_export.py`,
+OAuth `drive.file`) does convert the `.xlsx` to a native Google Sheet on
+upload, so a journalist-ready Sheet is produced today via that route.
 
 ### Per-finding provenance (`provenance.py`)
 
