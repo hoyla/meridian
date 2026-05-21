@@ -116,6 +116,32 @@ What's still open from this arc:
     already returns every Doc ID, so the mapping is in hand).
   - **`--upload-to-drive` CLI wiring** into the export / periodic path
     (currently invoked via `python -m briefing_pack.drive_export`).
+    OAuth-token durability: the consent screen is **Internal** (Guardian
+    Workspace), so the refresh token does **not** hit the 7-day
+    External/Testing expiry — it lasts until revoked / ~6-months-unused, so
+    a weekly cron is safe and re-prompts no one. BUT the unattended path
+    must **fail loud, not hang**: give `get_credentials()` a
+    non-interactive mode that *raises* on an unusable token instead of
+    falling through to `run_local_server` (which would block waiting on a
+    browser). On that failure: record it in `periodic_run_log` (error
+    field) and notify (see below); recovery is a one-off
+    `python -m briefing_pack.drive_export …` by hand to refresh the token.
+  - **Per-run outcome notification (Luke wants this).** Have the scheduled
+    Routine report the outcome *every* run, not just on failure: whether
+    new source data was found and **from where** (GACC / Eurostat / HMRC),
+    whether a new briefing was generated (and its data period), whether the
+    Drive upload succeeded, and any error. Most of this is already in
+    `PeriodicRunResult` (`action_taken`, `reason`, `data_period`,
+    `findings_path`, `analyser_counts`) plus `_new_releases_since` /
+    `_why_this_export_paragraph`; the Drive-upload result depends on the
+    `--upload-to-drive` wiring above, so build the notification together
+    with that. A dead-token alert is then just one possible outcome line.
+    Delivery, simplest first: (a) the Routine agent summarises + push-
+    notifies at the end of each run; (b) a macOS `osascript` desktop
+    notification with a one-line summary; (c) the Slack/email digest
+    channel once built. (a)+(b) work today without the deferred delivery
+    channel; the unattended path must still fail-loud (non-interactive
+    `get_credentials` that raises rather than blocking on a browser).
 
   Sharing needs no work: export folders inherit permissions from the
   `MERIDIAN_DRIVE_PARENT_ID` parent, which is already shared with Lisa and
