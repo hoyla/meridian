@@ -62,6 +62,7 @@ DOCX_MIME = (
 XLSX_MIME = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
+MD_MIME = "text/markdown"
 GDOC_MIME = "application/vnd.google-apps.document"
 GSHEET_MIME = "application/vnd.google-apps.spreadsheet"
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -95,28 +96,65 @@ _RAW_SUFFIXES = (".md", ".xlsx")
 # Auth
 # ---------------------------------------------------------------------------
 
-def get_credentials() -> Credentials:
-    """InstalledAppFlow with token persistence. First run opens a browser
-    for consent; later runs read (and silently refresh) the saved token."""
+class TokenUnusableError(RuntimeError):
+    """Raised (only when interactive=False) when the saved OAuth token is
+    missing or can't be silently refreshed — so an unattended caller fails
+    loud instead of blocking on a browser consent prompt."""
+
+
+_REAUTH_HINT = (
+    "Re-authorise once, interactively, by running the upload by hand: "
+    "`python scrape.py --upload-to-drive <bundle_dir>`."
+)
+
+
+def get_credentials(*, interactive: bool = True) -> Credentials:
+    """Load (and silently refresh) the persisted OAuth credentials.
+
+    `interactive` (default True): if there is no usable token, open a
+    browser for consent (the manual / first-run path). Set `interactive=
+    False` for unattended callers (a scheduled run): instead of opening a
+    browser — which would hang with no one to click it — raise
+    `TokenUnusableError` so the caller can fail loud and notify.
+    """
     creds: Credentials | None = None
     if TOKEN.exists():
         creds = Credentials.from_authorized_user_file(str(TOKEN), SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+    if creds and creds.valid:
+        return creds
+
+    # Try a silent refresh first (the common case — access token expired
+    # but the refresh token is still good).
+    if creds and creds.expired and creds.refresh_token:
+        try:
             creds.refresh(Request())
-        else:
-            if not CLIENT_SECRET.exists():
-                raise FileNotFoundError(
-                    f"OAuth client secret not found at {CLIENT_SECRET}. "
-                    "Download a Desktop-app client from the GCP console and "
-                    "save it there."
-                )
-            flow = InstalledAppFlow.from_client_secrets_file(
-                str(CLIENT_SECRET), SCOPES,
+        except Exception as exc:  # RefreshError etc. — token revoked/invalid
+            if not interactive:
+                raise TokenUnusableError(
+                    f"Google OAuth token could not be refreshed ({exc}). "
+                    + _REAUTH_HINT
+                ) from exc
+            creds = None  # fall through to the interactive flow
+
+    if not creds or not creds.valid:
+        if not interactive:
+            raise TokenUnusableError(
+                "No usable Google OAuth token (missing or unrefreshable). "
+                + _REAUTH_HINT
             )
-            creds = flow.run_local_server(port=0)
-        TOKEN.write_text(creds.to_json())
-        os.chmod(TOKEN, 0o600)
+        if not CLIENT_SECRET.exists():
+            raise FileNotFoundError(
+                f"OAuth client secret not found at {CLIENT_SECRET}. "
+                "Download a Desktop-app client from the GCP console and "
+                "save it there."
+            )
+        flow = InstalledAppFlow.from_client_secrets_file(
+            str(CLIENT_SECRET), SCOPES,
+        )
+        creds = flow.run_local_server(port=0)
+
+    TOKEN.write_text(creds.to_json())
+    os.chmod(TOKEN, 0o600)
     return creds
 
 
@@ -162,42 +200,30 @@ def _find_or_create_folder(
     return drive.files().create(body=body, fields="id").execute()["id"]
 
 
-def _upsert_converted(
-    drive, local_path: Path, name: str, target_mime: str,
-    source_mime: str, parent_id: str,
+def _upsert(
+    drive, local_path: Path, name: str, parent_id: str,
+    *, source_mime: str, target_mime: str | None = None,
 ) -> tuple[str, str]:
-    """Create-or-update a native Google file converted from `local_path`.
-    Returns (file_id, web_view_link). Updating in place keeps re-runs
-    idempotent (no duplicate files in the folder)."""
+    """Create-or-update file `name` in `parent_id` from `local_path`,
+    updating in place so re-runs stay idempotent (no duplicates). With
+    `target_mime` set, the upload converts to that native Google type
+    (Doc/Sheet) and the web link is returned; without it the file is stored
+    verbatim and the link is ''."""
     media = MediaFileUpload(str(local_path), mimetype=source_mime, resumable=True)
+    fields = "id,webViewLink" if target_mime else "id"
     existing = _find_file(drive, name, parent_id)
     if existing:
         f = drive.files().update(
-            fileId=existing["id"], media_body=media, fields="id,webViewLink",
+            fileId=existing["id"], media_body=media, fields=fields,
         ).execute()
     else:
+        body = {"name": name, "parents": [parent_id]}
+        if target_mime:
+            body["mimeType"] = target_mime
         f = drive.files().create(
-            body={"name": name, "mimeType": target_mime, "parents": [parent_id]},
-            media_body=media,
-            fields="id,webViewLink",
+            body=body, media_body=media, fields=fields,
         ).execute()
     return f["id"], f.get("webViewLink", "")
-
-
-def _upsert_raw(drive, local_path: Path, name: str, parent_id: str) -> str:
-    """Create-or-update a verbatim (non-converted) file in `parent_id`."""
-    suffix = local_path.suffix.lower()
-    mime = XLSX_MIME if suffix == ".xlsx" else "text/markdown"
-    media = MediaFileUpload(str(local_path), mimetype=mime, resumable=True)
-    existing = _find_file(drive, name, parent_id)
-    if existing:
-        return drive.files().update(
-            fileId=existing["id"], media_body=media, fields="id",
-        ).execute()["id"]
-    return drive.files().create(
-        body={"name": name, "parents": [parent_id]},
-        media_body=media, fields="id",
-    ).execute()["id"]
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +356,7 @@ def export_bundle_to_drive(
     *,
     folder_name: str | None = None,
     parent_id: str | None = None,
+    interactive: bool = True,
 ) -> dict:
     """Upload a local briefing-pack bundle to Drive. Returns a result dict
     with the export folder id, per-Doc/Sheet ids + links, and the raw-file
@@ -339,7 +366,12 @@ def export_bundle_to_drive(
     optionally nests the export folder under an existing Drive folder; it
     defaults to the `MERIDIAN_DRIVE_PARENT_ID` env var. The parent may be a
     folder you created by hand — under `drive.file` the app can't *read* it
-    but can *write into it* by ID, which is all we need."""
+    but can *write into it* by ID, which is all we need.
+
+    `interactive` is forwarded to `get_credentials`: leave True for a
+    hand-run upload (may open a browser to re-auth); pass False for an
+    unattended caller so a dead token raises `TokenUnusableError` rather
+    than blocking on a consent prompt."""
     bundle_dir = Path(bundle_dir)
     if not bundle_dir.is_dir():
         raise NotADirectoryError(f"Not a bundle directory: {bundle_dir}")
@@ -347,7 +379,7 @@ def export_bundle_to_drive(
     if parent_id is None:
         parent_id = os.environ.get("MERIDIAN_DRIVE_PARENT_ID") or None
 
-    creds = get_credentials()
+    creds = get_credentials(interactive=interactive)
     drive = build("drive", "v3", credentials=creds)
     docs = build("docs", "v1", credentials=creds)
 
@@ -368,8 +400,9 @@ def export_bundle_to_drive(
         if not p.exists():
             continue
         name = p.stem  # drive name carries no extension
-        file_id, link = _upsert_converted(
-            drive, p, name, target_mime, source_mime, export_folder_id,
+        file_id, link = _upsert(
+            drive, p, name, export_folder_id,
+            source_mime=source_mime, target_mime=target_mime,
         )
         entry = {"id": file_id, "link": link}
         if target_mime == GDOC_MIME:
@@ -391,7 +424,10 @@ def export_bundle_to_drive(
     if local_md_dir.is_dir():
         for p in sorted(local_md_dir.iterdir()):
             if p.is_file() and p.suffix.lower() in _RAW_SUFFIXES:
-                file_id = _upsert_raw(drive, p, p.name, md_folder_id)
+                src_mime = XLSX_MIME if p.suffix.lower() == ".xlsx" else MD_MIME
+                file_id, _ = _upsert(
+                    drive, p, p.name, md_folder_id, source_mime=src_mime,
+                )
                 results["raw"][p.name] = file_id
                 log.info("  raw %s -> file %s", p.name, file_id)
 

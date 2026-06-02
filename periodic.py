@@ -34,6 +34,11 @@ import anomalies
 import briefing_pack
 import llm_framing
 
+from briefing_pack._helpers import (
+    _bundle_root,
+    _new_data_phrase_since_last_brief,
+)
+
 log = logging.getLogger(__name__)
 
 
@@ -65,6 +70,43 @@ class PeriodicRunResult:
     analyser_counts: dict[str, Any] = dataclasses.field(default_factory=dict)
     """Per-analyser-step result dicts, keyed by step name. Useful for
     surfacing in routine logs without re-reading the export bundle."""
+
+    bundle_dir: str | None = None
+    """Top-level export-folder path when action_taken (the dir to hand to
+    `--upload-to-drive`), else None."""
+
+    new_data: str | None = None
+    """One-line phrase naming the source releases (GACC / Eurostat / HMRC)
+    first seen since the previous cycle, e.g. 'GACC March 2026
+    (preliminary); Eurostat March 2026'. Empty string when nothing new has
+    arrived (a forced rerun). None when not computed."""
+
+    def summary(self) -> str:
+        """Human-readable per-run report for the scheduled Routine to
+        surface. When a briefing was generated it includes which sources
+        brought new data and the exact manual command to publish it to
+        Drive — we deliberately do NOT auto-upload (the shared folder is
+        journalist-facing and the format is still under review)."""
+        if not self.action_taken:
+            return f"Periodic run: no new briefing this cycle — {self.reason}"
+        lines = [
+            f"Periodic run: new briefing generated for data period "
+            f"{self.data_period}."
+        ]
+        if self.new_data:
+            lines.append(f"  New source data since the last cycle: {self.new_data}.")
+        elif self.new_data == "":
+            lines.append(
+                "  No new source releases since the last cycle "
+                "(forced rerun against the same data)."
+            )
+        if self.bundle_dir:
+            lines.append(f"  Bundle written to: {self.bundle_dir}")
+            lines.append("  To publish it to Google Drive, run:")
+            lines.append(
+                f"    python scrape.py --upload-to-drive {self.bundle_dir}"
+            )
+        return "\n".join(lines)
 
 
 def run_periodic(
@@ -289,6 +331,16 @@ def run_periodic(
     # alongside the .md (NotebookLM-facing) and .xlsx (data-facing)
     # files. Callers in tests or one-off scripts can pass docx=False if
     # the python-docx soft dependency isn't available.
+    # Which sources brought new data this cycle, for the run summary.
+    # Compute BEFORE export() records this run's brief_runs row, so the
+    # latest row is still the previous cycle. None (not "") on failure, so
+    # the summary stays silent rather than falsely reporting a forced rerun.
+    try:
+        new_data_phrase = _new_data_phrase_since_last_brief()
+    except Exception:
+        log.exception("periodic-run: failed to compute new-data phrase")
+        new_data_phrase = None
+
     log.info("periodic-run: writing findings export")
     findings_path, leads_path = briefing_pack.export(
         out_dir=out_dir,
@@ -297,6 +349,9 @@ def run_periodic(
         docx=docx,
     )
 
+    # The top-level export folder is what `--upload-to-drive` takes.
+    bundle_dir = str(_bundle_root(findings_path))
+
     result = PeriodicRunResult(
         action_taken=True,
         reason=f"new export written for data_period {latest_data}",
@@ -304,6 +359,8 @@ def run_periodic(
         findings_path=findings_path,
         leads_path=leads_path,
         analyser_counts=counts,
+        bundle_dir=bundle_dir,
+        new_data=new_data_phrase,
     )
     _persist_log(result)
     return result

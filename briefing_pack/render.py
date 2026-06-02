@@ -538,7 +538,6 @@ def export(
         )
         log.info("Wrote spreadsheet to %s", xlsx_path)
         if out_path is None and md_dir != xlsx_top:
-            import shutil
             shutil.copy2(xlsx_path, md_dir / "04_Data.xlsx")
             log.info("Copied spreadsheet into %s/", _MARKDOWN_SUBFOLDER)
 

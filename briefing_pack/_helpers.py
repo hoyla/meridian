@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg2
+import psycopg2.extras
 
 import anomalies
 
@@ -140,19 +141,22 @@ _SOURCE_LABELS = {"gacc": "GACC", "eurostat": "Eurostat", "hmrc": "HMRC"}
 _MARKDOWN_SUBFOLDER = "Markdown versions for use with LLMs etc"
 
 
+def _bundle_root(file_path: str) -> Path:
+    """The top-level export folder for a bundle file (the dir to hand to
+    `--upload-to-drive`). When docx is generated the findings markdown sits
+    in the `_MARKDOWN_SUBFOLDER` subfolder; flat / older bundles have it at
+    the root. Either way, step up out of the subfolder if present."""
+    parent = Path(file_path).parent
+    return parent.parent if parent.name == _MARKDOWN_SUBFOLDER else parent
+
+
 def _prev_export_folder(output_path: str | None) -> str | None:
     """Derive the export-folder name from a recorded brief_runs.output_path.
-    New bundles record the findings markdown inside the markdown subfolder
-    (`…/<ts>/<subfolder>/03_Findings.md`); older runs recorded it at the
-    bundle root (`…/<ts>/03_Findings.md`). Returns None for legacy / test
-    paths that don't follow the standard layout — the caller falls back to
-    citing the timestamp alone."""
+    Returns None for legacy / test paths that don't follow the standard
+    layout — the caller falls back to citing the timestamp alone."""
     if not output_path:
         return None
-    parent = Path(output_path).parent
-    if parent.name == _MARKDOWN_SUBFOLDER:
-        parent = parent.parent
-    name = parent.name
+    name = _bundle_root(output_path).name
     if not name or name in {".", "..", "tmp", "exports"}:
         return None
     return name
@@ -230,6 +234,27 @@ def _source_data_sentence(new_releases_phrase: str) -> str:
         "**No new GACC / Eurostat / HMRC release has been published "
         "since then** — this is a rerun against the same source snapshot."
     )
+
+
+def _new_data_phrase_since_last_brief() -> str:
+    """One-line phrase naming the source releases (GACC / Eurostat / HMRC)
+    first seen since the most recent brief_runs row — e.g. 'GACC March 2026
+    (preliminary); Eurostat March 2026'. '' when nothing new arrived (or no
+    prior brief exists). Opens its own connection; call it BEFORE recording
+    the current run's brief_runs row, so the latest row is still the
+    previous cycle. Mirrors the release detection in
+    `_why_this_export_paragraph`."""
+    with _conn() as conn, conn.cursor(
+        cursor_factory=psycopg2.extras.DictCursor,
+    ) as cur:
+        cur.execute(
+            "SELECT generated_at FROM brief_runs "
+            "ORDER BY generated_at DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+        if not row or row[0] is None:
+            return ""
+        return _format_new_releases_phrase(_new_releases_since(cur, row[0]))
 
 
 def _why_this_export_paragraph(cur) -> str:

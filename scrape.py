@@ -657,6 +657,19 @@ def main() -> None:
         ),
     )
     p.add_argument(
+        "--upload-to-drive", metavar="BUNDLE_DIR",
+        help=(
+            "Upload an already-generated local bundle directory to Google "
+            "Drive: top-level .docx convert to native Google Docs and "
+            "04_Data.xlsx to a Sheet, heading navigation anchors are minted, "
+            "in-document links repaired, and the markdown subfolder mirrored. "
+            "Expects a docx=True bundle (run `--briefing-pack --docx` or "
+            "`--periodic-run` first). Run by hand — opens a browser to "
+            "re-authorise if the saved OAuth token has lapsed. Target parent "
+            "folder via the MERIDIAN_DRIVE_PARENT_ID env var."
+        ),
+    )
+    p.add_argument(
         "--with-provenance", action="store_true",
         help=(
             "With --briefing-pack: also bundle per-finding provenance files "
@@ -894,6 +907,20 @@ def main() -> None:
         print(out)
         return
 
+    if args.upload_to_drive:
+        import briefing_pack.drive_export as drive_export
+        res = drive_export.export_bundle_to_drive(args.upload_to_drive)
+        print(f"\nDrive folder: {res['folder_name']} ({res['folder_id']})")
+        for name, d in res["docs"].items():
+            extra = (
+                f"  ({d['anchors_minted']} anchors, "
+                f"{d.get('links_fixed', 0)} links fixed)"
+                if "anchors_minted" in d else "  (Sheet)"
+            )
+            print(f"  {name}: {d['link']}{extra}")
+        print(f"  markdown subfolder: {len(res['raw'])} raw files")
+        return
+
     if args.periodic_run:
         result = periodic.run_periodic(
             force=args.force,
@@ -903,9 +930,12 @@ def main() -> None:
             skip_llm=args.skip_llm,
         )
         log.info("periodic-run: %s", result.reason)
-        # Print the findings path to stdout (separate from log) so a wrapper
-        # (Claude Code routine, GHA, cron) can capture it for delivery.
-        # Empty string on no-op so the wrapper can branch on `if path:`.
+        # Human-readable per-run report for the scheduling layer (the
+        # Routine agent) to surface — and, when a briefing was generated,
+        # the exact manual `--upload-to-drive` command (we don't auto-publish).
+        print(result.summary())
+        # Then the findings path on its own final line, so a brittle wrapper
+        # can still capture it (empty string on a no-op).
         print(result.findings_path or "")
         return
 
