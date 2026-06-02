@@ -121,7 +121,7 @@ class OllamaBackend:
     # states during model load (503/504) and brief windows after an
     # in-RAM eviction. It does NOT mask a configuration-level 404 — if
     # OLLAMA_HOST resolves to a different listener than the host-native
-    # daemon, every attempt 404s in 22s. See dev_notes/2026-05-19_ollama_404.md
+    # daemon, every attempt 404s in 22s. See dev_notes/2026-05-19-ollama-404.md
     # for the host-resolution gotcha that motivated tightening .env.
     _RETRY_DELAYS_S: tuple[int, ...] = (0, 2, 5, 15)
     _RETRY_STATUSES: frozenset[int] = frozenset({404, 408, 503, 504})

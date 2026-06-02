@@ -1,7 +1,7 @@
 """Reconciliation smoke test: CN8-detail sum matches '000TOTAL'-row sum.
 
-Resolved 2026-05-10 in
-`dev_notes/forward-work-eurostat-aggregate-scale.md`. Eurostat's bulk
+Resolved 2026-05-10 (see `dev_notes/history.md`, "Eurostat
+aggregate-scale 2x mystery — RESOLVED"). Eurostat's bulk
 file ships both per-CN8-detail rows and a `product_nc='000TOTAL'`
 aggregate row per (reporter, period, partner, flow, stat_procedure).
 A naïve `SUM(value_eur)` includes both and double-counts.

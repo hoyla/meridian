@@ -374,7 +374,7 @@ def main() -> None:
     print("Next: drag both files to a Drive folder, double-click each, choose")
     print("'Open with Google Docs' / 'Open with Google Sheets'. Eyeball the")
     print("result against the local files. Things to look for are listed at")
-    print("the top of dev_notes/2026-05-16_docx-drive-spike.md.")
+    print("the top of dev_notes/2026-05-16-docx-drive-spike.md.")
 
 
 if __name__ == "__main__":

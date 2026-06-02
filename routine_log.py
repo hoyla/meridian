@@ -19,7 +19,7 @@ The two axes combine: a quiet expected gap is no_change × none_expected
 none_expected. This replaced the old "5 weeks past period close" fetch-gate
 (result='not_yet_eligible') — we always probe now, because fetching is
 idempotent and harmless, and the calendar gives the "is data expected yet?"
-signal more precisely. See dev_notes/eurostat-expectation-axis-design-2026-06-02.md.
+signal more precisely. See dev_notes/2026-06-02-eurostat-expectation-axis-design.md.
 
 Debug-only — no journalist-facing artefact reads from here. The Routine
 SKILL.md is the only writer in production; tests + ad-hoc CLI invocations

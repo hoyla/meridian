@@ -10,7 +10,7 @@ table is the per-invocation audit trail, complementing it:
 - The chain shows individual finding revisions.
 - This table shows what an analyser run produced in aggregate.
 
-See `dev_notes/logging-policy.md`.
+See `dev_notes/2026-05-15-logging-policy.md`.
 """
 from __future__ import annotations
 

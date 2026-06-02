@@ -572,7 +572,7 @@ surfaced the **shape** of the gap precisely: Soapbox's reporting is
 share-and-bilateral-aggregate-heavy; ours was growth-and-per-HS-
 group-heavy. Closed the gap with four sequential commits — cheapest
 to most-impactful per hour. Stage B/C results captured in
-[`soapbox-validation-2026-05-11.md`](soapbox-validation-2026-05-11.md).
+[`2026-05-11-soapbox-validation.md`](2026-05-11-soapbox-validation.md).
 
 ### Step 1 — Thirteen new `hs_groups` ([`5fa011d`](https://github.com/hoyla/meridian/commit/5fa011d), [`b4357ed`](https://github.com/hoyla/meridian/commit/b4357ed))
 
@@ -1057,7 +1057,7 @@ functions and the two no-op paths (empty DB; already-published).
 
 ### Three-layer deployment design
 
-Captured in [`periodic-runs-design-2026-05-11.md`](periodic-runs-design-2026-05-11.md).
+Captured in [`2026-05-11-periodic-runs-design.md`](2026-05-11-periodic-runs-design.md).
 Key idea: the pipeline (Layer 1, this repo), the scheduler (Layer
 2, Routine / cron / GHA — pluggable), and the delivery channel
 (Layer 3, manual / email / Slack — pluggable) are three independent
@@ -1075,7 +1075,7 @@ Commit [`(this commit)`].
 ## 2026-05-11 — Soapbox validation pass + two follow-up hs_groups
 
 A peer-comparison audit modelled on the shock-validation discipline
-(predict, then look). Output: [`soapbox-validation-2026-05-11.md`](soapbox-validation-2026-05-11.md).
+(predict, then look). Output: [`2026-05-11-soapbox-validation.md`](2026-05-11-soapbox-validation.md).
 
 ### Stage A — pre-registration
 
@@ -1146,7 +1146,7 @@ coverage extension. Tests: 196 passed.
 
 Commit [`38940ce`](https://github.com/hoyla/meridian/commit/38940ce).
 The annual aggregate table in
-[`shock-validation-2026-05-09.md:404-415`](shock-validation-2026-05-09.md)
+[`2026-05-09-shock-validation.md:404-415`](2026-05-09-shock-validation.md)
 pre-dated the 2026-05-10 `000TOTAL`-mystery resolution (commit
 `50f8dbd`) and double-counted by ~2x. Refreshed using the canonical
 `product_nc='000TOTAL'` aggregate row. **Sanity-check vs Lisa
@@ -1324,8 +1324,8 @@ hs-group analysers. Briefing pack restructured for per-scope
 sections. 3.9M HMRC raw rows backfilled 2017–2026; UK numbers
 cross-checked against HMRC published headlines.
 
-Commits `9489970` → `0cb91bf`. (Closes the original
-`forward-work-uk-data-gap.md`.)
+Commits `9489970` → `0cb91bf`. (Closes the original UK-data-gap
+forward-work item.)
 
 ### 6.2 — Universal-caveat suppression in the brief
 
@@ -1364,7 +1364,7 @@ classifications under variant thresholds. Three findings:
   74 mirror_gap_zscore findings sit within ±0.3 of the default.
 
 Script: `scripts/sensitivity_sweep.py`.
-Report: `dev_notes/sensitivity-sweep-2026-05-10.md` (kept as
+Report: `dev_notes/2026-05-10-sensitivity-sweep.md` (kept as
 dated artefact). Commit [`85d6cf7`](https://github.com/hoyla/meridian/commit/85d6cf7).
 
 ### 6.4 — Lead-scaffold restructure of LLM framing
@@ -1439,7 +1439,7 @@ record yet. Becomes measurable once analyser runs are scheduled
 periodically — see `roadmap.md`.
 
 Script: `scripts/out_of_sample_backtest.py`.
-Report: `dev_notes/out-of-sample-backtest-2026-05-10.md` (kept as
+Report: `dev_notes/2026-05-10-out-of-sample-backtest.md` (kept as
 dated artefact). Commit [`5d0e23e`](https://github.com/hoyla/meridian/commit/5d0e23e).
 
 ### 6.7 — GACC 2018 parser (partial)
@@ -1459,7 +1459,7 @@ hs-group analyses use Eurostat which extends to 2017).
 
 Forward work options (OCR, hunt for source xlsx, accept gap, lean
 on Eurostat+HMRC) captured in
-`dev_notes/forward-work-gacc-2018-parser.md` — kept open because
+`dev_notes/2026-05-10-forward-work-gacc-2018-parser.md` — kept open because
 this is genuinely deferred, not closed.
 
 Commit [`3f115b4`](https://github.com/hoyla/meridian/commit/3f115b4).
@@ -1524,7 +1524,7 @@ baseline updates propagate via the supersede chain without
 needing a method-version bump. 351 mirror_gap findings re-emitted.
 
 Sourced reference kept at
-`dev_notes/cif-fob-baselines-2026-05-10.md` for reproducibility.
+`dev_notes/2026-05-10-cif-fob-baselines.md` for reproducibility.
 Commit [`4d4f7cc`](https://github.com/hoyla/meridian/commit/4d4f7cc).
 
 ---
@@ -1580,7 +1580,7 @@ re-ingested everything with the new defaults.
 
 ### 5.6 — Pre-registered shock validation
 
-Document `dev_notes/shock-validation-2026-05-09.md` —
+Document `dev_notes/2026-05-09-shock-validation.md` —
 pre-registered expectations for what the analysers should
 surface across four known historical shocks (2018 Section 232
 tariffs, Q1 2020 COVID lockdown, Feb 2022 Russia invasion → renewables

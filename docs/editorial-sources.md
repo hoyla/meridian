@@ -33,7 +33,10 @@ or more of these:
    per-export bundle (`02_Leads.md` + `03_Findings.md` + `04_Data.xlsx`
    + `05_Groups.md`, plus optional `provenance/` subdir) as
    a recurring folder drop, eventually plus a digest channel
-   (Slack/email — not yet built).
+   (Slack/email — not yet built). The cycle is calendar-aware: the tool
+   knows each source's publication schedule, so it can tell a
+   not-yet-due quiet week from a genuinely *overdue* release (see
+   [methodology.md "Source freshness"](methodology.md#source-freshness-the-expectation-axis)).
 3. **Lead surfacing** — a journalist wants to be shown patterns they
    didn't know to look for. Surface: the LLM framing layer's
    `narrative_hs_group` findings (rendered to `02_Leads.md`), plus
@@ -80,7 +83,7 @@ shape this tool now produces):
   run, qwen3.6 cited "93%" recalled from this article in training
   data — the verifier correctly rejected it because that figure is
   not in our current data. **Hallucination loop closed 2026-05-11**:
-  the [Soapbox validation pass](../dev_notes/soapbox-validation-2026-05-11.md)
+  the [Soapbox validation pass](../dev_notes/2026-05-11-soapbox-validation.md)
   prompted a narrower `Sintered NdFeB magnets (CN8 85051110)`
   hs_group (HS-8505 was too broad — the broad-chapter kg YoY was
   only +1.4% at 2026-02 vs +18% specifically on 85051110). With the
@@ -171,7 +174,7 @@ within ±0.1pp after adding the Pork offal sub-group); EU motor-
 vehicle-parts exports to China (-€2.03B, Soapbox said -€2.01B);
 BEV imports from China 2023→2025 (-45.6% vs Soapbox's -43%).
 Stage A pre-registration + Stage B results live in
-[`dev_notes/soapbox-validation-2026-05-11.md`](../dev_notes/soapbox-validation-2026-05-11.md).
+[`dev_notes/2026-05-11-soapbox-validation.md`](../dev_notes/2026-05-11-soapbox-validation.md).
 The validation is a living doc — re-run after any major analyser
 change, same as shock-validation.
 

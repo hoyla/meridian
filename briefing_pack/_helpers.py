@@ -464,7 +464,7 @@ def _threshold_fragility_annotation(curr_eur: Any, prior_eur: Any, threshold_eur
         f"- ⚖️ **Near low-base threshold** ({_fmt_eur(smaller)} vs "
         f"€{thr/1e6:.0f}M threshold) — classification is fragile to "
         "small threshold changes; see "
-        "`dev_notes/sensitivity-sweep-2026-05-10.md`."
+        "`dev_notes/2026-05-10-sensitivity-sweep.md`."
     )
 
 

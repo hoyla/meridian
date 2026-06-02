@@ -12,8 +12,8 @@ see [`../dev_notes/`](../dev_notes/).
   three docs on first mention of each term.
 - **[architecture.md](architecture.md)** — system overview. Three
   sources, three layers, append-plus-supersede findings, the
-  per-export bundle, the CLI surface, configuration, external
-  dependencies.
+  per-export bundle, the CLI surface, source-freshness monitoring,
+  configuration, external dependencies.
 - **[methodology.md](methodology.md)** — what each finding means
   and when to quote it. Why the three sources don't agree, the
   anomaly subkinds, caveats, trajectory shapes, the hypothesis
@@ -41,6 +41,12 @@ for any unfamiliar term in either.
 [methodology.md §0 (why sources don't agree)](methodology.md#0-sources-and-why-they-dont-agree)
 + [§7 (known fragility)](methodology.md#7-known-fragility)
 + [§10 (known editorial-output limitations)](methodology.md#10-known-editorial-output-limitations).
+
+**"I'm running or scheduling the tool (periodic cycle, source probes, Drive publishing)."**
+[architecture.md §CLI surface](architecture.md#cli-surface) — the
+`--periodic-run`, `--probe-source` / `--source-status`, and
+`--upload-to-drive` commands, and how they fit the scheduler / publish
+flow. The root [README](../README.md) Usage block has copy-paste examples.
 
 **"I'm adding a new HS group / analyser / data source."**
 [architecture.md TL;DR](architecture.md#architecture) for the layout,

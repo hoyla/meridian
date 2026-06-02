@@ -7,7 +7,7 @@ rows for cycles that wrote) — most rows here will be no-ops, which is
 exactly the signal we want when debugging "did the Routine fire today
 and silently no-op, or did it not fire at all?"
 
-See `dev_notes/logging-policy.md`.
+See `dev_notes/2026-05-15-logging-policy.md`.
 """
 from __future__ import annotations
 

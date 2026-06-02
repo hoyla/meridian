@@ -1,7 +1,7 @@
 """Heading-anchor decision spike — OAuth + Drive upload + Docs-API touch.
 
 Settles the open question from the docx-anchor investigation (see
-`dev_notes/2026-05-16_docx-drive-spike.md`): Google Docs assigns a
+`dev_notes/2026-05-16-docx-drive-spike.md`): Google Docs assigns a
 `headingId` (the `#heading=h.xxxx` navigation anchor) lazily, when a
 heading paragraph is created/edited *through the editor*. Markdown
 import mints them; .docx import does not. Manually cutting+pasting a

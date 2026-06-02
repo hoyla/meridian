@@ -1,7 +1,7 @@
 """Publication-calendar engine: when is a source's data for a period *due*?
 
 This is the expectation axis introduced 2026-06-02 (see
-`dev_notes/eurostat-expectation-axis-design-2026-06-02.md`). It replaces the
+`dev_notes/2026-06-02-eurostat-expectation-axis-design.md`). It replaces the
 old hardcoded "5 weeks past period close" fetch-gate (`not_yet_eligible`) with
 a derived expectation for a candidate period:
 

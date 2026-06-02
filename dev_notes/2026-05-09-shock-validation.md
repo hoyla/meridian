@@ -108,7 +108,7 @@ effects, not direct):
   EU energy diversification accelerates Chinese solar imports. Eventually
   rolls over (the well-known 2024 collapse from oversupply).
 - `hs_group_yoy` — Wind generating sets / Wind turbine components: rising
-  through 2022–2023. Tan article (`dev_notes/editorial-sources.md`) data
+  through 2022–2023. Tan article (`docs/editorial-sources.md`) data
   point: "exports surged 50% in 2025" — should see precursor in the 2022–2024
   trajectory.
 - `hs_group_trajectory` — Solar PV: should classify as `inverse_u_peak` over
@@ -177,7 +177,7 @@ DB state after the clean-state rebuild (Phase 5):
   in the predicted ratio (HK ~28% of CN row count is plausible
   given HK reports finer commodity detail per shipment).
 - **GACC**: 149 section-4 releases across 2019-2026 (2018 absent —
-  parser title-format gap, see `forward-work-gacc-2018-parser.md`).
+  parser title-format gap, see `2026-05-10-forward-work-gacc-2018-parser.md`).
 - **Active findings**: 5,394 total —
   - hs_group_yoy: 2,326 (flow=1) + 2,270 (flow=2) = 4,596
   - hs_group_trajectory: 3 + 2 = 5  ⚠ very low — see Cross-shock §5

@@ -507,7 +507,7 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
   ('Wind generating sets only',
    'HS 850231 — wind-powered electric generating sets. Narrower than "Wind turbine components"; isolates the finished-turbine question from generator parts and steel towers.',
    ARRAY['850231%'], 'seed:tan_article'),
-  -- Added after the Soapbox validation pass (dev_notes/soapbox-validation-2026-05-11.md).
+  -- Added after the Soapbox validation pass (dev_notes/2026-05-11-soapbox-validation.md).
   -- Soapbox routinely cites pork meat and pork offal separately — both as
   -- targets of China''s anti-dumping action and the resulting volume drops
   -- (e.g. 2025 meat -11%, offal -3%). The existing Pork (HS 0203) group covers
@@ -516,7 +516,7 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
   ('Pork offal (HS 0206 swine)',
    'HS 0206 swine sub-codes — 020630 (fresh/chilled), 020641 (frozen liver), 020649 (frozen other). Sibling to "Pork (HS 0203)". Soapbox tracks pork meat and pork offal separately when reporting on EU-China pork trade and China''s anti-dumping action; surfacing each as its own finding makes both story sides directly quotable.',
    ARRAY['020630%', '020641%', '020649%'], 'seed:soapbox_validation'),
-  -- Added after the Soapbox validation pass (dev_notes/soapbox-validation-2026-05-11.md).
+  -- Added after the Soapbox validation pass (dev_notes/2026-05-11-soapbox-validation.md).
   -- The broad Permanent magnets (HS 8505) group spans electromagnets,
   -- electromagnetic couplings and various other 8505 sub-codes. The
   -- editorially-loaded story — sintered NdFeB magnets, ~93% from China,
@@ -530,7 +530,7 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
   ('Sintered NdFeB magnets (CN8 85051110)',
    'CN8 85051110 — sintered neodymium-iron-boron permanent magnets. Narrower than "Permanent magnets" (HS 8505 broad). Critical input for EV traction motors, wind-turbine generators, robotics, advanced electronics. China supplies the dominant share of extra-EU imports.',
    ARRAY['85051110%'], 'seed:soapbox_validation'),
-  -- Added after the Soapbox validation pass (dev_notes/soapbox-validation-2026-05-11.md, A2.3).
+  -- Added after the Soapbox validation pass (dev_notes/2026-05-11-soapbox-validation.md, A2.3).
   -- Natural graphite in powder/flake form (HS 250410) has been under
   -- China export-licence control since late 2023 on dual-use grounds.
   -- Soapbox 2026-04-27: "EU imports of natural graphite from China fell
@@ -540,7 +540,7 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
    'CN8 250410 — natural graphite in powder or flake form. Under China export-licence control since late 2023 on dual-use grounds; supply concentration and policy direction are recurring Soapbox / Reuters / FT story material. Narrower than chapter-level HS 2504 (which also includes lump and other forms).',
    ARRAY['250410%'], 'seed:soapbox_validation'),
   -- Added after the 2026-05-12 A1 re-test
-  -- (dev_notes/soapbox-validation-2026-05-11.md#a1-2026-05-11). Soapbox's
+  -- (dev_notes/2026-05-11-soapbox-validation.md#a1-2026-05-11). Soapbox's
   -- A1 headline analytical move is the "China share of EU imports by qty
   -- vs value" pattern across less-visible inputs: amino acids, adipic acid,
   -- choline, vanillin, ethylvanillin, feed premixes, inorganic acids,
@@ -734,7 +734,7 @@ INSERT INTO cif_fob_baselines (partner_iso2, baseline_pct, source, source_url, n
 -- distinguishes manual (ad-hoc) renders from periodic-run cycle outputs;
 -- only the latter participate in the global sequence a regular subscriber
 -- follows. On-demand renders for new users are 'manual' and don't
--- advance the cycle (see dev_notes/periodic-runs-design-2026-05-11.md).
+-- advance the cycle (see dev_notes/2026-05-11-periodic-runs-design.md).
 CREATE TABLE brief_runs (
     id              BIGSERIAL PRIMARY KEY,
     generated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -784,7 +784,7 @@ CREATE INDEX idx_routine_check_log_source_checked
 -- LLM-framing rejections: every output the verifier rejects (parse fail
 -- or numeric verification fail). Captures raw output + reason + detail
 -- + model so the failed prose is inspectable post-hoc. See
--- dev_notes/logging-policy.md.
+-- dev_notes/2026-05-15-logging-policy.md.
 CREATE TABLE llm_rejection_log (
     id              BIGSERIAL PRIMARY KEY,
     rejected_at     TIMESTAMPTZ NOT NULL DEFAULT now(),

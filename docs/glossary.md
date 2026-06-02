@@ -202,7 +202,7 @@ The OECD's International Transport and Insurance Costs of
 merchandise trade dataset. Source of the per-(EU member, China)
 CIF/FOB baselines in `cif_fob_baselines` (2022 values).
 Reproducibility notes in
-[`dev_notes/cif-fob-baselines-2026-05-10.md`](../dev_notes/cif-fob-baselines-2026-05-10.md).
+[`dev_notes/2026-05-10-cif-fob-baselines.md`](../dev_notes/2026-05-10-cif-fob-baselines.md).
 
 ### Soapbox Trade
 The Substack at <https://soapboxtrade.substack.com>. The model
@@ -257,6 +257,22 @@ the brief's methodology footer. **Per-finding-variable** caveats
 `low_kg_coverage`, etc.) ride on each finding's `caveat_codes`
 array and surface inline.
 See [methodology.md §3](methodology.md#3-caveats-reference).
+
+### Expectation axis (none_expected / due / overdue)
+Whether a source's data for a candidate period is *due yet*, derived
+from the source's own publication schedule (see
+[Release calendar](#release-calendar)). `none_expected` — today is
+before the scheduled publication date, so a quiet gap is normal. `due`
+— today is on/just after the scheduled date (a small grace window
+absorbs weekend shifts); data is expected now. `overdue` — the
+scheduled date has passed and the data still hasn't appeared. The
+expectation is recorded alongside, but independent of, the
+[probe](#probe-source-probe) *result* (`new_data` / `no_change` /
+`error`): a release missing past its date is `no_change × overdue`
+(worth a human glance); an early arrival is `new_data × none_expected`.
+Replaced the old hardcoded "fetch 5 weeks after period close" gate on
+2026-06-02.
+See [methodology.md §0](methodology.md#source-freshness-the-expectation-axis).
 
 ### Finding
 One row in the `findings` table. Has a `kind` (always `anomaly`
@@ -314,6 +330,25 @@ The deployment-agnostic orchestrator: `python scrape.py
 scope/flow combos, regenerates the findings export bundle.
 Wrapped in a Claude Code Routine that fires daily.
 See [architecture.md §Periodic-run orchestrator](architecture.md#periodic-run-orchestrator-phase-69).
+
+### Probe (source probe)
+A single always-on check of one upstream source for the next candidate
+period: `python scrape.py --probe-source {eurostat|hmrc|gacc}`. It
+computes the next period due, does a cheap HTTP header check (which
+gates the expensive Eurostat bulk download), ingests if new, classifies
+the [expectation](#expectation-axis-none_expected--due--overdue), and
+records the outcome to the `routine_check_log` table.
+`--source-status` prints a rolled-up view. The tool now probes every
+cycle rather than waiting on a fixed lag.
+
+### Release calendar
+The hand-entered publication schedule per source, used to derive the
+[expectation axis](#expectation-axis-none_expected--due--overdue).
+Provenance: the Eurostat "G.3 Trade in goods Publication Calendar" PDF
+(extra-EU detailed trade — our CN/HK/MO partners — lands ~46 days after
+the reference month ends) and the HMRC OTS release calendar (~6-week
+lag, usually a few days ahead of Eurostat for the same month). Lives in
+`release_calendar.py`.
 
 ### Predictability badge
 🟢 / 🟡 / 🔴 next to each HS group heading in the brief.

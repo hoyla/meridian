@@ -170,8 +170,8 @@ EU27_EXCLUDE_REPORTERS: tuple[str, ...] = ("GB",)
 # All analyser queries below apply HS-pattern LIKE filters (e.g. '8507%')
 # that don't match '000TOTAL' so they're unaffected, but ANY ad-hoc
 # direct sum (sanity checks, validation scripts) MUST exclude it. See
-# `dev_notes/forward-work-eurostat-aggregate-scale.md` for the full
-# investigation.
+# `dev_notes/history.md` ("Eurostat aggregate-scale 2x mystery —
+# RESOLVED") for the full investigation.
 EUROSTAT_AGGREGATE_PRODUCT_NC: str = "000TOTAL"
 
 # Comparison scope: which reporter side(s) to sum on the China-trade

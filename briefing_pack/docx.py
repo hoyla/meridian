@@ -4,7 +4,7 @@ Lisa-facing surface. The markdown stays canonical (NotebookLM-feed,
 per `memory/architecture_journalist_surfaces.md` — keep LLM output /
 interpretation OUTSIDE documents downstream LLM tools will read).
 Verified Drive → Google Docs round-trip fidelity 2026-05-16; see
-`dev_notes/2026-05-16_docx-drive-spike.md`.
+`dev_notes/2026-05-16-docx-drive-spike.md`.
 
 Architecture (v4, 2026-05-16 evening — full markdown-content parity):
 

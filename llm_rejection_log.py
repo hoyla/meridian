@@ -6,7 +6,7 @@ warning log line is preserved as Layer 2 diagnostics; this is the
 queryable persistent record so the rejected prose stays inspectable
 once terminal scrollback rolls off.
 
-See `dev_notes/logging-policy.md` for the policy this fits into.
+See `dev_notes/2026-05-15-logging-policy.md` for the policy this fits into.
 """
 from __future__ import annotations
 

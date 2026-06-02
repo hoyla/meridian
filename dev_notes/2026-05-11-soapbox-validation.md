@@ -4,7 +4,7 @@ A peer-comparison audit. We pick quantitative claims from recent Soapbox
 Trade (https://soapboxtrade.substack.com) articles, write down what our
 analyser **should** produce against the same period and product, and only
 then run the comparison. The discipline mirrors
-`dev_notes/shock-validation-2026-05-09.md` — predict, then look — because
+`dev_notes/2026-05-09-shock-validation.md` — predict, then look — because
 Soapbox sits inside our own LLM-framing prompt as a tone target
 (`docs/editorial-sources.md`) and was the source for at least one HS
 group (Pork, `schema.sql:443`), so the risk of an unconscious tune-and-look
@@ -54,9 +54,9 @@ Results columns from the live DB.
 ## Scope conventions used in Expected blocks
 
 - **`scope=eu_27`**: our default EU-27 sum, Eurostat reporters minus GB.
-- **`scope=eu_27_plus_uk`**: only available where HMRC ingest is live
-  (currently no — `dev_notes/forward-work-uk-data-gap.md`). Annotated
-  `WAIT-UK` until then.
+- **`scope=eu_27_plus_uk`**: available where HMRC ingest is live
+  (now live — see `dev_notes/history.md` §6.1; was annotated
+  `WAIT-UK` at the time of this note).
 - **`partners=CN`**: Soapbox/Merics single-partner convention.
 - **`partners=CN_HK_MO`**: our multi-partner default. **Both should be
   pre-registered and compared** wherever the Soapbox phrasing is ambiguous
@@ -361,7 +361,7 @@ appears here too).
   - Natural key: `hs_group='EV + hybrid passenger cars', current_end='2026-02', flow=1`
   - Expected (CN-only): Eurostat 12mo to 2026-02 YoY should be solidly
     positive; cross-check with Lisa's article reproducibility result in
-    `shock-validation-2026-05-09.md:300-305` ("our 12mo-ending-2026-02
+    `2026-05-09-shock-validation.md:300-305` ("our 12mo-ending-2026-02
     total is €10.46B (≈$11.3B)"). For a Q1-2026 vs Q1-2025 comparison
     rather than rolling 12mo, derive directly from observations.
 - Expected: +87% ±10pp on the YoY (CN-only, GACC USD); €/$ FX in the
@@ -939,9 +939,9 @@ After per-article Results are filled, sanity-check:
 - **Per-reporter hs_group rollup** — A4.5 (Germany leading EU's January
   drop) and A5.6 (Germany car-parts) need it. Currently
   hs_group_yoy aggregates across all EU-27 reporters with no breakdown.
-- **HMRC ingest** — A1.5 (UK trade with China estimate) blocked until
-  HMRC ingest lands; pointer at
-  `dev_notes/forward-work-uk-data-gap.md`.
+- **HMRC ingest** — A1.5 (UK trade with China estimate) was blocked
+  until HMRC ingest landed; now live (see `dev_notes/history.md`
+  §6.1).
 - **Aggregate-level findings** — almost every Soapbox aggregate claim
   (EU-CN total imports, total exports, total deficit, by month or by
   year) would benefit from a named `aggregate_yoy` finding kind. Some
@@ -980,12 +980,11 @@ After per-article Results are filled, sanity-check:
 
 ## Companion files
 
-- `dev_notes/shock-validation-2026-05-09.md` — the parent validation
+- `dev_notes/2026-05-09-shock-validation.md` — the parent validation
   pattern. Read first.
-- `dev_notes/forward-work-uk-data-gap.md` — UK-side data gap blocking
-  A1.5. **HMRC ingest is actually live as of this validation run** —
-  `hs_group_yoy_uk` and `hs_group_yoy_combined` findings exist; the
-  forward-work doc is stale.
+- `dev_notes/history.md` §6.1 — the UK-side data gap that blocked
+  A1.5, and its resolution. **HMRC ingest is live as of this validation
+  run** — `hs_group_yoy_uk` and `hs_group_yoy_combined` findings exist.
 - `docs/editorial-sources.md` — Soapbox positioning and tone notes.
 - `schema.sql` (lines 397-452) — canonical seeded hs_groups; verify
   any new draft hs_group against this list before adding.
@@ -1084,7 +1083,7 @@ The fix and its safeguards already exist in the repo:
 (`'8505%'`, `'85%'`, etc.) that naturally exclude `'000TOTAL'`.
 
 **The only stale artifact** is the annual snapshot table in
-[shock-validation-2026-05-09.md:404-415](shock-validation-2026-05-09.md)
+[2026-05-09-shock-validation.md:404-415](2026-05-09-shock-validation.md)
 — written *one day before* the 2x mystery was resolved, so its raw
 sums (2024 imports €1,058B etc.) double-count by 2x. Real `000TOTAL`-only
 EU-27 imports from CN: **2024 €525.7B**, **2025 €559.5B**. That table
@@ -1252,7 +1251,7 @@ The validation pass surfaced six concrete asks for the analyser pipeline, ranked
 3. ~~**Extend "Pork (HS 0203)" to include offal (HS 0206)** — or split into two groups. A6.5 and A10.3 cite both consistently; the offal data is in our DB but not aggregated. Trivial change.~~ **DONE 2026-05-11**: split into two groups (Pork HS 0203 = meat; Pork offal HS 0206 swine = id 33).
 4. **Per-reporter hs_group rollup** (covers A4.5, A5.6, and any future "Germany leads the decline" story). HMRC integration shows the rollup is feasible per source; extending per-reporter within Eurostat is a query addition, not new ingestion.
 5. **GACC section 5/6 ingest** OR Eurostat-side mirror for "China's exports of EV+hybrid to EU at HS-CN8 level" (covers A2.1, A4.1, A4.2, A7.1). Section 5/6 only has ~30 hand-curated commodity names; the cleaner path is to rely on Eurostat for HS-level and accept the FOB/CIF caveat.
-6. ~~**Refresh the annual snapshot table in [shock-validation-2026-05-09.md:404-415](shock-validation-2026-05-09.md)** — those raw sums pre-date the 2026-05-10 000TOTAL filter rule and are 2x inflated. Underlying analysers were always correct; only that one hand-rolled snapshot table is stale.~~ **DONE 2026-05-11**: refreshed using 000TOTAL canonical aggregate. The CN-only 2025 deficit now reads €360.0B — literally to the percentage point matching Lisa O'Carroll's "€360bn 2025 surplus" cite. Surfaced a separate pre-existing artefact: 2017 has duplicate 000TOTAL rows from the pre-v2 COMEXT format (sp=1: 648 rows for 2017 vs 351 for 2018) — flagged in the refreshed table; no analyser output affected.
+6. ~~**Refresh the annual snapshot table in [2026-05-09-shock-validation.md:404-415](2026-05-09-shock-validation.md)** — those raw sums pre-date the 2026-05-10 000TOTAL filter rule and are 2x inflated. Underlying analysers were always correct; only that one hand-rolled snapshot table is stale.~~ **DONE 2026-05-11**: refreshed using 000TOTAL canonical aggregate. The CN-only 2025 deficit now reads €360.0B — literally to the percentage point matching Lisa O'Carroll's "€360bn 2025 surplus" cite. Surfaced a separate pre-existing artefact: 2017 has duplicate 000TOTAL rows from the pre-v2 COMEXT format (sp=1: 648 rows for 2017 vs 351 for 2018) — flagged in the refreshed table; no analyser output affected.
 
 The first two together would convert roughly **half of the currently-blocked claims** in this validation to clean concur.
 
