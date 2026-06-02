@@ -33,10 +33,22 @@ def test_log_check_rejects_unknown_result(clean_db):
         routine_log.log_check("eurostat", "definitely_not_a_result")
 
 
+def test_log_check_rejects_retired_not_yet_eligible(clean_db):
+    # The 5-week gate was retired 2026-06-02; the app no longer writes it.
+    with pytest.raises(ValueError, match="result must be one of"):
+        routine_log.log_check("eurostat", "not_yet_eligible")
+
+
+def test_log_check_rejects_unknown_expectation(clean_db):
+    with pytest.raises(ValueError, match="expectation must be one of"):
+        routine_log.log_check("eurostat", "no_change", expectation="someday_maybe")
+
+
 def test_log_check_inserts_row_and_returns_id(clean_db, test_db_url):
     rid = routine_log.log_check(
         "eurostat",
         "new_data",
+        expectation="due",
         candidate_period=date(2026, 3, 1),
         notes="fetched 47k rows",
         duration_ms=12_345,
@@ -45,12 +57,14 @@ def test_log_check_inserts_row_and_returns_id(clean_db, test_db_url):
 
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT source, result, candidate_period, notes, duration_ms "
+            "SELECT source, result, expectation, candidate_period, notes, duration_ms "
             "FROM routine_check_log WHERE id = %s",
             (rid,),
         )
         row = cur.fetchone()
-    assert row == ("eurostat", "new_data", date(2026, 3, 1), "fetched 47k rows", 12_345)
+    assert row == (
+        "eurostat", "new_data", "due", date(2026, 3, 1), "fetched 47k rows", 12_345,
+    )
 
 
 def test_compute_status_returns_all_expected_sources_when_empty(clean_db):
@@ -60,6 +74,7 @@ def test_compute_status_returns_all_expected_sources_when_empty(clean_db):
     for s in statuses:
         assert s.last_check_at is None
         assert s.last_result is None
+        assert s.last_expectation is None
         assert s.last_new_data_at is None
         assert s.latest_period_in_db is None
 
@@ -67,14 +82,16 @@ def test_compute_status_returns_all_expected_sources_when_empty(clean_db):
 def test_compute_status_picks_most_recent_per_source(clean_db, test_db_url):
     _seed_releases(test_db_url)
 
-    # Eurostat: earlier ineligible check, later successful fetch.
+    # Eurostat: earlier quiet check (data not expected yet), later successful fetch.
     routine_log.log_check(
-        "eurostat", "not_yet_eligible",
+        "eurostat", "no_change",
+        expectation="none_expected",
         candidate_period=date(2026, 3, 1),
-        notes="candidate not yet 5 weeks past period close",
+        notes="not published yet",
     )
     routine_log.log_check(
         "eurostat", "new_data",
+        expectation="due",
         candidate_period=date(2026, 2, 1),
         notes="fetched 47k rows",
     )
@@ -89,6 +106,7 @@ def test_compute_status_picks_most_recent_per_source(clean_db, test_db_url):
 
     eu = by_src["eurostat"]
     assert eu.last_result == "new_data"
+    assert eu.last_expectation == "due"
     assert eu.last_period_brought_back == date(2026, 2, 1)
     assert eu.latest_period_in_db == date(2026, 2, 1)
     assert eu.error is None
@@ -101,6 +119,7 @@ def test_compute_status_picks_most_recent_per_source(clean_db, test_db_url):
 
     gacc = by_src["gacc"]
     assert gacc.last_result == "no_change"
+    assert gacc.last_expectation is None  # gacc has no expectation axis
     assert gacc.last_new_data_at is None
     assert gacc.latest_period_in_db == date(2026, 4, 1)  # from releases, not the log
 
@@ -122,10 +141,30 @@ def test_render_status_table_aligns_and_surfaces_errors(clean_db, test_db_url):
     out = routine_log.render_status_table(routine_log.compute_status())
     # Header row + all three expected sources rendered, regardless of log presence.
     assert "source" in out and "last_check" in out
+    assert "expectation" in out  # the new axis column
     for src in routine_log.EXPECTED_SOURCES:
         assert src in out
     # Errors get a trailing line in the extras block.
     assert "HTTP 503" in out
+
+
+def test_render_status_table_flags_overdue(clean_db, test_db_url):
+    _seed_releases(test_db_url)
+    # Eurostat candidate is past its scheduled date with nothing fetched.
+    routine_log.log_check(
+        "eurostat", "no_change", expectation="overdue",
+        candidate_period=date(2026, 3, 1), notes="not published yet",
+    )
+    out = routine_log.render_status_table(routine_log.compute_status())
+    assert "overdue" in out                 # the per-source column value
+    assert "OVERDUE: eurostat" in out       # the prominent alert line
+    # A non-overdue source must not raise the alert.
+    routine_log.log_check(
+        "hmrc", "no_change", expectation="none_expected",
+        candidate_period=date(2026, 3, 1),
+    )
+    out2 = routine_log.render_status_table(routine_log.compute_status())
+    assert "OVERDUE: hmrc" not in out2
 
 
 # --- Run-level lifecycle (started / completed / error on source='_routine') ---
@@ -185,7 +224,10 @@ def test_compute_lifecycle_in_flight_when_started_after_previous_completion(clea
 def test_render_status_table_surfaces_in_flight_header(clean_db, test_db_url):
     _seed_releases(test_db_url)
     routine_log.log_check(routine_log.ROUTINE_LIFECYCLE_SOURCE, "started")
-    routine_log.log_check("eurostat", "not_yet_eligible", candidate_period=date(2026, 3, 1))
+    routine_log.log_check(
+        "eurostat", "no_change", expectation="none_expected",
+        candidate_period=date(2026, 3, 1),
+    )
     # No 'completed' — simulates a Routine that died after step 2.
 
     out = routine_log.render_status_table(

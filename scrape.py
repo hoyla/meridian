@@ -16,6 +16,7 @@ Usage:
 """
 
 import argparse
+import dataclasses
 import logging
 import os
 from datetime import date
@@ -33,6 +34,7 @@ import llm_framing
 import lookups
 import parse
 import periodic
+import release_calendar
 import sheets_export
 
 load_dotenv()
@@ -131,23 +133,51 @@ def scrape_release(
             db.finish_run(run_id, status="failed", error_message=str(e))
 
 
+@dataclasses.dataclass(frozen=True)
+class IngestOutcome:
+    """What a single-period ingest attempt did, so callers (notably
+    `probe_source`) can map it to a routine_check_log result.
+
+    status:
+      success — rows ingested for the period
+      absent  — the source hasn't published this period yet (no write)
+      empty   — the file/response is present but held no rows for our filters
+                (no release row created)
+      skipped — a precondition was missing (e.g. HMRC FX rate absent)
+      failed  — an exception during fetch/parse/persist
+    """
+
+    status: str
+    rows: int = 0
+    error: str | None = None
+
+
 def scrape_eurostat(
     period: date,
     partners: set[str] | None = None,
     hs_prefixes: tuple[str, ...] | None = None,
     dry_run: bool = False,
-) -> None:
+) -> IngestOutcome:
     """Fetch one Eurostat monthly bulk file, persist raw rows, aggregate, persist observations.
 
     The raw CSV rows are stored verbatim in `eurostat_raw_rows`; the aggregated
     per-cell observations in `observations` carry an FK array back to the raw
     rows so any aggregation can be audited or re-derived.
 
+    Gated by a cheap existence probe: the bulk endpoint returns HTTP 200 with an
+    HTML body for not-yet-published periods, so a blind download would feed
+    garbage to py7zr. `bulk_file_exists` keys on the response headers instead;
+    an unpublished period returns IngestOutcome("absent") without touching the DB.
+
     NB: we don't write the 44 MB raw 7z to source_snapshots — Eurostat bulk files
     are immutable per period (re-fetchable by URL) and storing them would inflate
     the DB. The release row's source_url is the audit trail.
     """
     url = eurostat.bulk_file_url(period)
+    if not dry_run and not eurostat.bulk_file_exists(period):
+        log.info("Eurostat bulk file for %s not published yet — skipping",
+                 period.strftime("%Y-%m"))
+        return IngestOutcome(status="absent")
     log.info("Fetching Eurostat bulk file for %s", period.strftime("%Y-%m"))
     run_id = db.start_run(url) if not dry_run else None
     try:
@@ -167,7 +197,15 @@ def scrape_eurostat(
         if dry_run:
             obs = list(eurostat.aggregate_to_observations(period, [(None, r) for r in raw_rows]))
             log.info("Dry run: would aggregate to %d observations", len(obs))
-            return
+            return IngestOutcome(status="success", rows=len(raw_rows))
+
+        if not raw_rows:
+            # Published file but nothing matched our partner/HS filters. Don't
+            # create an empty release — that would falsely advance max(period).
+            log.info("Eurostat %s: 0 rows after filters — no release created",
+                     period.strftime("%Y-%m"))
+            db.finish_run(run_id, status="success", http_status=response.status_code)
+            return IngestOutcome(status="empty")
 
         raw_ids = db.bulk_insert_eurostat_raw_rows(run_id, raw_rows)
         log.info("Inserted %d eurostat_raw_rows", len(raw_ids))
@@ -177,10 +215,12 @@ def scrape_eurostat(
         counts = db.upsert_observations(run_id, release_id, observations)
         log.info("Persisted: %s", counts)
         db.finish_run(run_id, status="success", http_status=response.status_code)
+        return IngestOutcome(status="success", rows=len(raw_ids))
     except Exception as e:
         log.exception("Eurostat scrape failed for %s", period)
         if run_id is not None:
             db.finish_run(run_id, status="failed", error_message=str(e))
+        return IngestOutcome(status="failed", error=str(e))
 
 
 def _world_aggregate_hs_prefixes_from_hs_groups() -> tuple[str, ...]:
@@ -261,7 +301,7 @@ def scrape_hmrc(
     period: date,
     country_ids: tuple[int, ...] | None = None,
     dry_run: bool = False,
-) -> None:
+) -> IngestOutcome:
     """Fetch one HMRC OTS monthly slice (period × China-and-SARs by default),
     persist raw rows, aggregate, persist observations.
 
@@ -269,18 +309,23 @@ def scrape_hmrc(
     Run `python scrape.py --fetch-fx GBP --fx-since 2017-01` once to
     populate the full ECB history. Without it the conversion to EUR is
     skipped (value_eur left NULL on raw rows; observations would sum to 0).
+
+    HMRC has no 404 / header trick for "not published yet": the OData query
+    simply returns zero rows. An empty period therefore returns
+    IngestOutcome("empty") WITHOUT creating a release row (which would falsely
+    advance max(period) and break the always-probe candidate computation).
     """
     if country_ids is None:
         country_ids = hmrc.DEFAULT_COUNTRY_IDS
 
     fx = lookups.lookup_fx("GBP", "EUR", period)
     if fx is None:
-        log.error(
-            "HMRC scrape for %s skipped — no GBP/EUR FX rate in fx_rates "
-            "for that period. Run --fetch-fx GBP first.",
-            period.strftime("%Y-%m"),
+        msg = (
+            f"no GBP/EUR FX rate in fx_rates for {period.strftime('%Y-%m')}; "
+            "run --fetch-fx GBP first"
         )
-        return
+        log.error("HMRC scrape for %s skipped — %s", period.strftime("%Y-%m"), msg)
+        return IngestOutcome(status="skipped", error=msg)
     fx_rate = fx.rate
 
     initial_url = hmrc.ots_query_url(period, country_ids, hmrc.DEFAULT_PAGE_SIZE)
@@ -296,7 +341,15 @@ def scrape_hmrc(
         if dry_run:
             obs = list(hmrc.aggregate_to_observations(period, [(None, r) for r in raw_rows]))
             log.info("Dry run: would aggregate to %d observations", len(obs))
-            return
+            return IngestOutcome(status="success", rows=len(raw_rows))
+
+        if not raw_rows:
+            # OData returned nothing → period not published yet. Don't create
+            # an empty release (it would falsely advance max(period)).
+            log.info("HMRC %s: 0 rows — not published yet, no release created",
+                     period.strftime("%Y-%m"))
+            db.finish_run(run_id, status="success", http_status=response.status_code)
+            return IngestOutcome(status="empty")
 
         # Idempotent re-ingest: clear any prior raw rows for this period
         # before inserting the fresh fetch. Observations are handled by
@@ -313,10 +366,128 @@ def scrape_hmrc(
         counts = db.upsert_observations(run_id, release_id, observations)
         log.info("Persisted: %s", counts)
         db.finish_run(run_id, status="success", http_status=response.status_code)
+        return IngestOutcome(status="success", rows=len(raw_ids))
     except Exception as e:
         log.exception("HMRC scrape failed for %s", period)
         if run_id is not None:
             db.finish_run(run_id, status="failed", error_message=str(e))
+        return IngestOutcome(status="failed", error=str(e))
+
+
+def _latest_release_period(source: str) -> date | None:
+    """The most recent releases.period for `source`, or None if it has none."""
+    with db.transaction() as conn, conn.cursor() as cur:
+        cur.execute("SELECT MAX(period) FROM releases WHERE source = %s", (source,))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def _count_gacc_releases() -> int:
+    with db.transaction() as conn, conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM releases WHERE source = 'gacc'")
+        return cur.fetchone()[0]
+
+
+def _outcome_to_result(
+    candidate: date, outcome: "IngestOutcome",
+) -> tuple[str, str | None, str | None]:
+    """Map an IngestOutcome to a (result, notes, error) routine_check_log triple."""
+    if outcome.status == "success":
+        return "new_data", f"ingested {outcome.rows} raw rows for {candidate:%Y-%m}", None
+    if outcome.status == "absent":
+        return "no_change", "not published yet", None
+    if outcome.status == "empty":
+        return "no_change", "response present but no rows for our filters", None
+    # skipped (missing precondition) or failed (exception) — both are errors
+    # worth surfacing rather than silently swallowing.
+    return "error", None, outcome.error
+
+
+def probe_source(source: str, today: date | None = None) -> str:
+    """Always-probe one upstream source and record the outcome.
+
+    For eurostat / hmrc: compute the next candidate period (max published + 1
+    month), attempt to fetch it (cheap existence probe gates the download),
+    classify the publication-calendar expectation, and write one
+    routine_check_log row carrying both the objective result and the
+    expectation. For gacc: walk the indexes and compare release counts
+    (no candidate-period / expectation concept).
+
+    Replaces the old SKILL.md prose that computed candidates via psql and
+    guessed a 5-week eligibility gate. Returns a one-line human-readable
+    outcome (also printed to stdout for the Routine to surface).
+    """
+    import time
+    import routine_log
+
+    today = today or date.today()
+    started = time.monotonic()
+
+    if source == "gacc":
+        before = _count_gacc_releases()
+        try:
+            run_scrape(urls=None, dry_run=False, force_refetch=False)
+            added = _count_gacc_releases() - before
+            result = "new_data" if added > 0 else "no_change"
+            notes = (f"fetched {added} new releases" if added > 0
+                     else "walked indexes, no new releases")
+            error = None
+        except Exception as e:
+            log.exception("GACC walk failed")
+            result, notes, error = "error", None, str(e)
+        duration_ms = int((time.monotonic() - started) * 1000)
+        routine_log.log_check("gacc", result, notes=notes, error=error,
+                              duration_ms=duration_ms)
+        line = f"gacc: {result}" + (f" — {notes}" if notes else "") \
+            + (f" — {error}" if error else "")
+        print(line)
+        return line
+
+    if source not in ("eurostat", "hmrc"):
+        raise ValueError(f"unknown probe source {source!r}")
+
+    latest = _latest_release_period(source)
+    if latest is None:
+        routine_log.log_check(
+            source, "no_change",
+            notes="no prior releases in DB; cannot compute candidate period",
+        )
+        line = (f"{source}: no_change — no prior releases in DB to anchor the "
+                "candidate period")
+        print(line)
+        return line
+
+    candidate = release_calendar.next_period(latest)
+    expectation = release_calendar.classify_expectation(source, candidate, today)
+
+    if today < release_calendar.period_close(candidate):
+        # Hard floor: the candidate's reference month hasn't ended, so data for
+        # it cannot exist yet — skip the network probe (a guaranteed no-op).
+        # This is NOT the retired 5-week heuristic: we still probe through the
+        # [period_close → expected_publish] window, so early arrivals are
+        # caught and the publication lag stays un-censored. We only skip probes
+        # before the month has even closed, where there is nothing to find.
+        result, notes, error = "no_change", "reference month not closed yet", None
+    else:
+        if source == "eurostat":
+            outcome = scrape_eurostat(candidate, partners={"CN", "HK", "MO"})
+        else:  # hmrc
+            outcome = scrape_hmrc(candidate)
+        result, notes, error = _outcome_to_result(candidate, outcome)
+
+    duration_ms = int((time.monotonic() - started) * 1000)
+    routine_log.log_check(
+        source, result, expectation=expectation, candidate_period=candidate,
+        notes=notes, error=error, duration_ms=duration_ms,
+    )
+    line = (
+        f"{source}: {result} × {expectation or '—'} "
+        f"(candidate {candidate:%Y-%m})"
+        + (f" — {notes}" if notes else "")
+        + (f" — {error}" if error else "")
+    )
+    print(line)
+    return line
 
 
 def _parse_period(s: str) -> date:
@@ -549,13 +720,25 @@ def main() -> None:
     p.add_argument(
         "--log-result",
         choices=[
-            "new_data", "no_change", "not_yet_eligible", "error",
+            "new_data", "no_change", "error",
             "started", "completed",
         ],
         help=(
             "With --log-check: outcome of the check. The 'started' / "
             "'completed' values are reserved for the whole-Routine "
-            "lifecycle bookends — paired with --log-check _routine."
+            "lifecycle bookends — paired with --log-check _routine. "
+            "(The old 'not_yet_eligible' was retired 2026-06-02 — we always "
+            "probe now; see --probe-source.)"
+        ),
+    )
+    p.add_argument(
+        "--log-expectation",
+        choices=["none_expected", "due", "overdue"],
+        help=(
+            "With --log-check: the publication-calendar expectation for the "
+            "candidate period (none_expected / due / overdue). Normally set "
+            "automatically by --probe-source; this is for manual / test use. "
+            "Omit for gacc and the _routine bookends."
         ),
     )
     p.add_argument(
@@ -582,12 +765,26 @@ def main() -> None:
         help="With --log-check: wall-clock duration of the check, milliseconds.",
     )
     p.add_argument(
+        "--probe-source", metavar="SOURCE",
+        choices=["eurostat", "hmrc", "gacc"],
+        help=(
+            "Always-probe one source and record the outcome to "
+            "routine_check_log in one step: compute the next candidate period, "
+            "fetch it if available (a cheap header probe gates the Eurostat "
+            "download), ingest, classify the publication-calendar expectation "
+            "(none_expected / due / overdue), and log result + expectation. "
+            "The daily Routine calls this once per source — it replaces the "
+            "old psql-candidate + 5-week-gate prose. Prints a one-line outcome."
+        ),
+    )
+    p.add_argument(
         "--source-status", action="store_true",
         help=(
             "Print a rolled-up debug view of routine_check_log: per "
             "expected source (eurostat / hmrc / gacc), when last checked, "
-            "when new data last arrived, what's the latest period in the "
-            "DB. No writes."
+            "the latest result × expectation, when new data last arrived, "
+            "what's the latest period in the DB, and a flag for anything "
+            "overdue. No writes."
         ),
     )
     p.add_argument(
@@ -628,6 +825,10 @@ def main() -> None:
     )
     args = p.parse_args()
 
+    if args.probe_source:
+        probe_source(args.probe_source)
+        return
+
     if args.log_check:
         if not args.log_result:
             p.error("--log-check requires --log-result")
@@ -635,14 +836,15 @@ def main() -> None:
         rid = routine_log.log_check(
             args.log_check,
             args.log_result,
+            expectation=args.log_expectation,
             candidate_period=args.log_period,
             notes=args.log_notes,
             error=args.log_error,
             duration_ms=args.log_duration_ms,
         )
         log.info(
-            "routine_check_log id=%d (source=%s result=%s)",
-            rid, args.log_check, args.log_result,
+            "routine_check_log id=%d (source=%s result=%s expectation=%s)",
+            rid, args.log_check, args.log_result, args.log_expectation,
         )
         return
 

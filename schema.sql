@@ -760,13 +760,22 @@ CREATE TABLE routine_check_log (
     source           TEXT        NOT NULL,
     checked_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     result           TEXT        NOT NULL,
+    -- Derived from the source's publication calendar (release_calendar.py).
+    -- NULL for gacc (no candidate-period concept) and the _routine bookends.
+    expectation      TEXT,
     candidate_period DATE,
     notes            TEXT,
     error            TEXT,
     duration_ms      INT,
+    -- 'not_yet_eligible' is retained for historical rows only — the app no
+    -- longer writes it (the 5-week fetch-gate was replaced by the expectation
+    -- axis 2026-06-02; we always probe now). See the migration note.
     CHECK (result IN (
         'new_data', 'no_change', 'not_yet_eligible', 'error',
         'started', 'completed'
+    )),
+    CHECK (expectation IS NULL OR expectation IN (
+        'none_expected', 'due', 'overdue'
     ))
 );
 CREATE INDEX idx_routine_check_log_source_checked

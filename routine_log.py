@@ -7,10 +7,19 @@ to `routine_check_log` so `python scrape.py --source-status` can show:
 
 - when each source was last checked
 - when each source last brought back new data
-- whether the most recent attempt was a successful fetch, a "nothing new
-  yet" no-op, an explicit skip (the next candidate period isn't 5 weeks
-  past period-close yet, so the Routine doesn't bother fetching) or an
-  error
+- the most recent attempt's two orthogonal axes:
+    result      — the objective outcome: new_data / no_change / error
+    expectation — derived from the source's publication calendar
+                  (release_calendar.py): none_expected / due / overdue,
+                  or NULL for gacc (no candidate-period concept)
+
+The two axes combine: a quiet expected gap is no_change × none_expected
+(ignore); a release missing past its scheduled date is no_change × overdue
+(the one row a human should look at); an early arrival is new_data ×
+none_expected. This replaced the old "5 weeks past period close" fetch-gate
+(result='not_yet_eligible') — we always probe now, because fetching is
+idempotent and harmless, and the calendar gives the "is data expected yet?"
+signal more precisely. See dev_notes/eurostat-expectation-axis-design-2026-06-02.md.
 
 Debug-only — no journalist-facing artefact reads from here. The Routine
 SKILL.md is the only writer in production; tests + ad-hoc CLI invocations
@@ -24,6 +33,7 @@ from datetime import date, datetime
 from typing import Iterable, Sequence
 
 import db
+from release_calendar import VALID_EXPECTATIONS
 
 log = logging.getLogger(__name__)
 
@@ -40,9 +50,13 @@ EXPECTED_SOURCES: tuple[str, ...] = ("eurostat", "hmrc", "gacc")
 # Routine died mid-run; rely on the source rows to see how far it got.
 ROUTINE_LIFECYCLE_SOURCE: str = "_routine"
 
+# Result values the application writes. 'not_yet_eligible' is intentionally
+# absent — the 5-week fetch-gate was replaced by the expectation axis
+# (2026-06-02); we always probe now. Historical rows may still carry it, and
+# the DB CHECK still permits it, but log_check no longer accepts it.
 VALID_RESULTS: frozenset[str] = frozenset(
     {
-        "new_data", "no_change", "not_yet_eligible", "error",
+        "new_data", "no_change", "error",
         "started", "completed",
     }
 )
@@ -52,25 +66,38 @@ def log_check(
     source: str,
     result: str,
     *,
+    expectation: str | None = None,
     candidate_period: date | None = None,
     notes: str | None = None,
     error: str | None = None,
     duration_ms: int | None = None,
 ) -> int:
-    """Insert one row into routine_check_log; returns the new id."""
+    """Insert one row into routine_check_log; returns the new id.
+
+    `expectation` is the publication-calendar axis (none_expected / due /
+    overdue) — None for gacc and the _routine lifecycle bookends. Compute it
+    via release_calendar.classify_expectation.
+    """
     if result not in VALID_RESULTS:
         raise ValueError(
             f"result must be one of {sorted(VALID_RESULTS)}, got {result!r}"
+        )
+    if expectation is not None and expectation not in VALID_EXPECTATIONS:
+        raise ValueError(
+            f"expectation must be one of {sorted(VALID_EXPECTATIONS)} or None, "
+            f"got {expectation!r}"
         )
     with db.transaction() as conn, conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO routine_check_log
-                (source, result, candidate_period, notes, error, duration_ms)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                (source, result, expectation, candidate_period,
+                 notes, error, duration_ms)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (source, result, candidate_period, notes, error, duration_ms),
+            (source, result, expectation, candidate_period,
+             notes, error, duration_ms),
         )
         return cur.fetchone()[0]
 
@@ -80,6 +107,7 @@ class SourceStatus:
     source: str
     last_check_at: datetime | None
     last_result: str | None
+    last_expectation: str | None
     last_new_data_at: datetime | None
     last_period_brought_back: date | None
     latest_period_in_db: date | None
@@ -165,7 +193,7 @@ def compute_status(
         cur.execute(
             """
             SELECT DISTINCT ON (source)
-                source, checked_at, result, notes, error
+                source, checked_at, result, expectation, notes, error
             FROM routine_check_log
             WHERE source = ANY(%s)
             ORDER BY source, checked_at DESC
@@ -205,8 +233,9 @@ def compute_status(
             source=src,
             last_check_at=check[0] if check else None,
             last_result=check[1] if check else None,
-            notes=check[2] if check else None,
-            error=check[3] if check else None,
+            last_expectation=check[2] if check else None,
+            notes=check[3] if check else None,
+            error=check[4] if check else None,
             last_new_data_at=new[0] if new else None,
             last_period_brought_back=new[1] if new else None,
             latest_period_in_db=latest_release.get(src),
@@ -235,13 +264,14 @@ def render_status_table(
         return d.strftime("%Y-%m") if d else "—"
 
     headers = [
-        "source", "last_check", "last_result",
+        "source", "last_check", "last_result", "expectation",
         "last_new_data", "period_brought_back", "latest_in_db",
     ]
     body = [[
         row.source,
         fmt_ts(row.last_check_at),
         row.last_result or "—",
+        row.last_expectation or "—",
         fmt_ts(row.last_new_data_at),
         fmt_period(row.last_period_brought_back),
         fmt_period(row.latest_period_in_db),
@@ -262,6 +292,15 @@ def render_status_table(
     lines.extend(table_lines)
 
     extras: list[str] = []
+    # Surface "anything overdue?" prominently and independently of whether
+    # anything landed — a source past its scheduled publication date with no
+    # data yet is the one state worth a human glance.
+    overdue = [row.source for row in rows if row.last_expectation == "overdue"]
+    if overdue:
+        extras.append(
+            f"  OVERDUE: {', '.join(overdue)} — scheduled release date "
+            "passed, data not yet seen"
+        )
     for row in rows:
         if row.error:
             extras.append(f"  {row.source}: last error → {row.error}")

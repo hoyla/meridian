@@ -23,7 +23,16 @@ Notes from the recon (see project memory `project_gacc_datasources.md`):
   only the UK-specific `full_partxixu_v2_*` shows up. Fetch by direct URL.
 - PRODUCT_NC is HS-CN8, stored without leading zeros — must zero-pad on load.
 - FLOW: 1 = import, 2 = export. PARTNER/REPORTER are ISO-2 codes.
-- Latest available lags real time by ~10 weeks.
+- Our partners (CN/HK/MO) are extra-EU; extra-EU detailed trade publishes ~46
+  days (~6.6 weeks) after the reference month ends — same date as the
+  short-term indicators. (Intra-EU lags ~1 month more.) `release_calendar`
+  holds the authoritative per-month publication dates.
+
+Existence probe gotcha: the bulk endpoint NEVER returns 404. A request for a
+not-yet-published period returns HTTP 200 with an HTML error body. The real
+"does the .7z exist?" discriminator is the response headers
+(Content-Disposition: attachment / Content-Type: application/octet-stream),
+which only the real archive carries — see `bulk_file_exists`.
 """
 
 import csv
@@ -90,6 +99,31 @@ def fetch_bulk_file(period: date, timeout: float = DEFAULT_TIMEOUT) -> FetchResu
         content=r.content,
         sha256=hashlib.sha256(r.content).hexdigest(),
     )
+
+
+def bulk_file_exists(period: date, timeout: float = 30.0) -> bool:
+    """Cheap HEAD probe: is the monthly bulk file published yet?
+
+    The endpoint returns HTTP 200 even for not-yet-published periods (with an
+    HTML error body), so the status code is useless. The real archive is the
+    only response that carries `Content-Disposition: attachment` /
+    `Content-Type: application/octet-stream` — we key on those, on the *final*
+    response after following the redirect. A HEAD avoids pulling the ~25 MB
+    body just to discover the file isn't there.
+    """
+    url = bulk_file_url(period)
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        r = client.head(url)
+    content_type = (r.headers.get("content-type") or "").lower()
+    disposition = (r.headers.get("content-disposition") or "").lower()
+    exists = "attachment" in disposition or content_type.startswith(
+        "application/octet-stream"
+    )
+    log.info(
+        "Eurostat existence probe %s → %s (status=%s, content-type=%r)",
+        url, "present" if exists else "absent", r.status_code, content_type,
+    )
+    return exists
 
 
 def iter_raw_rows(
