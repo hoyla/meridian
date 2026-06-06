@@ -157,7 +157,7 @@ python scrape.py --export-sheet --out-format sheets --spreadsheet-id <ID>   # Go
 
 # Export bundle: read-me + LLM leads + findings + data + HS-group reference
 python scrape.py --briefing-pack                              # ./exports/YYYY-MM-DD-HHMM/{01_Read_Me_First.md, 02_Leads.md, 03_Findings.md, 04_Data.xlsx, 05_Groups.md}
-python scrape.py --briefing-pack --docx                       # also render styled .docx; restructures to mirror the Drive upload (docs at top, .md in a "Markdown versions for use with LLMs etc" subfolder)
+python scrape.py --briefing-pack --docx                       # also render styled .docx; restructures to mirror the Drive upload (docs at top, .md in a "Markdown versions for use with LLMs etc" subfolder); required before --upload-to-drive
 python scrape.py --briefing-pack --briefing-top-n 20          # 20 movers per flow direction
 python scrape.py --briefing-pack --export-dir exports/today   # explicit output folder
 python scrape.py --briefing-pack --export-scope "EV batteries (Li-ion)"  # adds slug to folder + scope line in docs
@@ -181,6 +181,20 @@ python scrape.py --finding-provenance 57378 --force           # regenerate even 
 # itself between briefing-pack runs.
 python scrape.py --groups-glossary                            # → exports/groups-glossary-YYYY-MM-DD.md
 python scrape.py --groups-glossary --out path/to/groups.md    # explicit output path
+
+# Periodic cycle — the full pipeline in one idempotent command (ingest-aware → analyse → render bundle)
+python scrape.py --periodic-run                               # no-op unless a fresher data period has landed
+python scrape.py --periodic-run --force                       # re-run against the same data
+python scrape.py --periodic-run --skip-llm                    # skip the LLM lead-scaffold pass
+# Prints a per-run summary (which sources brought new data; the exact --upload-to-drive command when a
+# briefing was generated) then the 03_Findings.md path on its own final line, for a wrapper to branch on.
+
+# Source freshness monitoring — always-probe + publication-calendar expectation (none_expected/due/overdue)
+python scrape.py --probe-source eurostat                      # probe one source (also: hmrc, gacc); records result + expectation
+python scrape.py --source-status                              # rolled-up per-source view of routine_check_log
+
+# Publish a generated bundle to Google Drive — a deliberate hand-run step (never auto-published)
+python scrape.py --upload-to-drive exports/2026-05-15-1430    # .docx → Google Docs, .xlsx → Sheet; needs a --docx bundle
 ```
 
 The two export surfaces share the same underlying data layer: switching between them — or adding a new one — is a thin render shim, not a re-ingest.
@@ -203,12 +217,15 @@ The two export surfaces share the same underlying data layer: switching between 
 | `hypothesis_catalog.py` | 12 standard causal hypotheses for China-EU/UK trade movements. Each entry carries a description (in the LLM prompt) and corroboration steps (attached deterministically post-pick). |
 | `scripts/`         | One-off analysis scripts (sensitivity sweep, OOS backtest) — not part of the CLI; run directly. |
 | `briefing_pack/` | Five-artefact export bundle into `./exports/YYYY-MM-DD-HHMM[-slug]/`. `03_Findings.md` is the deterministic NotebookLM-ready findings document (no LLM in the loop). `02_Leads.md` is the LLM lead-scaffold companion (anomaly summaries + picked hypotheses + corroboration steps), kept separate so downstream LLM tools reasoning over them see raw findings, not another LLM's interpretation. `04_Data.xlsx` is the 10-tab spreadsheet for data journalists. `05_Groups.md` is the HS group reference (auto-generated from the `hs_groups` table). `01_Read_Me_First.md` is the journalist-facing orientation page copied from the templates directory. Optionally with a `provenance/` subdir when `--with-provenance` is set. All artefacts share a single DB snapshot. With `docx=True` (the default in scheduled runs) the documents are also rendered as styled `.docx` and the folder is restructured to mirror the Google Drive upload. |
-| `drive_export.py` | Publishes a bundle to Google Drive (OAuth `drive.file`): top-level `.docx` → native Google Docs and `04_Data.xlsx` → a Sheet; mints the heading navigation anchors Google's `.docx` import omits (a batched style-flip pass); repoints in-document links via `headingId`; and mirrors the `Markdown versions for use with LLMs etc` subfolder of raw `.md`/`.xlsx`. Idempotent (update-in-place). Target folder via the `MERIDIAN_DRIVE_PARENT_ID` env var; export folders inherit the parent's sharing. |
+| `briefing_pack/drive_export.py` | Publishes a bundle to Google Drive (OAuth `drive.file`) via the manual `--upload-to-drive` CLI — never auto-published: top-level `.docx` → native Google Docs and `04_Data.xlsx` → a Sheet; mints the heading navigation anchors Google's `.docx` import omits (a batched style-flip pass); repoints in-document links via `headingId`; and mirrors the `Markdown versions for use with LLMs etc` subfolder of raw `.md`/`.xlsx`. Idempotent (update-in-place). Fail-loud token: an unattended caller raises `TokenUnusableError` rather than blocking on a browser consent prompt. Target folder via the `MERIDIAN_DRIVE_PARENT_ID` env var; export folders inherit the parent's sharing. |
+| `periodic.py`     | Periodic-cycle orchestrator behind `--periodic-run`: idempotency-checks the latest data period against `brief_runs`, runs every analyser across scope/flow combos, renders the bundle, and returns a `PeriodicRunResult` whose `summary()` names the new-data sources and the manual `--upload-to-drive` command. Deliberately does not auto-publish. |
+| `release_calendar.py` | Pure publication-calendar engine (no DB, no network) for the source-freshness *expectation axis*: given (source, period, today) it classifies `none_expected` / `due` / `overdue` from hand-entered Eurostat/HMRC calendar constants. Replaced the old "5 weeks past period close" fetch-gate (2026-06-02). Surfaced via `--probe-source` / `--source-status`. |
+| `routine_log.py`  | Routine-check telemetry (no journalist surface): records each probe to `routine_check_log` (result × expectation) and computes the `--source-status` view. |
 | `provenance.py`    | Per-finding provenance file generator. Each call writes `provenance/finding-{N}.md` — a journalist-readable audit trail (source URLs, FX rates, plain-English caveats, cross-source check, replay queries). CLI: `--finding-provenance N`. Frozen-snapshot semantics: idempotent on existing files; pass `--force` to regenerate. The `--briefing-pack --with-provenance` flag opt-in copies the editorially-fresh subset (Tier 1 changes + Top-N movers + Top-N leads, typically ~5-15 files) into the export bundle's `provenance/` subdir. Detailed templates cover `gacc_bilateral_aggregate_yoy*`, `hs_group_yoy*` (six scope/flow variants), and `hs_group_trajectory*` (six variants); other subkinds emit a stub. |
 | `sheets_export.py` | 10-tab spreadsheet exporter (xlsx local; the in-place Google Sheets writer is stubbed pending creds — Drive delivery instead converts the xlsx to a Sheet via `drive_export.py`). Tabs: summary (wide, all scopes), hs_yoy_imports/exports (long with scope column), trajectories, mirror_gaps (with per-country CIF/FOB baseline + excess-pp), mirror_gap_movers, low_base_review, predictability_index. Intentionally LLM-free for the same telephone-game reason as the findings document. |
 | `schema.sql`       | Canonical schema (includes lookup-table seeds: hs_groups, country_aliases, caveats, transshipment_hubs, cif_fob_baselines). A fresh setup is `createdb gacc && psql gacc < schema.sql` — no migration replay needed. |
 | `migrations.archived-2026-05-09/` | Historical record of the dev migrations that built up to the current schema. Folded into `schema.sql` on the 2026-05-09 clean-state rebuild; kept for reference but no longer applied. |
-| `dev_notes/`       | In-repo planning artefacts. `roadmap.md` (outstanding work), `history.md` (chronological record of addressed items), open `forward-work-*.md` docs (deferred options), dated analysis artefacts (sensitivity sweep, OOS backtest, CIF/FOB sourcing), and the pre-registered `shock-validation-2026-05-09.md` methodology doc. |
+| `dev_notes/`       | In-repo planning artefacts. `roadmap.md` (outstanding work), `history.md` (chronological record of addressed items), open `forward-work` design docs (deferred options), dated analysis artefacts (sensitivity sweep, OOS backtest, CIF/FOB sourcing), and the pre-registered `2026-05-09-shock-validation.md` methodology doc. All dated notes are named `YYYY-MM-DD-<slug>` so they sort chronologically. |
 | `docs/`            | Repo-level documentation: `architecture.md` (system overview), `methodology.md` (analysis-methodology reference), `editorial-sources.md` (the journalism the tool serves). |
 | `exports/`         | Default output directory for generated `.xlsx` and `.md` exports (gitignored) |
 | `tests/`           | pytest, live local Postgres. FakeBackend keeps Ollama out of the suite. |

@@ -7,7 +7,7 @@
 -- so a missing release past its scheduled date reads as no_change × overdue
 -- (the one row a human should look at), distinct from a quiet expected gap
 -- (no_change × none_expected) and an early arrival (new_data × none_expected).
--- See dev_notes/eurostat-expectation-axis-design-2026-06-02.md and
+-- See dev_notes/2026-06-02-eurostat-expectation-axis-design.md and
 -- release_calendar.py.
 --
 -- This replaces the old hardcoded "5 weeks past period close" fetch-gate that

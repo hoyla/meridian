@@ -1,5 +1,5 @@
 -- 2026-05-15 — three audit-log tables per the new logging policy
--- (dev_notes/logging-policy.md, agreed 2026-05-15). Each captures a
+-- (dev_notes/2026-05-15-logging-policy.md, agreed 2026-05-15). Each captures a
 -- silent system decision the project was previously losing to terminal
 -- scrollback.
 

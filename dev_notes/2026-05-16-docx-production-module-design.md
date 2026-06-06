@@ -1,6 +1,6 @@
 # Docx + charts production module — design (2026-05-16)
 
-Companion to [`2026-05-16_docx-drive-spike.md`](2026-05-16_docx-drive-spike.md).
+Companion to [`2026-05-16-docx-drive-spike.md`](2026-05-16-docx-drive-spike.md).
 The spike validated the architecture; this doc designs the actual
 production module.
 

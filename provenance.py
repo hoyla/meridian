@@ -480,8 +480,8 @@ def _cross_source_block(finding: dict) -> str:
     if iso2 is None:
         return (
             f"No automatic Eurostat counterpart lookup for partner "
-            f"`{partner}` yet — see `forward-work-uk-data-gap.md` and "
-            f"`country_aliases` for the routing table."
+            f"`{partner}` yet — see `country_aliases` for the routing "
+            f"table."
         )
 
     # In GACC, flow=export means China exporting → partner imports.
@@ -609,7 +609,7 @@ def _render_hs_group_yoy(finding: dict) -> str:
     parts.append("")
 
     # ---- What's in this HS group ------------------------------------------
-    # Luke's pack-review note (2026-05-13-1547_pack-review.txt) flagged that
+    # Luke's pack-review note (2026-05-13-1547-pack-review.txt) flagged that
     # journalists need an explicit definition of what each group covers.
     parts.append("## What's in this HS group\n")
     parts.append(f"**{group['name']}**  \n")

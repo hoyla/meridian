@@ -94,7 +94,7 @@ In rough order of cost:
 4. **Accept the 2018 mirror-trade gap**. The EU-side and UK-side
    data fully cover 2018; only the cross-source comparison is
    missing. For most stories this is acceptable — the 2018
-   Section 232 validation in `shock-validation-2026-05-09.md`
+   Section 232 validation in `2026-05-09-shock-validation.md`
    already runs on the Eurostat side without needing GACC.
 
 ## Recommendation

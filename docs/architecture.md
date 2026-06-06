@@ -197,6 +197,30 @@ The four hs-group passes are scope-aware: re-run them with
 `--comparison-scope eu_27 / uk / eu_27_plus_uk` to fill the findings
 document's three per-scope sections.
 
+### Source freshness
+
+```bash
+# Always-probe one source for the next due period and record the outcome
+scrape.py --probe-source eurostat   # (also: hmrc, gacc)
+scrape.py --source-status           # rolled-up per-source view of routine_check_log
+```
+
+`--probe-source` computes the next candidate period for a source, does a
+cheap HTTP header check (which gates the expensive Eurostat bulk
+download), ingests if new, classifies the publication-calendar
+*expectation* (`none_expected` / `due` / `overdue`), and writes the
+outcome to `routine_check_log` in one step. The expectation is derived
+by `release_calendar.py` — a pure module (no DB, no network) of
+hand-entered Eurostat/HMRC calendar constants — and recorded alongside,
+but independent of, the *result* (`new_data` / `no_change` / `error`),
+so a release missing past its date surfaces as `no_change × overdue`.
+This replaced the old hardcoded "fetch 5 weeks after period close" gate
+(the retired `not_yet_eligible` result) on 2026-06-02 — the tool now
+probes every cycle. The `--log-*` flags (`--log-check`, `--log-result`,
+`--log-expectation`, …) write a routine-check row by hand; `--no-record`
+suppresses the write. See [methodology.md §0 "Source
+freshness"](methodology.md#source-freshness-the-expectation-axis).
+
 ### Periodic-run orchestrator (Phase 6.9)
 
 ```bash
@@ -209,19 +233,24 @@ the DB is no fresher than what the last `trigger='periodic_run'` row
 in `brief_runs` already published, exits cleanly as a no-op. Otherwise
 runs every analyser kind across all scope/flow combos (idempotent
 per-row via the supersede chain), optionally runs `llm-framing`
-(`--skip-llm` to omit), and writes the bundled findings export. Prints
-the new `03_Findings.md` path to stdout (empty string on no-op) so the
-calling wrapper (Routine, GHA cron, etc.) can branch on it.
+(`--skip-llm` to omit), and writes the bundled findings export. Prints a
+per-run summary to stdout — which sources brought new data this cycle
+and, when a briefing was generated, the exact manual `--upload-to-drive`
+command to publish it — followed by the new `03_Findings.md` path
+(empty string on no-op) on its own final line, so the calling wrapper
+(Routine, GHA cron, etc.) can branch on it.
 
 The orchestrator deliberately does NOT fetch new Eurostat / HMRC
-periods — fetch is the scheduler layer's responsibility. Keeping
-network and analyser as separate concerns means a network failure
-during fetch doesn't leave the pipeline in flight.
+periods — fetch is the scheduler layer's responsibility, which probes
+each source with `--probe-source` (see [Source
+freshness](#source-freshness)). Keeping network and analyser as separate
+concerns means a network failure during fetch doesn't leave the pipeline
+in flight.
 
 Layer 2 (scheduler) is currently a Claude Code Routine
 (`gacc-daily-periodic-run`, cron `0 9 * * *`). Layer 3 (delivery to
 the journalist) is currently manual. See
-`dev_notes/periodic-runs-design-2026-05-11.md`.
+`dev_notes/2026-05-11-periodic-runs-design.md`.
 
 ### Export
 
@@ -273,14 +302,30 @@ are additionally rendered as styled Word files and the folder is
 **restructured to mirror the Google Drive upload**: the `.docx` (and
 `04_Data.xlsx`) sit at the top level, and the raw `.md` files plus a
 duplicate `04_Data.xlsx` move into a `Markdown versions for use with LLMs
-etc/` subfolder. `briefing_pack/drive_export.py` then uploads that bundle
-to Drive — top-level `.docx` convert to native Google Docs and the xlsx to
-a Sheet; heading navigation anchors are minted (Google's `.docx` import
-omits the `headingId`s, so a batched style-flip pass forces them);
-in-document links (e.g. the Groups "Quick index") are repointed via
-`headingId`; and the markdown subfolder is mirrored. OAuth scope is
-`drive.file`; the target parent folder comes from `MERIDIAN_DRIVE_PARENT_ID`
-and export folders inherit its sharing.
+etc/` subfolder.
+
+Publishing that bundle to Drive is a **deliberate, hand-run step** — the
+tool never auto-uploads (the shared folder is journalist-facing and the
+format is still settling):
+
+```bash
+scrape.py --upload-to-drive exports/2026-05-15-1430   # a docx=True bundle dir
+```
+
+`briefing_pack/drive_export.py` then converts the top-level `.docx` to
+native Google Docs and the xlsx to a Sheet; mints heading navigation
+anchors (Google's `.docx` import omits the `headingId`s, so a batched
+style-flip pass forces them); repoints in-document links (e.g. the Groups
+"Quick index") via `headingId`; and mirrors the markdown subfolder. The
+upload is idempotent — it matches by name within the parent folder,
+updating in place. OAuth scope is `drive.file`; the target parent folder
+comes from `MERIDIAN_DRIVE_PARENT_ID` and export folders inherit its
+sharing. A hand-run upload may open a browser to (re)authorise; an
+unattended caller (`get_credentials(interactive=False)`) instead raises
+`TokenUnusableError`, so a dead token fails loud rather than blocking on
+a consent prompt. The `--periodic-run` summary prints the exact
+`--upload-to-drive` command for the bundle it just wrote, so the
+scheduler can hand a journalist the publish step without auto-publishing.
 
 **Templates pipeline (since 2026-05-13)**: every file dropped into
 `briefing_pack/templates/` (except its own `README.md`) is copied
@@ -442,6 +487,12 @@ releases               (per source × period; one row per ingestable file/page)
 lookup tables (read-side only):
   hs_groups, caveats, transshipment_hubs, cif_fob_baselines,
   country_aliases, fx_rates
+
+operational telemetry (scheduler-side, no journalist surface):
+  routine_check_log   (per probe: source × period × result × expectation)
+  periodic_run_log    (per --periodic-run: action_taken × reason)
+  findings_emit_log   (per analyser pass: new / confirmed / superseded counts)
+  llm_rejection_log   (per llm-framing pass: parse / verification failures)
 ```
 
 Re-derivability is the discipline: any aggregated number can be

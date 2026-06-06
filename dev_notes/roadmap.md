@@ -8,7 +8,7 @@ the original Phase 1–6 plan, look at the git log around
 ## Observability / logging follow-ups (2026-05-15 evening arc)
 
 Four new audit-log surfaces shipped tonight along with
-[`dev_notes/logging-policy.md`](logging-policy.md):
+[`dev_notes/2026-05-15-logging-policy.md`](2026-05-15-logging-policy.md):
 `routine_check_log` (per-source Routine telemetry + lifecycle
 bookends), `llm_rejection_log`, `periodic_run_log`,
 `findings_emit_log`. CLIs: `--source-status`, `--llm-rejections`,
@@ -70,7 +70,7 @@ Lisa-feedback arc on docx + charts is substantially complete:
   the same sections as `03_Findings.md` plus charts at top-N
   movers via a mistune-based md→docx translator). Commits
   `713a337` → `f181419`. Design addendum captured in
-  [`2026-05-16_docx-production-module-design.md`](2026-05-16_docx-production-module-design.md).
+  [`2026-05-16-docx-production-module-design.md`](2026-05-16-docx-production-module-design.md).
 
 What's still open from this arc:
 
@@ -86,7 +86,7 @@ What's still open from this arc:
   `~/.config/meridian/client_secret.json`, token at
   `~/.config/meridian/google-token.json` (both outside the repo, chmod 600).
   Spike spec at
-  [`2026-05-16_docx-drive-spike.md`](2026-05-16_docx-drive-spike.md)
+  [`2026-05-16-docx-drive-spike.md`](2026-05-16-docx-drive-spike.md)
   — legs 1 and 2 verified manually; **leg 3 (OAuth) + the
   heading-anchor approach verified 2026-05-21** via
   `scripts/drive_heading_anchor_test.py` (see that note's
@@ -185,7 +185,7 @@ order:
 
 Periodic-run **pipeline + Routine** shipped 2026-05-11 (Phase 6.9 /
 6.10 — see `history.md` and
-[`periodic-runs-design-2026-05-11.md`](periodic-runs-design-2026-05-11.md)).
+[`2026-05-11-periodic-runs-design.md`](2026-05-11-periodic-runs-design.md)).
 Routine fires daily at 09:01 local time. What remains is observation
 and Layer-3 design:
 
@@ -213,7 +213,7 @@ and Layer-3 design:
 Items the Soapbox validation surfaced as real gaps but not on
 the periodic-runs critical path. Each is small-to-medium and
 self-contained. See
-[`soapbox-validation-2026-05-11.md`](soapbox-validation-2026-05-11.md)
+[`2026-05-11-soapbox-validation.md`](2026-05-11-soapbox-validation.md)
 for the per-claim test that motivates each.
 
 ### Eurostat-side HS-level mirror for "China's exports to EU"
@@ -247,7 +247,7 @@ editorial-framing driver — 49% of `hs_group_yoy*` findings would
 flip low_base classification across €5M–€500M. The default has
 never been calibrated against editorial reality. Approach:
 
-1. Take each shock from `shock-validation-2026-05-09.md` (2018
+1. Take each shock from `2026-05-09-shock-validation.md` (2018
    Section 232 steel, Q1 2020 COVID lockdown, Feb 2022 Russia
    invasion, Oct 2023 EV probe).
 2. For each, identify which HS groups carried the story and what
@@ -277,7 +277,7 @@ on a precise YoY for a specific HS-CN8 code.
 ### Per-(country, commodity) CIF/FOB granularity
 
 Phase 4 carry-over partially addressed in
-`cif-fob-baselines-2026-05-10.md`. Per-(EU member state, China)
+`2026-05-10-cif-fob-baselines.md`. Per-(EU member state, China)
 margins are now in `cif_fob_baselines`. The OECD ITIC SDMX endpoint
 also supports HS-4 splits (1224 commodities × 28 EU countries × CN
 ≈ 34k rows) for per-(country, commodity) precision. Schema-extend
@@ -369,7 +369,7 @@ a journalist asks for one specifically.
 
 ### 2018 GACC mirror-trade
 
-See [`forward-work-gacc-2018-parser.md`](forward-work-gacc-2018-parser.md).
+See [`2026-05-10-forward-work-gacc-2018-parser.md`](2026-05-10-forward-work-gacc-2018-parser.md).
 Title parser handles all 2018 quirks but the section-4 release
 pages embed PNG screenshots, not HTML tables. Body parse fails
 and the data is in pixels. Options: OCR (~half-day with editorial
@@ -399,7 +399,7 @@ journalist actually wants to use the tool independently.
 
 ### Custom Q&A bot (Phase 7+)
 
-See [`forward-work-qa-bot.md`](forward-work-qa-bot.md). Two-tier
+See [`2026-05-10-forward-work-qa-bot.md`](2026-05-10-forward-work-qa-bot.md). Two-tier
 scope (ask the findings, ask the underlying data). Tier 1 is ~3-5
 days of build. Triggers: web UI exists AND a journalist has a
 recurrent question pattern the brief can't answer.
@@ -415,16 +415,16 @@ trivially.
 These are real options that may be picked up later but aren't on
 any near-term path:
 
-- [`forward-work-gacc-2018-parser.md`](forward-work-gacc-2018-parser.md)
+- [`2026-05-10-forward-work-gacc-2018-parser.md`](2026-05-10-forward-work-gacc-2018-parser.md)
   — 2018 image-only blocker (above).
-- [`forward-work-qa-bot.md`](forward-work-qa-bot.md) — Phase 7+
+- [`2026-05-10-forward-work-qa-bot.md`](2026-05-10-forward-work-qa-bot.md) — Phase 7+
   Q&A bot (above).
-- [`shock-validation-2026-05-09.md`](shock-validation-2026-05-09.md)
+- [`2026-05-09-shock-validation.md`](2026-05-09-shock-validation.md)
   + companion `.sql` — pre-registered shock validation
   methodology. Living methodology doc, not just a one-off; re-run
   after any major analyser change. §5.4 refreshed 2026-05-11
   using the canonical `product_nc='000TOTAL'` row.
-- [`soapbox-validation-2026-05-11.md`](soapbox-validation-2026-05-11.md)
+- [`2026-05-11-soapbox-validation.md`](2026-05-11-soapbox-validation.md)
   — peer-comparison validation against Soapbox Trade
   (substack). 50 testable claims pre-registered, ~60% clean concur,
   ~80% directional. The 2026-05-12 A1 re-test (Stage B/C) drove
@@ -433,6 +433,6 @@ any near-term path:
   extra-EU aggregates) recorded in
   [`history.md`](history.md#2026-05-12--soapbox-a1-re-test--four-step-feature-pass).
   Living methodology doc — re-run after any major analyser change.
-- [`cif-fob-baselines-2026-05-10.md`](cif-fob-baselines-2026-05-10.md)
+- [`2026-05-10-cif-fob-baselines.md`](2026-05-10-cif-fob-baselines.md)
   — sourced reference for the OECD ITIC backfill. Reproducibility
   notes for refreshing in a future year.

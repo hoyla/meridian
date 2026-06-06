@@ -88,6 +88,8 @@ know what each source IS and what it's NOT.
 - **Currency:** GBP-native; we convert to EUR at ingest time using
   the period's ECB monthly-average rate.
 - **Valuation:** CIF on imports.
+- **Lag:** ~6 weeks behind the period being reported, usually a few
+  days ahead of Eurostat for the same reference month.
 - **Coverage:** UK only — sole post-Brexit source for UK trade
   with China. Carries its own `SuppressionIndex` flag where small
   flows from few traders would breach confidentiality.
@@ -159,9 +161,13 @@ A non-exhaustive list, in rough order of magnitude:
    rates can be 1-3%. (See §3 caveat `currency_timing`.)
 
 9. **Reporting lags + revision cycles.** GACC publishes ~10 days
-   after period close; Eurostat lags ~6-8 weeks; HMRC publishes
-   monthly. Comparing the same period across sources requires both
-   to have reported. Revisions also happen on different schedules.
+   after period close; Eurostat lags ~6-8 weeks; HMRC ~6 weeks
+   (typically a few days ahead of Eurostat for the same month).
+   Comparing the same period across sources requires both to have
+   reported. Revisions also happen on different schedules. The tool
+   tracks each source's publication calendar so it can tell a
+   not-yet-due gap from a genuinely overdue one — see "Source
+   freshness" below.
 
 10. **Confidentiality suppression.** Eurostat aggregates flows that
     would identify a single trader into HS-X-suffix residual codes;
@@ -174,6 +180,35 @@ transshipment effect (≈65%) plus the CIF/FOB baseline (≈6.5%)
 minus some reporting noise; the *change* in the gap, when the gap
 itself is normally stable for a partner, is what `mirror_gap_zscore`
 flags.
+
+### Source freshness: the expectation axis
+
+The same publication lags above also tell the tool *when to expect* a
+source's next release — which lets it distinguish "data isn't here yet,
+but that's normal" from "data is genuinely late." Each cycle the tool
+probes Eurostat, HMRC and GACC for the next period due and classifies
+the outcome against the source's own published calendar:
+
+- **none_expected** — today is before the scheduled publication date; a
+  quiet gap is normal, no flag.
+- **due** — today is on or just after the scheduled date (a small grace
+  window absorbs weekend shifts); the release is expected now.
+- **overdue** — the scheduled date has passed and the data still hasn't
+  appeared; this is the one worth a human glance.
+
+This *expectation* is recorded independently of the *result* of the
+probe (`new_data` / `no_change` / `error`), and the two combine into the
+editorially useful signals: a release still missing past its date reads
+as `no_change × overdue` ("where's the release?"); an unusually early
+arrival reads as `new_data × none_expected` (the source beat its own
+calendar). The calendar dates are hand-entered annual constants with
+provenance — the Eurostat "G.3 Trade in goods Publication Calendar" PDF
+(extra-EU detailed trade for our CN/HK/MO partners lands ~46 days after
+the reference month ends) and the HMRC OTS release calendar. GACC has no
+calendar axis: its schedule varies, and the tool indexes it by walking
+the live site. (This replaced a hardcoded "fetch 5 weeks after period
+close" rule on 2026-06-02; the mechanism lives in `release_calendar.py`
+and is surfaced by `scrape.py --probe-source` / `--source-status`.)
 
 ## 1. Anomaly subkinds catalogue
 
@@ -512,7 +547,7 @@ IT, BE) clusters around 6.5–7.2%.
 To refresh in a future year, the OECD ITIC SDMX endpoint at
 `sdmx.oecd.org/sti-public/rest/data/OECD.SDD.TPS,DSD_ITIC@DF_ITIC,1.1/`
 supports the same query shape. See
-[`dev_notes/cif-fob-baselines-2026-05-10.md`](../dev_notes/cif-fob-baselines-2026-05-10.md)
+[`dev_notes/2026-05-10-cif-fob-baselines.md`](../dev_notes/2026-05-10-cif-fob-baselines.md)
 for the reproducibility notes.
 
 ## 4. Trajectory shape vocabulary
@@ -599,7 +634,7 @@ that quantify each:
 
 ### Threshold sensitivity (Phase 6.3)
 
-See [`dev_notes/sensitivity-sweep-2026-05-10.md`](../dev_notes/sensitivity-sweep-2026-05-10.md)
+See [`dev_notes/2026-05-10-sensitivity-sweep.md`](../dev_notes/2026-05-10-sensitivity-sweep.md)
 for the full numbers.
 
 - `low_base_threshold_eur` (default €50M) is **highly sensitive**:
@@ -615,7 +650,7 @@ for the full numbers.
 
 ### YoY rolling-window stability (Phase 6.6)
 
-See [`dev_notes/out-of-sample-backtest-2026-05-10.md`](../dev_notes/out-of-sample-backtest-2026-05-10.md).
+See [`dev_notes/2026-05-10-out-of-sample-backtest.md`](../dev_notes/2026-05-10-out-of-sample-backtest.md).
 
 Comparing each `hs_group_yoy*` finding at the latest period T
 against the same (group, subkind) at T-6: 31% of YoY signals

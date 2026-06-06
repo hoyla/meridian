@@ -1,7 +1,7 @@
 """Periodic-run orchestration — the deployment-agnostic pipeline that
 wraps ingest → analyse → render into a single idempotent CLI invocation.
 
-Design philosophy (see dev_notes/periodic-runs-design-2026-05-11.md for
+Design philosophy (see dev_notes/2026-05-11-periodic-runs-design.md for
 the full discussion):
 
 - This module knows nothing about *where* it runs (Claude Code routine,

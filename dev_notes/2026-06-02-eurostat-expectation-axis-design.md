@@ -5,7 +5,7 @@
 forks taken at their fuller option: Eurostat **and** HMRC; formula **+**
 hand-entered exact 2026 dates; a new `--probe-source` command (logic moved out
 of SKILL.md prose into the pipeline). Additive migration applied to both
-`gacc_test` and live `gacc`. Pairs with `periodic-runs-design-2026-05-11.md`.
+`gacc_test` and live `gacc`. Pairs with `2026-05-11-periodic-runs-design.md`.
 **Date:** 2026-06-02
 
 ---

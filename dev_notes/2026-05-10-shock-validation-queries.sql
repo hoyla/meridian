@@ -1,4 +1,4 @@
--- Validation queries for shock-validation-2026-05-09.md
+-- Validation queries for 2026-05-09-shock-validation.md
 -- Run AFTER analysers complete; outputs feed the Results sections.
 
 -- ========================================================================
