@@ -20,6 +20,7 @@ from typing import Any
 from briefing_pack._helpers import (
     _Section,
     _fmt_eur,
+    _fmt_missing_months,
     _fmt_month,
     _single_month_warning,
     _trace_token,
@@ -53,6 +54,8 @@ def _section_state_of_play_bilaterals(cur) -> _Section:
                  (detail->'totals'->'single_month'->>'yoy_pct')::numeric AS sm_yoy_pct,
                  (detail->'totals'->'single_month'->>'current_eur')::numeric AS sm_curr_eur,
                  (detail->'totals'->>'partial_window')::boolean AS partial_window,
+                 detail->'totals'->'missing_months_current' AS missing_curr,
+                 detail->'totals'->'missing_months_prior' AS missing_prior,
                  detail->'totals'->'jan_feb_combined_years' AS jan_feb_combined_years
             FROM findings
            WHERE subkind LIKE 'gacc_bilateral_aggregate_yoy%%' AND superseded_at IS NULL
@@ -145,7 +148,11 @@ def _section_state_of_play_bilaterals(cur) -> _Section:
             # full caveat text is in the per-finding provenance file.
             annotations: list[str] = []
             if r["partial_window"]:
-                annotations.append("incomplete window (a month of source data is missing)")
+                miss = _fmt_missing_months(r["missing_curr"], r["missing_prior"])
+                annotations.append(
+                    f"incomplete window — {miss}" if miss
+                    else "incomplete window (a month of source data is missing)"
+                )
             jfc_years = r["jan_feb_combined_years"]
             if jfc_years:
                 annotations.append(

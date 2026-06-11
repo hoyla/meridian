@@ -162,6 +162,149 @@ def _single_month_warning(sm_pct: Any) -> str:
     return ""
 
 
+# Warning line rendered directly under a 🔴-badged group heading in Tier 2.
+# Additive (a line, not a heading change) so heading anchors stay stable.
+_VOLATILE_GROUP_NOTE = (
+    "*🔴 Volatile — this group's year-on-year signal has not held over "
+    "the past 6 months. Verify any figure here independently before "
+    "quoting it.*"
+)
+
+
+def _fmt_missing_months(
+    missing_current: list[str] | None,
+    missing_prior: list[str] | None,
+) -> str:
+    """Render detail.totals.missing_months_current/_prior (ISO date
+    strings) as a window-attributed phrase: which month is absent, and
+    whether it falls in the current window (understates the new total)
+    or the prior comparison window (skews the YoY denominator). ''
+    when nothing is missing."""
+    def _months(vals: list[str]) -> str:
+        return ", ".join(_fmt_month(date.fromisoformat(v)) for v in vals)
+
+    bits: list[str] = []
+    if missing_current:
+        bits.append(
+            f"missing {_months(missing_current)} from the current "
+            "12-month window"
+        )
+    if missing_prior:
+        bits.append(
+            f"missing {_months(missing_prior)} from the prior "
+            "(comparison) window"
+        )
+    return " and ".join(bits)
+
+
+def _quotability_verdict(
+    *,
+    badge: str | None,
+    low_base: Any,
+    current_eur: Any,
+    prior_eur: Any,
+    threshold_eur: Any,
+    missing_current: list[str] | None = None,
+    missing_prior: list[str] | None = None,
+) -> str:
+    """One-sentence plain-English quotability instruction for a YoY
+    finding — the render-time verdict that applies methodology §9/§10
+    at the point of quotation instead of trusting the reader to have
+    read them. Composed entirely from facts already on the finding row
+    plus the render-time stability badge; nothing is stored, so verdict
+    wording can evolve without superseding findings.
+
+    Priority: low base (percentages unusable) → 🔴 (signal didn't hold)
+    → threshold fragility → badge-graded go-ahead. A missing-month
+    qualifier is appended whatever the lead clause."""
+    thr_m = f"€{float(threshold_eur) / 1e6:.0f}M" if threshold_eur else "low-base"
+    smaller = None
+    if current_eur is not None and prior_eur is not None:
+        smaller = min(float(current_eur), float(prior_eur))
+
+    if low_base:
+        lead = (
+            "percentages here are not quotable — the smaller 12-month "
+            f"total is only {_fmt_eur(smaller)}, below the {thr_m} "
+            "low-base line; quote the absolute € amounts instead"
+        )
+    elif badge == "🔴":
+        lead = (
+            "verify before quoting — the year-on-year signal for this "
+            "group has flipped or shifted over the past 6 months (🔴)"
+        )
+    elif is_threshold_fragile(current_eur, prior_eur, threshold_eur):
+        lead = (
+            f"quote with care — the smaller 12-month total "
+            f"({_fmt_eur(smaller)}) sits close to the {thr_m} low-base "
+            "line, so check the absolute € amounts alongside the "
+            "percentage"
+        )
+    elif badge == "🟢":
+        lead = (
+            "quotable as a 12-month trend — the signal has held over "
+            "the past 6 months and the base is meaningful"
+        )
+    elif badge == "🟡":
+        lead = (
+            "quotable with a double-check — the signal has been mixed "
+            "over the past 6 months"
+        )
+    else:
+        lead = (
+            "quotable on the numbers, but stability is unscored — not "
+            "enough history yet to know whether this trend holds"
+        )
+
+    parts = [lead]
+    miss = _fmt_missing_months(missing_current, missing_prior)
+    if miss:
+        parts.append(
+            f"note: the window is {miss} — re-check once that month "
+            "has been ingested"
+        )
+    sentence = "; ".join(parts)
+    return sentence[0].upper() + sentence[1:] + "."
+
+
+def _hmrc_suppressed_counts(
+    cur,
+    *,
+    patterns: list[str],
+    partners: list[str],
+    flow: int,
+    current_start: date,
+    current_end: date,
+    prior_start: date,
+    prior_end: date,
+) -> tuple[int, int]:
+    """(current-window, prior-window) counts of HMRC raw rows excluded
+    from the totals because HMRC suppressed their value for
+    confidentiality (small-trader flows). Mirrors the analyser's
+    aggregation predicates (anomalies hmrc branch: flow + partner +
+    hs-pattern) with `suppression_index <> 0` — so the count describes
+    exactly the rows missing from the rendered totals. Both windows are
+    counted because suppression that differs between them skews the YoY
+    itself, not just the level."""
+    like_clause, like_params = anomalies._hs_pattern_or_clause(patterns)
+    cur.execute(
+        f"""
+        SELECT
+          COUNT(*) FILTER (WHERE period >= %s AND period <= %s) AS n_curr,
+          COUNT(*) FILTER (WHERE period >= %s AND period <= %s) AS n_prior
+          FROM hmrc_raw_rows
+         WHERE flow = %s
+           AND partner = ANY(%s)
+           AND {like_clause}
+           AND suppression_index <> 0
+        """,
+        (current_start, current_end, prior_start, prior_end,
+         flow, list(partners), *like_params),
+    )
+    row = cur.fetchone()
+    return int(row[0] or 0), int(row[1] or 0)
+
+
 # Plain-English labels for finding subkind families — used wherever a
 # subkind code would otherwise face a journalist (Tier 1 diff counts,
 # material-shift lines). Keyed by family prefix; suffixed variants

@@ -85,7 +85,10 @@ def _seed_hs_yoy_finding(cur, run_id: int, group_name: str, *,
                         period: date = date(2026, 2, 1),
                         per_reporter_breakdown: list[dict] | None = None,
                         single_month_yoy_pct: float | None = None,
-                        method_query: dict | None = None) -> int:
+                        method_query: dict | None = None,
+                        partial_window: bool = False,
+                        missing_current: list[str] | None = None,
+                        missing_prior: list[str] | None = None) -> int:
     cur.execute("SELECT id FROM hs_groups WHERE name = %s", (group_name,))
     hg = cur.fetchone()
     hg_ids = [hg[0]] if hg else []
@@ -118,6 +121,10 @@ def _seed_hs_yoy_finding(cur, run_id: int, group_name: str, *,
             "yoy_pct": single_month_yoy_pct,
             "yoy_pct_kg": single_month_yoy_pct / 2,
         }
+    if partial_window:
+        detail["totals"]["partial_window"] = True
+        detail["totals"]["missing_months_current"] = missing_current or []
+        detail["totals"]["missing_months_prior"] = missing_prior or []
     cur.execute(
         """
         INSERT INTO findings (scrape_run_id, kind, subkind, observation_ids, hs_group_ids,
@@ -1368,7 +1375,7 @@ def test_predictability_badge_appears_when_t_minus_6_pair_exists(
                    if line.startswith("### Rare-earth materials"))
     assert "🔴" in re_line
     # Brief explains the badge.
-    assert "YoY predictability" in md
+    assert "Signal stability" in md
 
 
 def test_predictability_badge_suppressed_below_min_pairs(
@@ -1521,3 +1528,162 @@ def test_reading_the_numbers_key_in_both_docs(empty_findings, test_db_url):
         assert "## Reading the numbers" in doc
         assert "Value vs volume" in doc
         assert "12-month figure vs latest month" in doc
+
+
+# ---------------------------------------------------------------------------
+# Iteration 1 — quotability verdicts + integrity riders
+# ---------------------------------------------------------------------------
+
+class TestQuotabilityVerdict:
+    """Pure-function tests for the render-time verdict (no DB)."""
+
+    def _verdict(self, **kw):
+        from briefing_pack._helpers import _quotability_verdict
+        defaults = dict(
+            badge=None, low_base=False, current_eur=1e9, prior_eur=0.9e9,
+            threshold_eur=5e7,
+        )
+        defaults.update(kw)
+        return _quotability_verdict(**defaults)
+
+    def test_low_base_leads_and_names_amounts(self):
+        v = self._verdict(low_base=True, current_eur=1.7e6, prior_eur=2.1e6)
+        assert v.startswith("Percentages here are not quotable")
+        assert "€1.7M" in v
+        assert "absolute € amounts" in v
+
+    def test_red_badge_demands_verification(self):
+        v = self._verdict(badge="🔴")
+        assert "Verify before quoting" in v
+        assert "6 months" in v
+
+    def test_low_base_outranks_red_badge(self):
+        v = self._verdict(badge="🔴", low_base=True,
+                          current_eur=1e6, prior_eur=2e6)
+        assert v.startswith("Percentages here are not quotable")
+
+    def test_green_badge_clean_base_is_quotable(self):
+        v = self._verdict(badge="🟢")
+        assert v.startswith("Quotable as a 12-month trend")
+
+    def test_fragile_base_quotes_with_care(self):
+        # smaller-of = €60M, within 1.5× of the €50M threshold.
+        v = self._verdict(badge="🟢", current_eur=6e7, prior_eur=9e7)
+        assert v.startswith("Quote with care")
+        assert "€60.0M" in v
+
+    def test_unbadged_is_quotable_but_unscored(self):
+        v = self._verdict(badge=None)
+        assert "stability is unscored" in v
+
+    def test_missing_month_qualifier_appended(self):
+        v = self._verdict(badge="🟢", missing_current=["2026-03-01"])
+        assert "missing Mar 2026 from the current 12-month window" in v
+        assert "re-check" in v
+
+
+def test_fmt_missing_months_window_attribution():
+    from briefing_pack._helpers import _fmt_missing_months
+    assert _fmt_missing_months(["2026-03-01"], None) == (
+        "missing Mar 2026 from the current 12-month window"
+    )
+    assert _fmt_missing_months(None, ["2025-03-01"]) == (
+        "missing Mar 2025 from the prior (comparison) window"
+    )
+    both = _fmt_missing_months(["2026-03-01"], ["2025-03-01"])
+    assert "current 12-month window" in both and "prior (comparison) window" in both
+    assert _fmt_missing_months(None, None) == ""
+    assert _fmt_missing_months([], []) == ""
+
+
+def test_tier3_block_leads_with_quotability_verdict(empty_findings, test_db_url):
+    """Every Tier 3 mover block opens with the Quotability bullet; the
+    old standalone low-base bullet is gone (the verdict carries the
+    instruction plus the actual amounts)."""
+    from briefing_pack.sections.hs_yoy_movers import _section_hs_yoy_movers
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        run = _seed_run(cur)
+        _seed_eurostat_release(cur, date(2026, 2, 1))
+        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)",
+                             yoy_pct=2.5, current_eur=1.7e6, prior_eur=0.5e6,
+                             low_base=True)
+        conn.commit()
+        md = _section_hs_yoy_movers(cur, flow=1, top_n=10).markdown
+    assert "**Quotability**: Percentages here are not quotable" in md
+    assert "€1.7M" in md
+    assert "Low-base flag" not in md
+
+
+def test_tier2_red_badge_group_carries_demotion_line(empty_findings, test_db_url):
+    """A 🔴-badged group gets an explicit warning line under its Tier 2
+    heading; an unbadged group does not."""
+    from briefing_pack._helpers import _VOLATILE_GROUP_NOTE
+    from briefing_pack.sections.state_of_play import _section_state_of_play
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        run = _seed_run(cur)
+        _seed_eurostat_release(cur, date(2026, 2, 1))
+        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)", yoy_pct=0.2)
+        _seed_hs_yoy_finding(cur, run, "Drones and unmanned aircraft", yoy_pct=0.3)
+        conn.commit()
+        md = _section_state_of_play(
+            cur, predictability={"EV batteries (Li-ion)": ("🔴", 0.0, 6)},
+        ).markdown
+    ev_block = md.split("### EV batteries (Li-ion)")[1].split("\n### ")[0]
+    drones_block = md.split("### Drones and unmanned aircraft")[1].split("\n### ")[0]
+    assert _VOLATILE_GROUP_NOTE in ev_block
+    assert _VOLATILE_GROUP_NOTE not in drones_block
+
+
+def test_tier2_partial_window_names_missing_month(empty_findings, test_db_url):
+    """The Tier 2 incomplete-window flag names the missing month and
+    which window it fell in, sourced from detail.totals."""
+    from briefing_pack.sections.state_of_play import _section_state_of_play
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        run = _seed_run(cur)
+        _seed_eurostat_release(cur, date(2026, 2, 1))
+        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)", yoy_pct=0.2,
+                             partial_window=True,
+                             missing_current=["2026-02-01"])
+        conn.commit()
+        md = _section_state_of_play(cur, predictability={}).markdown
+    assert "incomplete window — missing Feb 2026 from the current 12-month window" in md
+
+
+def test_uk_scope_block_surfaces_hmrc_suppression_counts(
+    empty_findings, test_db_url,
+):
+    """UK-scope Tier 3 blocks count the HMRC rows suppressed for
+    confidentiality (excluded from totals), split by window; nothing
+    renders when no rows were suppressed."""
+    from briefing_pack.sections.hs_yoy_movers import _section_hs_yoy_movers
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        run = _seed_run(cur)
+        _seed_eurostat_release(cur, date(2026, 2, 1))
+        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)",
+                             subkind="hs_group_yoy_uk", yoy_pct=0.2)
+        # Window: current = 2025-02→2026-02, prior = 2024-02→2025-02.
+        # Two suppressed rows in the current window, one in the prior;
+        # one non-suppressed row that must NOT be counted.
+        for period, suppressed in [
+            (date(2025, 6, 1), 1), (date(2025, 9, 1), 1),
+            (date(2024, 6, 1), 1), (date(2025, 7, 1), 0),
+        ]:
+            cur.execute(
+                "INSERT INTO hmrc_raw_rows (scrape_run_id, period, reporter, "
+                "  partner, product_nc, flow_type_id, flow, suppression_index, "
+                "  value_gbp, value_eur, net_mass_kg) "
+                "VALUES (%s, %s, 'GB', 'CN', '85076010', 3, 1, %s, 10, 12, 1)",
+                (run, period, suppressed),
+            )
+        conn.commit()
+        md = _section_hs_yoy_movers(
+            cur, flow=1, top_n=10, comparison_scope="uk",
+        ).markdown
+    assert (
+        "**HMRC suppression**: 2 source rows in the current window and 1 "
+        "in the prior window" in md
+    )
