@@ -14,7 +14,7 @@ the model journalist is Lisa O'Carroll.
 
 ## What the brief looks like
 
-Every export bundle's `03_Findings.md` opens with three tiers (what's
+Every export bundle's `02_Findings.md` opens with three tiers (what's
 new since last time → current state of play → full detail). A
 typical Tier 2 entry for one HS group reads like this:
 
@@ -41,7 +41,7 @@ GACC release page.
 ## Three rules the design follows
 
 - **Brief and spreadsheet are LLM-free.** The LLM lead scaffolds live
-  in a separate `02_Leads.md` — so a downstream LLM tool (NotebookLM,
+  in a separate `03_Leads.md` — so a downstream LLM tool (NotebookLM,
   Claude, etc.) reasoning over the brief sees raw findings, not
   another LLM's interpretation.
 - **Findings are versioned, not over-written.** When data revises or
@@ -156,7 +156,7 @@ python scrape.py --export-sheet --out-path exports/custom.xlsx
 python scrape.py --export-sheet --out-format sheets --spreadsheet-id <ID>   # Google Sheets (pending creds)
 
 # Export bundle: read-me + LLM leads + findings + data + HS-group reference
-python scrape.py --briefing-pack                              # ./exports/YYYY-MM-DD-HHMM/{01_Read_Me_First.md, 02_Leads.md, 03_Findings.md, 04_Data.xlsx, 05_Groups.md}
+python scrape.py --briefing-pack                              # ./exports/YYYY-MM-DD-HHMM/{01_Read_Me_First.md, 03_Leads.md, 02_Findings.md, 04_Data.xlsx, 05_Groups.md}
 python scrape.py --briefing-pack --docx                       # also render styled .docx; restructures to mirror the Drive upload (docs at top, .md in a "Markdown versions for use with LLMs etc" subfolder); required before --upload-to-drive
 python scrape.py --briefing-pack --briefing-top-n 20          # 20 movers per flow direction
 python scrape.py --briefing-pack --export-dir exports/today   # explicit output folder
@@ -187,7 +187,7 @@ python scrape.py --periodic-run                               # no-op unless a f
 python scrape.py --periodic-run --force                       # re-run against the same data
 python scrape.py --periodic-run --skip-llm                    # skip the LLM lead-scaffold pass
 # Prints a per-run summary (which sources brought new data; the exact --upload-to-drive command when a
-# briefing was generated) then the 03_Findings.md path on its own final line, for a wrapper to branch on.
+# briefing was generated) then the 02_Findings.md path on its own final line, for a wrapper to branch on.
 
 # Source freshness monitoring — always-probe + publication-calendar expectation (none_expected/due/overdue)
 python scrape.py --probe-source eurostat                      # probe one source (also: hmrc, gacc); records result + expectation
@@ -216,7 +216,7 @@ The two export surfaces share the same underlying data layer: switching between 
 | `llm_framing.py`   | LLM lead-scaffold layer over the deterministic findings. v2 produces, per HS group, an anomaly summary + 2-3 hypothesis ids picked from `hypothesis_catalog.py` with one-line rationales + deterministic corroboration steps. Numeric-verification gate rejects any number not present in the underlying facts; hypothesis ids must exist in the catalog. Default backend: Ollama / `qwen3.6:latest`. |
 | `hypothesis_catalog.py` | 12 standard causal hypotheses for China-EU/UK trade movements. Each entry carries a description (in the LLM prompt) and corroboration steps (attached deterministically post-pick). |
 | `scripts/`         | One-off analysis scripts (sensitivity sweep, OOS backtest) — not part of the CLI; run directly. |
-| `briefing_pack/` | Five-artefact export bundle into `./exports/YYYY-MM-DD-HHMM[-slug]/`. `03_Findings.md` is the deterministic NotebookLM-ready findings document (no LLM in the loop). `02_Leads.md` is the LLM lead-scaffold companion (anomaly summaries + picked hypotheses + corroboration steps), kept separate so downstream LLM tools reasoning over them see raw findings, not another LLM's interpretation. `04_Data.xlsx` is the 10-tab spreadsheet for data journalists. `05_Groups.md` is the HS group reference (auto-generated from the `hs_groups` table). `01_Read_Me_First.md` is the journalist-facing orientation page copied from the templates directory. Optionally with a `provenance/` subdir when `--with-provenance` is set. All artefacts share a single DB snapshot. With `docx=True` (the default in scheduled runs) the documents are also rendered as styled `.docx` and the folder is restructured to mirror the Google Drive upload. |
+| `briefing_pack/` | Five-artefact export bundle into `./exports/YYYY-MM-DD-HHMM[-slug]/`. `02_Findings.md` is the deterministic NotebookLM-ready findings document (no LLM in the loop). `03_Leads.md` is the LLM lead-scaffold companion (anomaly summaries + picked hypotheses + corroboration steps), kept separate so downstream LLM tools reasoning over them see raw findings, not another LLM's interpretation. `04_Data.xlsx` is the 10-tab spreadsheet for data journalists. `05_Groups.md` is the HS group reference (auto-generated from the `hs_groups` table). `01_Read_Me_First.md` is the journalist-facing orientation page copied from the templates directory. Optionally with a `provenance/` subdir when `--with-provenance` is set. All artefacts share a single DB snapshot. With `docx=True` (the default in scheduled runs) the documents are also rendered as styled `.docx` and the folder is restructured to mirror the Google Drive upload. |
 | `briefing_pack/drive_export.py` | Publishes a bundle to Google Drive (OAuth `drive.file`) via the manual `--upload-to-drive` CLI — never auto-published: top-level `.docx` → native Google Docs and `04_Data.xlsx` → a Sheet; mints the heading navigation anchors Google's `.docx` import omits (a batched style-flip pass); repoints in-document links via `headingId`; and mirrors the `Markdown versions for use with LLMs etc` subfolder of raw `.md`/`.xlsx`. Idempotent (update-in-place). Fail-loud token: an unattended caller raises `TokenUnusableError` rather than blocking on a browser consent prompt. Target folder via the `MERIDIAN_DRIVE_PARENT_ID` env var; export folders inherit the parent's sharing. |
 | `periodic.py`     | Periodic-cycle orchestrator behind `--periodic-run`: idempotency-checks the latest data period against `brief_runs`, runs every analyser across scope/flow combos, renders the bundle, and returns a `PeriodicRunResult` whose `summary()` names the new-data sources and the manual `--upload-to-drive` command. Deliberately does not auto-publish. |
 | `release_calendar.py` | Pure publication-calendar engine (no DB, no network) for the source-freshness *expectation axis*: given (source, period, today) it classifies `none_expected` / `due` / `overdue` from hand-entered Eurostat/HMRC calendar constants. Replaced the old "5 weeks past period close" fetch-gate (2026-06-02). Surfaced via `--probe-source` / `--source-status`. |
@@ -242,7 +242,7 @@ See docs folder for architecture and details about methodology.
   exact licence acknowledgement when its data is re-published).
   [NOTICE](NOTICE) lists each source and the wording to carry into
   derived journalism; every export bundle also carries source URLs in
-  its `03_Findings.md` Sources appendix.
+  its `02_Findings.md` Sources appendix.
 - **Citing the tool**: see [CITATION.cff](CITATION.cff), or use the
   "Cite this repository" button on GitHub.
 

@@ -422,8 +422,8 @@ def test_export_writes_brief_and_leads_into_folder(
     brief_path, leads_path = briefing_pack.export(
         out_dir=str(tmp_path / "20260510-1200"),
     )
-    assert Path(brief_path).name == "03_Findings.md"
-    assert Path(leads_path).name == "02_Leads.md"
+    assert Path(brief_path).name == "02_Findings.md"
+    assert Path(leads_path).name == "03_Leads.md"
     assert Path(brief_path).parent == Path(leads_path).parent
     brief_content = Path(brief_path).read_text()
     leads_content = Path(leads_path).read_text()
@@ -647,12 +647,12 @@ def test_paired_export_cross_references_each_other(
     # "(this document)".
     for doc in (brief, leads):
         assert "## In this export folder" in doc
-        assert "**02_Leads**" in doc
-        assert "**03_Findings**" in doc
+        assert "**03_Leads**" in doc
+        assert "**02_Findings**" in doc
         assert "**04_Data**" in doc
         assert "**05_Groups**" in doc
-    assert "**03_Findings** *(this document)*" in brief
-    assert "**02_Leads** *(this document)*" in leads
+    assert "**02_Findings** *(this document)*" in brief
+    assert "**03_Leads** *(this document)*" in leads
 
 
 def test_about_findings_endnote_appears_in_both_docs(
@@ -790,7 +790,7 @@ def test_diff_section_lead_in_cites_previous_export_folder(empty_findings, test_
         cur.execute(
             "INSERT INTO brief_runs (generated_at, output_path, top_n) "
             "VALUES (now() - interval '1 second', "
-            "        '/work/exports/2026-05-15-1811/03_Findings.md', 10)"
+            "        '/work/exports/2026-05-15-1811/02_Findings.md', 10)"
         )
         conn.commit()
 
@@ -808,7 +808,7 @@ def test_diff_section_lead_in_names_new_source_releases(empty_findings, test_db_
         cur.execute(
             "INSERT INTO brief_runs (generated_at, output_path, top_n) "
             "VALUES (now() - interval '1 second', "
-            "        '/work/exports/2026-05-15-1811/03_Findings.md', 10)"
+            "        '/work/exports/2026-05-15-1811/02_Findings.md', 10)"
         )
         _seed_eurostat_release(cur, date(2026, 3, 1))
         _seed_gacc_release(cur, date(2026, 4, 1))
@@ -831,7 +831,7 @@ def test_leads_doc_carries_why_this_export_paragraph(empty_findings, test_db_url
         cur.execute(
             "INSERT INTO brief_runs (generated_at, output_path, top_n) "
             "VALUES (now() - interval '1 second', "
-            "        '/work/exports/2026-05-15-1811/03_Findings.md', 10)"
+            "        '/work/exports/2026-05-15-1811/02_Findings.md', 10)"
         )
         _seed_eurostat_release(cur, date(2026, 3, 1))
         conn.commit()
@@ -850,7 +850,7 @@ def test_leads_doc_flags_rerun_when_no_new_releases(empty_findings, test_db_url)
         cur.execute(
             "INSERT INTO brief_runs (generated_at, output_path, top_n) "
             "VALUES (now() - interval '1 second', "
-            "        '/work/exports/2026-05-15-1811/03_Findings.md', 10)"
+            "        '/work/exports/2026-05-15-1811/02_Findings.md', 10)"
         )
         conn.commit()
 
@@ -876,7 +876,7 @@ def test_diff_section_lead_in_flags_rerun_when_no_new_releases(empty_findings, t
         cur.execute(
             "INSERT INTO brief_runs (generated_at, output_path, top_n) "
             "VALUES (now() - interval '1 second', "
-            "        '/work/exports/2026-05-15-1811/03_Findings.md', 10)"
+            "        '/work/exports/2026-05-15-1811/02_Findings.md', 10)"
         )
         conn.commit()
 
@@ -903,7 +903,7 @@ def test_export_records_brief_run(empty_findings, test_db_url, tmp_path):
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
         cur.execute("SELECT output_path, top_n FROM brief_runs ORDER BY id DESC LIMIT 1")
         path, top_n = cur.fetchone()
-    assert path == str(tmp_path / "20260510-1200" / "03_Findings.md")
+    assert path == str(tmp_path / "20260510-1200" / "02_Findings.md")
     assert top_n == 5
 
 

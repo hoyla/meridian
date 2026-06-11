@@ -1,7 +1,7 @@
 # Glossary
 
-For when a term in the docs / `03_Findings.md` / `04_Data.xlsx` /
-`02_Leads.md` looks unfamiliar. Each entry is a sentence or two;
+For when a term in the docs / `02_Findings.md` / `04_Data.xlsx` /
+`03_Leads.md` looks unfamiliar. Each entry is a sentence or two;
 cross-links lead to where the methodology or architecture goes
 deeper.
 
@@ -234,12 +234,12 @@ The specific classification of a finding. Currently emitted:
 - `gacc_aggregate_yoy{,_import}` — non-EU bloc partner aggregates
 - `gacc_bilateral_aggregate_yoy{,_import}` — EU bloc + single-country GACC partners
 - `partner_share{,_export}` — China's share of EU-27 extra-EU imports/exports per HS group
-- `narrative_hs_group` — LLM lead scaffold (in `02_Leads.md` only)
+- `narrative_hs_group` — LLM lead scaffold (in `03_Leads.md` only)
 
 ### Brief / findings document
-The deterministic Markdown rendering at `03_Findings.md`. Three
+The deterministic Markdown rendering at `02_Findings.md`. Three
 tiers ([Tier 1 / 2 / 3](#tier-1--2--3)). Pure SQL → text; no LLM
-in the loop. Pairs with `04_Data.xlsx` and `02_Leads.md` per export
+in the loop. Pairs with `04_Data.xlsx` and `03_Leads.md` per export
 folder.
 
 ### Brief run
@@ -282,7 +282,7 @@ a `natural_key_hash` + `value_signature` for idempotency, a
 integer `id` that `finding/{id}` citation tokens point at.
 
 ### Finding ID / trace token
-Every quotable number in `03_Findings.md` or `04_Data.xlsx` carries a
+Every quotable number in `02_Findings.md` or `04_Data.xlsx` carries a
 `finding/{id}` citation token (e.g. `finding/41349`). The integer
 is the row's primary key. Stable across re-runs of the analyser —
 when a finding revises, the new value gets a fresh id and the
@@ -298,8 +298,8 @@ input prompted each addition (e.g. `seed:lisa_article`,
 ### Lead scaffold
 The LLM-produced output for each HS group: anomaly summary +
 2–3 hypotheses picked from a curated catalog of standard causes
-+ deterministic corroboration steps. Rendered in `02_Leads.md`,
-NOT in `03_Findings.md`, to keep deterministic output
++ deterministic corroboration steps. Rendered in `03_Leads.md`,
+NOT in `02_Findings.md`, to keep deterministic output
 downstream-LLM-safe. Every number cited must round-trip to a fact
 in the prompt or the whole scaffold is rejected.
 
@@ -368,7 +368,7 @@ pointing at the new row. Active findings are those with
 See [architecture.md §Append-plus-supersede chain](architecture.md#append-plus-supersede-chain).
 
 ### Tier 1 / 2 / 3
-The three sections of `03_Findings.md`:
+The three sections of `02_Findings.md`:
 - **Tier 1 — What's new this cycle.** Diff against previous brief.
   Auto-suppressed on method-bump cycles where ≥95% of supersede
   pairs are value-identical (renders a one-line "this cycle is
@@ -384,8 +384,8 @@ above Tier 1. A regular subscriber reads Top 5 → Tier 1; a new
 joiner reads Top 5 → Tier 2 → Tier 3.
 
 ### Top movers
-The composite-ranked editorial digest at the top of `03_Findings.md`
-and `02_Leads.md`. Filter rules: |yoy_pct| ≥ 10pp, current_12mo_eur
+The composite-ranked editorial digest at the top of `02_Findings.md`
+and `03_Leads.md`. Filter rules: |yoy_pct| ≥ 10pp, current_12mo_eur
 ≥ €100M, not low-base, predictability badge ≠ 🔴, current_end =
 latest anchor across the family (recency filter). Score is
 |yoy_pct| × log10(current_12mo_eur) — rewards "big move on a

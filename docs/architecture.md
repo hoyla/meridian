@@ -8,8 +8,8 @@ for unfamiliar terms see [glossary.md](glossary.md).
 > **TL;DR.** Three customs sources (GACC / Eurostat / HMRC), three
 > data layers (`raw_rows` → `observations` → `findings`), an
 > append-plus-supersede chain on findings, a per-export folder
-> bundle of five artefacts (`01_Read_Me_First.md` + `02_Leads.md` +
-> `03_Findings.md` + `04_Data.xlsx` + `05_Groups.md`), optionally with
+> bundle of five artefacts (`01_Read_Me_First.md` + `03_Leads.md` +
+> `02_Findings.md` + `04_Data.xlsx` + `05_Groups.md`), optionally with
 > a `provenance/` subdir of per-finding audit files. A daily periodic-
 > run pipeline re-emits the bundle when a new Eurostat release lands;
 > idempotent on no-op days.
@@ -93,7 +93,7 @@ support a `--comparison-scope` flag that picks
                                   │
                 ┌─────────────┬─────────────┬─────────────────┬─────────────┐
                 ▼             ▼             ▼                 ▼             ▼
-        03_Findings.md   02_Leads.md   04_Data.xlsx      05_Groups.md  provenance/
+        02_Findings.md   03_Leads.md   04_Data.xlsx      05_Groups.md  provenance/
           (markdown,      (markdown,   (xlsx, 10 tabs;   (markdown,    (markdown,
            deterministic   LLM-drafted  Google Sheets     HS group      per-finding,
            — no LLM in the leads,       writer stubbed)   reference     opt-in via
@@ -236,7 +236,7 @@ per-row via the supersede chain), optionally runs `llm-framing`
 (`--skip-llm` to omit), and writes the bundled findings export. Prints a
 per-run summary to stdout — which sources brought new data this cycle
 and, when a briefing was generated, the exact manual `--upload-to-drive`
-command to publish it — followed by the new `03_Findings.md` path
+command to publish it — followed by the new `02_Findings.md` path
 (empty string on no-op) on its own final line, so the calling wrapper
 (Routine, GHA cron, etc.) can branch on it.
 
@@ -265,12 +265,12 @@ exports/
                              Custom per-cycle orientation file; the only
                              artefact a journalist receiving the pack cold
                              really needs to read first.
-    02_Leads.md           ← LLM lead-scaffold companion. Top N leads at top,
+    03_Leads.md           ← LLM lead-scaffold companion. Top N leads at top,
                              full per-group blocks below. Cross-references the
-                             finding IDs in 03_Findings.md. Reading-order first
+                             finding IDs in 02_Findings.md. Reading-order first
                              of the auto-generated artefacts (Luke's framing —
                              see 01_Read_Me_First.md).
-    03_Findings.md        ← deterministic Markdown; NotebookLM-ready, no LLM in the loop.
+    02_Findings.md        ← deterministic Markdown; NotebookLM-ready, no LLM in the loop.
                              Top N movers above Tier 1/2/3.
     04_Data.xlsx          ← 10-tab spreadsheet, LLM-free. Same DB snapshot.
     05_Groups.md          ← HS group reference. One section per row in `hs_groups`:
@@ -283,8 +283,8 @@ exports/
       …                      The long tail is on-demand via the CLI.
   2026-05-15-1500-ev-batteries-li-ion/   ← future scoped export
     01_Read_Me_First.md
-    02_Leads.md
-    03_Findings.md
+    03_Leads.md
+    02_Findings.md
     04_Data.xlsx
     05_Groups.md
 ```
@@ -360,7 +360,7 @@ explicit tiers separated by `---` and named in their
   ≥10pp move, ≥€100M current 12mo, not low-base, predictability
   ≠ 🔴, and `current_end` = latest anchor. Same scoring drives
   spreadsheet `top_movers_rank` / `top_movers_score` columns and
-  the Top N leads section at the top of `02_Leads.md`.
+  the Top N leads section at the top of `03_Leads.md`.
 - **Tier 1 — What's new this cycle**: the diff against the previous
   `trigger='periodic_run'` row. Auto-suppressed on method-bump
   cycles (≥95% value-identical supersedes + zero material shifts
@@ -449,7 +449,7 @@ pack runs.
 | `GACC_TEST_DATABASE_URL` | Test DB for pytest |
 | `GACC_LIVE_DATABASE_URL` | Optional: lets opt-in tests check the live DB |
 | `LLM_BACKEND` | `ollama` (default) or future alternatives |
-| `GACC_PERMALINK_BASE` | If set, 03_Findings.md renders trace tokens as Markdown links to a hosted finding viewer |
+| `GACC_PERMALINK_BASE` | If set, 02_Findings.md renders trace tokens as Markdown links to a hosted finding viewer |
 
 ### Schema-table seeds
 

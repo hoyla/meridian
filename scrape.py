@@ -683,7 +683,7 @@ def main() -> None:
     p.add_argument(
         "--docx", action="store_true",
         help=(
-            "With --briefing-pack: also write a parallel `03_Findings.docx` "
+            "With --briefing-pack: also write a parallel `02_Findings.docx` "
             "to the export folder — the Lisa-facing surface that carries "
             "charts on top of the editorial top-N movers. The .md remains "
             "canonical (NotebookLM feed); the .docx is additive. Default off "

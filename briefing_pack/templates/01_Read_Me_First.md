@@ -12,9 +12,9 @@ Meridian spits out an export pack after receiving substantive new data from one 
 
 ## Where to start, by time available
 
-- **5 minutes** — open **03_Findings** and read "If you read only this page" at the top: the cycle's most quotable shifts as ready-to-check sentences, plus a one-line digest of what changed since the last pack.
-- **15 minutes** — then skim the "Top leads" section of **02_Leads** for story angles, and look up your beat's categories in 03_Findings Tier 2.
-- **Digging in** — open **04_Data** (a multi-tab spreadsheet, summary tab first) to sort and filter everything, and use 03_Findings Tier 3 for the per-category detail behind any number.
+- **5 minutes** — open **02_Findings** and read "If you read only this page" at the top: the cycle's most quotable shifts as ready-to-check sentences, plus a one-line digest of what changed since the last pack.
+- **15 minutes** — then skim the "Top leads" section of **03_Leads** for story angles, and look up your beat's categories in 02_Findings Tier 2.
+- **Digging in** — open **04_Data** (a multi-tab spreadsheet, summary tab first) to sort and filter everything, and use 02_Findings Tier 3 for the per-category detail behind any number.
 
 ## Before you quote a number
 
@@ -27,11 +27,11 @@ Four habits that will keep you out of trouble:
 
 ## The files
 
-### 03_Findings
+### 02_Findings
 The direct output from Meridian, showing data for each HS category — pure data, no AI involved in producing it. Three layers: what's new this cycle, the current state of play for every category, then full detail. This is the file to cite numbers from.
 
-### 02_Leads
-An LLM's interpretation of the Findings file: a "top leads" section with what it thinks is interesting, then remarks per category about what might be worth exploring. Useful for story angles — but where the other files are all pure data, this one is produced by GenAI and subject to the vagaries of that technology (the LLM is a local model running on my laptop, so it's not 'top of the range'). Treat it as a tip-sheet, not a source; every number it cites is machine-checked against the Findings, but verify against 03_Findings before quoting.
+### 03_Leads
+An LLM's interpretation of the Findings file: a "top leads" section with what it thinks is interesting, then remarks per category about what might be worth exploring. Useful for story angles — but where the other files are all pure data, this one is produced by GenAI and subject to the vagaries of that technology (the LLM is a local model running on my laptop, so it's not 'top of the range'). Treat it as a tip-sheet, not a source; every number it cites is machine-checked against the Findings, but verify against 02_Findings before quoting.
 
 ### 04_Data
 All the data from the Findings, in a data-journalist friendly format. Multi-tab spreadsheet, summary page first — the fastest way to sort and filter by size, change, or stability.

@@ -242,4 +242,4 @@ def test_charts_tab_description_row(
     ws = wb["Charts"]
     description = ws.cell(row=1, column=1).value or ""
     assert "monthly" in description.lower()
-    assert "03_findings.docx" in description.lower()
+    assert "02_findings.docx" in description.lower()
