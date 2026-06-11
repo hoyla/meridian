@@ -9,6 +9,7 @@ from briefing_pack._helpers import (
     _Section,
     _SCOPE_LABEL,
     _SCOPE_SUBKIND_SUFFIX,
+    _flow_phrase,
     _fmt_eur,
     _fmt_kg,
     _fmt_pct,
@@ -44,8 +45,7 @@ def _section_hs_yoy_movers(
     flow_suffix = "" if flow == 1 else "_export"
     subkind = f"hs_group_yoy{scope_suffix}{flow_suffix}"
     scope_label = _SCOPE_LABEL[comparison_scope]
-    direction = "Imports (CN→reporter)" if flow == 1 else "Exports (reporter→CN)"
-    flow_label = f"{scope_label} {direction}"
+    flow_label = f"{scope_label} {_flow_phrase(flow)}"
     flow_short = "imports" if flow == 1 else "exports"
     cur.execute(
         """
@@ -84,7 +84,7 @@ def _section_hs_yoy_movers(
         # rather than printing N empty headers per scope. The default scope
         # (eu_27) still surfaces a "no findings" header below if needed.
         return _Section(markdown="")
-    lines.append(f"### {flow_label} — top {len(rows)} movers (latest 12mo YoY)")
+    lines.append(f"### {flow_label} — top {len(rows)} movers (12-month year-on-year)")
     lines.append("")
 
     for r in rows:

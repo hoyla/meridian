@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from briefing_pack._helpers import _Section, _fmt_eur, _trace_token
+from briefing_pack._helpers import (
+    _Section,
+    _fmt_eur,
+    _fmt_month,
+    _single_month_warning,
+    _trace_token,
+)
 
 
 def _section_state_of_play(
@@ -88,30 +94,37 @@ def _section_state_of_play(
         cur_eur = row["cur_eur"]
         flags: list[str] = []
         if row["low_base"]:
-            flags.append("⚠ low base")
+            flags.append("⚠ low base — quote the € amounts, not the %")
         if row["partial_window"]:
-            flags.append("partial window")
-        flags_str = (" — " + ", ".join(flags)) if flags else ""
-        yoy_v_str = f"{yoy_v:+.1f}%" if yoy_v is not None else "n/a"
-        yoy_k_str = f" (kg {yoy_k:+.1f}%)" if yoy_k is not None else ""
+            flags.append("incomplete window (a month of source data is missing)")
+        flags_str = (" — " + "; ".join(flags)) if flags else ""
+        # Value and volume carry their words on every line — "(kg ...)"
+        # in parens read as noise to cold readers, and the value/volume
+        # distinction is exactly where misquotes happen.
+        yoy_v_str = f"value {yoy_v:+.1f}%" if yoy_v is not None else "value n/a"
+        yoy_k_str = f", volume {yoy_k:+.1f}%" if yoy_k is not None else ""
         eur_str = _fmt_eur(cur_eur)
-        traj_str = f" Trajectory: `{traj_label}`." if traj_label else ""
+        traj_str = f" Trend: {traj_label}." if traj_label else ""
         # Phase 6.10: surface the single-month YoY (latest period vs same
         # month a year earlier) next to the 12mo rolling figure when the
         # finding carries it. The Soapbox / Lisa register often quotes the
         # single-month figure directly; the journalist seeing both at a
         # glance can pick the cadence that matches the story they're
-        # writing.
+        # writing. Extreme swings carry the not-quotable warning.
         sm_yoy_pct = row["sm_yoy_pct"]
         sm_str = ""
         if sm_yoy_pct is not None:
             sm_v = float(sm_yoy_pct) * 100
             sm_k_raw = row["sm_yoy_pct_kg"]
-            sm_k_str = f" (kg {float(sm_k_raw)*100:+.1f}%)" if sm_k_raw is not None else ""
-            sm_str = f" Latest month: {sm_v:+.1f}%{sm_k_str}."
+            sm_k_str = f", volume {float(sm_k_raw)*100:+.1f}%" if sm_k_raw is not None else ""
+            sm_str = (
+                f" Latest month: value {sm_v:+.1f}%{sm_k_str}."
+                f"{_single_month_warning(sm_yoy_pct)}"
+            )
         return (
-            f"  - **{label}**: {yoy_v_str}{yoy_k_str} to {eur_str} (12mo to "
-            f"{row['current_end']}).{sm_str}{traj_str}{flags_str} "
+            f"  - **{label}**: {yoy_v_str}{yoy_k_str}, 12mo total {eur_str} "
+            f"(12 months to {_fmt_month(row['current_end'])}).{sm_str}"
+            f"{traj_str}{flags_str} "
             f"{_trace_token(row['id'])}"
         )
 
@@ -120,12 +133,12 @@ def _section_state_of_play(
     # then exports.
     SCOPE_ORDER = [
         # (subkind_yoy, subkind_trajectory, display_label, flow_direction)
-        ("hs_group_yoy", "hs_group_trajectory", "EU-27 imports (CN→reporter)", 1),
-        ("hs_group_yoy_uk", "hs_group_trajectory_uk", "UK imports (CN→reporter)", 1),
-        ("hs_group_yoy_combined", "hs_group_trajectory_combined", "EU-27+UK imports (combined)", 1),
-        ("hs_group_yoy_export", "hs_group_trajectory_export", "EU-27 exports (reporter→CN)", 2),
-        ("hs_group_yoy_uk_export", "hs_group_trajectory_uk_export", "UK exports (reporter→CN)", 2),
-        ("hs_group_yoy_combined_export", "hs_group_trajectory_combined_export", "EU-27+UK exports (combined)", 2),
+        ("hs_group_yoy", "hs_group_trajectory", "EU-27 imports from China", 1),
+        ("hs_group_yoy_uk", "hs_group_trajectory_uk", "UK imports from China", 1),
+        ("hs_group_yoy_combined", "hs_group_trajectory_combined", "EU-27 + UK imports from China (combined)", 1),
+        ("hs_group_yoy_export", "hs_group_trajectory_export", "EU-27 exports to China", 2),
+        ("hs_group_yoy_uk_export", "hs_group_trajectory_uk_export", "UK exports to China", 2),
+        ("hs_group_yoy_combined_export", "hs_group_trajectory_combined_export", "EU-27 + UK exports to China (combined)", 2),
     ]
 
     lines: list[str] = []
@@ -134,12 +147,14 @@ def _section_state_of_play(
     lines.append("## Tier 2 — Current state of play")
     lines.append("")
     lines.append(
-        "One block per HS group. Each row inside is a (scope, flow) "
-        "compact summary: latest 12mo YoY (value, and kg in parens), current "
-        "12mo total in EUR, trajectory shape if classified, and the "
-        "`finding/N` token you can use to find the same row in the spreadsheet "
-        "or the detail tier below. Predictability badges (🟢/🟡/🔴) sit next "
-        "to the group name where the historical pair exists."
+        "One block per HS group. Each row is a compact summary for one "
+        "view of that group (EU-27 / UK / combined, imports / exports): "
+        "the year-on-year change in value (€) and volume (kg weight), "
+        "the current 12-month total, the trend shape where one is "
+        "classified, and the `finding/N` token you can use to find the "
+        "same row in the spreadsheet or the detail tier below. "
+        "Stability badges (🟢/🟡/🔴 — see *Reading the numbers* above) "
+        "sit next to the group name where enough history exists."
     )
     lines.append("")
     lines.append(

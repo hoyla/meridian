@@ -5,6 +5,8 @@ from __future__ import annotations
 from briefing_pack._helpers import (
     _ALL_UNIVERSAL_CAVEATS,
     _Section,
+    _caveat_summary_map,
+    _fmt_caveats_inline,
     _fmt_eur,
     _fmt_pct,
     _release_ids_for_observations,
@@ -45,15 +47,31 @@ def _section_mirror_gaps(cur) -> _Section:
     )
     gap_rows = cur.fetchall()
 
+    # code → plain-English summary, fetched once for the caveat lines below.
+    caveat_summaries = _caveat_summary_map(cur)
+
     release_ids: set[int] = set()
     lines: list[str] = []
     lines.append("### Mirror-trade gaps (latest per partner)")
     lines.append("")
     lines.append(
-        "Mirror-gap = (Eurostat — GACC_EUR_converted) / Eurostat. The *expected* "
-        "baseline is +5–10% (CIF vs FOB pricing — caveat `cif_fob`). Persistent gaps "
-        "well above that — Netherlands and Italy notably — sit in the structural "
-        "transshipment territory; sudden movements are flagged separately as movers."
+        "The same trade reported from both sides of the customs fence: "
+        "what China says it exported to a country vs what that country "
+        "says it imported from China. The two never match exactly — a "
+        "gap of +5–10% is *expected*, because import values include "
+        "freight and insurance while export values don't (the CIF vs "
+        "FOB convention; see the methodology footer). What matters "
+        "editorially is the gap *beyond* that baseline, shown per "
+        "partner below. Persistent large gaps — Netherlands and Italy "
+        "notably — usually reflect goods routed through ports rather "
+        "than anything untoward; sudden *movements* in a gap are "
+        "flagged separately as movers."
+    )
+    lines.append("")
+    # Gap formula, for the verifying reader:
+    lines.append(
+        "*Gap formula: (Europe-reported value − China-reported value, "
+        "EUR-converted) ÷ Europe-reported value.*"
     )
     lines.append("")
     if not gap_rows:
@@ -97,8 +115,13 @@ def _section_mirror_gaps(cur) -> _Section:
             # `transshipment_hub`) surface correctly. Caveats that apply to
             # essentially every finding by default (multi_partner_sum) are
             # suppressed inline; the top-of-brief note covers them.
+            # Rendered as the plain-English summary from the `caveats`
+            # table, with the code in parens for cross-reference.
             caveats = [c for c in (r['caveat_codes'] or []) if c not in _ALL_UNIVERSAL_CAVEATS]
-            lines.append(f"- *Caveats*: {', '.join(caveats) if caveats else '—'}")
+            lines.append(
+                f"- *Caveats*: "
+                f"{_fmt_caveats_inline(caveats, caveat_summaries) if caveats else '—'}"
+            )
             if r['hub_iso2']:
                 # One-line transshipment-hub annotation when the partner is in
                 # the table — the finding body has the longer version.
@@ -134,7 +157,9 @@ def _section_mirror_gaps(cur) -> _Section:
     lines.append(
         "Each row: a partner whose gap shifted notably vs that partner's own rolling "
         "baseline. High |z| = the gap moved unusually for *this* country, regardless "
-        "of where the gap level sits structurally."
+        "of where the gap level sits structurally. (z counts how many standard "
+        "deviations the latest gap sits from the partner's own recent average — "
+        "above about 2 is a genuinely unusual move.)"
     )
     lines.append("")
     if not movers:

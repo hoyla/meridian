@@ -7,6 +7,7 @@ import re
 from briefing_pack._helpers import (
     _ALL_UNIVERSAL_CAVEATS,
     _Section,
+    _caveat_summary_map,
     _slugify_heading,
     _trace_token,
 )
@@ -215,6 +216,9 @@ def _section_llm_narratives(cur) -> _Section:
     if not rows:
         return _Section(markdown="")
 
+    # code → plain-English summary for the per-lead Provenance blocks.
+    caveat_summaries = _caveat_summary_map(cur)
+
     lines.append("## Investigation leads")
     lines.append("")
     lines.append(
@@ -276,10 +280,15 @@ def _section_llm_narratives(cur) -> _Section:
         lines.append("**Provenance:**")
         lines.append("")
         if visible_caveats:
-            linked = ", ".join(
-                f"[`{c}`]({_METHODOLOGY_CAVEATS})" for c in visible_caveats
-            )
-            lines.append(f"- *Caveats from underlying findings*: {linked}")
+            # One bullet per caveat: the plain-English summary leads,
+            # the linked code follows for cross-reference.
+            lines.append("- *Caveats from underlying findings*:")
+            for c in visible_caveats:
+                summary = caveat_summaries.get(c)
+                label = f"{summary} " if summary else ""
+                lines.append(
+                    f"  - {label}([`{c}`]({_METHODOLOGY_CAVEATS}))"
+                )
         underlying_ids = detail.get("underlying_finding_ids") or []
         if underlying_ids:
             ids_str = ", ".join(str(i) for i in underlying_ids)

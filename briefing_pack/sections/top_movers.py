@@ -22,7 +22,9 @@ from __future__ import annotations
 
 from briefing_pack._helpers import (
     _Section,
+    _flow_phrase,
     _fmt_eur,
+    _fmt_month,
     _fmt_pct,
     _slugify_heading,
     _trace_token,
@@ -46,38 +48,36 @@ def _section_top_movers(top_movers: list[dict]) -> _Section:
     lines.append(f"## Top {len(top_movers)} movers this cycle")
     lines.append("")
     lines.append(
-        "*Editorially-quotable shifts ranked by a composite of "
-        "|YoY| × log(€). Filters: ≥10pp move, ≥€100M current 12mo total, "
-        "not low-base, predictability badge ≠ 🔴 (no badge is fine — "
-        "groups without enough T-6 history yet are still eligible). "
-        "Drill into each via its Tier 2 anchor or `finding/{id}` token; "
-        "the full state-of-play picture is in Tier 2 below.*"
+        "*The most quotable shifts this cycle, ranked by a blend of "
+        "size-of-move and size-of-market (|YoY| × log €). To qualify, a "
+        "move must be at least 10 points, on a 12-month total of at "
+        "least €100M, with no low-base warning and no 🔴 stability "
+        "badge (groups with no badge yet are eligible). Click a group "
+        "name for its Tier 2 entry; every line ends with its "
+        "`finding/{id}` citation token.*"
     )
     lines.append("")
 
     for i, m in enumerate(top_movers, start=1):
         group_name = m["group_name"]
         is_export = m["subkind"].endswith("_export")
-        flow_label = (
-            "EU-27 exports (reporter→CN)" if is_export
-            else "EU-27 imports (CN→reporter)"
-        )
+        flow_label = f"EU-27 {_flow_phrase(2 if is_export else 1)}"
         # Badge if present.
         pred = m.get("predictability")
         badge = f" {pred[0]}" if pred is not None else ""
-        # Kg YoY in parens when available (matches Tier 2 format).
+        # Volume YoY alongside value when available (matches Tier 2 format).
         yoy_kg = m.get("yoy_pct_kg")
         kg_str = (
-            f" (kg {_fmt_pct(yoy_kg)})" if yoy_kg is not None else ""
+            f", volume {_fmt_pct(yoy_kg)}" if yoy_kg is not None else ""
         )
         period = m["current_end"]
         anchor = _slugify_heading(group_name)
 
         lines.append(
             f"{i}. **[{group_name}](#{anchor}){badge}** — "
-            f"{flow_label}: {_fmt_pct(m['yoy_pct'])}{kg_str} to "
-            f"{_fmt_eur(m['current_eur'])} "
-            f"(12mo to {period.strftime('%Y-%m')}). "
+            f"{flow_label}: value {_fmt_pct(m['yoy_pct'])}{kg_str}, "
+            f"12mo total {_fmt_eur(m['current_eur'])} "
+            f"(12 months to {_fmt_month(period)}). "
             f"{_trace_token(m['id'])}"
         )
     lines.append("")

@@ -91,13 +91,16 @@ _METADATA_SECTION_HEADINGS = {
     "Period coverage",
     "Findings included",
     "How to read this findings document",
+    "Reading the numbers",
     "About the finding/N citations",
 }
 # Per-file metadata sets for the other house-styled Docs. Leads mirrors the
-# Findings treatment (orientation block + citation endnote); Groups tints
-# only its navigation index; Read_Me_First gets none (it is all orientation).
+# Findings treatment (orientation block + key + citation endnote); Groups
+# tints only its navigation index; Read_Me_First gets none (it is all
+# orientation).
 _LEADS_METADATA_HEADINGS = {
     "In this export folder",
+    "Reading the numbers",
     "About the finding/N citations",
 }
 _GROUPS_METADATA_HEADINGS = {
@@ -210,8 +213,8 @@ def _pick_eur_scale(max_value: float) -> tuple[float, str]:
 
 def _flow_label_for_subkind(subkind: str) -> str:
     if subkind.endswith("_export"):
-        return "EU-27 exports (reporter→CN)"
-    return "EU-27 imports (CN→reporter)"
+        return "EU-27 exports to China"
+    return "EU-27 imports from China"
 
 
 def _build_chart_png(

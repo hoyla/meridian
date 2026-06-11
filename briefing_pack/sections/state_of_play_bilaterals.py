@@ -17,7 +17,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from briefing_pack._helpers import _Section, _fmt_eur, _trace_token
+from briefing_pack._helpers import (
+    _Section,
+    _fmt_eur,
+    _fmt_month,
+    _single_month_warning,
+    _trace_token,
+)
 
 
 def _section_state_of_play_bilaterals(cur) -> _Section:
@@ -62,13 +68,15 @@ def _section_state_of_play_bilaterals(cur) -> _Section:
     lines.append("## Tier 2 — Current state of play: GACC bilateral partners")
     lines.append("")
     lines.append(
-        "China-side YoY for the EU bloc and every single-country GACC "
-        "partner. The 12mo rolling figure is the stable comparator; the "
-        "**YTD cumulative** figure is the Soapbox / Merics register "
-        "(\"China-EU exports +19% Jan-Apr YoY\"); the **single-month** "
-        "figure is the latest-month acceleration signal. All three "
-        "operators share the same anchor period — pick whichever cadence "
-        "fits the story."
+        "Year-on-year change as reported by China's customs agency "
+        "(GACC), for the EU bloc and every single country GACC reports "
+        "on. Each line carries three readings of the same data: the "
+        "**12-month** figure (stable, the one to quote), the "
+        "**year-to-date** figure (\"China-EU exports +19% Jan-Apr "
+        "year-on-year\" — the register Chinese trade reporting "
+        "typically uses), and the **latest month** (the newest "
+        "direction signal). All three share the same anchor period — "
+        "pick whichever cadence fits the story."
     )
     lines.append("")
 
@@ -84,8 +92,8 @@ def _section_state_of_play_bilaterals(cur) -> _Section:
         by_partner.setdefault(r["partner_label"], {})[r["subkind"]] = r
 
     SUBKIND_ORDER = [
-        ("gacc_bilateral_aggregate_yoy", "Exports (China → partner)"),
-        ("gacc_bilateral_aggregate_yoy_import", "Imports (partner → China)"),
+        ("gacc_bilateral_aggregate_yoy", "China's exports to this partner"),
+        ("gacc_bilateral_aggregate_yoy_import", "China's imports from this partner"),
     ]
 
     # EU bloc first, then single countries alphabetically. Matches the
@@ -115,13 +123,19 @@ def _section_state_of_play_bilaterals(cur) -> _Section:
                 ytd_v = float(r["ytd_yoy_pct"]) * 100
                 ytd_eur = _fmt_eur(r["ytd_curr_eur"])
                 months = r["ytd_months"]
-                ytd_block = f" YTD ({months}mo): {ytd_v:+.1f}% to {ytd_eur}."
+                ytd_block = (
+                    f" Year-to-date ({months} months): {ytd_v:+.1f}% "
+                    f"to {ytd_eur}."
+                )
 
             sm_block = ""
             if r["sm_yoy_pct"] is not None and r["sm_curr_eur"] is not None:
                 sm_v = float(r["sm_yoy_pct"]) * 100
                 sm_eur = _fmt_eur(r["sm_curr_eur"])
-                sm_block = f" Latest month: {sm_v:+.1f}% to {sm_eur}."
+                sm_block = (
+                    f" Latest month: {sm_v:+.1f}% to {sm_eur}."
+                    f"{_single_month_warning(r['sm_yoy_pct'])}"
+                )
 
             # Inline annotations for the per-finding caveats most relevant
             # to a journalist scanning the line. `partial_window` flags that
@@ -131,14 +145,17 @@ def _section_state_of_play_bilaterals(cur) -> _Section:
             # full caveat text is in the per-finding provenance file.
             annotations: list[str] = []
             if r["partial_window"]:
-                annotations.append("partial window")
+                annotations.append("incomplete window (a month of source data is missing)")
             jfc_years = r["jan_feb_combined_years"]
             if jfc_years:
-                annotations.append(f"includes Jan+Feb {','.join(str(y) for y in jfc_years)} cumulative")
+                annotations.append(
+                    f"Jan+Feb {','.join(str(y) for y in jfc_years)} counted "
+                    "as a single combined figure (GACC publishes them merged)"
+                )
             suffix = (" — " + "; ".join(annotations)) if annotations else ""
             lines.append(
-                f"  - **{label}**: 12mo rolling {rolling_str} to {rolling_eur} "
-                f"(12mo to {r['current_end']}).{ytd_block}{sm_block}{suffix} "
+                f"  - **{label}**: 12-month figure {rolling_str} to {rolling_eur} "
+                f"(12 months to {_fmt_month(r['current_end'])}).{ytd_block}{sm_block}{suffix} "
                 f"{_trace_token(r['id'])}"
             )
         lines.append("")
