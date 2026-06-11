@@ -12,7 +12,7 @@ Meridian spits out an export pack after receiving substantive new data from one 
 
 ## Where to start, by time available
 
-- **5 minutes** — open **03_Findings** and read the "Top movers this cycle" list and "Tier 1 — what's new this cycle". Those are the headline shifts since the last pack.
+- **5 minutes** — open **03_Findings** and read "If you read only this page" at the top: the cycle's most quotable shifts as ready-to-check sentences, plus a one-line digest of what changed since the last pack.
 - **15 minutes** — then skim the "Top leads" section of **02_Leads** for story angles, and look up your beat's categories in 03_Findings Tier 2.
 - **Digging in** — open **04_Data** (a multi-tab spreadsheet, summary tab first) to sort and filter everything, and use 03_Findings Tier 3 for the per-category detail behind any number.
 

@@ -35,7 +35,11 @@ from briefing_pack._helpers import (
 )
 from briefing_pack.sections.about_findings import _section_about_findings
 from briefing_pack.sections.detail_opener import _section_detail_opener
-from briefing_pack.sections.diff import _section_diff_since_last_brief
+from briefing_pack.sections.diff import (
+    _compute_diff,
+    _section_diff_since_last_brief,
+)
+from briefing_pack.sections.front_page import _section_front_page
 from briefing_pack.sections.headline import _section_headline
 from briefing_pack.sections.hs_yoy_movers import _section_hs_yoy_movers
 from briefing_pack.sections.llm_narratives import (
@@ -55,7 +59,6 @@ from briefing_pack.sections.state_of_play_aggregates import (
 from briefing_pack.sections.state_of_play_bilaterals import (
     _section_state_of_play_bilaterals,
 )
-from briefing_pack.sections.top_movers import _section_top_movers
 from briefing_pack.sections.trajectories import _section_trajectories
 from briefing_pack.render_groups import render_groups
 
@@ -193,16 +196,16 @@ def render(
         # section renderer falls back to no badge in that case.
         predictability = _compute_predictability_per_group(cur)
 
-        # ----- Top-5 movers (editorial digest) -----
-        # Sits above Tier 1 so a journalist opening the brief sees the
-        # composite-ranked shortlist immediately. Empty markdown if no
-        # group passes the filters (≥10pp, ≥€100M, not low-base, badge
-        # ≠ 🔴) — the section drops out of the document entirely in
-        # that case, which is the right behaviour on a fresh DB or any
-        # cycle where every candidate sits in low-base / volatile /
-        # tiny-base territory.
+        # ----- Front page: "If you read only this page" -----
+        # Publishable hedged sentences for the cycle's most quotable
+        # shifts (the composite-ranked top movers: ≥10pp, ≥€100M, not
+        # low-base, badge ≠ 🔴) plus a "Since the last pack" digest
+        # built from the same diff data Tier 1 renders — the two
+        # surfaces can't disagree about what kind of cycle this is.
+        # Dropped entirely on a fresh DB with nothing to say.
         top_movers = _compute_top_movers(cur, predictability=predictability)
-        sections.append(_section_top_movers(top_movers))
+        diff_data = _compute_diff(cur)
+        sections.append(_section_front_page(top_movers, diff_data))
 
         # ----- Tier 1: what's new this cycle (the diff) -----
         # Excludes narrative_hs_group findings — those live in the companion
@@ -210,7 +213,7 @@ def render(
         # heading + the `---` separator above it. Empty case (first-ever brief
         # or nothing material changed) still emits the heading with a
         # baseline-explainer paragraph.
-        sections.append(_section_diff_since_last_brief(cur))
+        sections.append(_section_diff_since_last_brief(diff_data))
 
         # ----- Tier 2: current state of play (compact summary) -----
         # Per-HS-group block first (the EU-CN deep-dive view), then the
@@ -635,13 +638,13 @@ def _editorially_fresh_finding_ids(
     bundling those every time is mostly redundant weight.
 
     Section boundaries are pinned to the headings the section modules
-    emit (see briefing_pack/sections/{diff,top_movers,llm_narratives}.py).
+    emit (see briefing_pack/sections/{diff,front_page,llm_narratives}.py).
     A section that doesn't appear (e.g. method-bump-suppressed Tier 1)
     contributes nothing — fine, no spurious bundling."""
     ids: set[int] = set()
-    # Top-N movers in brief: "## Top N movers this cycle" → next "## " or "---"
+    # Front page in brief: "## If you read only this page" → next "## " or "---"
     m = re.search(
-        r"^## Top \d+ movers this cycle\b(.*?)(?=^## |^---\s*$)",
+        r"^## If you read only this page\b(.*?)(?=^## |^---\s*$)",
         brief_text, re.DOTALL | re.MULTILINE,
     )
     if m:
