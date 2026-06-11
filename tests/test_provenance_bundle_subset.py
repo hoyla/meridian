@@ -8,7 +8,7 @@ Top-N movers + Top-N leads (typically ~40-60 files), with everything
 else served on-demand via the --finding-provenance CLI flag.
 
 These tests pin the regex boundaries the filter uses — if a section
-heading changes shape in `briefing_pack/sections/{diff,top_movers,llm_narratives}.py`,
+heading changes shape in `briefing_pack/sections/{diff,front_page,llm_narratives}.py`,
 the filter will silently start dropping a section, and these will
 break first.
 """
@@ -21,13 +21,15 @@ BRIEF_SAMPLE = """\
 
 intro paragraph mentioning `finding/1` which should NOT be bundled.
 
-## Top 3 movers this cycle
+## If you read only this page
 
-*Editorially-quotable shifts ranked by ...*
+*The most quotable shifts this cycle, written ready to check ...*
 
-1. **[EV batteries](#ev-batteries)** — +34% to €27B. `finding/100`
-2. **[Solar PV](#solar-pv)** — +18% to €8B. `finding/101`
-3. **[Permanent magnets](#permanent-magnets)** — +12% to €1.5B. `finding/102`
+1. **[EU-27 imports of EV batteries from China](#ev-batteries)** rose 34.0% by value. `finding/100`
+2. **[EU-27 imports of Solar PV from China](#solar-pv)** rose 18.0% by value. `finding/101`
+3. **[EU-27 imports of Permanent magnets from China](#permanent-magnets)** rose 12.0% by value. `finding/102`
+
+**Since the last pack:** 2 findings shifted materially.
 
 ---
 
@@ -80,7 +82,7 @@ Long tail again: `finding/600`, `finding/601`, `finding/602`.
 """
 
 
-def test_extracts_top_movers_findings():
+def test_extracts_front_page_findings():
     ids = _editorially_fresh_finding_ids(BRIEF_SAMPLE, leads_text="")
     assert 100 in ids and 101 in ids and 102 in ids
 
@@ -119,7 +121,7 @@ def test_method_bump_suppressed_tier_1_contributes_nothing():
     with no real editorial movement), the section renders but contains
     no finding/N tokens — fine, that just means zero contribution."""
     method_bump_brief = """\
-## Top 5 movers this cycle
+## If you read only this page
 
 (no movers — empty cycle)
 
