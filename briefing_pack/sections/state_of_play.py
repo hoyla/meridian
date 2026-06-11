@@ -6,7 +6,9 @@ from typing import Any
 
 from briefing_pack._helpers import (
     _Section,
+    _VOLATILE_GROUP_NOTE,
     _fmt_eur,
+    _fmt_missing_months,
     _fmt_month,
     _single_month_warning,
     _trace_token,
@@ -42,6 +44,8 @@ def _section_state_of_play(
                  (detail->'totals'->>'current_12mo_eur')::numeric AS cur_eur,
                  (detail->'totals'->>'low_base')::boolean AS low_base,
                  (detail->'totals'->>'partial_window')::boolean AS partial_window,
+                 detail->'totals'->'missing_months_current' AS missing_curr,
+                 detail->'totals'->'missing_months_prior' AS missing_prior,
                  (detail->'totals'->'single_month'->>'yoy_pct')::numeric AS sm_yoy_pct,
                  (detail->'totals'->'single_month'->>'yoy_pct_kg')::numeric AS sm_yoy_pct_kg
             FROM findings
@@ -96,7 +100,14 @@ def _section_state_of_play(
         if row["low_base"]:
             flags.append("⚠ low base — quote the € amounts, not the %")
         if row["partial_window"]:
-            flags.append("incomplete window (a month of source data is missing)")
+            # Name the missing month and which window it fell in (the
+            # detail has carried this since the analyser first flagged
+            # partial windows; the brief just never surfaced it).
+            miss = _fmt_missing_months(row["missing_curr"], row["missing_prior"])
+            flags.append(
+                f"incomplete window — {miss}" if miss
+                else "incomplete window (a month of source data is missing)"
+            )
         flags_str = (" — " + "; ".join(flags)) if flags else ""
         # Value and volume carry their words on every line — "(kg ...)"
         # in parens read as noise to cold readers, and the value/volume
@@ -177,6 +188,14 @@ def _section_state_of_play(
         badge_str = f" {pred[0]}" if pred is not None else ""
         lines.append(f"### {group_name}{badge_str}")
         lines.append("")
+        # 🔴 demotion: volatile groups get an explicit warning line, not
+        # just an emoji — red groups previously rendered identically to
+        # green ones bar the badge. Additive (a line under the heading,
+        # not a heading change) so anchors from Top movers / 05_Groups
+        # stay stable.
+        if pred is not None and pred[0] == "🔴":
+            lines.append(_VOLATILE_GROUP_NOTE)
+            lines.append("")
 
         any_emitted = False
         for sk_yoy, sk_traj, label, _flow in SCOPE_ORDER:

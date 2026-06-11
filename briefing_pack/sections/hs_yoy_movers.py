@@ -13,6 +13,8 @@ from briefing_pack._helpers import (
     _fmt_eur,
     _fmt_kg,
     _fmt_pct,
+    _hmrc_suppressed_counts,
+    _quotability_verdict,
     _release_ids_for_window,
     _threshold_fragility_annotation,
     _trace_token,
@@ -56,6 +58,9 @@ def _section_hs_yoy_movers(
                  (detail->'windows'->>'current_start')::date AS current_start,
                  (detail->'windows'->>'current_end')::date AS current_end,
                  (detail->'windows'->>'prior_start')::date AS prior_start,
+                 (detail->'windows'->>'prior_end')::date AS prior_end,
+                 detail->'totals'->'missing_months_current' AS missing_curr,
+                 detail->'totals'->'missing_months_prior' AS missing_prior,
                  (detail->'totals'->>'current_12mo_eur')::numeric AS current_eur,
                  (detail->'totals'->>'prior_12mo_eur')::numeric AS prior_eur,
                  (detail->'totals'->>'yoy_pct')::numeric AS yoy_pct,
@@ -97,6 +102,22 @@ def _section_hs_yoy_movers(
             badge, _pct, _n = pred
             badge_str = f" {badge}"
         lines.append(f"#### {r['group_name']}{badge_str}")
+        # The render-time quotability verdict leads the block — the
+        # plain-English instruction that applies methodology §9/§10 at
+        # the point of quotation. The bullets after it are the
+        # supporting evidence.
+        lines.append(
+            "- **Quotability**: "
+            + _quotability_verdict(
+                badge=pred[0] if pred is not None else None,
+                low_base=r["low_base"],
+                current_eur=r["current_eur"],
+                prior_eur=r["prior_eur"],
+                threshold_eur=r["low_base_threshold"],
+                missing_current=r["missing_curr"],
+                missing_prior=r["missing_prior"],
+            )
+        )
         if pred is not None:
             badge, pct, n = pred
             label = (
@@ -105,14 +126,10 @@ def _section_hs_yoy_movers(
                 else "volatile"
             )
             lines.append(
-                f"- *YoY predictability* ({badge} {label}): "
-                f"{int(pct*100)}% of {n} (scope, flow) permutations stayed "
-                f"on the same direction with shift <{int(PREDICTABILITY_SHIFT_PP)}pp "
-                f"vs 6 months ago. "
-                + ("Headline % is robust." if badge == "🟢"
-                   else "Lean on trajectory shape; hedge any % quoted from this group."
-                   if badge == "🔴"
-                   else "Treat the headline % with caution.")
+                f"- *Signal stability* ({badge} {label}): "
+                f"{int(pct*100)}% of {n} views of this group stayed on "
+                f"the same direction with a shift under "
+                f"{int(PREDICTABILITY_SHIFT_PP)}pp vs 6 months ago."
             )
         # Surface the period the finding actually refers to. For groups where
         # the analyser has stopped emitting findings (e.g. low-base failure),
@@ -164,19 +181,41 @@ def _section_hs_yoy_movers(
                     f"{_fmt_eur(pr['current_eur'])}, Δ {_fmt_eur(delta)}"
                     f"{share_str})"
                 )
-        if r['low_base']:
-            lines.append(
-                "- ⚠️ **Low-base flag**: prior or current 12mo total below the €50M "
-                "threshold. Verify absolute figures before quoting the percentage."
-            )
-        # Phase: threshold-fragility annotation (orthogonal to the low_base
-        # flag — a finding can be flagged AND fragile, or fragile-but-not-
-        # flagged because it's just above the threshold).
+        # Low-base instruction now lives in the Quotability verdict above
+        # (with the actual amounts + threshold), not a separate bullet.
+        # Threshold-fragility annotation stays as supporting evidence
+        # (orthogonal to the low_base flag — a finding can be flagged AND
+        # fragile, or fragile-but-not-flagged because it's just above the
+        # threshold).
         fragility = _threshold_fragility_annotation(
             r['current_eur'], r['prior_eur'], r['low_base_threshold'],
         )
         if fragility:
             lines.append(fragility)
+        # UK-scope integrity rider: how many HMRC source rows were
+        # suppressed for confidentiality (and so excluded from the
+        # totals above), split by window because differing suppression
+        # between windows skews the YoY itself. Render-time count
+        # mirroring the analyser's aggregation predicates.
+        if comparison_scope == "uk" and r["prior_end"] is not None:
+            n_curr, n_prior = _hmrc_suppressed_counts(
+                cur,
+                patterns=list(r["hs_patterns"] or []),
+                partners=list(r.get("partners_used") or ["CN", "HK", "MO"]),
+                flow=flow,
+                current_start=r["current_start"],
+                current_end=r["current_end"],
+                prior_start=r["prior_start"],
+                prior_end=r["prior_end"],
+            )
+            if n_curr or n_prior:
+                lines.append(
+                    f"- **HMRC suppression**: {n_curr} source rows in the "
+                    f"current window and {n_prior} in the prior window were "
+                    "suppressed by HMRC for confidentiality and are excluded "
+                    "from these totals — the UK figures are a slight "
+                    "undercount."
+                )
         # Pull partner list from the finding's method_query (default new
         # behaviour: CN+HK+MO; legacy CN-only findings are superseded after
         # the v7 method bump but rendering here stays defensive).

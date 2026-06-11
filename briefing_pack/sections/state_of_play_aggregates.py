@@ -7,6 +7,7 @@ from typing import Any
 from briefing_pack._helpers import (
     _Section,
     _fmt_eur,
+    _fmt_missing_months,
     _fmt_month,
     _single_month_warning,
     _trace_token,
@@ -41,6 +42,8 @@ def _section_state_of_play_aggregates(cur) -> _Section:
                  (detail->'totals'->>'yoy_pct')::numeric AS yoy_pct,
                  (detail->'totals'->>'current_12mo_eur')::numeric AS cur_eur,
                  (detail->'totals'->>'partial_window')::boolean AS partial_window,
+                 detail->'totals'->'missing_months_current' AS missing_curr,
+                 detail->'totals'->'missing_months_prior' AS missing_prior,
                  (detail->'totals'->'ytd_cumulative'->>'yoy_pct')::numeric AS ytd_yoy_pct,
                  (detail->'totals'->'ytd_cumulative'->>'current_eur')::numeric AS ytd_curr_eur,
                  (detail->'totals'->'ytd_cumulative'->>'months_in_ytd')::int AS ytd_months,
@@ -109,7 +112,11 @@ def _section_state_of_play_aggregates(cur) -> _Section:
             # provenance file.
             annotations: list[str] = []
             if r["partial_window"]:
-                annotations.append("incomplete window (a month of source data is missing)")
+                miss = _fmt_missing_months(r["missing_curr"], r["missing_prior"])
+                annotations.append(
+                    f"incomplete window — {miss}" if miss
+                    else "incomplete window (a month of source data is missing)"
+                )
             jfc_years = r["jan_feb_combined_years"]
             if jfc_years:
                 annotations.append(
