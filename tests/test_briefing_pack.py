@@ -83,7 +83,9 @@ def _seed_hs_yoy_finding(cur, run_id: int, group_name: str, *,
                         prior_eur: float = 0.7e9,
                         low_base: bool = False,
                         period: date = date(2026, 2, 1),
-                        per_reporter_breakdown: list[dict] | None = None) -> int:
+                        per_reporter_breakdown: list[dict] | None = None,
+                        single_month_yoy_pct: float | None = None,
+                        method_query: dict | None = None) -> int:
     cur.execute("SELECT id FROM hs_groups WHERE name = %s", (group_name,))
     hg = cur.fetchone()
     hg_ids = [hg[0]] if hg else []
@@ -91,7 +93,7 @@ def _seed_hs_yoy_finding(cur, run_id: int, group_name: str, *,
     prior_end = date(period.year - 1, period.month, 1)
     detail = {
         "method": "hs_group_yoy_v4_with_low_base_flag",
-        "method_query": {"hs_patterns": ["8507%"]},
+        "method_query": method_query or {"hs_patterns": ["8507%"]},
         "group": {"name": group_name, "hs_patterns": ["8507%"]},
         "windows": {
             "current_start": prior_end.isoformat(),
@@ -111,6 +113,11 @@ def _seed_hs_yoy_finding(cur, run_id: int, group_name: str, *,
         },
         "per_reporter_breakdown": per_reporter_breakdown or [],
     }
+    if single_month_yoy_pct is not None:
+        detail["totals"]["single_month"] = {
+            "yoy_pct": single_month_yoy_pct,
+            "yoy_pct_kg": single_month_yoy_pct / 2,
+        }
     cur.execute(
         """
         INSERT INTO findings (scrape_run_id, kind, subkind, observation_ids, hs_group_ids,
@@ -220,7 +227,7 @@ def test_render_produces_all_top_level_sections(empty_findings, test_db_url):
     with no findings so the brief stays terse rather than printing N
     empty per-scope headers."""
     md = briefing_pack.render()
-    assert "# GACC × Eurostat trade findings" in md
+    assert "# China–EU/UK trade — findings" in md
     assert "## Period coverage" in md
     assert "## Findings included" in md
     # The mirror-trade section always renders (it's not scope-gated yet).
@@ -331,7 +338,7 @@ def test_top_n_truncates_movers(empty_findings, test_db_url):
     # from "## EU-27 Imports..." to "### EU-27 Imports..." so it sits under
     # the Tier 3 "## Full detail" parent; per-group sub-headings were
     # correspondingly demoted from "### {group}" to "#### {group}".
-    imports_block = md.split("### EU-27 Imports (CN→reporter)")[1].split("\n### ")[0]
+    imports_block = md.split("### EU-27 imports from China")[1].split("\n### ")[0]
     h4_count = len(re.findall(r"^#### ", imports_block, re.MULTILINE))
     assert h4_count == 3
 
@@ -413,8 +420,8 @@ def test_export_writes_brief_and_leads_into_folder(
     assert Path(brief_path).parent == Path(leads_path).parent
     brief_content = Path(brief_path).read_text()
     leads_content = Path(leads_path).read_text()
-    assert brief_content.startswith("# GACC × Eurostat trade findings")
-    assert leads_content.startswith("# GACC × Eurostat trade — investigation leads")
+    assert brief_content.startswith("# China–EU/UK trade — findings")
+    assert leads_content.startswith("# China–EU/UK trade — investigation leads")
     # Empty DB: leads file gracefully announces absence of findings.
     assert "No active `narrative_hs_group` findings" in leads_content
 
@@ -507,6 +514,87 @@ def test_export_default_folder_uses_minute_timestamp(
     assert folder.parent.name == "exports"
     # Folder name matches YYYY-MM-DD-HHMM (no scope suffix on default)
     assert re.match(r"^\d{4}-\d{2}-\d{2}-\d{4}$", folder.name), folder.name
+
+
+# method_query shape a provenance renderer can consume: the bundled
+# `_render_hs_group_yoy` needs flow + comparison_scope (the default seed's
+# minimal {"hs_patterns": [...]} is enough for the brief but not for
+# provenance generation).
+_RENDERABLE_METHOD_QUERY = {
+    "flow": 1,
+    "sources": ["eurostat"],
+    "partners": ["CN", "HK", "MO"],
+    "comparison_scope": "eu_27",
+    "hs_patterns": ["8507%"],
+}
+
+
+def _seed_editorially_fresh_renderable_finding(test_db_url) -> int:
+    """Seed one finding that (a) qualifies for 'Top movers this cycle'
+    (|yoy| ≥ 10pp, ≥ €100M, no low-base flag) — i.e. is editorially
+    fresh — and (b) carries a detail shape the hs_group_yoy provenance
+    renderer can generate a file from. Plus one Eurostat release so the
+    renderer's sources block has something to cite."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        _seed_eurostat_release(cur, date(2026, 2, 1))
+        fid = _seed_hs_yoy_finding(
+            cur, run, "EV batteries (Li-ion)", yoy_pct=0.4,
+            method_query=_RENDERABLE_METHOD_QUERY,
+        )
+        conn.commit()
+    return fid
+
+
+def test_export_with_provenance_bundles_on_recorded_run(
+    empty_findings, test_db_url, tmp_path, monkeypatch,
+):
+    """Regression: the provenance-bundling step used to sit inside the
+    `record=False` branch of export(), so the documented CLI flow
+    (`--briefing-pack --with-provenance`, which records by default)
+    silently produced no provenance/ folder. Bundling must happen
+    regardless of `record`."""
+    import provenance
+    monkeypatch.setattr(
+        provenance, "PROVENANCE_DIR", tmp_path / "canonical_provenance",
+    )
+    fid = _seed_editorially_fresh_renderable_finding(test_db_url)
+
+    brief_path, _ = briefing_pack.export(
+        out_dir=str(tmp_path / "20260611-1200"),
+        record=True, with_provenance=True,
+    )
+
+    # The finding made the editorially-fresh cut (Top movers)…
+    assert f"finding/{fid}" in Path(brief_path).read_text()
+    # …and its provenance file landed in the export's provenance/ dir.
+    bundle = Path(brief_path).parent / "provenance"
+    assert (bundle / f"finding-{fid}.md").exists()
+
+
+def test_export_with_provenance_still_bundles_unrecorded(
+    empty_findings, test_db_url, tmp_path, monkeypatch,
+):
+    """record=False (e.g. `--no-record` preview exports) skips the
+    brief_runs row but must still bundle provenance when asked."""
+    import provenance
+    monkeypatch.setattr(
+        provenance, "PROVENANCE_DIR", tmp_path / "canonical_provenance",
+    )
+    fid = _seed_editorially_fresh_renderable_finding(test_db_url)
+
+    brief_path, _ = briefing_pack.export(
+        out_dir=str(tmp_path / "20260611-1300"),
+        record=False, with_provenance=True,
+    )
+
+    bundle = Path(brief_path).parent / "provenance"
+    assert (bundle / f"finding-{fid}.md").exists()
+    # And the run really was unsequenced: no brief_runs row inserted.
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM brief_runs")
+        assert cur.fetchone()[0] == 0
 
 
 def test_export_scope_label_adds_slug_suffix_and_header_line(
@@ -850,6 +938,20 @@ def test_methodology_footer_renders_with_definitions(empty_findings, test_db_url
     assert "CIF" in md and "FOB" in md
 
 
+def _provenance_caveat_block(leads: str) -> str:
+    """The sub-bullet block under the first '- *Caveats from underlying
+    findings*:' header in a rendered leads doc — one '  - ' line per
+    caveat (plain-English summary + linked code)."""
+    lines = leads.splitlines()
+    hdr = lines.index("- *Caveats from underlying findings*:")
+    block: list[str] = []
+    for line in lines[hdr + 1:]:
+        if not line.startswith("  - "):
+            break
+        block.append(line)
+    return "\n".join(block)
+
+
 def test_universal_caveats_suppressed_inline_in_finding_lines(empty_findings, test_db_url):
     """A finding with universal caveats in its detail.caveat_codes should
     not show those caveats inline in the rendered output (they're explained
@@ -891,19 +993,19 @@ def test_universal_caveats_suppressed_inline_in_finding_lines(empty_findings, te
         conn.commit()
 
     leads = briefing_pack.render_leads()
-    # The Investigation leads document's per-finding Provenance bullet
-    # for caveats shows surviving (per-finding-variable) caveats only;
-    # universal caveats are suppressed.
+    # The Investigation leads document's per-finding Provenance caveat
+    # display (a header bullet + one sub-bullet per caveat, plain-English
+    # summary leading) shows surviving (per-finding-variable) caveats
+    # only; universal caveats are suppressed.
     assert "Caveats from underlying findings" in leads
-    inline_caveat_line = next(
-        line for line in leads.splitlines()
-        if line.startswith("- *Caveats from underlying findings*:")
-    )
-    assert "low_kg_coverage" in inline_caveat_line
-    assert "cif_fob" not in inline_caveat_line
-    assert "currency_timing" not in inline_caveat_line
-    # Caveat codes link to the methodology caveats table.
-    assert "methodology.md#3-caveats-reference" in inline_caveat_line
+    caveat_block = _provenance_caveat_block(leads)
+    assert "low_kg_coverage" in caveat_block
+    assert "cif_fob" not in caveat_block
+    assert "currency_timing" not in caveat_block
+    # Caveat codes link to the methodology caveats table, and the
+    # plain-English summary from the `caveats` table leads the line.
+    assert "methodology.md#3-caveats-reference" in caveat_block
+    assert "kg coverage too low" in caveat_block
     # Leads no longer appear in the brief itself.
     md = briefing_pack.render()
     assert "Caveats from underlying findings" not in md
@@ -961,14 +1063,13 @@ def test_leads_provenance_bullets_and_linkification(empty_findings, test_db_url)
     assert "- *Underlying findings*: 101, 102, 103" in leads
     assert f"- *Trace*: `finding/{lead_id}`" in leads
 
-    # Caveat codes in the Provenance block are clickable.
-    caveat_line = next(
-        line for line in leads.splitlines()
-        if line.startswith("- *Caveats from underlying findings*:")
-    )
-    assert "[`low_base_effect`]" in caveat_line
-    assert "[`partial_window`]" in caveat_line
-    assert "methodology.md#3-caveats-reference" in caveat_line
+    # Caveat sub-bullets in the Provenance block are clickable and lead
+    # with the plain-English summary from the `caveats` table.
+    caveat_block = _provenance_caveat_block(leads)
+    assert "[`low_base_effect`]" in caveat_block
+    assert "[`partial_window`]" in caveat_block
+    assert "methodology.md#3-caveats-reference" in caveat_block
+    assert "tiny denominator" in caveat_block
 
     # Body-level linkification: first occurrence of "mirror gap" linked,
     # second occurrence plain. low_base_effect in body also linked.
@@ -1122,7 +1223,7 @@ def test_top_movers_section_absent_when_no_candidates(empty_findings, test_db_ur
 def test_state_of_play_suppresses_volatile_trajectory_inline(
     empty_findings, test_db_url,
 ):
-    """In Tier 2's per-group block, the inline `Trajectory: …`
+    """In Tier 2's per-group block, the inline `Trend: …`
     annotation is dropped when the underlying shape is `volatile`
     (~68% of HS-group series are classified volatile and the label
     carries no narrative information — methodology §10).
@@ -1154,12 +1255,12 @@ def test_state_of_play_suppresses_volatile_trajectory_inline(
     tier_2 = md.split("## Tier 2 — Current state of play")[1].split("\n## ")[0]
     ev_block = tier_2.split("### EV batteries (Li-ion)")[1].split("\n### ")[0]
     drones_block = tier_2.split("### Drones and unmanned aircraft")[1].split("\n### ")[0]
-    # Volatile suppressed inline: no Trajectory annotation anywhere in
+    # Volatile suppressed inline: no Trend annotation anywhere in
     # the EV batteries block.
-    assert "Trajectory:" not in ev_block
+    assert "Trend:" not in ev_block
     assert "volatile" not in ev_block.lower()
     # The dip_recovery shape for the other group keeps its label.
-    assert "Trajectory:" in drones_block
+    assert "Trend:" in drones_block
     assert "dip-and-recovery" in drones_block
 
 
@@ -1316,7 +1417,7 @@ def test_threshold_fragility_appears_in_brief(empty_findings, test_db_url):
         conn.commit()
 
     md = briefing_pack.render(top_n=20)
-    assert "Near low-base threshold" in md
+    assert "Near the low-base line" in md
     assert "⚖️" in md
 
 
@@ -1377,3 +1478,46 @@ def test_construct_chinese_source_url():
     assert _construct_chinese_source_url("https://ec.europa.eu/foo.html") is None
     assert _construct_chinese_source_url("") is None
     assert _construct_chinese_source_url(None) is None
+
+
+def test_extreme_single_month_swing_carries_not_quotable_warning(
+    empty_findings, test_db_url,
+):
+    """A single-month YoY beyond the SINGLE_MONTH_EXTREME bound (300%)
+    renders with an inline not-quotable warning — the +686380.9% civil-
+    aircraft case from the 2026-05-21 export must never again appear as
+    a bare quotable percentage (methodology §10). A modest single-month
+    figure renders without the warning."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        _seed_eurostat_release(cur, date(2026, 2, 1))
+        # Degenerate: +686380.9% single-month (near-zero base month).
+        _seed_hs_yoy_finding(cur, run, "EV batteries (Li-ion)",
+                             yoy_pct=1.087, single_month_yoy_pct=6863.809)
+        # Normal: +31.5% single-month — no warning.
+        _seed_hs_yoy_finding(cur, run, "Drones and unmanned aircraft",
+                             yoy_pct=0.30, single_month_yoy_pct=0.315)
+        conn.commit()
+
+    md = briefing_pack.render()
+    tier_2 = md.split("## Tier 2 — Current state of play")[1].split("\n## ")[0]
+    ev_block = tier_2.split("### EV batteries (Li-ion)")[1].split("\n### ")[0]
+    drones_block = tier_2.split("### Drones and unmanned aircraft")[1].split("\n### ")[0]
+    assert "extreme swing" in ev_block
+    assert "quote the 12-month figure" in ev_block
+    # The number itself still renders — annotated, never hidden.
+    assert "+686380.9%" in ev_block
+    assert "extreme swing" not in drones_block
+
+
+def test_reading_the_numbers_key_in_both_docs(empty_findings, test_db_url):
+    """Both the findings doc and the leads doc open with the shared
+    'Reading the numbers' key (value-vs-volume, 12mo-vs-latest-month,
+    %-vs-pp, badges, low base, finding/N)."""
+    md = briefing_pack.render()
+    leads = briefing_pack.render_leads()
+    for doc in (md, leads):
+        assert "## Reading the numbers" in doc
+        assert "Value vs volume" in doc
+        assert "12-month figure vs latest month" in doc

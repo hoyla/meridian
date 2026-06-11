@@ -28,6 +28,7 @@ from briefing_pack._helpers import (
     _MARKDOWN_SUBFOLDER,
     _conn,
     _in_this_export_folder_md,
+    _reading_the_numbers_md,
     _slugify_heading,
     _slugify_scope,
     _why_this_export_paragraph,
@@ -293,7 +294,7 @@ def render_leads(
     announces what slice of the data it covers.
     """
     lines: list[str] = []
-    lines.append("# GACC × Eurostat trade — investigation leads")
+    lines.append("# China–EU/UK trade — investigation leads")
     lines.append(
         f"*Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} from "
         "active `narrative_hs_group` findings.*"
@@ -330,6 +331,9 @@ def render_leads(
 
     lines.append(_in_this_export_folder_md(current="02_Leads"))
     lines.append("")
+    # Same "Reading the numbers" key as the findings doc — leads quote
+    # the same figures, so the same conventions apply.
+    lines.append(_reading_the_numbers_md())
     lines.append(
         "Each lead ends with a **Provenance** block: the per-finding-"
         "variable caveats that fired on the underlying findings (clickable "
@@ -606,14 +610,14 @@ def export(
             "unsequenced and will not appear in the cycle history."
         )
 
-        # Provenance bundling is opt-in (--with-provenance on the CLI).
-        # When on, bundle only the editorially-fresh subset — Tier 1
-        # changes, top-5 movers, and the leads.md picks — typically
-        # ~40-60 files per export rather than ~2,000. The long tail of
-        # state-of-play findings stays on-demand via
-        # `python scrape.py --finding-provenance N`.
-        if with_provenance:
-            _emit_provenance_bundle(p, lp)
+    # Provenance bundling is opt-in (--with-provenance on the CLI).
+    # When on, bundle only the editorially-fresh subset — Tier 1
+    # changes, top-5 movers, and the leads.md picks — typically
+    # ~40-60 files per export rather than ~2,000. The long tail of
+    # state-of-play findings stays on-demand via
+    # `python scrape.py --finding-provenance N`.
+    if with_provenance:
+        _emit_provenance_bundle(p, lp)
 
     return str(p), str(lp)
 

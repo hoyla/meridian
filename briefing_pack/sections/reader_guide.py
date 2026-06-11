@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from briefing_pack._helpers import _Section
+from briefing_pack._helpers import _Section, _reading_the_numbers_md
 
 
 def _section_reader_guide() -> _Section:
@@ -55,6 +55,9 @@ def _section_reader_guide() -> _Section:
         "heading so it's easy to scan to where you want to land.*"
     )
     lines.append("")
+    # The shared "Reading the numbers" key — the conventions a cold
+    # reader needs before quoting anything. Same text in the leads doc.
+    lines.append(_reading_the_numbers_md())
     lines.append("### Predictability badges")
     lines.append("")
     lines.append(

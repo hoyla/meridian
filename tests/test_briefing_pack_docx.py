@@ -122,11 +122,11 @@ class TestMonthIter:
 class TestFlowLabel:
     def test_export_subkind(self):
         assert bp_docx._flow_label_for_subkind("hs_group_yoy_export") == \
-            "EU-27 exports (reporter→CN)"
+            "EU-27 exports to China"
 
     def test_import_subkind(self):
         assert bp_docx._flow_label_for_subkind("hs_group_yoy") == \
-            "EU-27 imports (CN→reporter)"
+            "EU-27 imports from China"
 
 
 class TestBuildBilateralSummaryBarPng:
@@ -315,7 +315,7 @@ class TestBuildPerReporterBarPng:
         png = bp_docx._build_per_reporter_bar_png(
             breakdown=self._breakdown(),
             group_name="Finished cars (broad)",
-            flow_label="EU-27 exports (reporter→CN)",
+            flow_label="EU-27 exports to China",
         )
         assert png is not None
         assert png.startswith(b"\x89PNG\r\n\x1a\n")
@@ -357,7 +357,7 @@ class TestBuildPerReporterBarPng:
         kwargs = dict(
             breakdown=self._breakdown(),
             group_name="Finished cars",
-            flow_label="EU-27 exports (reporter→CN)",
+            flow_label="EU-27 exports to China",
         )
         a = bp_docx._build_per_reporter_bar_png(**kwargs)
         b = bp_docx._build_per_reporter_bar_png(**kwargs)
@@ -377,7 +377,7 @@ class TestBuildChartPng:
             current_end=date(2026, 2, 1),
             monthly_eur=series,
             group_name="Test group",
-            flow_label="EU-27 imports (CN→reporter)",
+            flow_label="EU-27 imports from China",
         )
         assert isinstance(png, bytes)
         # PNG magic bytes
@@ -395,7 +395,7 @@ class TestBuildChartPng:
             current_end=date(2026, 2, 1),
             monthly_eur=series,
             group_name="Test group",
-            flow_label="EU-27 imports (CN→reporter)",
+            flow_label="EU-27 imports from China",
         )
         a = bp_docx._build_chart_png(**kwargs)
         b = bp_docx._build_chart_png(**kwargs)
@@ -409,7 +409,7 @@ class TestBuildChartPng:
             current_end=date(2026, 2, 1),
             monthly_eur={},
             group_name="No data",
-            flow_label="EU-27 imports (CN→reporter)",
+            flow_label="EU-27 imports from China",
         )
         assert png.startswith(b"\x89PNG\r\n\x1a\n")
 
@@ -426,7 +426,7 @@ class TestBuildChartPng:
             current_end=date(2026, 2, 1),
             monthly_eur=series,
             group_name="Sparse data",
-            flow_label="EU-27 imports (CN→reporter)",
+            flow_label="EU-27 imports from China",
         )
         assert png.startswith(b"\x89PNG\r\n\x1a\n")
 

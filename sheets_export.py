@@ -324,7 +324,7 @@ def _hs_yoy_long_sheet(
     the cut so the journalist can see the long tail).
     """
     top_movers_by_id = top_movers_by_id or {}
-    flow_label = "imports (CN→reporter)" if flow == 1 else "exports (reporter→CN)"
+    flow_label = "imports from China" if flow == 1 else "exports to China"
     name = f"hs_yoy_{'imports' if flow == 1 else 'exports'}"
     raw_rows: list[tuple] = []
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
@@ -1044,7 +1044,7 @@ def _add_charts_tab(wb, *, top_n: int = DEFAULT_TOP_N) -> None:
 
     Block layout (per mover):
         Row 0: bold heading row "EV batteries (Li-ion) — EU-27 imports
-               (CN→reporter): +34.5% to €27.25B"
+               from China: +34.5% to €27.25B"
         Row 1: bold column headers "Month | Prior 12mo (€) | Current
                12mo (€)"
         Rows 2..25: 24 data rows (month label, prior eur, current eur)
@@ -1079,8 +1079,8 @@ def _add_charts_tab(wb, *, top_n: int = DEFAULT_TOP_N) -> None:
             current_end = m["current_end"]
             is_export = m["subkind"].endswith("_export")
             flow_label = (
-                "EU-27 exports (reporter→CN)" if is_export
-                else "EU-27 imports (CN→reporter)"
+                "EU-27 exports to China" if is_export
+                else "EU-27 imports from China"
             )
             pred = m.get("predictability")
             badge = f" {pred[0]}" if pred is not None else ""

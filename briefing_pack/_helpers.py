@@ -104,6 +104,128 @@ def _fmt_kg(v: Any) -> str:
     return f"{n:.0f} kg"
 
 
+def _fmt_month(d: date | None) -> str:
+    """Render a period date as "Mar 2026" — every journalist-facing
+    surface uses this instead of the raw ISO date, whose day component
+    (always -01) is an artefact of period storage, not information."""
+    if d is None:
+        return "—"
+    return d.strftime("%b %Y")
+
+
+def _flow_phrase(flow: int) -> str:
+    """Plain-English direction phrase. The customs-register arrow form
+    ("CN→reporter") read as jargon to cold readers in the 2026-05-13
+    pack review; every surface now phrases flow as seen from Europe."""
+    return "imports from China" if flow == 1 else "exports to China"
+
+
+def _caveat_summary_map(cur) -> dict[str, str]:
+    """code → one-line plain-English summary, from the `caveats` table.
+    Sections that render per-finding caveat lines fetch this once and
+    render the summary with the code in parens — the code stays for
+    cross-referencing the methodology footer and the spreadsheet, but
+    the words carry the meaning."""
+    cur.execute("SELECT code, summary FROM caveats")
+    return {r[0]: r[1] for r in cur.fetchall()}
+
+
+def _fmt_caveats_inline(codes: list[str], summaries: dict[str, str]) -> str:
+    """Render a caveat-code list as plain English: "summary (`code`)";
+    falls back to the bare code for any code without a `caveats` row."""
+    parts = []
+    for c in codes:
+        s = summaries.get(c)
+        parts.append(f"{s} (`{c}`)" if s else f"`{c}`")
+    return "; ".join(parts)
+
+
+# Single-month YoY sanity bound. Above this (fractional, 3.0 = 300%) a
+# single-month percentage almost always reflects a tiny or empty base
+# month — e.g. civil aircraft printed "+686380.9%" in the 2026-05-21
+# export — and methodology.md §10 says such figures are not quotable.
+# The number still renders (never hide data) but carries an explicit
+# not-quotable warning so it can't be lifted into copy unhedged.
+SINGLE_MONTH_EXTREME = 3.0
+
+_SM_EXTREME_NOTE = (
+    " ⚠ *extreme swing — single-month percentages this size usually "
+    "mean a tiny or empty base month; quote the 12-month figure, not "
+    "this one.*"
+)
+
+
+def _single_month_warning(sm_pct: Any) -> str:
+    """'' or the not-quotable note, given a fractional single-month YoY."""
+    if sm_pct is not None and abs(float(sm_pct)) >= SINGLE_MONTH_EXTREME:
+        return _SM_EXTREME_NOTE
+    return ""
+
+
+# Plain-English labels for finding subkind families — used wherever a
+# subkind code would otherwise face a journalist (Tier 1 diff counts,
+# material-shift lines). Keyed by family prefix; suffixed variants
+# (_uk, _combined, _export) resolve via _subkind_plain_label.
+_SUBKIND_PLAIN_LABELS: dict[str, str] = {
+    "mirror_gap_zscore": "mirror-trade gap mover (unusual shift vs the partner's own baseline)",
+    "mirror_gap": "mirror-trade gap (China-reported vs Europe-reported totals)",
+    "hs_group_yoy": "year-on-year change for an HS group",
+    "hs_group_trajectory": "trend shape for an HS group",
+    "gacc_bilateral_aggregate_yoy": "China-side bilateral year-on-year",
+    "gacc_aggregate_yoy": "China-side bloc aggregate year-on-year",
+    "partner_share": "China's share of EU imports/exports",
+    "narrative_hs_group": "LLM-scaffolded lead",
+}
+
+
+def _subkind_plain_label(subkind: str) -> str:
+    """Best plain-English label for a subkind, tolerant of scope/flow
+    suffixes. Falls back to the raw subkind string."""
+    for prefix in sorted(_SUBKIND_PLAIN_LABELS, key=len, reverse=True):
+        if subkind.startswith(prefix):
+            return _SUBKIND_PLAIN_LABELS[prefix]
+    return subkind
+
+
+def _reading_the_numbers_md() -> str:
+    """The shared "Reading the numbers" key — the six conventions a
+    cold reader needs before quoting anything. Rendered near the top of
+    both the findings and the leads documents (and kept here so the two
+    never drift)."""
+    lines = [
+        "## Reading the numbers",
+        "",
+        "- **Value vs volume** — *value* is what the goods cost (€); "
+        "*volume* is their weight (kg). When the two diverge, the price "
+        "per kg moved: value falling faster than volume means the same "
+        "goods are getting cheaper.",
+        "- **12-month figure vs latest month** — the 12-month rolling "
+        "figure compares the last 12 months with the 12 before; it "
+        "smooths seasonal swings and is the right number to quote. "
+        "*Latest month* compares one month with the same month a year "
+        "earlier — a useful direction hint, but it swings wildly on "
+        "lumpy categories (aircraft, ships), so don't make it the "
+        "headline number.",
+        "- **% vs pp** — % is change relative to a year earlier; *pp* "
+        "(percentage points) is the difference between two percentages "
+        "(a share moving from 10% to 15% is +5 pp, not +50%).",
+        "- **🟢 🟡 🔴** — whether this group's year-on-year signal has "
+        "held up over the past 6 months: 🟢 held / 🟡 mixed / 🔴 didn't "
+        "hold (verify before quoting). No badge just means not enough "
+        "history yet.",
+        "- **⚠ low base** — the percentage rests on a small total "
+        "(under €50M), so it can look dramatic without being "
+        "significant. Quote the absolute € amounts instead.",
+        "- **`finding/N`** — the citation token ending every claim. It "
+        "is a permanent reference to the exact database row behind the "
+        "number; include it when asking for verification and the full "
+        "audit trail (source URLs, FX rates, the arithmetic) can be "
+        "produced.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def _release_ids_for_window(cur, start: date, end: date) -> set[int]:
     """Eurostat releases whose period falls in [start, end]. Used to
     populate the sources appendix for window-traced findings (hs_group_yoy
@@ -461,10 +583,12 @@ def _threshold_fragility_annotation(curr_eur: Any, prior_eur: Any, threshold_eur
     smaller = min(float(curr_eur), float(prior_eur))
     thr = float(threshold_eur)
     return (
-        f"- ⚖️ **Near low-base threshold** ({_fmt_eur(smaller)} vs "
-        f"€{thr/1e6:.0f}M threshold) — classification is fragile to "
-        "small threshold changes; see "
-        "`dev_notes/2026-05-10-sensitivity-sweep.md`."
+        f"- ⚖️ **Near the low-base line** ({_fmt_eur(smaller)} vs the "
+        f"€{thr/1e6:.0f}M threshold) — this finding sits close enough "
+        "to the cut-off that a small change in the threshold would flip "
+        "whether it carries the low-base warning. Treat it with the "
+        "same care as a flagged one: check the absolute € amounts "
+        "before quoting the percentage."
     )
 
 

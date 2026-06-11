@@ -312,3 +312,67 @@ class TestRobustness:
         md = "Visit <https://example.com> for info.\n"
         doc = _translate(md)
         assert "example.com" in doc.paragraphs[0].text
+
+
+# ---------------------------------------------------------------------------
+# Metadata-section shading (the blue-tint boilerplate convention)
+# ---------------------------------------------------------------------------
+
+from docx.oxml.ns import qn  # noqa: E402
+
+
+def _is_shaded(p, fill: str = "ABCDEF") -> bool:
+    pPr = p._p.pPr
+    return pPr is not None and any(
+        s.get(qn("w:fill")) == fill for s in pPr.findall(qn("w:shd"))
+    )
+
+
+class TestMetadataShading:
+    """Boilerplate/orientation sections are tinted (w:shd fill) so a
+    reader of the Doc can tell them from actual findings. A listed
+    heading opens shading; a deeper heading stays inside; a same-or-
+    higher non-listed heading closes it."""
+
+    MD = (
+        "## Orientation\n\nBoilerplate body.\n\n"
+        "### Sub-orientation\n\nStill boilerplate.\n\n"
+        "## Real content\n\nA finding.\n"
+    )
+
+    def test_listed_section_and_subsections_are_shaded(self):
+        doc = _translate(
+            self.MD,
+            shaded_section_headings={"Orientation"},
+            shade_fill="ABCDEF",
+        )
+        by_text = {p.text: _is_shaded(p) for p in doc.paragraphs if p.text}
+        assert by_text["Orientation"] is True
+        assert by_text["Boilerplate body."] is True
+        assert by_text["Sub-orientation"] is True
+        assert by_text["Still boilerplate."] is True
+
+    def test_same_level_unlisted_heading_closes_shading(self):
+        doc = _translate(
+            self.MD,
+            shaded_section_headings={"Orientation"},
+            shade_fill="ABCDEF",
+        )
+        by_text = {p.text: _is_shaded(p) for p in doc.paragraphs if p.text}
+        assert by_text["Real content"] is False
+        assert by_text["A finding."] is False
+
+    def test_reading_the_numbers_registered_in_both_doc_sets(self):
+        """The 'Reading the numbers' key (briefing_pack._helpers.
+        _reading_the_numbers_md) is orientation material — it must carry
+        the boilerplate tint in BOTH the findings and the leads Doc.
+        Guards against the key silently losing its tint (and, because a
+        same-level unlisted heading closes shading, against it cutting
+        the tint off the 'Predictability badges' block that follows it
+        in the findings doc)."""
+        from briefing_pack.docx import (
+            _LEADS_METADATA_HEADINGS,
+            _METADATA_SECTION_HEADINGS,
+        )
+        assert "Reading the numbers" in _METADATA_SECTION_HEADINGS
+        assert "Reading the numbers" in _LEADS_METADATA_HEADINGS

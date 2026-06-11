@@ -58,11 +58,15 @@ def _section_about_findings() -> _Section:
     )
     lines.append("")
     lines.append(
-        "**Looking one up today.** Direct DB query: "
-        "`SELECT * FROM findings WHERE id = 12345;` against the project's "
-        "Postgres instance. A hosted finding viewer is on the roadmap "
-        "(set `GACC_PERMALINK_BASE` to render citations as Markdown "
-        "links instead of bare tokens once it exists)."
+        "**Looking one up today.** Send the token back to whoever "
+        "produced this pack and ask for the audit trail — the system "
+        "can generate a plain-English provenance page for any finding "
+        "(source URLs, FX rates used, the caveats, the arithmetic). "
+        "Technical readers can query directly: "
+        "`SELECT * FROM findings WHERE id = 12345;` against the "
+        "project's Postgres instance. A hosted finding viewer is on "
+        "the roadmap (set `GACC_PERMALINK_BASE` to render citations as "
+        "Markdown links instead of bare tokens once it exists)."
     )
     lines.append("")
     lines.append(

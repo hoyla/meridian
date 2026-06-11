@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from briefing_pack._helpers import _Section, _fmt_eur, _trace_token
+from briefing_pack._helpers import (
+    _Section,
+    _fmt_eur,
+    _fmt_month,
+    _single_month_warning,
+    _trace_token,
+)
 
 
 def _section_state_of_play_aggregates(cur) -> _Section:
@@ -55,12 +61,13 @@ def _section_state_of_play_aggregates(cur) -> _Section:
     lines.append("## Tier 2 — Current state of play: GACC partner aggregates")
     lines.append("")
     lines.append(
-        "China-side YoY for the non-EU-bloc partner aggregates GACC "
-        "publishes — ASEAN, RCEP, Belt & Road, Africa, Latin America, "
-        "world Total. The flow direction is from China's perspective: "
-        "**Exports** = China sells; **Imports** = China buys. Context "
-        "for the EU-CN per-HS-group view below — Soapbox routinely "
-        "quotes these aggregates alongside EU-CN figures."
+        "Year-on-year change as reported by China's customs agency "
+        "(GACC) for the multi-country blocs it publishes — ASEAN, RCEP, "
+        "Belt & Road, Africa, Latin America, world Total. The flow "
+        "direction is from China's perspective: **exports** = China "
+        "sells to the bloc; **imports** = China buys from it. This is "
+        "the \"China's trade with the rest of the world\" context for "
+        "the per-category EU/UK view elsewhere in this document."
     )
     lines.append("")
 
@@ -76,8 +83,8 @@ def _section_state_of_play_aggregates(cur) -> _Section:
         by_agg.setdefault(r["agg_label"], {})[r["subkind"]] = r
 
     SCOPE_ORDER = [
-        ("gacc_aggregate_yoy", "Exports (China → aggregate)"),
-        ("gacc_aggregate_yoy_import", "Imports (aggregate → China)"),
+        ("gacc_aggregate_yoy", "China's exports to this bloc"),
+        ("gacc_aggregate_yoy_import", "China's imports from this bloc"),
     ]
 
     for agg_label in sorted(by_agg.keys()):
@@ -102,10 +109,13 @@ def _section_state_of_play_aggregates(cur) -> _Section:
             # provenance file.
             annotations: list[str] = []
             if r["partial_window"]:
-                annotations.append("partial window")
+                annotations.append("incomplete window (a month of source data is missing)")
             jfc_years = r["jan_feb_combined_years"]
             if jfc_years:
-                annotations.append(f"includes Jan+Feb {','.join(str(y) for y in jfc_years)} cumulative")
+                annotations.append(
+                    f"Jan+Feb {','.join(str(y) for y in jfc_years)} counted "
+                    "as a single combined figure (GACC publishes them merged)"
+                )
             suffix = (" — " + "; ".join(annotations)) if annotations else ""
 
             # New v4 operators: YTD cumulative + single-month. Surface
@@ -118,7 +128,7 @@ def _section_state_of_play_aggregates(cur) -> _Section:
             if r["ytd_yoy_pct"] is not None and r["ytd_curr_eur"] is not None:
                 ytd_v = float(r["ytd_yoy_pct"]) * 100
                 ytd_block = (
-                    f" YTD ({r['ytd_months']}mo): {ytd_v:+.1f}% "
+                    f" Year-to-date ({r['ytd_months']} months): {ytd_v:+.1f}% "
                     f"to {_fmt_eur(r['ytd_curr_eur'])}."
                 )
             sm_block = ""
@@ -126,11 +136,12 @@ def _section_state_of_play_aggregates(cur) -> _Section:
                 sm_v = float(r["sm_yoy_pct"]) * 100
                 sm_block = (
                     f" Latest month: {sm_v:+.1f}% to {_fmt_eur(r['sm_curr_eur'])}."
+                    f"{_single_month_warning(r['sm_yoy_pct'])}"
                 )
 
             lines.append(
-                f"  - **{label}**: 12mo rolling {yoy_str} to "
-                f"{_fmt_eur(r['cur_eur'])} (12mo to {r['current_end']})."
+                f"  - **{label}**: 12-month figure {yoy_str} to "
+                f"{_fmt_eur(r['cur_eur'])} (12 months to {_fmt_month(r['current_end'])})."
                 f"{ytd_block}{sm_block}{suffix} {_trace_token(r['id'])}"
             )
         lines.append("")

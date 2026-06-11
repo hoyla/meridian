@@ -9,6 +9,7 @@ from briefing_pack._helpers import (
     _prev_export_folder,
     _prev_export_ref,
     _source_data_sentence,
+    _subkind_plain_label,
     _trace_token,
 )
 
@@ -211,12 +212,16 @@ def _section_diff_since_last_brief(cur) -> _Section:
         lines.append("")
         for s in significant[:30]:
             flip = " 🔄 **direction flip**" if s["direction_flipped"] else ""
+            # _trace_token already formats the token (backticks, or a
+            # link when GACC_PERMALINK_BASE is set) — wrapping it in
+            # another backtick pair broke the link form.
             lines.append(
-                f"- **{s['group_name']}** — `{s['subkind']}`, "
+                f"- **{s['group_name']}** — "
+                f"{_subkind_plain_label(s['subkind'])} (`{s['subkind']}`), "
                 f"window ending {s['window_end']}: "
                 f"{s['old_yoy']*100:+.1f}% → {s['new_yoy']*100:+.1f}% "
                 f"({s['shift_pp']:+.1f}pp){flip}. "
-                f"Trace: `{_trace_token(s['new_finding_id'])}`"
+                f"Trace: {_trace_token(s['new_finding_id'])}"
             )
         if len(significant) > 30:
             lines.append("")
@@ -230,7 +235,9 @@ def _section_diff_since_last_brief(cur) -> _Section:
         lines.append(f"### New findings ({total_new})")
         lines.append("")
         for subkind, n in new_by_subkind:
-            lines.append(f"- {n} new `{subkind}`")
+            lines.append(
+                f"- {n} new — {_subkind_plain_label(subkind)} (`{subkind}`)"
+            )
         lines.append("")
 
     return _Section(markdown="\n".join(lines))
