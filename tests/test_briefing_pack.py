@@ -537,11 +537,12 @@ _RENDERABLE_METHOD_QUERY = {
 
 
 def _seed_editorially_fresh_renderable_finding(test_db_url) -> int:
-    """Seed one finding that (a) qualifies for 'Top movers this cycle'
-    (|yoy| ≥ 10pp, ≥ €100M, no low-base flag) — i.e. is editorially
-    fresh — and (b) carries a detail shape the hs_group_yoy provenance
-    renderer can generate a file from. Plus one Eurostat release so the
-    renderer's sources block has something to cite."""
+    """Seed one finding that (a) qualifies for the front page ('If you
+    read only this page': |yoy| ≥ 10pp, ≥ €100M, no low-base flag) —
+    i.e. is editorially fresh — and (b) carries a detail shape the
+    hs_group_yoy provenance renderer can generate a file from. Plus one
+    Eurostat release so the renderer's sources block has something to
+    cite."""
     with psycopg2.connect(test_db_url) as conn:
         cur = conn.cursor()
         run = _seed_run(cur)
@@ -1200,10 +1201,10 @@ def test_top_movers_excludes_red_predictability(empty_findings, test_db_url):
     assert movers == []
 
 
-def test_top_movers_section_renders_above_tier_1(empty_findings, test_db_url):
-    """The Top-N section sits between the reader's guide and Tier 1
-    in the rendered findings.md, and surfaces eligible movers with
-    anchor links."""
+def test_front_page_renders_above_tier_1(empty_findings, test_db_url):
+    """The front page sits between the reader's guide and Tier 1 in the
+    rendered findings.md, and writes eligible movers as publishable
+    sentences with anchor links and citation tokens."""
     with psycopg2.connect(test_db_url) as conn:
         cur = conn.cursor()
         run = _seed_run(cur)
@@ -1214,17 +1215,24 @@ def test_top_movers_section_renders_above_tier_1(empty_findings, test_db_url):
         conn.commit()
 
     md = briefing_pack.render()
-    assert "## Top 1 movers this cycle" in md
-    assert "[EV batteries (Li-ion)](#ev-batteries-li-ion)" in md
-    # Order: Top movers comes before Tier 1.
-    assert md.find("## Top 1 movers this cycle") < md.find("## Tier 1")
+    assert "## If you read only this page" in md
+    # The sentence form: subject link, verb by direction, value + volume,
+    # 12-month framing, unscored-stability hedge (no badge seeded).
+    assert (
+        "**[EU-27 imports of EV batteries (Li-ion) from China]"
+        "(#ev-batteries-li-ion)** rose 35.0% by value in the 12 months "
+        "to Feb 2026, to €27.00B; volume up 52.5%" in md
+    )
+    assert "verify before headlining" in md
+    # Order: front page comes before Tier 1.
+    assert md.find("## If you read only this page") < md.find("## Tier 1")
 
 
-def test_top_movers_section_absent_when_no_candidates(empty_findings, test_db_url):
-    """An empty findings table → no top movers → the section drops out
-    entirely; Tier 1 follows the reader's guide directly."""
+def test_front_page_absent_when_nothing_to_say(empty_findings, test_db_url):
+    """Empty findings table and no previous export → no front page;
+    Tier 1 follows the reader's guide directly."""
     md = briefing_pack.render()
-    assert "## Top" not in md.split("## Tier 1")[0]
+    assert "## If you read only this page" not in md
 
 
 def test_state_of_play_suppresses_volatile_trajectory_inline(
@@ -1687,3 +1695,81 @@ def test_uk_scope_block_surfaces_hmrc_suppression_counts(
         "**HMRC suppression**: 2 source rows in the current window and 1 "
         "in the prior window" in md
     )
+
+
+class TestFrontPageDigest:
+    """'Since the last pack' regimes — pure rendering from _DiffData."""
+
+    def _md(self, diff, movers=None):
+        from briefing_pack.sections.front_page import _section_front_page
+        return _section_front_page(movers or [], diff).markdown
+
+    def test_no_change_regime(self):
+        from briefing_pack.sections.diff import _DiffData
+        md = self._md(_DiffData(regime="no_change"))
+        assert "**Since the last pack:** nothing material" in md
+
+    def test_method_bump_regime(self):
+        from briefing_pack.sections.diff import _DiffData
+        md = self._md(_DiffData(regime="method_bump", n_pairs=23207))
+        assert "methodology version bump" in md
+        assert "23,207" in md
+        assert "nothing editorial moved" in md
+
+    def test_movement_regime_names_sharpest_shift(self):
+        from briefing_pack.sections.diff import _DiffData
+        diff = _DiffData(
+            regime="movement",
+            significant=[{
+                "subkind": "hs_group_yoy_export",
+                "group_name": "Finished cars (broad)",
+                "window_end": "2026-03-01",
+                "old_yoy": -0.352, "new_yoy": -0.411,
+                "direction_flipped": False, "shift_pp": -5.9,
+                "new_finding_id": 1,
+            }],
+            total_new=12,
+        )
+        md = self._md(diff)
+        assert "1 findings shifted materially" in md
+        assert (
+            "**Finished cars (broad)** (EU-27 exports to China, "
+            "12 months to Mar 2026) went from -35.2% to -41.1%" in md
+        )
+        assert "12 findings are new this cycle." in md
+
+    def test_movement_regime_counts_direction_flips(self):
+        from briefing_pack.sections.diff import _DiffData
+        diff = _DiffData(
+            regime="movement",
+            significant=[{
+                "subkind": "hs_group_yoy",
+                "group_name": "Honey",
+                "window_end": "2026-03-01",
+                "old_yoy": 0.05, "new_yoy": -0.08,
+                "direction_flipped": True, "shift_pp": -13.0,
+                "new_finding_id": 2,
+            }],
+        )
+        md = self._md(diff)
+        assert "1 of them flipping direction" in md
+
+    def test_badge_hedges_in_mover_sentences(self):
+        from briefing_pack.sections.front_page import _mover_sentence
+        from datetime import date as _date
+        base = dict(
+            group_name="EV batteries (Li-ion)", subkind="hs_group_yoy",
+            yoy_pct=0.345, yoy_pct_kg=0.694, current_eur=27.25e9,
+            current_end=_date(2026, 3, 1), id=1,
+        )
+        green = _mover_sentence({**base, "predictability": ("🟢", 0.8, 5)})
+        assert "a trend that has held over the past six months" in green
+        yellow = _mover_sentence({**base, "predictability": ("🟡", 0.5, 5)})
+        assert "double-check before headlining" in yellow
+        unscored = _mover_sentence({**base, "predictability": None})
+        assert "verify before headlining" in unscored
+        # Falling movers get the right verb.
+        falling = _mover_sentence({**base, "yoy_pct": -0.2, "yoy_pct_kg": -0.1,
+                                   "predictability": None})
+        assert "fell 20.0% by value" in falling
+        assert "volume down 10.0%" in falling

@@ -330,6 +330,36 @@ def _subkind_plain_label(subkind: str) -> str:
     return subkind
 
 
+# Scope + flow phrase per YoY subkind — the "which trade flow is this"
+# clause for sentence contexts (Tier 1 shift lines, the front page).
+# Longest-prefix wins, so suffixed variants must precede their parents.
+_SUBKIND_FLOW_SCOPE_PHRASES: list[tuple[str, str]] = [
+    ("hs_group_yoy_uk_export", "UK exports to China"),
+    ("hs_group_yoy_uk", "UK imports from China"),
+    ("hs_group_yoy_combined_export", "EU-27 + UK exports to China (combined)"),
+    ("hs_group_yoy_combined", "EU-27 + UK imports from China (combined)"),
+    ("hs_group_yoy_export", "EU-27 exports to China"),
+    ("hs_group_yoy", "EU-27 imports from China"),
+    ("gacc_bilateral_aggregate_yoy_import", "China's imports (GACC-reported)"),
+    ("gacc_bilateral_aggregate_yoy", "China's exports (GACC-reported)"),
+    ("gacc_aggregate_yoy_import", "China's imports (GACC-reported)"),
+    ("gacc_aggregate_yoy", "China's exports (GACC-reported)"),
+    ("partner_share_export", "China's share of EU-27 extra-EU exports"),
+    ("partner_share", "China's share of EU-27 extra-EU imports"),
+]
+
+
+def _subkind_flow_scope_phrase(subkind: str) -> str | None:
+    """Scope/flow phrase for a YoY subkind ("EU-27 imports from China"),
+    or None when the subkind has no flow framing (trajectories etc.)."""
+    for prefix, phrase in sorted(
+        _SUBKIND_FLOW_SCOPE_PHRASES, key=lambda t: -len(t[0]),
+    ):
+        if subkind.startswith(prefix):
+            return phrase
+    return None
+
+
 def _reading_the_numbers_md() -> str:
     """The shared "Reading the numbers" key — the six conventions a
     cold reader needs before quoting anything. Rendered near the top of
