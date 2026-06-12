@@ -58,6 +58,80 @@ Lower priority — pick up when one of them breaks visibly:
   counts, etc. Most raise today; some `log.warning`. Per-anomaly
   table if frequency rises.
 
+## Journalist-usability arc — paused for feedback (2026-06-12)
+
+Iterations 0–2 shipped 2026-06-11 (PRs #5, #6, #7/#8, #9 — see
+[`history.md`](history.md)): the plain-language pass, quotability
+verdicts + integrity riders, the "If you read only this page" front
+page, and the file renumbering that puts Findings (02) ahead of
+Leads (03) so folder order matches reading order.
+
+**Deliberate pause.** The next step is observational, not build: wait
+for the next substantive source release, deliver the resulting
+briefing pack, then run a five-minute **quote audit** — what did the
+journalist actually quote or chase, and did the Quotability verdicts
+agree? Disagreements in either direction (quoted a 🔴 figure; ignored
+everything 🟢) are the calibration data for everything below.
+
+Then, in order:
+
+### Iteration 3 — self-verifying bundle
+
+Make the bundle carry its own audit trail so a journalist never needs
+DB access to verify a cited number:
+
+- Detailed provenance renderers for the remaining subkind families
+  (`mirror_gap*`, `partner_share*`, `gacc_aggregate_yoy*`) — the
+  § "Provenance renderers for remaining subkinds" item below, which
+  this iteration absorbs and de-defers.
+- Bundle provenance for everything the brief cites (full entries for
+  front page + Tier 1 findings, compact entries for the Tier 2 long
+  tail), not just the opt-in fresh subset; render `finding/N` tokens
+  as working links into it.
+- Drive form: likely a single "06_Provenance" appendix Doc with one
+  heading per finding, so tokens can link to `#heading=` anchors via
+  the existing heading-anchor minting machinery in
+  `briefing_pack/drive_export.py` — the cross-document link problem
+  noted under the Drive-upload arc is already half-solved there.
+
+### Iteration 4 — low-base threshold calibration
+
+The shock-replay calibration of `low_base_threshold_eur` — the
+§ "Editorial calibration of low_base_threshold_eur" item below,
+promoted: the sensitivity sweep showed 49% of `hs_group_yoy*`
+findings flip classification across €5M–€500M, and the threshold now
+drives the rendered Quotability verdicts, so calibrating it has
+direct editorial effect. A recalibration propagates as a method bump
+through the supersede chain — cheap to apply once decided.
+
+### Iteration 5 — change-based delivery (Layer 3)
+
+When the delivery vector gets decided (see § "Watch the first 2-3
+real cycles + decide delivery vector"), make the unit of delivery the
+story-worthy change, not the export — an alert like "EV battery
+imports crossed a threshold this morning" linking into the front
+page. The verdict layer is the trigger filter. Don't pre-build;
+design the alert granularity when the vector is picked.
+
+### Smaller follow-ons surfaced by the arc
+
+- **Group display names.** Front-page sentences read awkwardly for
+  groups whose names mention China ("EU-27 imports of Critical
+  minerals (export-controlled by China) from China"). Fix: a
+  journalist-editable display-name column on `hs_groups`, consumed by
+  the sentence renderer only. ~1 hour.
+- **Repo restructure for public readability.** ~21 root-level modules
+  → a `meridian/` package with a root `scrape.py` shim preserving the
+  Routine's pre-approved commands. Proposal + compatibility notes in
+  [`2026-06-12-repo-structure-proposal.md`](2026-06-12-repo-structure-proposal.md).
+  Do after the watched cycle, ideally after `--upload-to-drive` is
+  CLI-wired (removes the `python -m briefing_pack.drive_export`
+  invocation the move would break).
+- **Mirror-gap "Period: None" rows.** Some mirror-gap blocks render
+  `Period: **None**` — the period lookup via `observation_ids[1]`
+  returns NULL for some findings. Diagnose and fix; also the
+  "1 releases" grammar in the same block.
+
 ## Near-term (likely next session)
 
 ### Docx + Drive upload — v1 and v4 shipped 2026-05-16
@@ -242,6 +316,10 @@ filter rule resolution from 2026-05-10.
 
 ### Editorial calibration of `low_base_threshold_eur` via shock-validation backtest
 
+> **Promoted to iteration 4 of the journalist-usability arc** (see top
+> of this file) — the threshold now drives the rendered Quotability
+> verdicts, so this is no longer "pick up if a story warrants it".
+
 Phase 6.3 sensitivity sweep showed €50M is the single largest
 editorial-framing driver — 49% of `hs_group_yoy*` findings would
 flip low_base classification across €5M–€500M. The default has
@@ -343,6 +421,10 @@ to take precedence when the prefix and the description disagree.
 ~30 minutes of work; deferred until needed.
 
 ### Provenance renderers for remaining subkinds
+
+> **Absorbed into iteration 3 of the journalist-usability arc** (see
+> top of this file) — no longer demand-deferred; the per-family detail
+> below still describes the work.
 
 The 2026-05-14/15 arc added detailed provenance templates for
 `gacc_bilateral_aggregate_yoy{,_import}`, `hs_group_yoy*` (six

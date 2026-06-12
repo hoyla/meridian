@@ -265,13 +265,16 @@ exports/
                              Custom per-cycle orientation file; the only
                              artefact a journalist receiving the pack cold
                              really needs to read first.
+    02_Findings.md        ← deterministic Markdown; NotebookLM-ready, no LLM
+                             in the loop. Opens with the "If you read only
+                             this page" front page, then Tier 1/2/3.
+                             Reading-order first of the auto-generated
+                             artefacts (renumbered ahead of Leads 2026-06-11
+                             when the front page became the entry point —
+                             numeric order IS the recommended reading order).
     03_Leads.md           ← LLM lead-scaffold companion. Top N leads at top,
                              full per-group blocks below. Cross-references the
-                             finding IDs in 02_Findings.md. Reading-order first
-                             of the auto-generated artefacts (Luke's framing —
-                             see 01_Read_Me_First.md).
-    02_Findings.md        ← deterministic Markdown; NotebookLM-ready, no LLM in the loop.
-                             Top N movers above Tier 1/2/3.
+                             finding IDs in 02_Findings.md.
     04_Data.xlsx          ← 10-tab spreadsheet, LLM-free. Same DB snapshot.
     05_Groups.md          ← HS group reference. One section per row in `hs_groups`:
                              description, HS patterns, top contributing CN8 codes,
@@ -279,22 +282,23 @@ exports/
                              category figure.
     provenance/           ← (opt-in via --with-provenance) per-finding audit
       finding-57378.md       trail files for the editorially-fresh subset
-      finding-57608.md       (Tier 1 changes + Top movers + Top leads).
+      finding-57608.md       (Tier 1 changes + front page + Top leads).
       …                      The long tail is on-demand via the CLI.
   2026-05-15-1500-ev-batteries-li-ion/   ← future scoped export
     01_Read_Me_First.md
-    03_Leads.md
     02_Findings.md
+    03_Leads.md
     04_Data.xlsx
     05_Groups.md
 ```
 
 Filenames carry `NN_` prefixes so file viewers (Drive, Finder, GitHub
 web UI) list them lexically in the suggested reading order. The
-numbering reflects Luke's framing in `01_Read_Me_First.md`: orient via
-the read-me, scan the LLM-scaffolded leads, drill into deterministic
-findings, drop into the spreadsheet for filterable detail, and consult
-the group glossary when a category name needs disambiguation.
+numbering reflects the routing in `01_Read_Me_First.md`: orient via
+the read-me, read the findings front page ("If you read only this
+page"), scan the LLM-scaffolded leads for angles, drop into the
+spreadsheet for filterable detail, and consult the group glossary
+when a category name needs disambiguation.
 
 The layout above is the quick `--briefing-pack` shape (markdown only).
 With `docx=True` (the default in scheduled/periodic runs) the documents
@@ -350,15 +354,19 @@ The `--no-record` flag (or `record=False` kwarg) produces an
 "unsequenced" export that doesn't insert a row — useful for test or
 preview renders that shouldn't pollute the cycle baseline.
 
-The findings document opens with **Top 5 movers this cycle** (the
-composite-ranked editorial digest, since 2026-05-13), then three
-explicit tiers separated by `---` and named in their
-`## Tier N — ...` headings:
+The findings document opens with the front page — **"If you read
+only this page"** (since 2026-06-11; previously "Top 5 movers this
+cycle") — then three explicit tiers separated by `---` and named in
+their `## Tier N — ...` headings:
 
-- **Top 5 movers this cycle**: composite-ranked
-  (|yoy_pct| × log10(current_12mo_eur)) shortlist filtered to
-  ≥10pp move, ≥€100M current 12mo, not low-base, predictability
-  ≠ 🔴, and `current_end` = latest anchor. Same scoring drives
+- **Front page**: the composite-ranked top movers
+  (|yoy_pct| × log10(current_12mo_eur), filtered to ≥10pp move,
+  ≥€100M current 12mo, not low-base, predictability ≠ 🔴,
+  `current_end` = latest anchor) rendered as publishable hedged
+  sentences — verb by direction, value + volume named, the
+  stability hedge graded by badge, citation token at the end —
+  plus a "Since the last pack" digest computed from the same
+  `_DiffData` Tier 1 renders. Same mover scoring drives the
   spreadsheet `top_movers_rank` / `top_movers_score` columns and
   the Top N leads section at the top of `03_Leads.md`.
 - **Tier 1 — What's new this cycle**: the diff against the previous
@@ -368,17 +376,24 @@ explicit tiers separated by `---` and named in their
 - **Tier 2 — Current state of play**: compact summary, one block
   per HS group + one per GACC bilateral partner + one per GACC
   partner aggregate (ASEAN / Africa / Latin America / world Total).
-  Each row shows 12mo rolling YoY AND single-month "Latest month"
-  YoY inline (Phase 6.10). Trajectory annotations are suppressed
-  inline when shape is `volatile` (since 2026-05-13) — absence
-  signals "no useful narrative shape; rely on the headline %."
-- **Tier 3 — Full detail by HS group**: per-finding mover sections,
-  trajectory shape buckets, mirror gaps, partner share, low-base
-  review.
+  Each row labels value and volume explicitly and shows the 12mo
+  rolling YoY AND single-month "Latest month" YoY inline (Phase
+  6.10; single-month swings beyond ±300% carry an inline
+  not-quotable warning). 🔴-badged groups get an explicit
+  verify-before-quoting line under the heading. Trend annotations
+  are suppressed inline when shape is `volatile` (since
+  2026-05-13) — absence signals "no useful narrative shape; rely
+  on the headline %."
+- **Tier 3 — Full detail by HS group**: per-finding mover sections
+  (each opening with a plain-English **Quotability** verdict that
+  applies methodology §9/§10 at the point of quotation; UK-scope
+  blocks also disclose HMRC suppression counts), trajectory shape
+  buckets, mirror gaps, partner share, low-base review.
 
-A reader's-guide section right after the headline names the tiers so
-journalists know where to dive in (regular subscriber: Top 5 →
-Tier 1; new joiner: Top 5 → Tier 2 → Tier 3).
+A reader's-guide section right after the headline names the tiers
+and includes the shared "Reading the numbers" key, so journalists
+know where to dive in (regular subscriber: front page → Tier 1; new
+joiner: front page → Tier 2 → Tier 3).
 
 Note: `scope_label` is currently metadata only — the findings document
 and leads still render the full finding set. Scoped *filtering* (only emit

@@ -708,7 +708,12 @@ journalist can sort/filter on robustness directly.
 
 ## 9. What to quote vs hedge vs not quote
 
-A practical rubric:
+A practical rubric. Since 2026-06-11 the brief applies this rubric
+*at render time*: every Tier 3 mover block opens with a plain-English
+**Quotability** verdict composed from the same rules below (low base →
+🔴 stability → threshold fragility → badge-graded go-ahead), and the
+front page's sentences carry the hedge inline. The rubric here remains
+the reference definition the renderer implements.
 
 ### Quote with confidence
 - A YoY finding for a group with a 🟢 predictability badge and
@@ -837,7 +842,11 @@ Wind generating sets, etc., where one shipment dominates a month.
 A 12mo rolling figure of +57% paired with a "Latest month: -99%"
 is the typical shape. Use the 12mo figure as the editorial
 anchor; treat single-month as a "what's the very latest direction"
-hint, not a quotable percentage.
+hint, not a quotable percentage. Since 2026-06-11 the brief
+enforces the extreme end of this at render time: any single-month
+figure beyond ±300% renders with an inline "extreme swing — not
+quotable" warning (the number still shows; it is annotated, never
+hidden).
 
 ### "Combined" scope is methodologically imperfect
 
