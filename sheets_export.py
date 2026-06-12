@@ -1061,7 +1061,7 @@ def _add_charts_tab(wb, *, top_n: int = DEFAULT_TOP_N) -> None:
     ws = wb.create_sheet(title="Charts")
     ws["A1"] = (
         "Top-N movers monthly EUR series — prior 12mo vs current 12mo."
-        " Companion to 03_Findings.docx."
+        " Companion to 02_Findings.docx."
     )
     ws["A1"].font = Font(italic=True)
 

@@ -5,8 +5,8 @@ Target Drive layout (per export):
 
     <export folder>                    e.g. "Meridian — 2026-05-21-1439"
     ├── 01_Read_Me_First               Google Doc
-    ├── 02_Leads                       Google Doc
-    ├── 03_Findings                    Google Doc
+    ├── 03_Leads                       Google Doc
+    ├── 02_Findings                    Google Doc
     ├── 04_Data                        Google Sheet
     ├── 05_Groups                      Google Doc
     └── Markdown versions for use with LLMs etc/
@@ -82,8 +82,8 @@ _FLIP_CHUNK = 100
 # artefact starts being generated.
 _CONVERT: dict[str, tuple[str, str]] = {
     "01_Read_Me_First.docx": (GDOC_MIME, DOCX_MIME),
-    "02_Leads.docx": (GDOC_MIME, DOCX_MIME),
-    "03_Findings.docx": (GDOC_MIME, DOCX_MIME),
+    "03_Leads.docx": (GDOC_MIME, DOCX_MIME),
+    "02_Findings.docx": (GDOC_MIME, DOCX_MIME),
     "04_Data.xlsx": (GSHEET_MIME, XLSX_MIME),
     "05_Groups.docx": (GDOC_MIME, DOCX_MIME),
 }

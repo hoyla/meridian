@@ -554,7 +554,7 @@ def _new_data_phrase_since_last_brief() -> str:
 
 def _why_this_export_paragraph(cur) -> str:
     """Standalone one-paragraph "why this export" framing for surfaces
-    that don't have a Tier 1 diff section (notably `02_Leads.md`). Returns
+    that don't have a Tier 1 diff section (notably `03_Leads.md`). Returns
     an italicised markdown paragraph, or '' if there is no previous brief
     to compare against. Phrasing is kept consistent with the findings
     doc's Tier 1 lead-in so the two surfaces don't disagree about what
@@ -591,15 +591,19 @@ _SCOPE_SUBKIND_SUFFIX = {"eu_27": "", "uk": "_uk", "eu_27_plus_uk": "_combined"}
 # delivered Drive folder each is a native Google Doc / Sheet for human
 # readers, and the plain markdown / spreadsheet copies live in a subfolder.
 _EXPORT_ARTEFACTS = [
-    ("02_Leads",
+    # Numeric order IS the recommended reading order (renumbered
+    # 2026-06-11: Findings ahead of Leads, now that the deterministic
+    # front page — not the LLM tip-sheet — is the entry point).
+    ("02_Findings",
+     "the deterministic findings — no LLM in the loop. Starts with "
+     "\"If you read only this page\". Cite this for the underlying "
+     "numbers behind any lead."),
+    ("03_Leads",
      "LLM-scaffolded investigation leads, one per HS group: a one-sentence "
      "anomaly summary, 2–3 hypotheses from a curated catalog, and concrete "
      "corroboration steps. Kept separate from the findings so a downstream "
      "LLM tool reasoning over them sees raw data, not another LLM's "
      "interpretation."),
-    ("03_Findings",
-     "the deterministic findings — no LLM in the loop. Cite this for the "
-     "underlying numbers behind any lead."),
     ("04_Data",
      "a multi-tab spreadsheet for data journalists: the same findings in "
      "long, filterable form with scope/flow columns, predictability badges, "
@@ -613,7 +617,7 @@ _EXPORT_ARTEFACTS = [
 
 def _in_this_export_folder_md(current: str | None = None) -> str:
     """The shared "In this export folder" section. `current` (e.g.
-    "03_Findings") marks which artefact is the document being read."""
+    "02_Findings") marks which artefact is the document being read."""
     lines = ["## In this export folder", ""]
     lines.append(
         "This is one of four documents generated together from the same "

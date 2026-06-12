@@ -236,8 +236,8 @@ def _section_for_group(
 
 
 def render_groups(
-    companion_filename: str = "03_Findings.md",
-    leads_filename: str = "02_Leads.md",
+    companion_filename: str = "02_Findings.md",
+    leads_filename: str = "03_Leads.md",
 ) -> str:
     """Build the standalone `05_Groups.md` reference for an export bundle.
 
@@ -326,7 +326,7 @@ def render_groups(
         lines.append(
             "These groups are seeded but their HS code selection has "
             "not yet been editorially validated against a real story. "
-            "Figures appear in `03_Findings.md` for transparency but "
+            "Figures appear in `02_Findings.md` for transparency but "
             "should not be quoted without verification. Each will "
             "either be promoted (the `draft:` prefix on `created_by` "
             "removed) or dropped once a journalist tests it in anger."

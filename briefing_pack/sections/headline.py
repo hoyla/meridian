@@ -43,7 +43,7 @@ def _section_headline(
     lines.append("into the project's database. A **Sources** appendix at the end lists every third-party ")
     lines.append("URL the findings rest on, with fetch timestamps.")
     lines.append("")
-    lines.append(_in_this_export_folder_md(current="03_Findings"))
+    lines.append(_in_this_export_folder_md(current="02_Findings"))
     lines.append("")
     lines.append("## Scope notes")
     lines.append("")

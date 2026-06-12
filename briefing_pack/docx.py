@@ -1,4 +1,4 @@
-"""Docx output for the briefing pack — parallel surface to `03_Findings.md`.
+"""Docx output for the briefing pack — parallel surface to `02_Findings.md`.
 
 Lisa-facing surface. The markdown stays canonical (NotebookLM-feed,
 per `memory/architecture_journalist_surfaces.md` — keep LLM output /

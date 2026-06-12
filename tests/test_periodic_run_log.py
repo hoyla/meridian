@@ -43,7 +43,7 @@ def test_log_run_persists_analyser_counts_as_jsonb(clean_db, test_db_url):
         action_taken=True,
         reason="new export written for data_period 2026-03-01",
         data_period=date(2026, 3, 1),
-        findings_path="/exports/2026-05-15-1811/03_Findings.md",
+        findings_path="/exports/2026-05-15-1811/02_Findings.md",
         analyser_counts=counts,
         duration_ms=120_000,
     )
@@ -65,7 +65,7 @@ def test_recent_cycles_newest_first(clean_db):
     )
     periodic_run_log.log_run(
         action_taken=True, reason="new export", data_period=date(2026, 2, 1),
-        findings_path="/exports/.../03_Findings.md",
+        findings_path="/exports/.../02_Findings.md",
     )
     rows = periodic_run_log.recent_cycles(limit=5)
     assert rows[0].action_taken is True
@@ -79,7 +79,7 @@ def test_render_cycles_marks_noop_and_export(clean_db):
     )
     periodic_run_log.log_run(
         action_taken=True, reason="wrote export", data_period=date(2026, 3, 1),
-        findings_path="/exports/X/03_Findings.md",
+        findings_path="/exports/X/02_Findings.md",
     )
     out = periodic_run_log.render_cycles(periodic_run_log.recent_cycles())
     assert "WROTE EXPORT" in out

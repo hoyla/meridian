@@ -332,7 +332,7 @@ def render_leads(
         lines.append(why_paragraph)
         lines.append("")
 
-    lines.append(_in_this_export_folder_md(current="02_Leads"))
+    lines.append(_in_this_export_folder_md(current="03_Leads"))
     lines.append("")
     # Same "Reading the numbers" key as the findings doc — leads quote
     # the same figures, so the same conventions apply.
@@ -347,7 +347,7 @@ def render_leads(
         "[glossary](https://github.com/hoyla/meridian/blob/main/docs/glossary.md) "
         "on first occurrence per lead. Family-universal caveats (CIF/FOB, "
         "CN8 revisions, multi-partner sum, etc.) apply to every finding "
-        "by construction and are described once in the **03_Findings** "
+        "by construction and are described once in the **02_Findings** "
         "methodology footer rather than repeated here."
     )
     lines.append("")
@@ -452,7 +452,7 @@ def export(
     since the previous export" baseline. The bundle itself is still
     written normally; only the audit row is skipped.
 
-    `docx=True` also writes a parallel `03_Findings.docx` to the same
+    `docx=True` also writes a parallel `02_Findings.docx` to the same
     folder — the Lisa-facing surface that carries charts (see
     `briefing_pack/docx.py`). The .md remains canonical (NotebookLM
     feed); the .docx is additive. Default off pending Lisa's review of
@@ -476,11 +476,13 @@ def export(
         d = Path(out_dir)
         # File names carry numeric prefixes so that most file viewers
         # (Drive, Finder, the GitHub web UI) list them in the order
-        # we'd like a journalist to read them: orientation → leads
-        # (the LLM-scaffolded "start here") → findings (deterministic
-        # detail) → data (the spreadsheet) → groups (the reference
-        # glossary). The `01_Read_Me_First.md` template is copied in
-        # by `_copy_export_templates()` and slots in first.
+        # we'd like a journalist to read them: orientation → findings
+        # (deterministic; opens with the front page) → leads (the
+        # LLM-scaffolded tip-sheet) → data (the spreadsheet) → groups
+        # (the reference glossary). Renumbered 2026-06-11 — Findings
+        # ahead of Leads — when the front page became the entry point.
+        # The `01_Read_Me_First.md` template is copied in by
+        # `_copy_export_templates()` and slots in first.
         # When docx is generated, the bundle layout mirrors the Drive
         # upload: the human-facing documents (.docx / .xlsx — Google
         # Docs/Sheet once uploaded) sit at the top, and the plain markdown
@@ -489,8 +491,8 @@ def export(
         # there are no Google Docs to separate from, so the markdown stays
         # flat at the top — the original quick-pack layout.
         md_dir = (d / _MARKDOWN_SUBFOLDER) if docx else d
-        p = md_dir / "03_Findings.md"
-        lp = md_dir / "02_Leads.md"
+        p = md_dir / "02_Findings.md"
+        lp = md_dir / "03_Leads.md"
         if spreadsheet is None:
             spreadsheet = True  # bundle is the default user-facing mode
 
@@ -549,7 +551,7 @@ def export(
             log.info("Copied spreadsheet into %s/", _MARKDOWN_SUBFOLDER)
 
     if docx and out_path is None:
-        # Parallel Lisa-facing surface. Sits next to 03_Findings.md
+        # Parallel Lisa-facing surface. Sits next to 02_Findings.md
         # using the same numeric prefix — same conceptual document,
         # different format. python-docx + mistune are soft dependencies;
         # import lazily so callers that don't pass docx=True don't need
@@ -561,12 +563,12 @@ def export(
         # The styled .docx are the top-level, human-facing surface; `d` is
         # the bundle root (the .md sit in the markdown subfolder beneath it).
         render_findings_docx(
-            d / "03_Findings.docx", top_n=top_n, scope_label=scope_label,
+            d / "02_Findings.docx", top_n=top_n, scope_label=scope_label,
             companion_filename=leads_basename,
             groups_filename=groups_basename,
         )
         render_leads_docx(
-            d / "02_Leads.docx", scope_label=scope_label,
+            d / "03_Leads.docx", scope_label=scope_label,
             companion_filename=brief_basename,
         )
         render_groups_docx(

@@ -441,8 +441,8 @@ def test_briefing_pack_export_also_writes_data_xlsx(
         out_dir=str(tmp_path / "20260510-1200"),
     )
     folder = Path(brief_path).parent
-    assert (folder / "03_Findings.md").exists()
-    assert (folder / "02_Leads.md").exists()
+    assert (folder / "02_Findings.md").exists()
+    assert (folder / "03_Leads.md").exists()
     assert (folder / "04_Data.xlsx").exists()
     assert (folder / "05_Groups.md").exists()
 
