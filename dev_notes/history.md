@@ -10,6 +10,62 @@ to understand how the project got here.
 
 ---
 
+## 2026-06-11 — journalist-usability arc, iterations 0–2 + renumbering
+
+A four-PR arc out of the 2026-06-11 usability review ("what flaws does
+this have for non-technical journalists?"), which found the rigor
+strong but the journalist surface assuming a reader who understands
+trade statistics and can walk an audit trail they can't reach. Test
+count 376 → 398. Work now **paused for journalist feedback** — see
+roadmap § "Journalist-usability arc".
+
+### Iteration 0 — plain-language pass ([#5](https://github.com/hoyla/meridian/pull/5))
+
+Render-only language rework: flow labels become "EU-27 imports from
+China" (the `(CN→reporter)` arrow form read as jargon in the
+2026-05-13 pack review); per-finding caveats render their
+plain-English `caveats.summary` with the code in parens; value vs
+volume labelled at every quote point; a shared "Reading the numbers"
+key opens findings + leads (registered in the docx metadata-tint
+sets); single-month YoY beyond ±300% carries an inline not-quotable
+warning (the `+686380.9%` civil-aircraft case); doc titles renamed
+"China–EU/UK trade — …"; Read_Me_First routes by time available.
+Also fixed in passing: Tier 1 trace tokens double-wrapped in
+backticks; `--with-provenance` dead on recorded runs (dedent +
+regression tests via a spawned-task session).
+
+### Iteration 1 — quotability verdicts + integrity riders ([#6](https://github.com/hoyla/meridian/pull/6))
+
+Methodology §9/§10 enforced at render time: every Tier 3 mover block
+opens with a one-sentence **Quotability** verdict
+(`_quotability_verdict`; priority low base → 🔴 → threshold
+fragility → badge-graded go-ahead); 🔴 groups get an explicit warning
+line under their Tier 2 heading; partial-window flags name the
+missing month and window (surfacing `missing_months_current/_prior`,
+stored since the caveat shipped but never rendered); UK-scope blocks
+disclose HMRC suppression counts split by window.
+
+### Iteration 2 — deterministic front page ([#7](https://github.com/hoyla/meridian/pull/7) via [#8](https://github.com/hoyla/meridian/pull/8))
+
+`02_Findings` now opens with **"If you read only this page"** — the
+composite-ranked top movers as publishable hedged sentences
+(template-rendered, no LLM; hedge graded by stability badge) plus a
+"Since the last pack" digest. The Tier 1 diff split into
+`_compute_diff() → _DiffData` + renderer so the digest and Tier 1
+share one snapshot. Replaced the "Top 5 movers this cycle" section;
+the provenance-bundling regex follows the new heading. Resolves the
+arc's structural inversion: the most readable artefact (previously
+the LLM-authored Leads) is no longer the recommended entry point.
+
+### File renumbering ([#9](https://github.com/hoyla/meridian/pull/9))
+
+Findings → `02_`, Leads → `03_`, so folder sort order matches the
+recommended reading order now that the front page is the entry point.
+dev_notes and dated spike scripts keep old names (historical record);
+existing Drive bundles unaffected (per-export folders).
+
+---
+
 ## 2026-05-15 — Jan+Feb combined-release parser + transparency surfacing
 
 A two-part arc Luke flagged after the morning's batch of work: the

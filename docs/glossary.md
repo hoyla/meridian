@@ -374,25 +374,32 @@ The three sections of `02_Findings.md`:
   pairs are value-identical (renders a one-line "this cycle is
   plumbing" notice instead of a long churn list).
 - **Tier 2 — Current state of play.** Compact per-HS-group summary.
-  Inline `Trajectory: …` annotations are dropped when shape is
+  Inline `Trend: …` annotations are dropped when shape is
   `volatile` — absence signals "no useful narrative shape; lean on
-  the headline %".
-- **Tier 3 — Full detail.** Per-finding mover sections.
+  the headline %". 🔴-badged groups carry an explicit
+  verify-before-quoting line under their heading.
+- **Tier 3 — Full detail.** Per-finding mover sections, each
+  opening with a plain-English **Quotability** verdict.
 
-The brief opens with [**Top 5 movers this cycle**](#top-movers)
-above Tier 1. A regular subscriber reads Top 5 → Tier 1; a new
-joiner reads Top 5 → Tier 2 → Tier 3.
+The brief opens with [**"If you read only this page"**](#front-page)
+above Tier 1. A regular subscriber reads the front page → Tier 1; a
+new joiner reads the front page → Tier 2 → Tier 3.
 
-### Top movers
-The composite-ranked editorial digest at the top of `02_Findings.md`
-and `03_Leads.md`. Filter rules: |yoy_pct| ≥ 10pp, current_12mo_eur
-≥ €100M, not low-base, predictability badge ≠ 🔴, current_end =
-latest anchor across the family (recency filter). Score is
+### Front page
+"If you read only this page" — the one-page brief at the top of
+`02_Findings.md` (since 2026-06-11; previously "Top 5 movers this
+cycle"). The composite-ranked top movers rendered as publishable
+hedged sentences (no LLM — template-rendered from the deterministic
+findings), plus a "Since the last pack" cycle digest. Filter rules
+for the movers: |yoy_pct| ≥ 10pp, current_12mo_eur ≥ €100M, not
+low-base, predictability badge ≠ 🔴, current_end = latest anchor
+across the family (recency filter). Score is
 |yoy_pct| × log10(current_12mo_eur) — rewards "big move on a
 meaningful base" without favouring either dimension alone. Same
 scoring drives the `top_movers_rank` / `top_movers_score`
-columns in `04_Data.xlsx`, so a journalist sorting the spreadsheet
-by score lands on the same picks as the brief's Top 5.
+columns in `04_Data.xlsx` and the Top N leads at the top of
+`03_Leads.md`, so a journalist sorting the spreadsheet by score
+lands on the same picks as the front page.
 
 ### Threshold fragility
 A finding whose smaller-of-(current_12mo_eur, prior_12mo_eur)

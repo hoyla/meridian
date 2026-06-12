@@ -14,29 +14,40 @@ the model journalist is Lisa O'Carroll.
 
 ## What the brief looks like
 
-Every export bundle's `02_Findings.md` opens with three tiers (what's
-new since last time → current state of play → full detail). A
-typical Tier 2 entry for one HS group reads like this:
+Every export bundle's `02_Findings.md` opens with a one-page front
+page — **"If you read only this page"** — the cycle's most quotable
+shifts as publishable, hedged sentences (no LLM involved; these are
+template-rendered from the deterministic findings):
+
+> **EU-27 exports of Finished cars (broad) to China** fell 41.1% by
+> value in the 12 months to Mar 2026, to €7.94B; volume down 37.7% —
+> though the signal has been mixed over the past six months, so
+> double-check before headlining. `finding/65865`
+
+followed by three tiers (what's new since last time → current state
+of play → full detail). A typical Tier 2 entry for one HS group:
 
 > ### EV batteries (Li-ion) 🟡
 >
->   - **EU-27 imports (CN→reporter)**: +34.5% (kg +69.4%) to
->     €27.25B (12mo to 2026-02-01). Latest month: +31.5% (kg
->     +69.0%). Trajectory: `dip-and-recovery (was rising, dipped,
->     now rising again)`. `finding/38664`
->   - **UK imports (CN→reporter)**: +13.8% (kg +35.3%) to €1.66B.
->     `finding/45367`
->   - **EU-27 exports (reporter→CN)**: -36.2% (kg -8.7%) to
->     €453.7M. `finding/42085`
+>   - **EU-27 imports from China**: value +35.6%, volume +71.3%,
+>     12mo total €27.63B (12 months to Mar 2026). Latest month:
+>     value +19.0%, volume +47.9%. Trend: dip-and-recovery (was
+>     rising, dipped, now rising again). `finding/65765`
+>   - **UK imports from China**: value +13.8%, volume +35.3%, 12mo
+>     total €1.66B (12 months to Feb 2026). `finding/45367`
+>   - **EU-27 exports to China**: value -37.4%, volume -1.9%, 12mo
+>     total €422.6M (12 months to Mar 2026). `finding/65853`
 
-🟢 / 🟡 / 🔴 are predictability badges (would the headline % from
+🟢 / 🟡 / 🔴 are stability badges (would the headline % from
 6 months ago still hold today?); `finding/{id}` is a stable citation
 token you can paste into a story and follow back to source rows.
-Tier 3 ("Full detail") adds the top contributing reporter countries
-(*"Germany alone explains 66% of the EU-wide drop"*), top
-contributing HS-CN8 codes, mirror-trade gaps, and the per-finding
-caveats. Every finding traces back to a Eurostat / HMRC raw row or a
-GACC release page.
+Tier 3 ("Full detail") opens every block with a plain-English
+**Quotability** verdict that applies the methodology's quote/hedge
+rules at the point of quotation, then adds the top contributing
+reporter countries (*"Germany alone explains 66% of the EU-wide
+drop"*), top contributing HS-CN8 codes, mirror-trade gaps, and the
+per-finding caveats. Every finding traces back to a Eurostat / HMRC
+raw row or a GACC release page.
 
 ## Three rules the design follows
 

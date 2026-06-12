@@ -26,7 +26,10 @@ see [`../dev_notes/`](../dev_notes/).
 ## Reading paths by goal
 
 **"I want to quote a number from the brief tomorrow."**
+Since 2026-06-11 the brief itself states a plain-English
+**Quotability** verdict next to each Tier 3 figure — start there.
 [methodology.md §9 (quote / hedge / don't quote)](methodology.md#9-what-to-quote-vs-hedge-vs-not-quote)
+is the reference definition the verdicts implement
 → [§3 (caveats reference)](methodology.md#3-caveats-reference) to
 decode any caveat codes on the finding → [glossary.md](glossary.md)
 for any unfamiliar term in either.
