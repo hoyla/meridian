@@ -335,23 +335,42 @@ class MarkdownToDocxTranslator:
         emits each as a styled paragraph. Nested lists are handled
         recursively (each nested list emits at the same flat level —
         python-docx's first-class list nesting requires deeper XML
-        plumbing than this v1 needs)."""
+        plumbing than this v1 needs).
+
+        Ordered lists each get a *fresh* numbering instance so the count
+        restarts at the list's own start value. Without this every
+        ordered list in the document shares the single `numId` carried by
+        the built-in "List Number" style, so a second list continues the
+        first one's count (the "If you read only this page" list opening
+        at 4 because an earlier list had three items)."""
         attrs = node.get("attrs") or {}
         ordered = attrs.get("ordered", False)
         style_name = "List Number" if ordered else "List Bullet"
+        num_id = None
+        if ordered:
+            # mistune carries the list's first number in attrs["start"]
+            # (default 1); honour it so a "3." -prefixed list still starts
+            # at 3 rather than always resetting to 1.
+            num_id = self._new_ordered_num_id(start=int(attrs.get("start", 1)))
         for child in node.get("children") or []:
             if child.get("type") != "list_item":
                 continue
-            self._render_list_item(child, style_name=style_name)
+            self._render_list_item(
+                child, style_name=style_name, num_id=num_id,
+            )
 
-    def _render_list_item(self, node: dict, *, style_name: str) -> None:
+    def _render_list_item(
+        self, node: dict, *, style_name: str, num_id: int | None = None,
+    ) -> None:
         """Emit a list_item as a list-styled paragraph. The item's
         block_text holds the inline content; nested lists become
-        subsequent paragraphs (flat for v1)."""
+        subsequent paragraphs (flat for v1). `num_id`, when set, pins the
+        paragraph to a specific numbering instance (see `_block_list`)."""
         for sub in node.get("children") or []:
             t = sub.get("type")
             if t == "block_text":
                 p = self.doc.add_paragraph(style=style_name)
+                self._apply_num_id(p, num_id)
                 self._render_inline_into_paragraph(
                     sub.get("children") or [], p,
                 )
@@ -362,20 +381,105 @@ class MarkdownToDocxTranslator:
                 # Multi-paragraph list item — second paragraph onward
                 # gets the same list style.
                 p = self.doc.add_paragraph(style=style_name)
+                self._apply_num_id(p, num_id)
                 self._render_inline_into_paragraph(
                     sub.get("children") or [], p,
                 )
             elif t == "list":
                 # Nested list — recurse. python-docx doesn't carry
                 # depth automatically; the nested list paragraphs use
-                # the same style. Visual fidelity is acceptable for our
-                # use case (single-level nesting in the existing pack).
+                # the same style. A nested ordered list gets its own
+                # fresh numbering instance via the recursive call, so it
+                # restarts independently of its parent. Visual fidelity is
+                # acceptable for our use case (single-level nesting in the
+                # existing pack).
                 self._block_list(sub)
             else:
                 # Unknown sub-element — fall back to plain text.
                 text = self._collect_plain_text(sub).strip()
                 if text:
-                    self.doc.add_paragraph(text, style=style_name)
+                    p = self.doc.add_paragraph(text, style=style_name)
+                    self._apply_num_id(p, num_id)
+
+    # ----- ordered-list numbering -------------------------------------------
+
+    def _apply_num_id(self, paragraph, num_id: int | None) -> None:
+        """Pin `paragraph` to numbering instance `num_id` at level 0,
+        overriding the `numId` it would otherwise inherit from the
+        "List Number" paragraph style. No-op when `num_id` is None
+        (unordered lists, or when no numbering part is available)."""
+        if num_id is None:
+            return
+        pPr = paragraph._p.get_or_add_pPr()
+        numPr = OxmlElement("w:numPr")
+        ilvl = OxmlElement("w:ilvl")
+        ilvl.set(qn("w:val"), "0")
+        numId = OxmlElement("w:numId")
+        numId.set(qn("w:val"), str(num_id))
+        numPr.append(ilvl)
+        numPr.append(numId)
+        pPr.append(numPr)
+
+    def _new_ordered_num_id(self, *, start: int = 1) -> int | None:
+        """Create a fresh numbering instance that restarts an ordered
+        list at `start`, reusing the abstract definition behind the
+        built-in "List Number" style so the "1." format and indentation
+        match the rest of the pack. Returns the new `numId`, or None if
+        the document has no numbering part (defensive — the stock
+        python-docx template always ships one). Each `<w:num>` is an
+        independent counter, so a new one always restarts."""
+        try:
+            numbering = self.doc.part.numbering_part.element
+        except (NotImplementedError, KeyError, AttributeError):
+            return None
+        abstract_id = self._list_number_abstract_id(numbering)
+        if abstract_id is None:
+            return None
+        existing = [
+            int(n.get(qn("w:numId")))
+            for n in numbering.findall(qn("w:num"))
+            if n.get(qn("w:numId")) is not None
+        ]
+        new_id = (max(existing) + 1) if existing else 1
+        num = OxmlElement("w:num")
+        num.set(qn("w:numId"), str(new_id))
+        abs_ref = OxmlElement("w:abstractNumId")
+        abs_ref.set(qn("w:val"), str(abstract_id))
+        num.append(abs_ref)
+        # Force level 0 to (re)start at the list's own first number,
+        # independent of any counter state inherited from the abstract
+        # definition or an earlier list.
+        lvl_override = OxmlElement("w:lvlOverride")
+        lvl_override.set(qn("w:ilvl"), "0")
+        start_override = OxmlElement("w:startOverride")
+        start_override.set(qn("w:val"), str(start))
+        lvl_override.append(start_override)
+        num.append(lvl_override)
+        numbering.append(num)
+        return new_id
+
+    def _list_number_abstract_id(self, numbering) -> int | None:
+        """Resolve the `abstractNumId` behind the built-in "List Number"
+        style: styleId 'ListNumber' → its `numId` → that num's
+        `abstractNumId`. Returns None if the chain can't be followed (a
+        non-standard template), letting the caller fall back to the
+        style's shared numbering."""
+        styles = self.doc.styles.element
+        style_num_id = None
+        for st in styles.findall(qn("w:style")):
+            if st.get(qn("w:styleId")) == "ListNumber":
+                nid_el = st.find(".//" + qn("w:numId"))
+                if nid_el is not None:
+                    style_num_id = nid_el.get(qn("w:val"))
+                break
+        if style_num_id is None:
+            return None
+        for n in numbering.findall(qn("w:num")):
+            if n.get(qn("w:numId")) == style_num_id:
+                a = n.find(qn("w:abstractNumId"))
+                if a is not None and a.get(qn("w:val")) is not None:
+                    return int(a.get(qn("w:val")))
+        return None
 
     def _maybe_inject_chart_after_item(self, block_text_node: dict) -> None:
         """Scan the item's text for a finding/N token; if found, ask

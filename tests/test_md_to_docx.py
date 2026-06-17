@@ -130,6 +130,51 @@ class TestLists:
         assert any("Group X" in r.text for r in bold_runs)
         assert "body of the item" in item.text
 
+    def test_separate_ordered_lists_restart_numbering(self):
+        """Regression: two ordered lists separated by other content must
+        each restart at 1, not share one continuous counter. The bug
+        showed up as the "If you read only this page" list opening at 4
+        because an earlier three-item list bled its count forward — every
+        ordered list inherited the single `numId` carried by the built-in
+        "List Number" style, so Word/Google Docs treated them as one
+        list."""
+        md = (
+            "1. first\n2. second\n3. third\n\n"
+            "para break\n\n"
+            "1. alpha\n2. beta\n"
+        )
+        doc = _translate(md)
+        items = [p for p in doc.paragraphs if p.style.name == "List Number"]
+        assert len(items) == 5
+
+        def num_id(p):
+            el = p._p.find(".//" + qn("w:numId"))
+            return el.get(qn("w:val")) if el is not None else None
+
+        first_list = {num_id(p) for p in items[:3]}
+        second_list = {num_id(p) for p in items[3:]}
+        # Each list pins its three / two items to a single numId of its own…
+        assert len(first_list) == 1 and len(second_list) == 1
+        # …and the two lists use *different* numbering instances, which is
+        # what makes the second restart at 1.
+        assert first_list.isdisjoint(second_list)
+        assert next(iter(first_list)) is not None
+
+    def test_ordered_list_honours_start_number(self):
+        """A list whose first marker is not 1 (e.g. `3.`) keeps its start
+        value via a startOverride rather than being forced back to 1."""
+        md = "3. third\n4. fourth\n"
+        doc = _translate(md)
+        item = next(p for p in doc.paragraphs if p.style.name == "List Number")
+        num_id = item._p.find(".//" + qn("w:numId")).get(qn("w:val"))
+        numbering = doc.part.numbering_part.element
+        num = next(
+            n for n in numbering.findall(qn("w:num"))
+            if n.get(qn("w:numId")) == num_id
+        )
+        start = num.find(".//" + qn("w:startOverride"))
+        assert start is not None and start.get(qn("w:val")) == "3"
+
 
 # ---------------------------------------------------------------------------
 # Tables
