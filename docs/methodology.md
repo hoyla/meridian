@@ -393,6 +393,51 @@ negative gap = premium pricing.
 **Coverage limitation**: EU-27 scope only — there is no HMRC-side
 world-aggregate equivalent yet.
 
+### `trade_balance` / `trade_balance_cn_only`
+
+The EU-27's all-goods goods-trade **balance** with China — imports minus
+exports — read straight from Eurostat. Added 2026-06-17 after a
+journalist flagged that the tool never surfaced the single biggest
+Eurostat story of the cycle: the deficit running at roughly €1bn a
+*day*. Every other family measures one flow at a time and reports a
+year-on-year *change*; the deficit is a standing *level* that barely
+moves cycle to cycle, so it tripped none of the "what's new"
+thresholds. This family closes that gap.
+
+**Reads the `000TOTAL` aggregate rows, not a SUM over CN8 detail.**
+Eurostat ships, per (reporter, partner, flow, period), one
+`product_nc='000TOTAL'` row that already sums every CN8 detail row for
+the slice. Summing detail *and* the aggregate double-counts; this family
+uses `000TOTAL` alone. EU-27 = every Eurostat reporter
+except GB (pre-Brexit GB excluded at all times for cross-period
+comparability). Eurostat values are native EUR, so no FX step.
+
+**Each finding carries three registers side-by-side** in
+`detail.totals`, every one with a `deficit_per_day_eur`:
+
+- `single_month` — the anchor month's deficit. The register the press
+  quotes ("€31.9bn in April → €1.06bn a day").
+- `rolling_12mo` — trailing-12-month deficit + its YoY vs the prior 12
+  months. Emitted only when the current window is complete (12/12
+  months on both flows).
+- `ytd` — Jan-to-anchor of the current year vs the same range a year
+  earlier. Null when the prior-year range is incomplete.
+
+**Two partner scopes are emitted side by side.** `trade_balance`
+(CN+HK+MO) is our editorial standard, the same China definition every
+other family uses; `trade_balance_cn_only` (mainland China only) matches
+the slice Eurostat uses in its *own* published EU–China headline, so the
+figure reconciles directly against the press number. The brief renders
+both at the top of the document in the "standing picture" block
+(`trade_balance.py`), CN+HK+MO as the headline and CN-only as the
+reconciliation line.
+
+**Natural key**: `(reporter_scope, partner_scope, anchor_yyyymm)` —
+e.g. `('eu27', 'cn_only', '2026-04')`. Partner scope is also mirrored in
+the subkind suffix. Method version `eu_china_trade_balance_v1_000total`.
+Today EU-27 only; `uk` / `eu27_plus_uk` reporter scopes are reserved for
+when an HMRC all-goods total is wired in.
+
 ### `gacc_bilateral_aggregate_yoy` / `gacc_bilateral_aggregate_yoy_import`
 
 Bilateral counterpart to `gacc_aggregate_yoy`. Same GACC-side data,

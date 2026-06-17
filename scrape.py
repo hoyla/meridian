@@ -549,7 +549,7 @@ def main() -> None:
                    choices=["mirror-trade", "mirror-gap-trends", "hs-group-yoy",
                             "hs-group-trajectory", "gacc-aggregate-yoy",
                             "gacc-bilateral-aggregate-yoy", "partner-share",
-                            "llm-framing"],
+                            "trade-balance", "llm-framing"],
                    help="Run a deterministic anomaly pass over already-ingested data, "
                         "or 'llm-framing' to generate per-hs-group lead scaffolds "
                         "(anomaly summary + 2-3 picked hypotheses + corroboration steps; "
@@ -1016,6 +1016,15 @@ def main() -> None:
             group_names=args.hs_group, flow=args.flow,
         )
         log.info("partner-share analysis (flow=%d): %s", args.flow, counts)
+        return
+
+    if args.analyse == "trade-balance":
+        # EU–China all-goods trade deficit (imports minus exports), framed
+        # per day. No flow axis — emits both partner scopes (CN+HK+MO and
+        # CN-only) in one pass. Eurostat-only; reads the 000TOTAL aggregate
+        # rows. Surfaces the "€1bn a day" register the press quotes.
+        counts = anomalies.detect_eu_china_trade_balance()
+        log.info("EU–China trade-balance analysis: %s", counts)
         return
 
     if args.analyse == "llm-framing":

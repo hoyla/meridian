@@ -18,6 +18,7 @@ Future types (not yet implemented):
 - rank_shift: changes in partner-share rankings
 """
 
+import calendar
 import logging
 import math
 import os
@@ -3707,6 +3708,415 @@ def _insert_gacc_bilateral_aggregate_yoy_finding(
                 "partial_window": partial_window,
             },
             observation_ids=sorted(set(obs_ids)),
+            score=score,
+            title=title,
+            body="\n".join(body_lines),
+            detail=detail,
+        )
+    return action
+
+
+# =============================================================================
+# EU–China trade balance: the all-goods bilateral deficit, framed per day.
+# =============================================================================
+# Added 2026-06-17 after a journalist (Lisa O'Carroll) flagged that the tool
+# never surfaced the single biggest Eurostat story of the cycle: the EU's
+# goods-trade deficit with China running at roughly €1bn a DAY. Every other
+# family measures ONE flow at a time and reports year-on-year *change*; the
+# deficit is a *level* — imports minus exports — and a standing level that
+# barely moves year to year falls through every change-threshold we have.
+#
+# This analyser closes that gap. It reads the all-goods Eurostat totals (the
+# `000TOTAL` aggregate rows — NOT a SUM over CN8 detail, which would double-
+# count detail+aggregate) for EU-27 reporters and emits, per anchor period,
+# the EU↔China deficit in three registers: latest single month, rolling 12
+# months (+ its YoY), and year-to-date (+ its YoY) — each with a €/day
+# rendering, the register the press actually quotes.
+#
+# Two partner scopes are emitted side by side:
+#   - cn_hk_mo (subkind `trade_balance`): our editorial standard, treating
+#     Hong Kong + Macau as Chinese trade — consistent with every other
+#     family in the pack.
+#   - cn_only (subkind `trade_balance_cn_only`): the slice Eurostat uses in
+#     its own published EU–China headline, so a reporter can reconcile our
+#     figure against the press number. The Apr-2026 €31.9bn single-month
+#     deficit (≈€1.06bn/day) reconstructs exactly from this scope.
+
+TRADE_BALANCE_SOURCE_URL = "analysis://trade_balance/v1"
+
+# subkind -> partner ISO-2 codes summed on the China side.
+TRADE_BALANCE_PARTNER_SCOPES: dict[str, tuple[str, ...]] = {
+    "trade_balance": EUROSTAT_PARTNERS,          # CN+HK+MO (editorial standard)
+    "trade_balance_cn_only": ("CN",),            # matches Eurostat's published headline
+}
+# Token stored in the natural key / detail for the partner axis.
+_TRADE_BALANCE_PARTNER_TOKEN: dict[str, str] = {
+    "trade_balance": "cn_hk_mo",
+    "trade_balance_cn_only": "cn_only",
+}
+# Only EU-27 today. GB excluded at all times for cross-period comparability
+# (pre-Brexit GB rows live in the DB but never count toward EU-27 — same
+# convention as EU27_EXCLUDE_REPORTERS).
+TRADE_BALANCE_REPORTER_SCOPE = "eu27"
+
+
+def _eurostat_bloc_allgoods_totals(
+    flow: str, partners: tuple[str, ...],
+) -> dict[date, tuple[float, list[int]]]:
+    """All-goods EU-27 Eurostat totals per period for one flow and partner
+    set, read from the `000TOTAL` aggregate rows. Returns
+    {period: (value_eur, [observation_ids])}.
+
+    Why 000TOTAL and not a SUM over detail: the bulk file ships, per
+    (reporter, partner, flow, period), one `product_nc='000TOTAL'` row that
+    already sums every CN8 detail row for that slice (see
+    EUROSTAT_AGGREGATE_PRODUCT_NC). Summing the detail rows AND the
+    aggregate row double-counts; 000TOTAL alone is the canonical all-goods
+    figure. (This is exactly the trap the mirror_gap Eurostat sum fell
+    into — its totals are ~2x — so this family is deliberately built the
+    other way.)
+
+    EU-27 = every Eurostat reporter except GB. Eurostat values are native
+    EUR, so no FX step is needed (contrast the GACC families)."""
+    if flow not in ("import", "export"):
+        raise ValueError(f"flow must be 'import' or 'export'; got {flow!r}")
+    out: dict[date, tuple[float, list[int]]] = {}
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT r.period,
+                   COALESCE(SUM(o.value_amount), 0) AS total_eur,
+                   COALESCE(ARRAY_AGG(o.id ORDER BY o.id), '{}') AS obs_ids
+              FROM observations o
+              JOIN releases r ON r.id = o.release_id
+             WHERE r.source = 'eurostat'
+               AND o.flow = %s
+               AND o.hs_code = %s
+               AND o.partner_country = ANY(%s)
+               AND o.reporter_country <> ALL(%s)
+          GROUP BY r.period
+            """,
+            (flow, EUROSTAT_AGGREGATE_PRODUCT_NC, list(partners),
+             list(EU27_EXCLUDE_REPORTERS)),
+        )
+        for period, total, ids in cur.fetchall():
+            out[period] = (float(total), list(ids))
+    return out
+
+
+def _days_in_month_window(start: date, end: date) -> int:
+    """Calendar-day span of a contiguous month window [start, end], both
+    first-of-month dates. Used to turn a period total into a €/day figure."""
+    last_day = calendar.monthrange(end.year, end.month)[1]
+    return (date(end.year, end.month, last_day) - start).days + 1
+
+
+def _allgoods_window(
+    totals: dict[date, tuple[float, list[int]]], start: date, end: date,
+) -> tuple[float, list[int], int]:
+    """Sum the contiguous monthly window [start, end] from a per-period
+    totals map. Returns (sum_eur, obs_ids, n_months_present)."""
+    total = 0.0
+    ids: list[int] = []
+    n = 0
+    m = start
+    while m <= end:
+        if m in totals:
+            total += totals[m][0]
+            ids.extend(totals[m][1])
+            n += 1
+        m = _months_back(m, -1)
+    return total, ids, n
+
+
+def detect_eu_china_trade_balance() -> dict[str, int]:
+    """Emit the EU-27 ↔ China all-goods trade deficit (imports minus
+    exports) per anchor period, for both partner scopes (CN+HK+MO and
+    CN-only).
+
+    One finding per (partner_scope, anchor_period) where the anchor month
+    has both an import and an export all-goods total AND the trailing
+    12-month current window is complete (12 of 12 months present on both
+    flows). The rolling-12mo YoY, the year-to-date YoY, and the
+    single-month figure are all carried on the same finding; any that can't
+    be computed for lack of history are stored as null rather than
+    suppressing the finding.
+
+    Returns counts: emitted, inserted_new, confirmed_existing, superseded,
+    skipped_no_data, skipped_incomplete_window.
+    """
+    counts = {
+        "emitted": 0,
+        "inserted_new": 0, "confirmed_existing": 0, "superseded": 0,
+        "skipped_no_data": 0,
+        "skipped_incomplete_window": 0,
+    }
+
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'running') RETURNING id",
+            (TRADE_BALANCE_SOURCE_URL,),
+        )
+        analysis_run_id = cur.fetchone()[0]
+
+    try:
+        for subkind, partners in TRADE_BALANCE_PARTNER_SCOPES.items():
+            imports = _eurostat_bloc_allgoods_totals("import", partners)
+            exports = _eurostat_bloc_allgoods_totals("export", partners)
+            anchors = sorted(set(imports) & set(exports))
+            if not anchors:
+                counts["skipped_no_data"] += 1
+                continue
+
+            # Monthly deficit series (both flows present), for the detail blob.
+            monthly_series = [
+                {"period": m.isoformat(),
+                 "deficit_eur": imports[m][0] - exports[m][0]}
+                for m in anchors
+            ]
+
+            for t in anchors:
+                # ----- Rolling 12 months: current window must be complete. -----
+                cur_start, cur_end = _months_back(t, 11), t
+                imp_cur, imp_cur_ids, n_imp_cur = _allgoods_window(imports, cur_start, cur_end)
+                exp_cur, exp_cur_ids, n_exp_cur = _allgoods_window(exports, cur_start, cur_end)
+                if n_imp_cur < 12 or n_exp_cur < 12:
+                    counts["skipped_incomplete_window"] += 1
+                    continue
+                deficit_12 = imp_cur - exp_cur
+                days_12 = _days_in_month_window(cur_start, cur_end)
+
+                # Rolling YoY of the deficit (prior window also complete).
+                pri_start, pri_end = _months_back(t, 23), _months_back(t, 12)
+                imp_pri, _, n_imp_pri = _allgoods_window(imports, pri_start, pri_end)
+                exp_pri, _, n_exp_pri = _allgoods_window(exports, pri_start, pri_end)
+                rolling_block: dict | None = None
+                if n_imp_pri == 12 and n_exp_pri == 12:
+                    deficit_12_prior = imp_pri - exp_pri
+                    yoy = (
+                        (deficit_12 - deficit_12_prior) / abs(deficit_12_prior)
+                        if deficit_12_prior != 0 else None
+                    )
+                    rolling_block = {
+                        "prior_deficit_eur": deficit_12_prior,
+                        "delta_eur": deficit_12 - deficit_12_prior,
+                        "yoy_pct": yoy,
+                        "prior_window_start": pri_start.isoformat(),
+                        "prior_window_end": pri_end.isoformat(),
+                    }
+
+                # ----- Single month -----
+                imp_sm, exp_sm = imports[t][0], exports[t][0]
+                deficit_sm = imp_sm - exp_sm
+                days_sm = calendar.monthrange(t.year, t.month)[1]
+                t_minus_12 = date(t.year - 1, t.month, 1)
+                sm_yoy = None
+                if t_minus_12 in imports and t_minus_12 in exports:
+                    deficit_sm_prior = imports[t_minus_12][0] - exports[t_minus_12][0]
+                    sm_yoy = (
+                        (deficit_sm - deficit_sm_prior) / abs(deficit_sm_prior)
+                        if deficit_sm_prior != 0 else None
+                    )
+
+                # ----- Year-to-date (Jan..anchor vs same range prior year) -----
+                ytd_start, ytd_start_prior = date(t.year, 1, 1), date(t.year - 1, 1, 1)
+                ytd_end_prior = date(t.year - 1, t.month, 1)
+                imp_ytd, imp_ytd_ids, n_imp_ytd = _allgoods_window(imports, ytd_start, t)
+                exp_ytd, exp_ytd_ids, n_exp_ytd = _allgoods_window(exports, ytd_start, t)
+                ytd_block: dict | None = None
+                if n_imp_ytd == t.month and n_exp_ytd == t.month:
+                    deficit_ytd = imp_ytd - exp_ytd
+                    imp_ytd_pri, _, n_imp_ytd_pri = _allgoods_window(imports, ytd_start_prior, ytd_end_prior)
+                    exp_ytd_pri, _, n_exp_ytd_pri = _allgoods_window(exports, ytd_start_prior, ytd_end_prior)
+                    ytd_yoy = None
+                    deficit_ytd_prior = None
+                    if n_imp_ytd_pri == t.month and n_exp_ytd_pri == t.month:
+                        deficit_ytd_prior = imp_ytd_pri - exp_ytd_pri
+                        ytd_yoy = (
+                            (deficit_ytd - deficit_ytd_prior) / abs(deficit_ytd_prior)
+                            if deficit_ytd_prior != 0 else None
+                        )
+                    ytd_block = {
+                        "current_deficit_eur": deficit_ytd,
+                        "prior_deficit_eur": deficit_ytd_prior,
+                        "yoy_pct": ytd_yoy,
+                        "months_in_ytd": t.month,
+                        "import_eur": imp_ytd,
+                        "export_eur": exp_ytd,
+                    }
+
+                obs_ids = sorted(set(imp_cur_ids + exp_cur_ids + imp_ytd_ids + exp_ytd_ids))
+                action = _insert_trade_balance_finding(
+                    analysis_run_id, subkind, partners, t,
+                    cur_start, cur_end,
+                    imp_cur=imp_cur, exp_cur=exp_cur, deficit_12=deficit_12, days_12=days_12,
+                    rolling_block=rolling_block,
+                    deficit_sm=deficit_sm, imp_sm=imp_sm, exp_sm=exp_sm,
+                    days_sm=days_sm, sm_yoy=sm_yoy,
+                    ytd_block=ytd_block,
+                    monthly_series=monthly_series, obs_ids=obs_ids,
+                )
+                _tally(counts, action)
+
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='success', ended_at=now() WHERE id=%s",
+                (analysis_run_id,),
+            )
+    except Exception as e:
+        log.exception("EU–China trade-balance analysis failed")
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='failed', error_message=%s, ended_at=now() WHERE id=%s",
+                (str(e), analysis_run_id),
+            )
+        raise
+    return counts
+
+
+def _insert_trade_balance_finding(
+    analysis_run_id: int,
+    subkind: str,
+    partners: tuple[str, ...],
+    anchor_period: date,
+    cur_start: date,
+    cur_end: date,
+    *,
+    imp_cur: float, exp_cur: float, deficit_12: float, days_12: int,
+    rolling_block: dict | None,
+    deficit_sm: float, imp_sm: float, exp_sm: float, days_sm: int,
+    sm_yoy: float | None,
+    ytd_block: dict | None,
+    monthly_series: list[dict],
+    obs_ids: list[int],
+) -> findings_io.EmitAction:
+    partner_token = _TRADE_BALANCE_PARTNER_TOKEN[subkind]
+    partner_label = "CN+HK+MO" if partner_token == "cn_hk_mo" else "CN only"
+    per_day_12 = deficit_12 / days_12
+    per_day_sm = deficit_sm / days_sm
+    # A positive figure is an EU deficit (imports > exports); negative would
+    # be an EU surplus. Word it for whichever holds so the prose can't lie.
+    word_12 = "deficit" if deficit_12 >= 0 else "surplus"
+
+    title = (
+        f"EU-27 trade {word_12} with China ({partner_label}), 12mo to "
+        f"{cur_end.strftime('%Y-%m')}: €{abs(deficit_12)/1e9:,.1f}B "
+        f"(€{abs(per_day_12)/1e6:,.0f}M/day)"
+    )
+
+    body_lines = [
+        f"EU-27 (excl. UK) all-goods trade balance with China, partner scope: "
+        f"{partner_label}.",
+        "Balance = EU-27 imports from China − EU-27 exports to China; a "
+        "positive figure is an EU deficit. Eurostat values imports CIF and "
+        "exports FOB, which inflates the deficit relative to a like-for-like "
+        "basis — but it is the basis on which Eurostat publishes its own "
+        "EU–China headline.",
+        "",
+        f"Rolling 12 months to {cur_end.strftime('%Y-%m')}:",
+        f"  Imports: €{imp_cur:,.0f}   Exports: €{exp_cur:,.0f}",
+        f"  {word_12.capitalize()}: €{abs(deficit_12):,.0f} "
+        f"(≈ €{abs(per_day_12):,.0f}/day over {days_12} days)",
+    ]
+    if rolling_block and rolling_block["yoy_pct"] is not None:
+        body_lines.append(
+            f"  YoY: {rolling_block['yoy_pct']*100:+.1f}% vs "
+            f"€{abs(rolling_block['prior_deficit_eur']):,.0f} the prior 12 months"
+        )
+    word_sm = "deficit" if deficit_sm >= 0 else "surplus"
+    body_lines += [
+        "",
+        f"Latest single month ({anchor_period.strftime('%Y-%m')}):",
+        f"  Imports: €{imp_sm:,.0f}   Exports: €{exp_sm:,.0f}",
+        f"  {word_sm.capitalize()}: €{abs(deficit_sm):,.0f} "
+        f"(≈ €{abs(per_day_sm):,.0f}/day over {days_sm} days)",
+    ]
+    if sm_yoy is not None:
+        body_lines.append(f"  YoY (same month a year earlier): {sm_yoy*100:+.1f}%")
+    if ytd_block is not None:
+        word_ytd = "deficit" if ytd_block["current_deficit_eur"] >= 0 else "surplus"
+        line = (
+            f"Year-to-date (Jan–{anchor_period.strftime('%b %Y')}, "
+            f"{ytd_block['months_in_ytd']} months): {word_ytd} "
+            f"€{abs(ytd_block['current_deficit_eur']):,.0f}"
+        )
+        if ytd_block["yoy_pct"] is not None:
+            line += f" ({ytd_block['yoy_pct']*100:+.1f}% YoY)"
+        body_lines += ["", line]
+    if partner_token == "cn_only":
+        body_lines += [
+            "",
+            "Scope note: CN-only is the slice that matches Eurostat's own "
+            "published EU–China deficit, so this figure can be reconciled "
+            "directly against the press number. Our editorial-standard "
+            "figure (CN+HK+MO) is in the paired `trade_balance` finding.",
+        ]
+
+    detail = {
+        "method": "eu_china_trade_balance_v1_000total",
+        "method_query": {
+            "source": "observations (source=eurostat)",
+            "hs_code": EUROSTAT_AGGREGATE_PRODUCT_NC,
+            "reporter_scope": TRADE_BALANCE_REPORTER_SCOPE,
+            "reporters_excluded": list(EU27_EXCLUDE_REPORTERS),
+            "partner_scope": partner_token,
+            "partners": list(partners),
+            "balance_sign": "imports_minus_exports (positive = EU deficit)",
+        },
+        "windows": {
+            "anchor_period": anchor_period.isoformat(),
+            "rolling_current_start": cur_start.isoformat(),
+            "rolling_current_end": cur_end.isoformat(),
+        },
+        "totals": {
+            "rolling_12mo": {
+                "import_eur": imp_cur,
+                "export_eur": exp_cur,
+                "deficit_eur": deficit_12,
+                "deficit_per_day_eur": per_day_12,
+                "window_days": days_12,
+                "yoy_pct": rolling_block["yoy_pct"] if rolling_block else None,
+                "prior_deficit_eur": rolling_block["prior_deficit_eur"] if rolling_block else None,
+            },
+            "single_month": {
+                "import_eur": imp_sm,
+                "export_eur": exp_sm,
+                "deficit_eur": deficit_sm,
+                "deficit_per_day_eur": per_day_sm,
+                "month_days": days_sm,
+                "yoy_pct": sm_yoy,
+            },
+            "ytd": ytd_block,
+        },
+        "monthly_deficit_series": monthly_series,
+    }
+    score = abs(rolling_block["yoy_pct"]) if (rolling_block and rolling_block["yoy_pct"] is not None) else 0.0
+
+    with _conn() as conn, conn.cursor() as cur:
+        _, action = findings_io.emit_finding(
+            cur,
+            scrape_run_id=analysis_run_id,
+            kind="anomaly",
+            subkind=subkind,
+            natural_key=findings_io.nk_trade_balance(
+                TRADE_BALANCE_REPORTER_SCOPE, partner_token,
+                cur_end.strftime("%Y-%m"),
+            ),
+            value_fields={
+                "method": detail["method"],
+                "deficit_12mo_eur": round(deficit_12, 2),
+                "import_12mo_eur": round(imp_cur, 2),
+                "export_12mo_eur": round(exp_cur, 2),
+                "rolling_yoy_pct": (
+                    round(rolling_block["yoy_pct"], 6)
+                    if rolling_block and rolling_block["yoy_pct"] is not None else None
+                ),
+                "deficit_single_month_eur": round(deficit_sm, 2),
+                "ytd_deficit_eur": (
+                    round(ytd_block["current_deficit_eur"], 2) if ytd_block else None
+                ),
+            },
+            observation_ids=obs_ids,
             score=score,
             title=title,
             body="\n".join(body_lines),
