@@ -77,8 +77,18 @@ def _seed_one_pair(conn, period: date) -> tuple[int, list[int]]:
     )
     eu_run_id = cur.fetchone()[0]
 
+    # CN8 detail rows (7B + 4B) PLUS the 000TOTAL all-goods aggregate row
+    # Eurostat ships alongside them (= 11B, the sum). The analyser must read
+    # 000TOTAL alone (→ 11B); summing detail + aggregate would double-count
+    # to 22B. Seeding both is what makes that regression detectable.
+    # Returns only the 000TOTAL observation id — that's the row the finding
+    # cites now that the analyser reads the aggregate, not the detail.
     eu_obs_ids = []
-    for hs, val in [("87038010", 7_000_000_000), ("87038090", 4_000_000_000)]:
+    for hs, val in [
+        ("87038010", 7_000_000_000),
+        ("87038090", 4_000_000_000),
+        ("000TOTAL", 11_000_000_000),
+    ]:
         cur.execute(
             """
             INSERT INTO observations (release_id, scrape_run_id, period_kind, flow,
@@ -89,7 +99,9 @@ def _seed_one_pair(conn, period: date) -> tuple[int, list[int]]:
             """,
             (eurostat_release_id, eu_run_id, hs, val),
         )
-        eu_obs_ids.append(cur.fetchone()[0])
+        obs_id = cur.fetchone()[0]
+        if hs == "000TOTAL":
+            eu_obs_ids.append(obs_id)
 
     # FX rate: 1 CNY = 0.125 EUR (so 100B CNY = €12.5B)
     cur.execute(
@@ -170,8 +182,15 @@ def _seed_pair_for_partner(conn, period: date, gacc_label: str,
         (f"http://example/eurostat-{eurostat_reporter}.7z",),
     )
     eu_run = cur.fetchone()[0]
+    # CN8 detail (7B + 4B) plus the 000TOTAL all-goods aggregate (= 11B).
+    # The analyser reads 000TOTAL only; the detail rows are decoys that a
+    # no-filter sum would erroneously add (the double-count this guards).
     eu_obs_ids = []
-    for hs, val in [("87038010", 7_000_000_000), ("87038090", 4_000_000_000)]:
+    for hs, val in [
+        ("87038010", 7_000_000_000),
+        ("87038090", 4_000_000_000),
+        ("000TOTAL", 11_000_000_000),
+    ]:
         cur.execute(
             "INSERT INTO observations (release_id, scrape_run_id, period_kind, flow, "
             "                          reporter_country, partner_country, hs_code, "
@@ -240,7 +259,8 @@ def _seed_extra_eurostat_partner(conn, period: date, reporter: str,
                                   partner_iso2: str, value: float) -> None:
     """Add one extra Eurostat import row with a non-CN partner_country (e.g.
     'HK') for an existing reporter+period. Used by Phase 2.3 multi-partner
-    tests."""
+    tests. Seeded as the 000TOTAL all-goods aggregate row for that partner,
+    since that is what the analyser sums."""
     cur = conn.cursor()
     # Find the existing eurostat release for this period.
     cur.execute(
@@ -258,7 +278,7 @@ def _seed_extra_eurostat_partner(conn, period: date, reporter: str,
         "INSERT INTO observations (release_id, scrape_run_id, period_kind, flow, "
         "                          reporter_country, partner_country, hs_code, "
         "                          value_amount, value_currency, source_row) "
-        "VALUES (%s, %s, 'monthly', 'import', %s, %s, '85076010', %s, 'EUR', '{}')",
+        "VALUES (%s, %s, 'monthly', 'import', %s, %s, '000TOTAL', %s, 'EUR', '{}')",
         (rel[0], run, reporter, partner_iso2, value),
     )
     conn.commit()
@@ -289,6 +309,27 @@ def test_mirror_gap_partner_set_is_cn_hk_mo(empty_op_tables, test_db_url):
     assert "multi_partner_sum" in anomalies.UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY["mirror_gap"]
     # Eurostat total = 12B (CN + HK; MO has no rows but is requested).
     assert abs(detail["eurostat"]["total_eur"] - 12_000_000_000) < 1
+
+
+def test_mirror_gap_eurostat_total_is_000total_not_detail_sum(empty_op_tables, test_db_url):
+    """Regression for the 2026-06-17 double-count bug. The Eurostat side
+    must read the 000TOTAL all-goods aggregate row (11B), NOT the sum of
+    that row plus the CN8 detail rows (7B + 4B + 11B = 22B). _seed_pair_for_partner
+    seeds both, so a regression to a no-filter sum would surface here as a
+    2x total."""
+    period = date(2025, 12, 1)
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_pair_for_partner(conn, period, "Germany", "DE")
+
+    anomalies.detect_mirror_trade_gaps(period=period)
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT detail FROM findings WHERE subkind = 'mirror_gap'")
+        detail = cur.fetchone()[0]
+
+    # 11B (the 000TOTAL row), not 22B (000TOTAL + 7B + 4B detail).
+    assert abs(detail["eurostat"]["total_eur"] - 11_000_000_000) < 1
+    # Provenance points only at the aggregate row, not the CN8 detail.
+    assert detail["eurostat"]["n_aggregate_rows"] == 1
 
 
 def test_mirror_gap_records_cif_fob_baseline_provenance(empty_op_tables, test_db_url):
@@ -528,7 +569,8 @@ def test_aggregate_eu_emits_finding_with_member_provenance(empty_op_tables, test
             (gacc_rel, run),
         )
 
-        # Eurostat: imports from CN by DE/FR/IT/NL — totals to €70B
+        # Eurostat: all-goods 000TOTAL imports from CN by DE/FR/IT/NL —
+        # totals to €70B. (000TOTAL is the aggregate row the analyser reads.)
         cur.execute(
             "INSERT INTO releases (source, period, source_url) VALUES ('eurostat', %s, 'e') RETURNING id",
             (period,),
@@ -540,7 +582,7 @@ def test_aggregate_eu_emits_finding_with_member_provenance(empty_op_tables, test
                 INSERT INTO observations (release_id, scrape_run_id, period_kind, flow,
                                           reporter_country, partner_country, hs_code,
                                           value_amount, value_currency, source_row)
-                VALUES (%s, %s, 'monthly', 'import', %s, 'CN', '99999999', %s, 'EUR', '{}')
+                VALUES (%s, %s, 'monthly', 'import', %s, 'CN', '000TOTAL', %s, 'EUR', '{}')
                 """,
                 (eu_rel, run, reporter, val),
             )

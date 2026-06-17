@@ -124,9 +124,8 @@ A non-exhaustive list, in rough order of magnitude:
    as imported from CN under DE's mirror flow — or under partner=NL
    if the importer is Dutch. The known transshipment hubs (NL, BE,
    HK, SG, AE, MX) get a `transshipment_hub` caveat
-   automatically. The classic NL ~65% Eurostat-higher mirror gap
-   is mostly this, NOT a smuggling story. (See §3 caveat
-   `transshipment_hub`.)
+   automatically. The positive NL mirror gap is mostly this,
+   NOT a smuggling story. (See §3 caveat `transshipment_hub`.)
 
 4. **Different HS classifications at HS-8.** GACC uses CHS8
    (Chinese 8-digit harmonised); Eurostat uses CN8 (Combined
@@ -223,10 +222,23 @@ For a (period, country) pair where both GACC and Eurostat have
 data, computes `gap_pct = (eurostat_eur - gacc_eur) / max(...)`.
 Stores `excess_over_baseline_pct = |gap_pct| - cif_fob_baseline_pct`.
 
-What's in `detail`: GACC value (raw + EUR-converted), Eurostat
-total + how many CN8 codes contributed, FX rate used, transshipment
-flag if applicable, the CIF/FOB baseline that was applied (and its
-source). Where in the findings document: "Mirror-trade gaps" section.
+The Eurostat side reads the **`000TOTAL` all-goods aggregate row**, not a
+sum over the CN8 detail. The `observations` table holds both the detail
+rows and that aggregate row (which already sums them), so a sum with no
+`hs_code` filter double-counts. **This was a live bug until 2026-06-17
+(method `mirror_trade_v6_000total_allgoods_fix`)**: the Eurostat totals
+were ~2×, which inflated every gap and manufactured a spurious
+transshipment signal — e.g. the Netherlands gap read ~+61% when the
+corrected figure is ~+20% (≈+13.5pp over the CIF/FOB baseline). Re-running
+the analyser append-supersedes the affected findings with corrected
+numbers; see `migrations/2026-06-17-mirror-gap-000total-fix.sql` for the
+matching editorial-note correction.
+
+What's in `detail`: GACC value (raw + EUR-converted), Eurostat all-goods
+total + how many 000TOTAL aggregate rows contributed, FX rate used,
+transshipment flag if applicable, the CIF/FOB baseline that was applied
+(and its source). Where in the findings document: "Mirror-trade gaps"
+section.
 
 ### `mirror_gap_zscore` (mirror-gap-trends)
 
