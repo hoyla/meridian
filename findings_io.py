@@ -260,6 +260,29 @@ def nk_gacc_aggregate_yoy(
     return (str(alias_id), aggregate_kind, current_end_yyyymm)
 
 
+def nk_trade_balance(
+    reporter_scope: str,
+    partner_scope: str,
+    anchor_yyyymm: str,
+) -> tuple[str, str, str]:
+    """A trade_balance finding is identified by (reporter_scope,
+    partner_scope, anchor period). Unlike the YoY families there is no
+    single flow — the balance IS imports minus exports — so the natural
+    key carries the two scope axes instead of a flow:
+
+    - `reporter_scope`: which reporting bloc ('eu27' today; 'uk' /
+      'eu27_plus_uk' reserved for when HMRC all-goods totals are wired in).
+    - `partner_scope`: which China partner slice ('cn_hk_mo' = our
+      editorial standard; 'cn_only' = the slice matching Eurostat's own
+      published EU–China headline).
+
+    The partner_scope is ALSO mirrored in the subkind suffix
+    (`trade_balance` vs `trade_balance_cn_only`) for readability when the
+    supersede chain is queried directly, the same way flow is mirrored in
+    the YoY families' subkinds."""
+    return (reporter_scope, partner_scope, anchor_yyyymm)
+
+
 def nk_partner_share(
     hs_group_id: int,
     current_end_yyyymm: str,

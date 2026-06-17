@@ -53,6 +53,7 @@ from briefing_pack.sections.partner_share import _section_partner_share
 from briefing_pack.sections.reader_guide import _section_reader_guide
 from briefing_pack.sections.sources_appendix import _section_sources_appendix
 from briefing_pack.sections.state_of_play import _section_state_of_play
+from briefing_pack.sections.trade_balance import _section_trade_balance
 from briefing_pack.sections.state_of_play_aggregates import (
     _section_state_of_play_aggregates,
 )
@@ -206,6 +207,12 @@ def render(
         top_movers = _compute_top_movers(cur, predictability=predictability)
         diff_data = _compute_diff(cur)
         sections.append(_section_front_page(top_movers, diff_data))
+
+        # ----- Standing picture: the EU–China goods-trade deficit. -----
+        # A level, not a change, so it never surfaces in the change-driven
+        # tiers — but it's usually the most quotable single number in the
+        # pack (the "~€1bn a day" figure). Sits right under the front page.
+        sections.append(_section_trade_balance(cur))
 
         # ----- Tier 1: what's new this cycle (the diff) -----
         # Excludes narrative_hs_group findings — those live in the companion

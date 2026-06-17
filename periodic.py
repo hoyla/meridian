@@ -282,6 +282,16 @@ def run_periodic(
             flow=flow_str,
         )
 
+    # EU–China trade balance (the all-goods bilateral deficit, framed per
+    # day). No flow axis — the balance IS imports minus exports — so it
+    # runs once and emits both partner scopes (CN+HK+MO and CN-only)
+    # internally. Eurostat-only today; cheap (reads the 000TOTAL aggregate
+    # rows, not the CN8 detail).
+    counts["trade_balance"] = _run_analyser(
+        "trade_balance", "trade_balance",
+        anomalies.detect_eu_china_trade_balance,
+    )
+
     # Partner-share runs ONLY if the eurostat_world_aggregates table has
     # data for the latest 12 months — otherwise the analyser skips with
     # `skipped_no_world_data`. The periodic step is light when there's

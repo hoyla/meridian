@@ -317,6 +317,8 @@ _SUBKIND_PLAIN_LABELS: dict[str, str] = {
     "gacc_bilateral_aggregate_yoy": "China-side bilateral year-on-year",
     "gacc_aggregate_yoy": "China-side bloc aggregate year-on-year",
     "partner_share": "China's share of EU imports/exports",
+    "trade_balance_cn_only": "EU–China trade deficit (all-goods, CN-only — matches Eurostat's published figure)",
+    "trade_balance": "EU–China trade deficit (all-goods, CN+HK+MO)",
     "narrative_hs_group": "LLM-scaffolded lead",
 }
 
