@@ -109,26 +109,31 @@ def _filter_visible_caveats(codes: list[str] | None) -> list[str]:
 def assemble_sheets() -> list[SheetData]:
     """Build the journalist-facing spreadsheet tabs.
 
-    Tab roster (10):
+    Tab roster (11):
 
     1. summary — wide, one row per HS group, all 3 scopes × 2 flows side
        by side. Best starting place for editorial scanning.
-    2. hs_yoy_imports — long, one row per (group, scope), full metric
+    2. trade_balance — long, one row per (partner_scope, anchor month) of
+       the EU–China all-goods deficit (imports minus exports), with the
+       single-month / rolling-12mo / YTD registers and their €/day figures.
+       The sortable counterpart to the "standing picture" block in
+       findings.md.
+    3. hs_yoy_imports — long, one row per (group, scope), full metric
        set with predictability + fragility annotations.
-    3. hs_yoy_exports — same shape, flow=2.
-    4. hs_yoy_reporter_movers — long, one row per (group, scope, flow,
+    4. hs_yoy_exports — same shape, flow=2.
+    5. hs_yoy_reporter_movers — long, one row per (group, scope, flow,
        reporter); contribution + share of group's delta. Phase 6.11.
-    5. trajectories — long, one row per (group, scope, flow), shape
+    6. trajectories — long, one row per (group, scope, flow), shape
        classification + features.
-    6. gacc_bilateral_yoy — one row per (partner, flow) of the GACC-side
+    7. gacc_bilateral_yoy — one row per (partner, flow) of the GACC-side
        bilateral aggregate findings (Tier 2 of findings.md in sortable
        form). Carries visible_caveats + jan_feb_combined_years so
        Chinese-New-Year combined-release coverage is filterable.
-    7. mirror_gaps — latest mirror_gap per partner, with per-country
+    8. mirror_gaps — latest mirror_gap per partner, with per-country
        CIF/FOB baseline + excess-over-baseline split.
-    8. mirror_gap_movers — z-score sheet, sorted by |z|.
-    9. low_base_review — findings flagged low_base; pre-quote audit queue.
-    10. predictability_index — per-group YoY predictability (Phase 6.6
+    9. mirror_gap_movers — z-score sheet, sorted by |z|.
+    10. low_base_review — findings flagged low_base; pre-quote audit queue.
+    11. predictability_index — per-group YoY predictability (Phase 6.6
         backtest output) summarised so a journalist can sort/filter on
         which groups give robust headline percentages.
 
@@ -154,6 +159,7 @@ def assemble_sheets() -> list[SheetData]:
 
     sheets: list[SheetData] = []
     sheets.append(_summary_sheet(predictability, top_movers_by_group_flow))
+    sheets.append(_trade_balance_sheet())
     sheets.append(_hs_yoy_long_sheet(flow=1, predictability=predictability,
                                       top_movers_by_id=top_movers_by_id))
     sheets.append(_hs_yoy_long_sheet(flow=2, predictability=predictability,
@@ -545,6 +551,72 @@ def _trajectories_long_sheet() -> SheetData:
             "or `flow` to narrow. `seasonal_signal` = TRUE means the series "
             "has a strong lag-12 autocorrelation (deseasonalise before "
             "interpreting raw movement)."
+        ),
+        headers=headers, rows=rows,
+    )
+
+
+def _trade_balance_sheet() -> SheetData:
+    """Long, filterable table of the EU–China all-goods trade balance
+    (imports minus exports = the EU deficit), one row per (partner_scope,
+    anchor month). Carries all three registers — single month, rolling 12
+    months, year-to-date — each with its €/day figure and YoY, so a data
+    journalist can sort by size, chart the series, or pull the exact month
+    behind a press figure. Both partner scopes are included: cn_hk_mo (our
+    editorial standard) and cn_only (matches Eurostat's published EU–China
+    headline). See briefing_pack.sections.trade_balance for the prose
+    headline this tab sits behind."""
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        cur.execute(
+            """
+            SELECT id, score, subkind, detail
+              FROM findings
+             WHERE subkind LIKE 'trade_balance%%' AND superseded_at IS NULL
+          ORDER BY subkind,
+                   (detail->'windows'->>'anchor_period')::date DESC,
+                   id DESC
+            """
+        )
+        rows_raw = cur.fetchall()
+
+    headers = [
+        "finding_id", "link", "partner_scope", "reporter_scope", "anchor_month",
+        "sm_import_eur", "sm_export_eur", "sm_deficit_eur",
+        "sm_deficit_per_day_eur", "sm_yoy_pct",
+        "r12_import_eur", "r12_export_eur", "r12_deficit_eur",
+        "r12_deficit_per_day_eur", "r12_yoy_pct",
+        "ytd_months", "ytd_deficit_eur", "ytd_yoy_pct",
+        "score",
+    ]
+    rows = []
+    for r in rows_raw:
+        d = r["detail"]
+        q = d.get("method_query", {})
+        totals = d.get("totals", {})
+        sm = totals.get("single_month", {}) or {}
+        r12 = totals.get("rolling_12mo", {}) or {}
+        ytd = totals.get("ytd") or {}
+        rows.append([
+            r["id"], _link_cell(r["id"]),
+            q.get("partner_scope"), q.get("reporter_scope"),
+            (d.get("windows", {}) or {}).get("anchor_period"),
+            sm.get("import_eur"), sm.get("export_eur"), sm.get("deficit_eur"),
+            sm.get("deficit_per_day_eur"), sm.get("yoy_pct"),
+            r12.get("import_eur"), r12.get("export_eur"), r12.get("deficit_eur"),
+            r12.get("deficit_per_day_eur"), r12.get("yoy_pct"),
+            ytd.get("months_in_ytd"), ytd.get("current_deficit_eur"), ytd.get("yoy_pct"),
+            _to_float(r["score"]),
+        ])
+    return SheetData(
+        name="trade_balance",
+        description=(
+            "EU-27 (excl. UK) all-goods trade balance with China = imports "
+            "minus exports; a positive figure is an EU deficit. Eurostat "
+            "values imports CIF and exports FOB. partner_scope cn_only "
+            "matches Eurostat's published EU–China headline; cn_hk_mo adds "
+            "Hong Kong + Macau (this pack's standard). sm_* = single anchor "
+            "month, r12_* = rolling 12 months, ytd_* = Jan–anchor vs prior "
+            "year. *_per_day divides the deficit by the days in its window."
         ),
         headers=headers, rows=rows,
     )

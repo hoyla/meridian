@@ -59,12 +59,13 @@ def _seed_one_finding(conn, subkind: str, group_name: str, detail: dict) -> int:
 
 
 def test_export_produces_xlsx_with_all_tabs(empty_findings, test_db_url, tmp_path):
-    """An empty findings table still produces all 10 tabs — just with no data rows.
+    """An empty findings table still produces all 11 tabs — just with no data rows.
     Tab roster is documented in sheets_export.assemble_sheets()."""
     out = sheets_export.export(out_format="xlsx", out_path=str(tmp_path / "out.xlsx"))
     wb = load_workbook(out)
     expected_tabs = {
         "summary",
+        "trade_balance",
         "hs_yoy_imports", "hs_yoy_exports", "hs_yoy_reporter_movers",
         "trajectories",
         "gacc_bilateral_yoy",
@@ -132,6 +133,68 @@ def test_gacc_bilateral_yoy_tab_surfaces_jan_feb_combined_caveat(
     visible = de[headers.index("visible_caveats")] or ""
     assert "jan_feb_combined" in visible
     assert "partial_window" in visible
+
+
+def test_trade_balance_tab_surfaces_deficit_and_per_day(
+    empty_findings, test_db_url, tmp_path,
+):
+    """The trade_balance tab carries both partner scopes with the single-
+    month / rolling-12mo / YTD registers and their €/day figures, one row
+    per (scope, anchor month)."""
+    import json as _json
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) "
+            "VALUES ('test://trade_balance', 'success') RETURNING id"
+        )
+        run_id = cur.fetchone()[0]
+        for subkind, partner_scope, sm_def, sm_day in [
+            ("trade_balance", "cn_hk_mo", 30.0e9, 1.0e9),
+            ("trade_balance_cn_only", "cn_only", 31.9e9, 1.063e9),
+        ]:
+            detail = {
+                "method": "eu_china_trade_balance_v1_000total",
+                "method_query": {"reporter_scope": "eu27", "partner_scope": partner_scope},
+                "windows": {"anchor_period": "2026-04-01", "rolling_current_end": "2026-04-01"},
+                "totals": {
+                    "single_month": {
+                        "import_eur": sm_def + 16e9, "export_eur": 16e9,
+                        "deficit_eur": sm_def, "deficit_per_day_eur": sm_day,
+                        "month_days": 30, "yoy_pct": 0.05,
+                    },
+                    "rolling_12mo": {
+                        "import_eur": 480e9, "export_eur": 130e9,
+                        "deficit_eur": 350e9, "deficit_per_day_eur": 0.96e9,
+                        "window_days": 365, "yoy_pct": 0.06, "prior_deficit_eur": 330e9,
+                    },
+                    "ytd": {
+                        "current_deficit_eur": 112e9, "prior_deficit_eur": 110e9,
+                        "yoy_pct": 0.02, "months_in_ytd": 4,
+                        "import_eur": 180e9, "export_eur": 68e9,
+                    },
+                },
+                "monthly_deficit_series": [],
+            }
+            cur.execute(
+                "INSERT INTO findings (scrape_run_id, kind, subkind, title, detail) "
+                "VALUES (%s, 'anomaly', %s, 'test', %s)",
+                (run_id, subkind, _json.dumps(detail)),
+            )
+        conn.commit()
+
+    out = sheets_export.export(out_format="xlsx", out_path=str(tmp_path / "out.xlsx"))
+    wb = load_workbook(out)
+    ws = wb["trade_balance"]
+    headers = [c.value for c in ws[3]]
+    rows = [[c.value for c in row] for row in ws.iter_rows(min_row=4, values_only=False)]
+    assert {"partner_scope", "sm_deficit_eur", "sm_deficit_per_day_eur",
+            "r12_deficit_eur", "ytd_deficit_eur"} <= set(headers)
+
+    cn_only = next(r for r in rows if r[headers.index("partner_scope")] == "cn_only")
+    assert cn_only[headers.index("sm_deficit_eur")] == 31.9e9
+    assert cn_only[headers.index("sm_deficit_per_day_eur")] == 1.063e9
+    cn_hk_mo = next(r for r in rows if r[headers.index("partner_scope")] == "cn_hk_mo")
+    assert cn_hk_mo[headers.index("sm_deficit_eur")] == 30.0e9
 
 
 def test_summary_picks_latest_per_group_per_scope(empty_findings, test_db_url, tmp_path):
