@@ -690,7 +690,7 @@ INSERT INTO caveats (code, summary, detail, applies_to) VALUES
 -- documenting the editorial basis. These are starting points — journalists
 -- can extend the table for new investigations.
 INSERT INTO transshipment_hubs (iso2, notes, evidence_url, created_by) VALUES
-  ('NL', 'Rotterdam — largest container port in Europe; well-documented Chinese-goods routing into the EU. Persistent ~65-70% Eurostat-higher mirror gap is the classic transshipment signature.',
+  ('NL', 'Rotterdam — largest container port in Europe; well-documented Chinese-goods routing into the EU. Expect a structural positive mirror gap from re-export routing, but weight movements relative to NL''s own baseline over the absolute level.',
    'https://unctad.org/topic/transport-and-trade-logistics/review-of-maritime-transport',
    'seed:roadmap_phase_2'),
   ('BE', 'Antwerp — second-largest EU container port; secondary hub to Rotterdam.',

@@ -238,7 +238,7 @@ class _MirrorGapResult:
     gacc_value_eur: float
     eurostat_total_eur: float
     eurostat_obs_ids: list[int]
-    eurostat_n_hs_codes: int
+    eurostat_n_aggregate_rows: int
     fx_rate_id: int
     fx_rate: float
     fx_rate_date: date
@@ -507,7 +507,7 @@ def _compute_one_gap(
         gacc_value_eur=gacc_value_eur,
         eurostat_total_eur=float(eurostat_total),
         eurostat_obs_ids=eurostat_ids,
-        eurostat_n_hs_codes=n_hs,
+        eurostat_n_aggregate_rows=n_hs,
         fx_rate_id=fx.rate_id,
         fx_rate=fx.rate,
         fx_rate_date=fx.rate_date,
@@ -539,7 +539,21 @@ def _eurostat_aggregate_for_members(
     period. The multi-partner sum is universal for the analyser families
     that call this — see UNIVERSAL_CAVEATS_BY_SUBKIND_FAMILY.
 
-    Returns (total_eur, obs_ids, n_obs)."""
+    Reads the `000TOTAL` all-goods aggregate row, NOT a sum over the CN8
+    detail rows. Eurostat ships, per (reporter, partner, flow, period), one
+    `product_nc='000TOTAL'` row that already sums every CN8 detail row for
+    that slice (see EUROSTAT_AGGREGATE_PRODUCT_NC). The `observations` table
+    holds BOTH the detail rows and that aggregate row, so a sum with no
+    hs_code filter double-counts (detail + aggregate ≈ 2×). This was a live
+    bug until 2026-06-17: the mirror-trade gap's Eurostat totals were ~2×,
+    which inflated every gap and manufactured a spurious transshipment
+    signal for high-volume partners. The hs_code='000TOTAL' clause is the
+    fix; the same canonical-aggregate approach is used by the
+    trade_balance family (`_eurostat_bloc_allgoods_totals`).
+
+    Returns (total_eur, obs_ids, n_aggregate_rows) — n is the count of
+    000TOTAL rows summed (one per member × partner present), NOT a CN8
+    count."""
     if not member_iso2s:
         return None, [], 0
     if partners is None:
@@ -556,10 +570,11 @@ def _eurostat_aggregate_for_members(
              WHERE r.source = 'eurostat'
                AND r.period = %s
                AND o.flow = 'import'
+               AND o.hs_code = %s
                AND o.reporter_country = ANY(%s)
                AND o.partner_country = ANY(%s)
             """,
-            (period, member_iso2s, partners),
+            (period, EUROSTAT_AGGREGATE_PRODUCT_NC, member_iso2s, partners),
         )
         total, ids, n = cur.fetchone()
     if n == 0:
@@ -593,8 +608,9 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
         f"export to '{r.gacc_partner_label}', converted at the ECB "
         f"{r.gacc_value_currency}/EUR rate of {r.fx_rate:.6f} for {r.fx_rate_date.strftime('%Y-%m')}, "
         f"= €{r.gacc_value_eur:,.0f}.\n\n"
-        f"Eurostat: imports from CN summed across {r.eurostat_n_hs_codes:,} HS-CN8 "
-        f"observations from {eurostat_descriptor} = €{r.eurostat_total_eur:,.0f}.\n\n"
+        f"Eurostat: all-goods imports from CN+HK+MO, read from the 000TOTAL "
+        f"aggregate row(s) for {eurostat_descriptor} ({r.eurostat_n_aggregate_rows:,} "
+        f"aggregate row(s)) = €{r.eurostat_total_eur:,.0f}.\n\n"
         f"Gap: €{r.gap_eur:,.0f} ({r.gap_pct*100:+.1f}% of larger value). "
         f"CIF/FOB baseline ({baseline_scope}) expects ~{baseline_pct*100:.1f}% Eurostat-higher; "
         f"excess over baseline is {r.excess_over_cif_fob_baseline_pct*100:+.1f} percentage points."
@@ -633,7 +649,7 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
         caveat_codes.append("transshipment_hub")
 
     detail = {
-        "method": "mirror_trade_v5_per_country_cif_fob_baselines",
+        "method": "mirror_trade_v6_000total_allgoods_fix",
         # Caveat codes — journalists should weigh these when interpreting the gap.
         # Promote to a dedicated findings.caveat_codes column when the schema
         # gets its first migration after the lookups went in.
@@ -655,7 +671,7 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
         },
         "eurostat": {
             "obs_ids_count": len(r.eurostat_obs_ids),
-            "n_hs_codes": r.eurostat_n_hs_codes,
+            "n_aggregate_rows": r.eurostat_n_aggregate_rows,
             "total_eur": r.eurostat_total_eur,
             "partners_summed": r.eurostat_partners,  # Phase 2.3
         },
@@ -733,6 +749,15 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
                 # global default for a per-country OECD ITIC value — propagates
                 # as a supersede so the briefing pack picks up the new framing.
                 "cif_fob_baseline_pct": round(detail["cif_fob_baseline_pct"], 6),
+                # The transshipment-hub note is editorial content that travels
+                # in the finding body + detail. Including it here means an edit
+                # to a hub's note (e.g. correcting the stale "~65-70%" gap claim
+                # after the 000TOTAL double-count fix) propagates as a supersede,
+                # rather than leaving already-emitted findings citing the old
+                # text until their numbers happen to move.
+                "transshipment_note": (
+                    r.transshipment_hub.notes if r.transshipment_hub else None
+                ),
             },
             observation_ids=obs_ids,
             score=score,
@@ -746,8 +771,9 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
 # =============================================================================
 # Trend / time-series anomaly detection over the mirror_gap series itself.
 # =============================================================================
-# The structural mirror-gap (e.g. NL ~65% Eurostat-higher, IT ~70%) is a known
-# fact of EU-China trade reporting and isn't itself news. The story is when
+# The structural mirror-gap (a modest positive gap for hub partners like
+# NL/IT, from CIF/FOB plus re-export routing) is a known fact of EU-China
+# trade reporting and isn't itself news. The story is when
 # that gap *moves*: a partner whose gap was steady and suddenly shifts is the
 # kind of thing a desk wants flagged. This module computes a rolling-baseline
 # z-score of each (iso2, period) gap_pct against its prior `window_months`
@@ -870,8 +896,8 @@ def detect_mirror_gap_trends(
     |z| >= z_threshold. Below threshold, the period-iso2 pair is silently
     skipped (so the findings table stays signal-only).
 
-    The structural baseline gap is partner-specific (NL ~65% Eurostat-higher
-    is normal; a sudden jump to 80% is the news), so we baseline per-iso2
+    The structural baseline gap is partner-specific (a hub like NL runs a
+    modest positive gap; a sudden jump is the news), so we baseline per-iso2
     rather than across all partners.
 
     Args:
