@@ -15,6 +15,7 @@ from datetime import date
 from pathlib import Path
 
 import psycopg2
+import psycopg2.extras
 import pytest
 
 import briefing_pack
@@ -672,6 +673,24 @@ def test_about_findings_endnote_appears_in_both_docs(
         assert "docs/architecture.md" in doc
 
 
+def test_reissue_banner_renders_directly_under_the_title(empty_findings, test_db_url):
+    """A corrected-re-issue banner must sit immediately under the H1 title —
+    before the orientation copy and well before the tiers — so a withdrawal
+    notice can't be missed. Regression guard: it was once emitted after the
+    'Findings included' block, ~70 lines down."""
+    note = "Corrected re-issue of the 16 June pack."
+    md = briefing_pack.render(reissue_note=note)
+    lines = md.splitlines()
+    assert lines[0].startswith("# China–EU/UK trade")
+    banner_idx = next(i for i, ln in enumerate(lines) if note in ln)
+    # Within the first handful of lines (title, generated-stamp, banner) and
+    # above both the orientation copy and the first '##' subheading.
+    assert banner_idx <= 4, f"banner at line {banner_idx}, expected near the top"
+    assert banner_idx < next(i for i, ln in enumerate(lines) if ln.startswith("## "))
+    # Absent when no note is passed.
+    assert note not in briefing_pack.render()
+
+
 def test_diff_section_empty_on_first_brief(empty_findings, test_db_url):
     """Phase 6.8: a fresh DB with no prior brief_runs row produces no
     'Changes since the previous export' section. The brief still renders;
@@ -741,6 +760,68 @@ def test_diff_section_lists_material_yoy_shifts(empty_findings, test_db_url):
     assert "### New findings" in md
     # The pre-marker supersede should NOT show up.
     assert "Solar PV cells & modules" not in md.split("## ")[1]  # rough containment
+
+
+def test_diff_new_count_excludes_revisions_and_honours_baseline_override(
+    empty_findings, test_db_url,
+):
+    """Two diff behaviours added 2026-06-17 for the corrected re-issue:
+    (1) a finding that supersedes an ancestor predating the baseline is a
+        *revision*, not 'new', so it's excluded from the New-findings count
+        (this is what stops a methodology re-run from flooding Tier 1);
+    (2) `baseline_brief_run_id` diffs against a specific brief_runs row
+        rather than the most recent one."""
+    from briefing_pack.sections.diff import _compute_diff
+
+    def _f(cur, run, subkind, nk, age_days):
+        cur.execute(
+            "INSERT INTO findings (scrape_run_id, kind, subkind, detail, "
+            "natural_key_hash, created_at) VALUES (%s, 'anomaly', %s, '{}'::jsonb, "
+            "%s, now() - (%s || ' days')::interval) RETURNING id",
+            (run, subkind, nk, age_days),
+        )
+        return cur.fetchone()[0]
+
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        # Two brief markers: the older one is our override target; the newer
+        # one is what MAX(generated_at) would pick by default.
+        cur.execute(
+            "INSERT INTO brief_runs (generated_at, output_path, top_n) "
+            "VALUES (now() - interval '10 days', '/tmp/may.md', 10) RETURNING id"
+        )
+        baseline_id = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO brief_runs (generated_at, output_path, top_n) "
+            "VALUES (now() - interval '1 day', '/tmp/jun.md', 10)"
+        )
+        # K1: ancestor predates the baseline, revised today → revision (NOT new).
+        # Supersede the ancestor before inserting the revision — the partial
+        # unique index allows only one active row per natural key.
+        anc = _f(cur, run, "mirror_gap", "K1", 20)
+        cur.execute("UPDATE findings SET superseded_at = now() WHERE id = %s", (anc,))
+        rev = _f(cur, run, "mirror_gap", "K1", 0)
+        cur.execute(
+            "UPDATE findings SET superseded_by_finding_id = %s WHERE id = %s",
+            (rev, anc),
+        )
+        # K2: genuinely new key, created today → new.
+        _f(cur, run, "trade_balance", "K2", 0)
+        # K3: new key created 5 days ago — after the older baseline but before
+        # the newer marker. Counts as new ONLY if the override targets the
+        # older row.
+        _f(cur, run, "trade_balance_uk", "K3", 5)
+        conn.commit()
+
+    with psycopg2.connect(test_db_url) as conn, \
+            conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        diff = _compute_diff(cur, baseline_brief_run_id=baseline_id)
+    new = {sk: n for sk, n in diff.new_by_subkind}
+
+    assert new.get("trade_balance") == 1          # genuinely new key
+    assert "mirror_gap" not in new                # revision of pre-baseline key
+    assert new.get("trade_balance_uk") == 1       # proves override hit the older row
 
 
 def test_diff_section_renders_partner_label_for_bilateral(empty_findings, test_db_url):

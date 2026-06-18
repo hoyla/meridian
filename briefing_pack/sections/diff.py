@@ -57,18 +57,31 @@ class _DiffData:
     method_transitions: set = field(default_factory=set)
 
 
-def _compute_diff(cur) -> _DiffData:
+def _compute_diff(cur, baseline_brief_run_id: int | None = None) -> _DiffData:
     """Phase 6.8 (+ 2026-05-12 method-bump detection): compute 'what
     changed since the previous brief'.
 
     Editorial threshold: a YoY shift > 5pp is "material"; a direction
     flip is highlighted separately. New findings are counted by subkind
     rather than per-row — the journalist drills into the per-finding
-    sections once they know what's new."""
-    cur.execute(
-        "SELECT generated_at, output_path FROM brief_runs "
-        "ORDER BY generated_at DESC LIMIT 1"
-    )
+    sections once they know what's new.
+
+    `baseline_brief_run_id`: when set, diff against that specific
+    `brief_runs` row rather than the most recent one. Used for a corrected
+    *re-issue* — regenerating a withdrawn pack so its Tier 1 reads against
+    the pack *before* the withdrawn one (e.g. re-issuing the 16 Jun pack
+    against the 21 May baseline), without deleting the withdrawn pack's
+    audit row from `brief_runs`."""
+    if baseline_brief_run_id is not None:
+        cur.execute(
+            "SELECT generated_at, output_path FROM brief_runs WHERE id = %s",
+            (baseline_brief_run_id,),
+        )
+    else:
+        cur.execute(
+            "SELECT generated_at, output_path FROM brief_runs "
+            "ORDER BY generated_at DESC LIMIT 1"
+        )
     row = cur.fetchone()
     prev_at = row[0] if row else None
     prev_output_path = row[1] if row else None
@@ -81,12 +94,25 @@ def _compute_diff(cur) -> _DiffData:
     cur.execute(
         """
         SELECT subkind, COUNT(*) AS n
-          FROM findings
+          FROM findings f
          WHERE created_at > %s AND superseded_at IS NULL
            AND subkind <> 'narrative_hs_group'
+           -- Genuinely new = the natural key first appeared after the
+           -- baseline. A finding that supersedes an ancestor predating the
+           -- baseline is a *revision*, not a new finding — it belongs to the
+           -- "changed" path (where it has a predecessor to diff against), not
+           -- the "new" list. Without this, a methodology re-run that
+           -- supersedes many existing findings at once (e.g. the 2026-06-17
+           -- mirror_gap double-count fix) floods Tier 1 with phantom "new"
+           -- findings that are really corrections of existing ones.
+           AND NOT EXISTS (
+               SELECT 1 FROM findings p
+                WHERE p.natural_key_hash = f.natural_key_hash
+                  AND p.created_at <= %s
+           )
       GROUP BY subkind ORDER BY subkind
         """,
-        (prev_at,),
+        (prev_at, prev_at),
     )
     new_by_subkind = list(cur.fetchall())
 
