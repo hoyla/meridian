@@ -3771,19 +3771,48 @@ def _insert_gacc_bilateral_aggregate_yoy_finding(
 TRADE_BALANCE_SOURCE_URL = "analysis://trade_balance/v1"
 
 # subkind -> partner ISO-2 codes summed on the China side.
+# Partner axis (China-side envelope): partner_token -> ISO-2 codes summed.
 TRADE_BALANCE_PARTNER_SCOPES: dict[str, tuple[str, ...]] = {
-    "trade_balance": EUROSTAT_PARTNERS,          # CN+HK+MO (editorial standard)
-    "trade_balance_cn_only": ("CN",),            # matches Eurostat's published headline
+    "cn_hk_mo": EUROSTAT_PARTNERS,    # CN+HK+MO (editorial standard)
+    "cn_only": ("CN",),               # matches the published EU–China / UK–China headline
 }
-# Token stored in the natural key / detail for the partner axis.
-_TRADE_BALANCE_PARTNER_TOKEN: dict[str, str] = {
-    "trade_balance": "cn_hk_mo",
-    "trade_balance_cn_only": "cn_only",
+_TRADE_BALANCE_PARTNER_SUFFIX: dict[str, str] = {
+    "cn_hk_mo": "",                   # bare subkind (backward-compat with the EU-27 family)
+    "cn_only": "_cn_only",
 }
-# Only EU-27 today. GB excluded at all times for cross-period comparability
-# (pre-Brexit GB rows live in the DB but never count toward EU-27 — same
-# convention as EU27_EXCLUDE_REPORTERS).
-TRADE_BALANCE_REPORTER_SCOPE = "eu27"
+# Reporter axis (which bloc's books): reporter_scope -> source(s).
+# - eu27          : Eurostat 000TOTAL, EU-27 reporters (GB excluded at all
+#                   times for cross-period comparability — pre-Brexit GB rows
+#                   live in the DB but never count toward EU-27).
+# - uk            : HMRC OTS, summed over CN8 detail (no 000TOTAL row exists
+#                   on the HMRC side; see _hmrc_allgoods_totals).
+# - eu27_plus_uk  : the two summed per period — a `cross_source_sum` figure
+#                   (two agencies, different revision cycles / suppression
+#                   rules), so it carries that caveat and is never presented
+#                   as a single-source number.
+TRADE_BALANCE_REPORTER_SCOPES: tuple[str, ...] = ("eu27", "uk", "eu27_plus_uk")
+_TRADE_BALANCE_REPORTER_SUFFIX: dict[str, str] = {
+    "eu27": "",                       # bare subkind (backward-compat)
+    "uk": "_uk",
+    "eu27_plus_uk": "_combined",
+}
+_TRADE_BALANCE_REPORTER_LABEL: dict[str, str] = {
+    "eu27": "EU-27",
+    "uk": "UK",
+    "eu27_plus_uk": "EU-27 + UK",
+}
+
+
+def _trade_balance_subkind(reporter_scope: str, partner_token: str) -> str:
+    """Compose the subkind from the two scope axes. Bare `trade_balance` is
+    eu27 × cn_hk_mo (unchanged from the original EU-27-only family, so those
+    findings don't churn). Reporter suffix precedes partner suffix, e.g.
+    `trade_balance_uk_cn_only`, mirroring the hs_group_yoy suffix order."""
+    return (
+        f"trade_balance"
+        f"{_TRADE_BALANCE_REPORTER_SUFFIX[reporter_scope]}"
+        f"{_TRADE_BALANCE_PARTNER_SUFFIX[partner_token]}"
+    )
 
 
 def _eurostat_bloc_allgoods_totals(
@@ -3830,6 +3859,68 @@ def _eurostat_bloc_allgoods_totals(
     return out
 
 
+def _hmrc_allgoods_totals(
+    flow: str, partners: tuple[str, ...],
+) -> dict[date, tuple[float, list[int]]]:
+    """All-goods UK (HMRC OTS) totals per period for one flow and partner
+    set. Returns {period: (value_eur, [observation_ids])}.
+
+    Unlike Eurostat, HMRC ships NO `000TOTAL` aggregate row — the data is
+    pure CN8 detail — so the all-goods total is a genuine SUM over the
+    monthly detail rows (no double-count risk; the opposite of the Eurostat
+    case). HMRC values are stored EUR-converted at ingest (value_currency =
+    'EUR'), so they add directly to the Eurostat side with no FX step.
+
+    Caveat carried by callers: OTS suppresses some commodity values for
+    disclosure control, so a sum of the published CN8 detail can modestly
+    *undercount* HMRC's own published UK–China headline. The gap is
+    typically small; it is flagged in the finding body for the uk and
+    eu27_plus_uk scopes rather than silently absorbed."""
+    if flow not in ("import", "export"):
+        raise ValueError(f"flow must be 'import' or 'export'; got {flow!r}")
+    out: dict[date, tuple[float, list[int]]] = {}
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT r.period,
+                   COALESCE(SUM(o.value_amount), 0) AS total_eur,
+                   COALESCE(ARRAY_AGG(o.id ORDER BY o.id), '{}') AS obs_ids
+              FROM observations o
+              JOIN releases r ON r.id = o.release_id
+             WHERE r.source = 'hmrc'
+               AND o.flow = %s
+               AND o.period_kind = 'monthly'
+               AND o.partner_country = ANY(%s)
+          GROUP BY r.period
+            """,
+            (flow, list(partners)),
+        )
+        for period, total, ids in cur.fetchall():
+            out[period] = (float(total), list(ids))
+    return out
+
+
+def _reporter_allgoods_totals(
+    reporter_scope: str, flow: str, partners: tuple[str, ...],
+) -> dict[date, tuple[float, list[int]]]:
+    """All-goods totals per period for a reporter scope. eu27 reads Eurostat
+    000TOTAL; uk reads the HMRC CN8 sum; eu27_plus_uk sums the two per
+    period — restricted to periods present on BOTH sides so a combined
+    figure is never half-sourced."""
+    if reporter_scope == "eu27":
+        return _eurostat_bloc_allgoods_totals(flow, partners)
+    if reporter_scope == "uk":
+        return _hmrc_allgoods_totals(flow, partners)
+    if reporter_scope == "eu27_plus_uk":
+        eu = _eurostat_bloc_allgoods_totals(flow, partners)
+        uk = _hmrc_allgoods_totals(flow, partners)
+        return {
+            p: (eu[p][0] + uk[p][0], eu[p][1] + uk[p][1])
+            for p in (set(eu) & set(uk))
+        }
+    raise ValueError(f"unknown reporter_scope: {reporter_scope!r}")
+
+
 def _days_in_month_window(start: date, end: date) -> int:
     """Calendar-day span of a contiguous month window [start, end], both
     first-of-month dates. Used to turn a period total into a €/day figure."""
@@ -3856,11 +3947,13 @@ def _allgoods_window(
 
 
 def detect_eu_china_trade_balance() -> dict[str, int]:
-    """Emit the EU-27 ↔ China all-goods trade deficit (imports minus
-    exports) per anchor period, for both partner scopes (CN+HK+MO and
+    """Emit the Europe ↔ China all-goods trade deficit (imports minus
+    exports) per anchor period, across reporter scopes (EU-27 via Eurostat,
+    UK via HMRC, EU-27 + UK combined) × partner scopes (CN+HK+MO and
     CN-only).
 
-    One finding per (partner_scope, anchor_period) where the anchor month
+    One finding per (reporter_scope, partner_scope, anchor_period) where the
+    anchor month
     has both an import and an export all-goods total AND the trailing
     12-month current window is complete (12 of 12 months present on both
     flows). The rolling-12mo YoY, the year-to-date YoY, and the
@@ -3886,9 +3979,11 @@ def detect_eu_china_trade_balance() -> dict[str, int]:
         analysis_run_id = cur.fetchone()[0]
 
     try:
-        for subkind, partners in TRADE_BALANCE_PARTNER_SCOPES.items():
-            imports = _eurostat_bloc_allgoods_totals("import", partners)
-            exports = _eurostat_bloc_allgoods_totals("export", partners)
+        for reporter_scope in TRADE_BALANCE_REPORTER_SCOPES:
+          for partner_token, partners in TRADE_BALANCE_PARTNER_SCOPES.items():
+            subkind = _trade_balance_subkind(reporter_scope, partner_token)
+            imports = _reporter_allgoods_totals(reporter_scope, "import", partners)
+            exports = _reporter_allgoods_totals(reporter_scope, "export", partners)
             anchors = sorted(set(imports) & set(exports))
             if not anchors:
                 counts["skipped_no_data"] += 1
@@ -3973,7 +4068,8 @@ def detect_eu_china_trade_balance() -> dict[str, int]:
 
                 obs_ids = sorted(set(imp_cur_ids + exp_cur_ids + imp_ytd_ids + exp_ytd_ids))
                 action = _insert_trade_balance_finding(
-                    analysis_run_id, subkind, partners, t,
+                    analysis_run_id, subkind, reporter_scope, partner_token,
+                    partners, t,
                     cur_start, cur_end,
                     imp_cur=imp_cur, exp_cur=exp_cur, deficit_12=deficit_12, days_12=days_12,
                     rolling_block=rolling_block,
@@ -4003,6 +4099,8 @@ def detect_eu_china_trade_balance() -> dict[str, int]:
 def _insert_trade_balance_finding(
     analysis_run_id: int,
     subkind: str,
+    reporter_scope: str,
+    partner_token: str,
     partners: tuple[str, ...],
     anchor_period: date,
     cur_start: date,
@@ -4016,28 +4114,50 @@ def _insert_trade_balance_finding(
     monthly_series: list[dict],
     obs_ids: list[int],
 ) -> findings_io.EmitAction:
-    partner_token = _TRADE_BALANCE_PARTNER_TOKEN[subkind]
+    reporter_label = _TRADE_BALANCE_REPORTER_LABEL[reporter_scope]
     partner_label = "CN+HK+MO" if partner_token == "cn_hk_mo" else "CN only"
     per_day_12 = deficit_12 / days_12
     per_day_sm = deficit_sm / days_sm
-    # A positive figure is an EU deficit (imports > exports); negative would
-    # be an EU surplus. Word it for whichever holds so the prose can't lie.
+    # A positive figure is a deficit (imports > exports); negative is a
+    # surplus. Word it for whichever holds so the prose can't lie.
     word_12 = "deficit" if deficit_12 >= 0 else "surplus"
 
+    # Source/basis sentence varies by reporter scope.
+    if reporter_scope == "eu27":
+        basis = (
+            "Eurostat all-goods 000TOTAL. Eurostat values imports CIF and "
+            "exports FOB, which widens the deficit relative to a like-for-like "
+            "basis — but it is the basis on which Eurostat publishes its own "
+            "EU–China headline."
+        )
+    elif reporter_scope == "uk":
+        basis = (
+            "HMRC OTS, summed over CN8 detail (no 000TOTAL row on the HMRC "
+            "side). OTS suppresses some commodity values for disclosure "
+            "control, so this can modestly undercount HMRC's published "
+            "UK–China headline. Quote the 12-month figure: the UK single "
+            "month is lumpy (aircraft, gold, machinery)."
+        )
+    else:  # eu27_plus_uk
+        basis = (
+            "Eurostat (EU-27, 000TOTAL) + HMRC (UK, CN8 sum), summed per "
+            "month. A cross-source figure: two statistical agencies with "
+            "different revision cycles and suppression rules, so treat it as "
+            "a close approximation, not a single-source number "
+            "(`cross_source_sum`)."
+        )
+
     title = (
-        f"EU-27 trade {word_12} with China ({partner_label}), 12mo to "
+        f"{reporter_label} trade {word_12} with China ({partner_label}), 12mo to "
         f"{cur_end.strftime('%Y-%m')}: €{abs(deficit_12)/1e9:,.1f}B "
         f"(€{abs(per_day_12)/1e6:,.0f}M/day)"
     )
 
     body_lines = [
-        f"EU-27 (excl. UK) all-goods trade balance with China, partner scope: "
+        f"{reporter_label} all-goods trade balance with China, partner scope: "
         f"{partner_label}.",
-        "Balance = EU-27 imports from China − EU-27 exports to China; a "
-        "positive figure is an EU deficit. Eurostat values imports CIF and "
-        "exports FOB, which inflates the deficit relative to a like-for-like "
-        "basis — but it is the basis on which Eurostat publishes its own "
-        "EU–China headline.",
+        f"Balance = {reporter_label} imports from China − {reporter_label} "
+        f"exports to China; a positive figure is a deficit. {basis}",
         "",
         f"Rolling 12 months to {cur_end.strftime('%Y-%m')}:",
         f"  Imports: €{imp_cur:,.0f}   Exports: €{exp_cur:,.0f}",
@@ -4072,23 +4192,41 @@ def _insert_trade_balance_finding(
     if partner_token == "cn_only":
         body_lines += [
             "",
-            "Scope note: CN-only is the slice that matches Eurostat's own "
-            "published EU–China deficit, so this figure can be reconciled "
-            "directly against the press number. Our editorial-standard "
-            "figure (CN+HK+MO) is in the paired `trade_balance` finding.",
+            "Scope note: CN-only is the slice that matches the published "
+            f"{reporter_label}–China deficit, so this figure can be reconciled "
+            "directly against the press number. Our editorial-standard figure "
+            "(CN+HK+MO) is in the paired finding without the `_cn_only` suffix.",
         ]
+
+    caveat_codes: list[str] = []
+    if reporter_scope == "eu27_plus_uk":
+        caveat_codes.append("cross_source_sum")
+    if reporter_scope in ("uk", "eu27_plus_uk"):
+        caveat_codes.append("hmrc_detail_sum_suppression")
+
+    if reporter_scope == "eu27":
+        source_desc = "observations (source=eurostat, hs_code=000TOTAL)"
+    elif reporter_scope == "uk":
+        source_desc = "observations (source=hmrc, CN8 detail summed)"
+    else:
+        source_desc = (
+            "observations (source=eurostat 000TOTAL + source=hmrc CN8 sum)"
+        )
 
     detail = {
         "method": "eu_china_trade_balance_v1_000total",
         "method_query": {
-            "source": "observations (source=eurostat)",
-            "hs_code": EUROSTAT_AGGREGATE_PRODUCT_NC,
-            "reporter_scope": TRADE_BALANCE_REPORTER_SCOPE,
-            "reporters_excluded": list(EU27_EXCLUDE_REPORTERS),
+            "source": source_desc,
+            "reporter_scope": reporter_scope,
+            "reporters_excluded": (
+                list(EU27_EXCLUDE_REPORTERS)
+                if reporter_scope in ("eu27", "eu27_plus_uk") else []
+            ),
             "partner_scope": partner_token,
             "partners": list(partners),
-            "balance_sign": "imports_minus_exports (positive = EU deficit)",
+            "balance_sign": "imports_minus_exports (positive = deficit)",
         },
+        "caveat_codes": caveat_codes,
         "windows": {
             "anchor_period": anchor_period.isoformat(),
             "rolling_current_start": cur_start.isoformat(),
@@ -4125,7 +4263,7 @@ def _insert_trade_balance_finding(
             kind="anomaly",
             subkind=subkind,
             natural_key=findings_io.nk_trade_balance(
-                TRADE_BALANCE_REPORTER_SCOPE, partner_token,
+                reporter_scope, partner_token,
                 cur_end.strftime("%Y-%m"),
             ),
             value_fields={

@@ -1,8 +1,8 @@
-"""Front-of-pack — the EU's goods-trade deficit with China, framed per day.
+"""Front-of-pack — Europe's goods-trade deficit with China, framed per day.
 
-Renders the `trade_balance` / `trade_balance_cn_only` findings emitted by
+Renders the `trade_balance*` findings emitted by
 `anomalies.detect_eu_china_trade_balance`. This block exists because the
-single biggest Eurostat story of a typical cycle — the EU running a
+single biggest Eurostat story of a typical cycle — Europe running a
 goods-trade deficit with China of roughly €1bn a DAY — is a standing
 *level*, not a year-on-year *change*, and so falls through every
 change-threshold the rest of the pack is built on. A reader flagged that
@@ -10,20 +10,22 @@ the tool never surfaced it; this is the fix.
 
 It sits at the very top of the document (right after "If you read only
 this page") because the level is the headline a generalist desk wants
-first. Two scopes are shown side by side:
+first. Deliberately **very compact**: one line per reporter scope, each
+led by the figure a journalist would quote. If the top lines don't land
+in a few seconds, a reader never gets to the detail tiers.
 
-- **CN+HK+MO** (subkind `trade_balance`): our editorial standard, the
-  same China definition every other family in the pack uses.
-- **CN-only** (subkind `trade_balance_cn_only`): the slice Eurostat uses
-  in its own published EU–China headline, so the figure reconciles
-  directly against the press number.
+Three reporter scopes, each on the CN+HK+MO standard envelope:
+- **EU-27** (Eurostat) — the headline; the CN-only press figure rides
+  alongside in parentheses so it reconciles against what's published.
+- **UK** (HMRC) — led by the 12-month figure only; the UK single month
+  is too lumpy (aircraft, gold) to frame per-day.
+- **EU-27 + UK** (the two summed) — "Europe" in the widest sense; a
+  cross-source figure, flagged as such.
 
 Deterministic, no LLM — same trust class as the Findings tiers below.
 """
 
 from __future__ import annotations
-
-from typing import Any
 
 from briefing_pack._helpers import (
     _Section,
@@ -31,26 +33,34 @@ from briefing_pack._helpers import (
     _trace_token,
 )
 
-_HEADING = "The standing picture: the EU's goods-trade deficit with China"
+_HEADING = "The standing picture: Europe's goods-trade deficit with China"
 
 
-def _fmt_bn(v: Any) -> str:
-    """Deficit figures are always multi-billion; render to one decimal B."""
+def _fmt_bn(v) -> str:
+    """Deficit totals are multi-billion; render to one decimal B."""
     if v is None:
         return "—"
     return f"€{float(v) / 1e9:,.1f}B"
 
 
-def _fmt_per_day(v: Any) -> str:
-    """€/day, rendered in millions (the register the press quotes)."""
+def _fmt_per_day_bn(v) -> str:
+    """€/day rendered in billions to two decimals, so the three scopes are
+    comparable at a glance (the editorial point is 'EU ~€0.9bn, Europe-wide
+    just over €1bn a day')."""
     if v is None:
         return "—"
-    return f"€{abs(float(v)) / 1e6:,.0f}M a day"
+    return f"€{abs(float(v)) / 1e9:,.2f}bn a day"
 
 
-def _latest_by_scope(cur, subkind: str) -> dict | None:
+def _direction_word(deficit_eur) -> str:
+    if deficit_eur is None:
+        return "balance"
+    return "deficit" if float(deficit_eur) >= 0 else "surplus"
+
+
+def _latest(cur, subkind: str) -> dict | None:
     """Latest (most recent anchor) active finding for a trade_balance
-    subkind, with its detail JSON parsed out. None when none exist."""
+    subkind, detail parsed out. None when none exist."""
     cur.execute(
         """
         SELECT id,
@@ -67,100 +77,82 @@ def _latest_by_scope(cur, subkind: str) -> dict | None:
     row = cur.fetchone()
     if row is None:
         return None
-    return {"id": row["id"], "anchor": row["anchor"], "roll_end": row["roll_end"],
-            "totals": row["totals"]}
+    return {"id": row["id"], "anchor": row["anchor"],
+            "roll_end": row["roll_end"], "totals": row["totals"]}
 
 
-def _direction_word(deficit_eur: float | None) -> str:
-    if deficit_eur is None:
-        return "balance"
-    return "deficit" if float(deficit_eur) >= 0 else "surplus"
+def _scope_line(label: str, std: dict | None, *, tail: str = "") -> str | None:
+    """One compact line for a reporter scope, led by the 12-month deficit +
+    €/day (the stable figure to quote). `tail` appends scope-specific
+    colour (e.g. the EU CN-only press reconciliation). None when the scope
+    has no finding."""
+    if std is None:
+        return None
+    roll = std["totals"]["rolling_12mo"]
+    word = _direction_word(roll["deficit_eur"])
+    line = (
+        f"- **{label}:** {_fmt_bn(roll['deficit_eur'])} {word} over the 12 "
+        f"months to {_fmt_month(std['roll_end'])} — about "
+        f"**{_fmt_per_day_bn(roll['deficit_per_day_eur'])}**"
+    )
+    if tail:
+        line += tail
+    return line + f". {_trace_token(std['id'])}"
 
 
 def _section_trade_balance(cur) -> _Section:
     """Render the standing-deficit headline block. Empty markdown when no
-    trade_balance findings exist yet (so the document degrades cleanly on
-    a DB that predates the analyser) — same convention as the other gated
+    trade_balance findings exist yet (so the document degrades cleanly on a
+    DB that predates the analyser) — same convention as the other gated
     sections."""
-    std = _latest_by_scope(cur, "trade_balance")
-    cn = _latest_by_scope(cur, "trade_balance_cn_only")
-    if std is None and cn is None:
+    eu = _latest(cur, "trade_balance")
+    eu_cn = _latest(cur, "trade_balance_cn_only")
+    uk = _latest(cur, "trade_balance_uk")
+    combined = _latest(cur, "trade_balance_combined")
+    if eu is None and uk is None and combined is None:
         return _Section(markdown="")
-
-    lead = std or cn  # prefer the editorial-standard scope for the headline
-    sm = lead["totals"]["single_month"]
-    roll = lead["totals"]["rolling_12mo"]
-    ytd = lead["totals"].get("ytd")
-
-    word_sm = _direction_word(sm["deficit_eur"])
-    word_roll = _direction_word(roll["deficit_eur"])
-    scope_label = "CN+HK+MO" if (std is not None) else "CN only"
 
     lines: list[str] = []
     lines.append(f"## {_HEADING}")
     lines.append("")
     lines.append(
         "Unlike everything below, this is a **standing level, not a "
-        "year-on-year change** — the EU-27's all-goods trade balance with "
-        "China (imports minus exports), straight from Eurostat. It barely "
+        "year-on-year change** — Europe's all-goods trade balance with China "
+        "(imports minus exports), straight from Eurostat and HMRC. It barely "
         "moves cycle to cycle, so it never trips the \"what's new\" "
-        "thresholds — but the *size* of it, expressed per day, is usually "
-        "the most quotable single number in the pack."
+        "thresholds — but the *size* of it, per day, is usually the most "
+        "quotable single number in the pack. CN+HK+MO basis."
     )
     lines.append("")
 
-    # Headline sentence — editorial-standard scope, single month + per day.
-    lines.append(
-        f"- In **{_fmt_month(lead['anchor'])}** the EU-27 ran a goods-trade "
-        f"{word_sm} with China of **{_fmt_bn(sm['deficit_eur'])}** — about "
-        f"**{_fmt_per_day(sm['deficit_per_day_eur'])}** ({scope_label}). "
-        f"{_trace_token(lead['id'])}"
-    )
-    # Rolling 12-month context.
-    roll_line = (
-        f"- Over the **12 months to {_fmt_month(lead['roll_end'])}** the "
-        f"rolling {word_roll} was **{_fmt_bn(roll['deficit_eur'])}** "
-        f"({_fmt_per_day(roll['deficit_per_day_eur'])})"
-    )
-    if roll.get("yoy_pct") is not None:
-        roll_line += f", {float(roll['yoy_pct'])*100:+.1f}% vs the prior 12 months"
-    roll_line += "."
-    lines.append(roll_line)
-    # Year-to-date, if present.
-    if ytd is not None and ytd.get("current_deficit_eur") is not None:
-        ytd_line = (
-            f"- Year-to-date (Jan–{_fmt_month(lead['anchor'])}, "
-            f"{ytd['months_in_ytd']} months): {_direction_word(ytd['current_deficit_eur'])} "
-            f"**{_fmt_bn(ytd['current_deficit_eur'])}**"
+    # EU-27 headline, with the CN-only press figure riding alongside.
+    eu_tail = ""
+    if eu_cn is not None:
+        cn_sm = eu_cn["totals"]["single_month"]
+        eu_tail = (
+            f" (€{abs(float(cn_sm['deficit_eur']))/1e9:,.1f}B in "
+            f"{_fmt_month(eu_cn['anchor'])} alone on the mainland-China basis "
+            f"Eurostat headlines — `finding/{eu_cn['id']}`)"
         )
-        if ytd.get("yoy_pct") is not None:
-            ytd_line += f" ({float(ytd['yoy_pct'])*100:+.1f}% YoY)"
-        ytd_line += "."
-        lines.append(ytd_line)
+    for line in [
+        _scope_line("EU-27", eu, tail=eu_tail),
+        _scope_line("UK", uk),
+        _scope_line("EU-27 + UK", combined,
+                    tail=" (two statistical agencies summed — see note)"),
+    ]:
+        if line:
+            lines.append(line)
     lines.append("")
 
-    # CN-only reconciliation line, when both scopes exist.
-    if std is not None and cn is not None:
-        cn_sm = cn["totals"]["single_month"]
-        lines.append(
-            f"**Reconciling with the press figure:** Eurostat's own published "
-            f"EU–China headline counts mainland China only. On that **CN-only** "
-            f"basis the {_fmt_month(cn['anchor'])} {_direction_word(cn_sm['deficit_eur'])} "
-            f"was **{_fmt_bn(cn_sm['deficit_eur'])}** "
-            f"({_fmt_per_day(cn_sm['deficit_per_day_eur'])}) — the number you'll "
-            f"see quoted. Our headline above adds Hong Kong + Macau, consistent "
-            f"with the rest of this pack. {_trace_token(cn['id'])}"
-        )
-        lines.append("")
-
-    # Quote-safety caveat.
+    # One-line caveat covering both sources + the cross-source sum.
     lines.append(
-        "*Before quoting: Eurostat values imports CIF (freight + insurance "
-        "included) and exports FOB, which widens the deficit relative to a "
-        "like-for-like basis — but it is the basis Eurostat publishes on, so "
-        "the figure is directly comparable to its press releases. This is an "
-        "all-goods total across every product, not the curated HS categories "
-        "the tiers below break down.*"
+        "*Before quoting: Eurostat values imports CIF (freight + insurance) "
+        "and exports FOB, which widens the deficit — but it is the basis "
+        "Eurostat publishes on. The UK side is HMRC OTS (a sum of commodity "
+        "detail, which can slightly undercount HMRC's published total). The "
+        "EU-27 + UK line adds two agencies' figures: a close approximation, "
+        "not a single-source number. All figures are all-goods totals, not "
+        "the curated HS categories the tiers below break down.*"
     )
     lines.append("")
 
