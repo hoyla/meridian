@@ -164,6 +164,8 @@ def render(
     companion_filename: str | None = None,
     scope_label: str | None = None,
     groups_filename: str | None = None,
+    diff_baseline_brief_run_id: int | None = None,
+    reissue_note: str | None = None,
 ) -> str:
     """Render the full briefing pack as a single Markdown string.
 
@@ -189,6 +191,13 @@ def render(
             cur, companion_filename=companion_filename,
             groups_filename=groups_filename, scope_label=scope_label,
         ))
+        # Corrected re-issue banner (when a withdrawn pack is regenerated).
+        # Sits immediately under the headline so a reader sees, before
+        # anything else, that this pack replaces an earlier one and what
+        # baseline its "what's new" is measured against.
+        if reissue_note:
+            sections.append(_Section(markdown=f"> **⚠ {reissue_note}**\n"))
+
         sections.append(_section_reader_guide())
 
         # Phase: per-group YoY-predictability badges. Computed once and
@@ -205,7 +214,7 @@ def render(
         # surfaces can't disagree about what kind of cycle this is.
         # Dropped entirely on a fresh DB with nothing to say.
         top_movers = _compute_top_movers(cur, predictability=predictability)
-        diff_data = _compute_diff(cur)
+        diff_data = _compute_diff(cur, baseline_brief_run_id=diff_baseline_brief_run_id)
         sections.append(_section_front_page(top_movers, diff_data))
 
         # ----- Standing picture: the EU–China goods-trade deficit. -----
@@ -414,6 +423,8 @@ def export(
     record: bool = True,
     with_provenance: bool = False,
     docx: bool = False,
+    diff_baseline_brief_run_id: int | None = None,
+    reissue_note: str | None = None,
 ) -> tuple[str, str]:
     """Write the findings document AND the companion leads file to disk.
     Returns (findings_path, leads_path).
@@ -512,6 +523,8 @@ def export(
     p.write_text(render(
         top_n=top_n, companion_filename=leads_basename,
         groups_filename=groups_basename, scope_label=scope_label,
+        diff_baseline_brief_run_id=diff_baseline_brief_run_id,
+        reissue_note=reissue_note,
     ))
     log.info("Wrote briefing pack to %s", p)
 
