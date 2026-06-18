@@ -187,17 +187,13 @@ def render(
     release_ids: set[int] = set()
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         # ----- Front matter: title, reader's guide, scope/caveat setup -----
+        # The corrected-re-issue banner is rendered inside the headline,
+        # immediately under the title — see _section_headline(reissue_note=).
         sections.append(_section_headline(
             cur, companion_filename=companion_filename,
             groups_filename=groups_filename, scope_label=scope_label,
+            reissue_note=reissue_note,
         ))
-        # Corrected re-issue banner (when a withdrawn pack is regenerated).
-        # Sits immediately under the headline so a reader sees, before
-        # anything else, that this pack replaces an earlier one and what
-        # baseline its "what's new" is measured against.
-        if reissue_note:
-            sections.append(_Section(markdown=f"> **⚠ {reissue_note}**\n"))
-
         sections.append(_section_reader_guide())
 
         # Phase: per-group YoY-predictability badges. Computed once and

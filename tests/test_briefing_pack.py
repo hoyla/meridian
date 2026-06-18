@@ -673,6 +673,24 @@ def test_about_findings_endnote_appears_in_both_docs(
         assert "docs/architecture.md" in doc
 
 
+def test_reissue_banner_renders_directly_under_the_title(empty_findings, test_db_url):
+    """A corrected-re-issue banner must sit immediately under the H1 title —
+    before the orientation copy and well before the tiers — so a withdrawal
+    notice can't be missed. Regression guard: it was once emitted after the
+    'Findings included' block, ~70 lines down."""
+    note = "Corrected re-issue of the 16 June pack."
+    md = briefing_pack.render(reissue_note=note)
+    lines = md.splitlines()
+    assert lines[0].startswith("# China–EU/UK trade")
+    banner_idx = next(i for i, ln in enumerate(lines) if note in ln)
+    # Within the first handful of lines (title, generated-stamp, banner) and
+    # above both the orientation copy and the first '##' subheading.
+    assert banner_idx <= 4, f"banner at line {banner_idx}, expected near the top"
+    assert banner_idx < next(i for i, ln in enumerate(lines) if ln.startswith("## "))
+    # Absent when no note is passed.
+    assert note not in briefing_pack.render()
+
+
 def test_diff_section_empty_on_first_brief(empty_findings, test_db_url):
     """Phase 6.8: a fresh DB with no prior brief_runs row produces no
     'Changes since the previous export' section. The brief still renders;

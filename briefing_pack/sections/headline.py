@@ -16,6 +16,7 @@ def _section_headline(
     companion_filename: str | None = None,
     scope_label: str | None = None,
     groups_filename: str | None = None,
+    reissue_note: str | None = None,
 ) -> _Section:
     """Top-of-pack scene-setting: schema version, period coverage, finding counts."""
     cur.execute(
@@ -37,6 +38,12 @@ def _section_headline(
     lines.append(f"*Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} from the `findings` table.*")
     if scope_label:
         lines.append(f"*Scope: **{scope_label}**.*")
+    # Corrected-re-issue banner sits immediately under the title — the first
+    # thing a reader sees, before the orientation copy — so a withdrawal /
+    # correction notice can't be missed.
+    if reissue_note:
+        lines.append("")
+        lines.append(f"> **⚠ {reissue_note}**")
     lines.append("")
     lines.append("This document is a deterministic render of the underlying findings — no LLM in the loop. ")
     lines.append("Each finding line ends with a citation token (e.g. `finding/123`) which is a stable handle ")
