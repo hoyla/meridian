@@ -39,8 +39,10 @@ refresh token persisted to ~/.config/meridian/google-token.json.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import socket
 from pathlib import Path
 
 from google.auth.transport.requests import Request
@@ -70,6 +72,26 @@ FOLDER_MIME = "application/vnd.google-apps.folder"
 # Keep in sync with `briefing_pack.render._MARKDOWN_SUBFOLDER` — the local
 # bundle uses the same subfolder name, and this mirrors it to Drive.
 MARKDOWN_SUBFOLDER = "Markdown versions for use with LLMs etc"
+
+# google-api-python-client creates its sockets with NO timeout, so a stalled
+# read blocks forever (observed 2026-06-18: uploads hung in getresponse()
+# while curl to the same endpoints returned instantly and the token was
+# valid). Bounding the socket read makes a stall fail fast instead of hanging
+# an unattended / cron run. 120s is generous for the ~1 MB artefacts.
+DRIVE_SOCKET_TIMEOUT_S = 120
+
+
+@contextlib.contextmanager
+def _bounded_socket_reads(seconds: float = DRIVE_SOCKET_TIMEOUT_S):
+    """Set a process-wide default socket timeout for the duration of the
+    block, restoring whatever was there before. Scoped to the Drive calls so
+    we don't impose a timeout on the rest of the process (e.g. DB sockets)."""
+    prev = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(seconds)
+    try:
+        yield
+    finally:
+        socket.setdefaulttimeout(prev)
 
 # How many updateParagraphStyle requests to send per batchUpdate when
 # minting anchors. The Docs API accepts large batches, but chunking keeps
@@ -379,59 +401,62 @@ def export_bundle_to_drive(
     if parent_id is None:
         parent_id = os.environ.get("MERIDIAN_DRIVE_PARENT_ID") or None
 
-    creds = get_credentials(interactive=interactive)
-    drive = build("drive", "v3", credentials=creds)
-    docs = build("docs", "v1", credentials=creds)
+    # All the network work runs under a bounded socket read timeout so a
+    # stalled Google API response fails fast instead of hanging forever.
+    with _bounded_socket_reads():
+        creds = get_credentials(interactive=interactive)
+        drive = build("drive", "v3", credentials=creds)
+        docs = build("docs", "v1", credentials=creds)
 
-    folder_name = folder_name or f"Meridian — {bundle_dir.name}"
-    export_folder_id = _find_or_create_folder(drive, folder_name, parent_id)
-    log.info("Export folder %r -> %s", folder_name, export_folder_id)
+        folder_name = folder_name or f"Meridian — {bundle_dir.name}"
+        export_folder_id = _find_or_create_folder(drive, folder_name, parent_id)
+        log.info("Export folder %r -> %s", folder_name, export_folder_id)
 
-    results: dict = {
-        "folder_id": export_folder_id,
-        "folder_name": folder_name,
-        "docs": {},
-        "raw": {},
-    }
+        results: dict = {
+            "folder_id": export_folder_id,
+            "folder_name": folder_name,
+            "docs": {},
+            "raw": {},
+        }
 
-    # 1. Convert the house-styled artefacts into native Google files.
-    for fname, (target_mime, source_mime) in _CONVERT.items():
-        p = bundle_dir / fname
-        if not p.exists():
-            continue
-        name = p.stem  # drive name carries no extension
-        file_id, link = _upsert(
-            drive, p, name, export_folder_id,
-            source_mime=source_mime, target_mime=target_mime,
+        # 1. Convert the house-styled artefacts into native Google files.
+        for fname, (target_mime, source_mime) in _CONVERT.items():
+            p = bundle_dir / fname
+            if not p.exists():
+                continue
+            name = p.stem  # drive name carries no extension
+            file_id, link = _upsert(
+                drive, p, name, export_folder_id,
+                source_mime=source_mime, target_mime=target_mime,
+            )
+            entry = {"id": file_id, "link": link}
+            if target_mime == GDOC_MIME:
+                entry["anchors_minted"] = mint_heading_anchors(docs, file_id)
+                entry["links_fixed"] = fix_internal_heading_links(docs, file_id)
+                log.info("  %s -> Doc %s (%d anchors minted, %d internal links fixed)",
+                         name, file_id, entry["anchors_minted"], entry["links_fixed"])
+            else:
+                log.info("  %s -> Sheet %s", name, file_id)
+            results["docs"][name] = entry
+
+        # 2. Markdown subfolder: the raw .md files + the .xlsx, verbatim.
+        md_folder_id = _find_or_create_folder(
+            drive, MARKDOWN_SUBFOLDER, export_folder_id,
         )
-        entry = {"id": file_id, "link": link}
-        if target_mime == GDOC_MIME:
-            entry["anchors_minted"] = mint_heading_anchors(docs, file_id)
-            entry["links_fixed"] = fix_internal_heading_links(docs, file_id)
-            log.info("  %s -> Doc %s (%d anchors minted, %d internal links fixed)",
-                     name, file_id, entry["anchors_minted"], entry["links_fixed"])
-        else:
-            log.info("  %s -> Sheet %s", name, file_id)
-        results["docs"][name] = entry
+        results["markdown_folder_id"] = md_folder_id
+        # Mirror the bundle's local markdown subfolder (same name) into Drive.
+        local_md_dir = bundle_dir / MARKDOWN_SUBFOLDER
+        if local_md_dir.is_dir():
+            for p in sorted(local_md_dir.iterdir()):
+                if p.is_file() and p.suffix.lower() in _RAW_SUFFIXES:
+                    src_mime = XLSX_MIME if p.suffix.lower() == ".xlsx" else MD_MIME
+                    file_id, _ = _upsert(
+                        drive, p, p.name, md_folder_id, source_mime=src_mime,
+                    )
+                    results["raw"][p.name] = file_id
+                    log.info("  raw %s -> file %s", p.name, file_id)
 
-    # 2. Markdown subfolder: the raw .md files + the .xlsx, verbatim.
-    md_folder_id = _find_or_create_folder(
-        drive, MARKDOWN_SUBFOLDER, export_folder_id,
-    )
-    results["markdown_folder_id"] = md_folder_id
-    # Mirror the bundle's local markdown subfolder (same name) into Drive.
-    local_md_dir = bundle_dir / MARKDOWN_SUBFOLDER
-    if local_md_dir.is_dir():
-        for p in sorted(local_md_dir.iterdir()):
-            if p.is_file() and p.suffix.lower() in _RAW_SUFFIXES:
-                src_mime = XLSX_MIME if p.suffix.lower() == ".xlsx" else MD_MIME
-                file_id, _ = _upsert(
-                    drive, p, p.name, md_folder_id, source_mime=src_mime,
-                )
-                results["raw"][p.name] = file_id
-                log.info("  raw %s -> file %s", p.name, file_id)
-
-    return results
+        return results
 
 
 def main(argv: list[str] | None = None) -> None:
