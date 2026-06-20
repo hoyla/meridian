@@ -140,7 +140,7 @@ def _render_sections(sections) -> list[str]:
     the headline drill-down links."""
     out: list[str] = []
     for sec in sections:
-        if not sec.sections:
+        if not (sec.sections or sec.findings):
             continue
         if sec.kind == "state_of_play":
             out.append("## State of play")
@@ -157,6 +157,28 @@ def _render_sections(sections) -> list[str]:
                 for f in sub.findings:
                     out.append(_deficit_line_md(f))
                 out.append("")
+        elif sec.kind == "mirror_gap":
+            out.append("## Mirror-trade gaps")
+            out.append("")
+            if sec.intro:
+                out.append(f"*{sec.intro}*")
+                out.append("")
+            for f in sec.findings:
+                m = f.metrics
+                gp = (m.get("gap_pct") or 0) * 100
+                ex = m.get("excess_pct")
+                exc = (f" · {'+' if (ex or 0) >= 0 else '−'}{abs(ex) * 100:.1f}% "
+                       "beyond CIF/FOB baseline") if ex is not None else ""
+                hub = (f" ⚓ {m['hub']}: {m['hub_notes'][:160]}"
+                       if m.get("hub") and m.get("hub_notes") else "")
+                cite = (f" `finding/{f.provenance.finding_ids[0]}`"
+                        if f.provenance.finding_ids else "")
+                out.append(
+                    f"- **China ↔ {m.get('partner', '')}**: China reports "
+                    f"{_fmt_eur_md(m.get('gacc_eur'))}, partner reports "
+                    f"{_fmt_eur_md(m.get('eurostat_eur'))} — gap "
+                    f"{_fmt_eur_md(m.get('gap_eur'))} ({gp:+.1f}%){exc}.{cite}{hub}")
+            out.append("")
         elif sec.kind == "structural":
             out.append("## Trade map (SITC divisions)")
             out.append("")

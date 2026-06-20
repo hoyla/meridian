@@ -230,6 +230,40 @@ def _state_of_play_section(section) -> str:
     return "\n".join(out)
 
 
+def _mirror_gap_html(section) -> str:
+    out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
+    if section.intro:
+        out.append(f'<p class="kicker">{html.escape(section.intro)}</p>')
+    for f in section.findings:
+        m = f.metrics
+        gap = m.get("gap_eur") or 0
+        gp = (m.get("gap_pct") or 0) * 100
+        ex = m.get("excess_pct")
+        col = _DOWN if gap > 0 else _UP
+        excess = ""
+        if ex is not None:
+            exc_col = _DOWN if ex > 0 else _MUTED
+            sign = "+" if ex >= 0 else "−"
+            excess = (f' · <span style="color:{exc_col}">{sign}{abs(ex) * 100:.1f}% '
+                      f'beyond CIF/FOB baseline</span>')
+        hub = ""
+        if m.get("hub") and m.get("hub_notes"):
+            hub = (f'<div class="hub">⚓ {html.escape(m["hub"])} — '
+                   f'{html.escape(m["hub_notes"][:200])}</div>')
+        cite = (f'<span class="token">finding/{f.provenance.finding_ids[0]}</span>'
+                if f.provenance.finding_ids else "")
+        out.append(
+            '<div class="mg">'
+            f'<div class="mg-h"><span class="mg-p">China ↔ {html.escape(m.get("partner", ""))}</span>'
+            f'<span class="mg-g" style="color:{col}">gap {_fmt_eur(gap)} ({gp:+.1f}%){excess}</span></div>'
+            f'<div class="mg-v">China reports {_fmt_eur(m.get("gacc_eur"))} · '
+            f'partner reports {_fmt_eur(m.get("eurostat_eur"))} {cite}</div>'
+            f"{hub}"
+            "</div>"
+        )
+    return "\n".join(out)
+
+
 def _structural_section_html(section) -> str:
     """The trade-map browse: SITC divisions, value-weighted, each showing its
     share, code count, coverage by editorial groups, and the groups within —
@@ -402,6 +436,12 @@ a:hover{border-bottom-color:var(--link)}
 .tmbar{height:6px;background:var(--surface-alt);margin:5px 0 5px;overflow:hidden}
 .tmfill{height:6px;background:var(--masthead)}
 .tmgroups{font-size:12.5px;color:var(--muted)}
+.mg{padding:11px 0;border-bottom:1px solid var(--line)}
+.mg-h{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
+.mg-p{font-family:var(--font-headline);font-size:16px;font-weight:700;color:var(--ink)}
+.mg-g{font-size:13.5px;font-weight:700;white-space:nowrap}
+.mg-v{font-size:13.5px;color:var(--ink);margin-top:3px}
+.hub{font-size:12.5px;color:var(--muted);font-style:italic;margin-top:4px}
 .cov{font-weight:700;color:var(--ink);margin-right:6px}
 .cov.dark{color:var(--muted);font-weight:400;font-style:italic}
 .llm{background:#fffbe6;border:1px solid #f3c100;border-left:4px solid #f3c100;padding:10px 14px;margin:12px 0}
@@ -494,6 +534,8 @@ def render_html(report: Report) -> str:
             parts.append("<section>" + _state_of_play_section(sec) + "</section>")
         elif sec.kind == "sector_detail" and sec.sections:
             parts.append("<section>" + _sector_section(sec) + "</section>")
+        elif sec.kind == "mirror_gap" and sec.findings:
+            parts.append("<section>" + _mirror_gap_html(sec) + "</section>")
         elif sec.kind == "structural" and sec.sections:
             parts.append("<section>" + _structural_section_html(sec) + "</section>")
 

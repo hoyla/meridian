@@ -24,6 +24,7 @@ when the HTML renderer needs it. `facets` are likewise minimally stubbed
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from datetime import date, datetime
 
@@ -432,6 +433,60 @@ def _state_of_play_section(cur) -> Section:
     return root
 
 
+def _mirror_gap_section(cur) -> Section:
+    """The China↔EU mirror-trade discrepancy — the signature distinctive
+    analysis. Per partner: China's reported exports vs the partner's reported
+    imports, the gap, and how much exceeds the CIF/FOB accounting baseline
+    (the transshipment signal), with the named hub where relevant."""
+    root = Section(
+        id="mirror-gaps", title="Mirror-trade gaps", kind="mirror_gap",
+        intro="China's reported exports to each partner vs the partner's "
+              "reported imports from China — the discrepancy, and how much of "
+              "it exceeds the CIF/FOB accounting baseline (a transshipment "
+              "signal).",
+    )
+    cur.execute(
+        "SELECT id, title, detail FROM findings "
+        "WHERE superseded_at IS NULL AND subkind='mirror_gap'"
+    )
+    rows = []
+    for fid, title, d in cur.fetchall():
+        m = re.search(r"(\d{4}-\d{2})", title or "")
+        rows.append((m.group(1) if m else "", fid, title, d))
+    if not rows:
+        return root
+    latest = max(r[0] for r in rows)
+    as_of = date.fromisoformat(latest + "-01") if latest else None
+    for per, fid, title, d in rows:
+        if per != latest:
+            continue
+        d = d or {}
+        hub = d.get("transshipment_hub") or {}
+        pm = re.search(r"China ↔ ([^,]+),", title or "")
+        root.findings.append(Finding(
+            finding_id=fid, subkind="mirror_gap",
+            title=title,
+            metrics={
+                "partner": pm.group(1) if pm else "?",
+                "gacc_eur": _f((d.get("gacc") or {}).get("value_eur_converted")),
+                "eurostat_eur": _f((d.get("eurostat") or {}).get("total_eur")),
+                "gap_eur": _f(d.get("gap_eur")),
+                "gap_pct": _f(d.get("gap_pct")),
+                "excess_pct": _f(d.get("excess_over_baseline_pct")),
+                "baseline_pct": _f(d.get("cif_fob_baseline_pct")),
+                "hub": hub.get("iso2"),
+                "hub_notes": hub.get("notes"),
+            },
+            provenance=Provenance(
+                finding_ids=[fid], source="cross_source", as_of=as_of,
+                caveat=", ".join(d.get("caveat_codes") or []) or None,
+            ),
+        ))
+    # biggest excess-over-baseline first (the strongest transshipment signal)
+    root.findings.sort(key=lambda f: -(f.metrics.get("excess_pct") or -9))
+    return root
+
+
 def _structural_section(cur) -> Section:
     """The structural SITC-division browse — the full trade map by value,
     surfacing the ~43% of value / 75% of codes that sit in no editorial
@@ -533,6 +588,7 @@ def build_report(
             items = [_headline_item(m) for m in top_movers]
             if source_trigger == "eurostat":
                 sections = [_state_of_play_section(cur),
+                            _mirror_gap_section(cur),
                             _sector_detail_section(cur),
                             _structural_section(cur)]
 
