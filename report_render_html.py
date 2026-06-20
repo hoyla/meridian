@@ -191,6 +191,44 @@ def _sector_flow_row(f) -> str:
     )
 
 
+def _deficit_row(f) -> str:
+    m = f.metrics
+    per_day = m.get("per_day_eur")
+    pd = f" · €{per_day / 1e6:,.0f}M/day" if per_day else ""
+    yoy = m.get("yoy_pct")
+    delta = ""
+    if yoy is not None:
+        yoy = float(yoy)
+        col = _DOWN if yoy > 0 else _UP  # a widening deficit is the "bad" direction
+        delta = (f' · <span style="color:{col}">{"+" if yoy >= 0 else "−"}'
+                 f'{abs(yoy) * 100:.1f}% YoY</span>')
+    cite = (f'<span class="token">finding/{f.provenance.finding_ids[0]}</span>'
+            if f.provenance.finding_ids else "")
+    return (
+        '<div class="flow">'
+        f'<span class="flow-label">{html.escape(m.get("scope", ""))}</span>'
+        f'<span class="flow-val">{_fmt_eur(m.get("deficit_eur"))}{pd}{delta}</span>'
+        f'{_sparkline_svg(f.chart_data, w=90, h=24)}'
+        f'<span class="flow-cite">{cite}</span>'
+        "</div>"
+    )
+
+
+def _state_of_play_section(section) -> str:
+    out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
+    if section.intro:
+        out.append(f'<p class="kicker">{html.escape(section.intro)}</p>')
+    for sub in section.sections:
+        out.append(f'<div class="sector" id="{html.escape(sub.id)}">')
+        out.append(f'<h3 class="sector-h">{html.escape(sub.title)}</h3>')
+        if sub.intro:
+            out.append(f'<p class="note">{html.escape(sub.intro)}</p>')
+        for f in sub.findings:
+            out.append(_deficit_row(f))
+        out.append("</div>")
+    return "\n".join(out)
+
+
 def _sector_section(section) -> str:
     """The sector-detail tree — one anchored block per HS group. Each
     block's id is the group slug, so headline drill-down links land here."""
@@ -328,7 +366,9 @@ def render_html(report: Report) -> str:
                              "across this release</h2>" + _llm_block(slot) + "</section>")
 
     for sec in report.sections:
-        if sec.kind == "sector_detail" and sec.sections:
+        if sec.kind == "state_of_play" and sec.sections:
+            parts.append("<section>" + _state_of_play_section(sec) + "</section>")
+        elif sec.kind == "sector_detail" and sec.sections:
             parts.append("<section>" + _sector_section(sec) + "</section>")
 
     parts.append("<footer><h3>Where to go deeper</h3><div class='comp'>")

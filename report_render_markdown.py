@@ -120,26 +120,56 @@ def _sector_flow_line(f) -> str:
     return f"- {label}: **{val}**{lb}{cite}"
 
 
+def _deficit_line_md(f) -> str:
+    m = f.metrics
+    per_day = m.get("per_day_eur")
+    pd = f" · €{per_day / 1e6:,.0f}M/day" if per_day else ""
+    yoy = m.get("yoy_pct")
+    delta = ""
+    if yoy is not None:
+        yoy = float(yoy)
+        delta = f" · {'+' if yoy >= 0 else '−'}{abs(yoy) * 100:.1f}% YoY"
+    cite = (f" `finding/{f.provenance.finding_ids[0]}`"
+            if f.provenance.finding_ids else "")
+    return f"- {m.get('scope', '')}: **{_fmt_eur_md(m.get('deficit_eur'))}**{pd}{delta}{cite}"
+
+
 def _render_sections(sections) -> list[str]:
-    """Render the content tree (currently sector-detail) — parity with the
-    HTML portal so the LLM-facing surface carries the granularity too. The
-    `### {group}` heading auto-slugs to match the headline drill-down links."""
+    """Render the content tree — parity with the HTML portal so the
+    LLM-facing surface carries it too. `### {heading}` auto-slugs to match
+    the headline drill-down links."""
     out: list[str] = []
     for sec in sections:
-        if sec.kind != "sector_detail" or not sec.sections:
+        if not sec.sections:
             continue
-        out.append("## Sector detail")
-        out.append("")
-        if sec.intro:
-            out.append(f"*{sec.intro} {len(sec.sections)} groups, "
-                       "ordered by size.*")
+        if sec.kind == "state_of_play":
+            out.append("## State of play")
             out.append("")
-        for grp in sec.sections:
-            out.append(f"### {grp.title}")
+            if sec.intro:
+                out.append(f"*{sec.intro}*")
+                out.append("")
+            for sub in sec.sections:
+                out.append(f"### {sub.title}")
+                out.append("")
+                if sub.intro:
+                    out.append(f"*{sub.intro}*")
+                    out.append("")
+                for f in sub.findings:
+                    out.append(_deficit_line_md(f))
+                out.append("")
+        elif sec.kind == "sector_detail":
+            out.append("## Sector detail")
             out.append("")
-            for f in grp.findings:
-                out.append(_sector_flow_line(f))
-            out.append("")
+            if sec.intro:
+                out.append(f"*{sec.intro} {len(sec.sections)} groups, "
+                           "ordered by size.*")
+                out.append("")
+            for grp in sec.sections:
+                out.append(f"### {grp.title}")
+                out.append("")
+                for f in grp.findings:
+                    out.append(_sector_flow_line(f))
+                out.append("")
     return out
 
 

@@ -357,6 +357,68 @@ def _gacc_macro_items(cur, period) -> list[HeadlineItem]:
     return items
 
 
+_TB_SCOPES = [
+    ("trade_balance", "EU-27 (Eurostat)", "eurostat"),
+    ("trade_balance_uk", "UK (HMRC)", "hmrc"),
+    ("trade_balance_combined", "EU-27 + UK", "cross_source"),
+]
+
+
+def _state_of_play_section(cur) -> Section:
+    """The 'where things stand' companion (Q3). First cut: Europe's
+    standing goods-trade deficit with China across the three reporter
+    scopes — the canonical standing level (the ~€1bn/day figure). A level,
+    not a change, so it lives here rather than in 'what changed'."""
+    root = Section(
+        id="state-of-play", title="State of play", kind="state_of_play",
+        intro="Where things stand — standing levels, not this cycle's change.",
+    )
+    deficit = Section(
+        id="the-deficit",
+        title="Europe's goods-trade deficit with China", kind="state_of_play",
+        intro="The standing level by reporter scope, on the CN+HK+MO envelope.",
+    )
+    for subkind, label, source in _TB_SCOPES:
+        cur.execute(
+            """SELECT id, detail FROM findings
+                WHERE superseded_at IS NULL AND subkind = %s
+                ORDER BY (detail->'windows'->>'anchor_period')::date DESC
+                LIMIT 1""",
+            (subkind,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            continue
+        fid, d = row["id"], row["detail"]
+        roll = (d or {}).get("totals", {}).get("rolling_12mo", {})
+        anchor = (d or {}).get("windows", {}).get("anchor_period")
+        as_of = date.fromisoformat(anchor) if isinstance(anchor, str) else None
+        series = []
+        for p in (d or {}).get("monthly_deficit_series", []) or []:
+            per, val = p.get("period"), p.get("deficit_eur")
+            if per is not None and val is not None:
+                series.append(SeriesPoint(
+                    period=date.fromisoformat(per) if isinstance(per, str) else per,
+                    value=float(val),
+                ))
+        deficit.findings.append(Finding(
+            finding_id=fid, subkind=subkind,
+            title=f"{label} deficit with China",
+            metrics={
+                "scope": label,
+                "deficit_eur": _f(roll.get("deficit_eur")),
+                "per_day_eur": _f(roll.get("deficit_per_day_eur")),
+                "yoy_pct": _f(roll.get("yoy_pct")),
+            },
+            chart_data=(ChartData(chart_type="line", series=series)
+                        if len(series) >= 2 else None),
+            provenance=Provenance(finding_ids=[fid], source=source, as_of=as_of),
+        ))
+    if deficit.findings:
+        root.sections.append(deficit)
+    return root
+
+
 def build_report(
     source_trigger: str = "eurostat",
     data_period: date | None = None,
@@ -389,7 +451,8 @@ def build_report(
                 data_period = top_movers[0].get("current_end")
             items = [_headline_item(m) for m in top_movers]
             if source_trigger == "eurostat":
-                sections = [_sector_detail_section(cur)]
+                sections = [_state_of_play_section(cur),
+                            _sector_detail_section(cur)]
 
     month = _fmt_month(data_period)
     llm_slots: list[LLMSlot] = []
