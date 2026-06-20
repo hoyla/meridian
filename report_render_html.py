@@ -235,20 +235,27 @@ def _sector_section(section) -> str:
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
         out.append(f'<p class="kicker">{html.escape(section.intro)} '
-                   f'{len(section.sections)} groups, ordered by size.</p>')
-    if section.sections:
-        links = " · ".join(
-            f'<a href="#{html.escape(g.id)}">{html.escape(g.title)}</a>'
-            for g in section.sections
+                   "Ordered by size — filter to find a sector.</p>")
+    n = len(section.sections)
+    if n:
+        out.append(
+            '<div class="filter-bar">'
+            '<input id="sector-filter" class="filter" type="text" '
+            'placeholder="Filter sectors by name…" '
+            'aria-label="Filter sectors by name" autocomplete="off">'
+            f'<span id="sector-count" class="filter-count">{n} groups</span>'
+            "</div>"
         )
-        out.append('<nav class="jump"><span class="jump-l">Jump to:</span> '
-                   + links + "</nav>")
     for grp in section.sections:
-        out.append(f'<div class="sector" id="{html.escape(grp.id)}">')
+        # data-name drives the live filter (lowercased group title)
+        out.append(f'<div class="sector" id="{html.escape(grp.id)}" '
+                   f'data-name="{html.escape(grp.title.lower())}">')
         out.append(f'<h3 class="sector-h">{html.escape(grp.title)}</h3>')
         for f in grp.findings:
             out.append(_sector_flow_row(f))
         out.append("</div>")
+    out.append('<p id="sector-empty" class="note" style="display:none">'
+               "No sector matches that filter.</p>")
     return "\n".join(out)
 
 
@@ -297,10 +304,10 @@ a:hover{border-bottom-color:var(--link)}
 .drill{font-size:13px;font-weight:700;white-space:nowrap;border-bottom:none}
 .note{font-size:13px;color:var(--muted);font-style:italic}
 .since{font-family:var(--font-body);font-size:17px;line-height:1.4}
-.jump{font-size:13px;line-height:1.95;margin:0 0 6px;padding-bottom:12px;border-bottom:1px solid var(--line)}
-.jump a{border-bottom:none;white-space:nowrap}
-.jump a:hover{border-bottom:1px solid var(--link)}
-.jump-l{color:var(--muted);font-weight:700;margin-right:6px}
+.filter-bar{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.filter{font-family:var(--font-sans);font-size:14px;padding:7px 10px;border:1px solid var(--line);border-radius:4px;width:280px;max-width:60%;color:var(--ink);background:var(--surface)}
+.filter:focus{outline:none;border-color:var(--link);box-shadow:0 0 0 3px rgba(0,119,182,.15)}
+.filter-count{font-size:13px;color:var(--muted)}
 .sector{padding:12px 0;border-bottom:1px solid var(--line)}
 .sector:target{background:#fffdf0;scroll-margin-top:12px}
 .sector-h{font-family:var(--font-headline);font-size:18px;font-weight:700;color:var(--ink);margin:0 0 6px}
@@ -320,6 +327,26 @@ footer h3{font-size:13px;font-weight:700;color:var(--muted);margin:0 0 10px}
 .comp b{display:block;color:var(--link)}.comp span{font-size:13px;color:var(--muted)}
 @media(max-width:560px){.mast{font-size:27px}.sub{font-size:16px}section{padding:14px 18px}.masthead{padding:16px 18px}.subbar{padding:10px 18px}}
 """
+
+
+_FILTER_JS = """<script>
+(function(){
+  var f=document.getElementById('sector-filter');if(!f)return;
+  var blocks=[].slice.call(document.querySelectorAll('.sector[data-name]'));
+  var count=document.getElementById('sector-count');
+  var empty=document.getElementById('sector-empty');
+  function apply(){
+    var q=f.value.trim().toLowerCase(),shown=0;
+    blocks.forEach(function(b){
+      var m=!q||b.getAttribute('data-name').indexOf(q)!==-1;
+      b.style.display=m?'':'none';if(m)shown++;
+    });
+    if(count)count.textContent=q?('showing '+shown+' of '+blocks.length):(blocks.length+' groups');
+    if(empty)empty.style.display=shown?'none':'block';
+  }
+  f.addEventListener('input',apply);
+})();
+</script>"""
 
 
 def render_html(report: Report) -> str:
@@ -375,5 +402,7 @@ def render_html(report: Report) -> str:
     for name, what in _COMPANIONS:
         parts.append(f'<a href="#">{name and f"<b>{html.escape(name)}</b>"}'
                      f'<span>{html.escape(what)}</span></a>')
-    parts.append("</div></footer></div></body></html>")
+    parts.append("</div></footer></div>")
+    parts.append(_FILTER_JS)
+    parts.append("</body></html>")
     return "".join(parts)
