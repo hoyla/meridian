@@ -271,43 +271,64 @@ def _sector_detail_section(cur) -> Section:
                      (detail->'windows'->>'current_end')::date DESC"""
     )
     share_by_name = {n: (_f(sv), _f(sk), end) for n, sv, sk, end in cur.fetchall()}
-    cur.execute(
-        """SELECT id, subkind, detail FROM findings
-            WHERE superseded_at IS NULL
-              AND subkind IN ('hs_group_yoy','hs_group_yoy_export')
-              AND (detail->'windows'->>'current_end')::date = %s""",
-        (anchor,),
-    )
+    # All three reporter scopes (EU-27 / UK / EU-27+UK) per group, each at its
+    # own latest anchor (HMRC may lag Eurostat).
+    scopes = [
+        ("EU-27", "eurostat", ("hs_group_yoy", "hs_group_yoy_export")),
+        ("UK", "hmrc", ("hs_group_yoy_uk", "hs_group_yoy_uk_export")),
+        ("EU-27+UK", "cross_source",
+         ("hs_group_yoy_combined", "hs_group_yoy_combined_export")),
+    ]
+    scope_order = {"EU-27": 0, "UK": 1, "EU-27+UK": 2}
     by_group: dict[str, dict] = {}
-    for fid, subkind, detail in cur.fetchall():
-        grp = ((detail or {}).get("group") or {}).get("name") or "Unknown"
-        tot = (detail or {}).get("totals", {})
-        is_export = subkind.endswith("_export")
-        finding = Finding(
-            finding_id=fid, subkind=subkind,
-            title=(f"EU-27 {'exports' if is_export else 'imports'} of "
-                   f"{grp} {'to' if is_export else 'from'} China"),
-            metrics={
-                "flow": "export" if is_export else "import",
-                "yoy_pct": _f(tot.get("yoy_pct")),
-                "current_eur": _f(tot.get("current_12mo_eur")),
-                "yoy_pct_kg": _f(tot.get("yoy_pct_kg")),
-                "low_base": bool(tot.get("low_base")),
-            },
-            chart_data=_series_chart((detail or {}).get("monthly_series")),
-            provenance=Provenance(
-                finding_ids=[fid], source="eurostat", as_of=anchor,
-                caveat="low base" if tot.get("low_base") else None,
-            ),
-            facets=Facets(commodity=[grp]),
+    for scope_label, src, subks in scopes:
+        cur.execute(
+            """SELECT max((detail->'windows'->>'current_end')::date) FROM findings
+                WHERE subkind = ANY(%s) AND superseded_at IS NULL""",
+            (list(subks),),
         )
-        g = by_group.setdefault(grp, {"max_eur": 0.0, "findings": []})
-        g["findings"].append(finding)
-        g["max_eur"] = max(g["max_eur"], finding.metrics["current_eur"] or 0.0)
+        sa = cur.fetchone()[0]
+        if sa is None:
+            continue
+        cur.execute(
+            """SELECT id, subkind, detail FROM findings WHERE superseded_at IS NULL
+                AND subkind = ANY(%s)
+                AND (detail->'windows'->>'current_end')::date = %s""",
+            (list(subks), sa),
+        )
+        for fid, subkind, detail in cur.fetchall():
+            grp = ((detail or {}).get("group") or {}).get("name") or "Unknown"
+            tot = (detail or {}).get("totals", {})
+            is_export = subkind.endswith("_export")
+            finding = Finding(
+                finding_id=fid, subkind=subkind,
+                title=(f"{scope_label} {'exports' if is_export else 'imports'} "
+                       f"of {grp} {'to' if is_export else 'from'} China"),
+                metrics={
+                    "scope": scope_label,
+                    "flow": "export" if is_export else "import",
+                    "yoy_pct": _f(tot.get("yoy_pct")),
+                    "current_eur": _f(tot.get("current_12mo_eur")),
+                    "yoy_pct_kg": _f(tot.get("yoy_pct_kg")),
+                    "low_base": bool(tot.get("low_base")),
+                },
+                chart_data=_series_chart((detail or {}).get("monthly_series")),
+                provenance=Provenance(
+                    finding_ids=[fid], source=src, as_of=sa,
+                    caveat="low base" if tot.get("low_base") else None,
+                ),
+                facets=Facets(commodity=[grp]),
+            )
+            g = by_group.setdefault(grp, {"max_eur": 0.0, "findings": []})
+            g["findings"].append(finding)
+            if scope_label == "EU-27":
+                g["max_eur"] = max(g["max_eur"],
+                                   finding.metrics["current_eur"] or 0.0)
 
     for name, g in sorted(by_group.items(), key=lambda kv: -kv[1]["max_eur"]):
-        # findings sorted export-then-import (alpha: 'export' < 'import')
-        fs = sorted(g["findings"], key=lambda f: f.metrics["flow"])
+        # ordered scope (EU-27, UK, combined), then export-then-import
+        fs = sorted(g["findings"], key=lambda f: (
+            scope_order.get(f.metrics.get("scope"), 9), f.metrics["flow"]))
         sectors = classifications.sitc_divisions_for_patterns(
             patterns_by_name.get(name, [])
         )

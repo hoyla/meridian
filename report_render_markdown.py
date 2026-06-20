@@ -106,8 +106,9 @@ def _fmt_eur_md(v) -> str:
 
 def _sector_flow_line(f) -> str:
     flow = f.metrics.get("flow")
-    label = ("EU-27 exports to China" if flow == "export"
-             else "EU-27 imports from China")
+    scope = f.metrics.get("scope", "EU-27")
+    label = (f"{scope} exports to China" if flow == "export"
+             else f"{scope} imports from China")
     yoy = f.metrics.get("yoy_pct")
     if yoy is None:
         val = "—"
