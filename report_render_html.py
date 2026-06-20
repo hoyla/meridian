@@ -28,6 +28,7 @@ import html
 import re
 
 from report_model import Headline, Indicator, Report, WhatChanged
+from classifications import division_title  # static SITC title lookup
 
 # Guardian Source tokens — resolved hexes. See
 # ~/Code/guardian-source/CONVENTIONS.md — a shared local design-system
@@ -247,10 +248,20 @@ def _sector_section(section) -> str:
             "</div>"
         )
     for grp in section.sections:
-        # data-name drives the live filter (lowercased group title)
+        secs = grp.facets.sector if grp.facets else []
+        titles = [division_title(c) for c in secs]
+        # SITC division names join the filter index, so "machinery" or
+        # "electrical" finds groups by their structural bucket, not just name.
+        data_name = (grp.title + " " + " ".join(titles)).lower()
         out.append(f'<div class="sector" id="{html.escape(grp.id)}" '
-                   f'data-name="{html.escape(grp.title.lower())}">')
+                   f'data-name="{html.escape(data_name)}">')
         out.append(f'<h3 class="sector-h">{html.escape(grp.title)}</h3>')
+        if titles:
+            shown = titles[:3]
+            extra = f" +{len(titles) - 3} more" if len(titles) > 3 else ""
+            out.append('<div class="sitc">SITC · '
+                       + " · ".join(html.escape(t) for t in shown)
+                       + html.escape(extra) + "</div>")
         for f in grp.findings:
             out.append(_sector_flow_row(f))
         out.append("</div>")
@@ -310,7 +321,8 @@ a:hover{border-bottom-color:var(--link)}
 .filter-count{font-size:13px;color:var(--muted)}
 .sector{padding:12px 0;border-bottom:1px solid var(--line)}
 .sector:target{background:#fffdf0;scroll-margin-top:12px}
-.sector-h{font-family:var(--font-headline);font-size:18px;font-weight:700;color:var(--ink);margin:0 0 6px}
+.sector-h{font-family:var(--font-headline);font-size:18px;font-weight:700;color:var(--ink);margin:0 0 2px}
+.sitc{font-size:12px;color:var(--muted);margin:0 0 8px;letter-spacing:.2px}
 .flow{display:flex;align-items:center;gap:12px;font-size:14px;margin:4px 0}
 .flow-label{flex:1 1 auto;color:var(--ink)}
 .flow-cap{color:var(--news);font-weight:700;font-size:12px}

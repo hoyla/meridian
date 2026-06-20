@@ -97,6 +97,49 @@ def _real_cn8(code: str) -> bool:
     return code.isdigit() and len(code) == 8
 
 
+_CONVERSION: dict[str, str] | None = None
+
+
+def _conversion() -> dict[str, str]:
+    """HS6 -> SITC4, HS2022 over HS2017 (cached). Used to assign the SITC
+    `sector` facet to an editorial group from its HS patterns."""
+    global _CONVERSION
+    if _CONVERSION is None:
+        try:
+            m = _load_conversion(HS2017_SITC4)
+            m.update(_load_conversion(HS2022_SITC4))  # HS2022 wins
+        except FileNotFoundError:
+            # Shared classification files absent (e.g. a clean checkout
+            # without ~/Code/un-classifications/). The SITC sector facet is
+            # optional enrichment — degrade to empty, never break a render.
+            m = {}
+        _CONVERSION = m
+    return _CONVERSION
+
+
+def sitc_divisions_for_patterns(patterns) -> list[str]:
+    """The SITC division code(s) an editorial group spans, from its HS
+    wildcard patterns (2/4/6/8-digit). A group may span several — it's a
+    label, not a partition (e.g. 'Electrical equipment, broad' → 10)."""
+    conv = _conversion()
+    divs: set[str] = set()
+    for p in patterns or []:
+        d = p.replace("%", "")
+        if len(d) >= 6:
+            s = conv.get(d[:6])
+            if s:
+                divs.add(s[:2])
+        else:
+            for k, s in conv.items():
+                if k.startswith(d):
+                    divs.add(s[:2])
+    return sorted(divs)
+
+
+def division_title(code: str) -> str:
+    return SITC_DIVISION.get(code, f"div {code}")
+
+
 def build(write: bool = True) -> dict:
     m22 = _load_conversion(HS2022_SITC4)
     m17 = _load_conversion(HS2017_SITC4)

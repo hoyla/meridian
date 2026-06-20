@@ -37,6 +37,7 @@ from briefing_pack._helpers import (
 )
 from briefing_pack.sections.diff import _compute_diff
 from briefing_pack.sections.front_page import _mover_sentence
+import classifications
 from report_model import (
     ChartData,
     Facets,
@@ -248,6 +249,9 @@ def _sector_detail_section(cur) -> Section:
     anchor = cur.fetchone()[0]
     if anchor is None:
         return root
+    # Group HS patterns → SITC division facet (the structural spine).
+    cur.execute("SELECT name, hs_patterns FROM hs_groups")
+    patterns_by_name = {n: (p or []) for n, p in cur.fetchall()}
     cur.execute(
         """SELECT id, subkind, detail FROM findings
             WHERE superseded_at IS NULL
@@ -285,9 +289,12 @@ def _sector_detail_section(cur) -> Section:
     for name, g in sorted(by_group.items(), key=lambda kv: -kv[1]["max_eur"]):
         # findings sorted export-then-import (alpha: 'export' < 'import')
         fs = sorted(g["findings"], key=lambda f: f.metrics["flow"])
+        sectors = classifications.sitc_divisions_for_patterns(
+            patterns_by_name.get(name, [])
+        )
         root.sections.append(Section(
             id=_slugify_heading(name), title=name, kind="sector_detail",
-            findings=fs, facets=Facets(commodity=[name]),
+            findings=fs, facets=Facets(commodity=[name], sector=sectors),
         ))
     return root
 
