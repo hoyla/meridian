@@ -38,6 +38,7 @@ from briefing_pack._helpers import (
 from briefing_pack.sections.diff import _compute_diff
 from briefing_pack.sections.front_page import _mover_sentence
 import classifications
+import labels
 from report_model import (
     ChartData,
     Facets,
@@ -292,9 +293,11 @@ def _sector_detail_section(cur) -> Section:
         sectors = classifications.sitc_divisions_for_patterns(
             patterns_by_name.get(name, [])
         )
+        themes = labels.themes_for_group(name)
         root.sections.append(Section(
             id=_slugify_heading(name), title=name, kind="sector_detail",
-            findings=fs, facets=Facets(commodity=[name], sector=sectors),
+            findings=fs,
+            facets=Facets(commodity=[name], sector=sectors, theme=themes),
         ))
     return root
 

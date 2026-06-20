@@ -242,28 +242,45 @@ def _sector_section(section) -> str:
         out.append(
             '<div class="filter-bar">'
             '<input id="sector-filter" class="filter" type="text" '
-            'placeholder="Filter sectors by name…" '
-            'aria-label="Filter sectors by name" autocomplete="off">'
+            'placeholder="Filter by sector, SITC bucket or theme…" '
+            'aria-label="Filter sectors" autocomplete="off">'
             f'<span id="sector-count" class="filter-count">{n} groups</span>'
             "</div>"
         )
+        # Theme chips — clickable cross-cutting labels that drive the filter.
+        themes = sorted({t for g in section.sections
+                         if g.facets for t in g.facets.theme})
+        if themes:
+            chips = "".join(
+                f'<button class="chip" data-q="{html.escape(t.lower())}">'
+                f'{html.escape(t)}</button>' for t in themes
+            )
+            out.append('<div class="chips"><span class="chips-l">Themes:</span> '
+                       + chips + "</div>")
     for grp in section.sections:
-        secs = grp.facets.sector if grp.facets else []
+        f = grp.facets
+        secs = f.sector if f else []
         titles = [division_title(c) for c in secs]
-        # SITC division names join the filter index, so "machinery" or
-        # "electrical" finds groups by their structural bucket, not just name.
-        data_name = (grp.title + " " + " ".join(titles)).lower()
+        themes = f.theme if f else []
+        # SITC division names + theme names join the filter index, so
+        # "machinery", "electrical" or "xinjiang" all find groups.
+        data_name = (grp.title + " " + " ".join(titles) + " "
+                     + " ".join(themes)).lower()
         out.append(f'<div class="sector" id="{html.escape(grp.id)}" '
                    f'data-name="{html.escape(data_name)}">')
         out.append(f'<h3 class="sector-h">{html.escape(grp.title)}</h3>')
+        if themes:
+            out.append('<div class="themes">'
+                       + "".join(f'<span class="theme">{html.escape(t)}</span>'
+                                 for t in themes) + "</div>")
         if titles:
             shown = titles[:3]
             extra = f" +{len(titles) - 3} more" if len(titles) > 3 else ""
             out.append('<div class="sitc">SITC · '
                        + " · ".join(html.escape(t) for t in shown)
                        + html.escape(extra) + "</div>")
-        for f in grp.findings:
-            out.append(_sector_flow_row(f))
+        for fi in grp.findings:
+            out.append(_sector_flow_row(fi))
         out.append("</div>")
     out.append('<p id="sector-empty" class="note" style="display:none">'
                "No sector matches that filter.</p>")
@@ -323,6 +340,13 @@ a:hover{border-bottom-color:var(--link)}
 .sector:target{background:#fffdf0;scroll-margin-top:12px}
 .sector-h{font-family:var(--font-headline);font-size:18px;font-weight:700;color:var(--ink);margin:0 0 2px}
 .sitc{font-size:12px;color:var(--muted);margin:0 0 8px;letter-spacing:.2px}
+.chips{margin:0 0 14px;font-size:13px}
+.chips-l{color:var(--muted);font-weight:700;margin-right:6px}
+.chip{font-family:var(--font-sans);font-size:12.5px;color:var(--masthead);background:var(--surface);border:1px solid var(--line);border-radius:62.5rem;padding:3px 11px;margin:0 6px 6px 0;cursor:pointer}
+.chip:hover{border-color:var(--link)}
+.chip.on{background:var(--masthead);color:#fff;border-color:var(--masthead)}
+.themes{margin:0 0 6px}
+.theme{display:inline-block;font-size:11px;font-weight:700;color:#7a5c00;background:#fff4d6;border-radius:62.5rem;padding:2px 9px;margin:0 5px 4px 0}
 .flow{display:flex;align-items:center;gap:12px;font-size:14px;margin:4px 0}
 .flow-label{flex:1 1 auto;color:var(--ink)}
 .flow-cap{color:var(--news);font-weight:700;font-size:12px}
@@ -355,8 +379,18 @@ _FILTER_JS = """<script>
     });
     if(count)count.textContent=q?('showing '+shown+' of '+blocks.length):(blocks.length+' groups');
     if(empty)empty.style.display=shown?'none':'block';
+    [].forEach.call(document.querySelectorAll('.chip'),function(c){
+      c.classList.toggle('on', c.getAttribute('data-q')===q);
+    });
   }
   f.addEventListener('input',apply);
+  [].forEach.call(document.querySelectorAll('.chip'),function(c){
+    c.addEventListener('click',function(){
+      var q=c.getAttribute('data-q');
+      f.value=(f.value.trim().toLowerCase()===q)?'':q;  // toggle
+      apply();
+    });
+  });
 })();
 </script>"""
 

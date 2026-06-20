@@ -167,6 +167,16 @@ def _render_sections(sections) -> list[str]:
             for grp in sec.sections:
                 out.append(f"### {grp.title}")
                 out.append("")
+                meta = []
+                if grp.facets and grp.facets.theme:
+                    meta.append("themes: " + ", ".join(grp.facets.theme))
+                if grp.facets and grp.facets.sector:
+                    from classifications import division_title
+                    meta.append("SITC: " + ", ".join(
+                        division_title(c) for c in grp.facets.sector[:3]))
+                if meta:
+                    out.append("*" + " · ".join(meta) + "*")
+                    out.append("")
                 for f in grp.findings:
                     out.append(_sector_flow_line(f))
                 out.append("")
