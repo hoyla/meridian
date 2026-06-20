@@ -1,0 +1,22 @@
+<!-- @dsCard group="Spacing" viewport="700x180" name="Radius, keylines & shadow" subtitle="Square by default · pill buttons · borders over shadows" -->
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="stylesheet" href="../styles.css">
+<style>
+  body{margin:0;padding:24px;background:#fff;font-family:var(--font-sans)}
+  .row{display:flex;gap:24px;align-items:center;flex-wrap:wrap}
+  .item{display:flex;flex-direction:column;align-items:center;gap:8px}
+  .box{width:90px;height:64px;background:var(--neutral-97);border:1px solid var(--neutral-86)}
+  .lbl{font-size:11px;color:var(--neutral-46);font-weight:700;text-align:center}
+  .pill{width:110px;height:44px;background:var(--brand-400);border-radius:var(--radius-pill)}
+  .kl{width:110px;height:64px;background:#fff;border-top:4px solid var(--news-400)}
+  .sh{width:90px;height:64px;background:#fff;box-shadow:var(--shadow-floating)}
+</style></head>
+<body>
+<div class="row">
+  <div class="item"><div class="box" style="border-radius:var(--radius-card)"></div><div class="lbl">Card<br>0px square</div></div>
+  <div class="item"><div class="box" style="border-radius:var(--radius-input)"></div><div class="lbl">Input<br>4px</div></div>
+  <div class="item"><div class="pill"></div><div class="lbl">Pill button<br>fully round</div></div>
+  <div class="item"><div class="kl"></div><div class="lbl">Section keyline<br>4px pillar rule</div></div>
+  <div class="item"><div class="sh"></div><div class="lbl">Floating shadow<br>0 4 12 / 8%</div></div>
+</div>
+</body></html>
