@@ -192,6 +192,8 @@ def _render_sections(sections) -> list[str]:
                     from classifications import division_title
                     meta.append("SITC: " + ", ".join(
                         division_title(c) for c in grp.facets.sector[:3]))
+                if grp.facets and grp.facets.end_use:
+                    meta.append("end-use: " + ", ".join(grp.facets.end_use))
                 if meta:
                     out.append("*" + " · ".join(meta) + "*")
                     out.append("")

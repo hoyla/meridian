@@ -49,10 +49,11 @@ SCHEMA_VERSION = "0.1.0"
 class Facets:
     """Reporter-relevant axes a finding can be navigated/searched along,
     orthogonal to its place in the section tree."""
-    sector: list[str] = field(default_factory=list)
-    theme: list[str] = field(default_factory=list)
+    sector: list[str] = field(default_factory=list)    # SITC division (structural spine)
+    theme: list[str] = field(default_factory=list)     # editorial labels (overlay)
     partner: list[str] = field(default_factory=list)
     commodity: list[str] = field(default_factory=list)
+    end_use: list[str] = field(default_factory=list)   # BEC: capital/intermediate/consumption
 
 
 @dataclass

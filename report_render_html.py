@@ -299,10 +299,11 @@ def _sector_section(section) -> str:
         secs = f.sector if f else []
         titles = [division_title(c) for c in secs]
         themes = f.theme if f else []
-        # SITC division names + theme names join the filter index, so
-        # "machinery", "electrical" or "xinjiang" all find groups.
+        end_use = f.end_use if f else []
+        # SITC division names + theme names + end-use join the filter index,
+        # so "machinery", "xinjiang" or "capital" all find groups.
         data_name = (grp.title + " " + " ".join(titles) + " "
-                     + " ".join(themes)).lower()
+                     + " ".join(themes) + " " + " ".join(end_use)).lower()
         out.append(f'<div class="sector" id="{html.escape(grp.id)}" '
                    f'data-name="{html.escape(data_name)}">')
         out.append(f'<h3 class="sector-h">{html.escape(grp.title)}</h3>')
@@ -310,12 +311,16 @@ def _sector_section(section) -> str:
             out.append('<div class="themes">'
                        + "".join(f'<span class="theme">{html.escape(t)}</span>'
                                  for t in themes) + "</div>")
-        if titles:
-            shown = titles[:3]
-            extra = f" +{len(titles) - 3} more" if len(titles) > 3 else ""
-            out.append('<div class="sitc">SITC · '
-                       + " · ".join(html.escape(t) for t in shown)
-                       + html.escape(extra) + "</div>")
+        if titles or end_use:
+            bits = []
+            if titles:
+                shown = titles[:3]
+                extra = f" +{len(titles) - 3} more" if len(titles) > 3 else ""
+                bits.append("SITC · " + " · ".join(html.escape(t) for t in shown)
+                            + html.escape(extra))
+            if end_use:
+                bits.append("end-use · " + ", ".join(html.escape(e) for e in end_use))
+            out.append('<div class="sitc">' + "  |  ".join(bits) + "</div>")
         for fi in grp.findings:
             out.append(_sector_flow_row(fi))
         out.append("</div>")

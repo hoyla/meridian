@@ -295,10 +295,12 @@ def _sector_detail_section(cur) -> Section:
             patterns_by_name.get(name, [])
         )
         themes = labels.themes_for_group(name)
+        end_use = classifications.enduse_for_patterns(patterns_by_name.get(name, []))
         root.sections.append(Section(
             id=_slugify_heading(name), title=name, kind="sector_detail",
             findings=fs,
-            facets=Facets(commodity=[name], sector=sectors, theme=themes),
+            facets=Facets(commodity=[name], sector=sectors, theme=themes,
+                          end_use=end_use),
         ))
     return root
 
