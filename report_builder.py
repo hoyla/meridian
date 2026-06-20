@@ -40,6 +40,7 @@ from briefing_pack.sections.front_page import _mover_sentence
 from report_model import (
     ChartData,
     Facets,
+    Finding,
     Headline,
     HeadlineItem,
     Indicator,
@@ -47,10 +48,15 @@ from report_model import (
     Provenance,
     Report,
     ReportMeta,
+    Section,
     SeriesPoint,
     Shift,
     WhatChanged,
 )
+
+
+def _f(v):
+    return None if v is None else float(v)
 
 # Variant content (Q1). The lead title and note are *content* (they live
 # in the Headline node), so they belong here in the builder, not in a
@@ -205,6 +211,87 @@ def _what_changed(diff) -> WhatChanged:
     )
 
 
+def _series_chart(monthly_series) -> ChartData | None:
+    if not monthly_series:
+        return None
+    pts = []
+    for p in monthly_series:
+        per, val = p.get("period"), p.get("value_eur")
+        if per is None or val is None:
+            continue
+        pts.append(SeriesPoint(
+            period=date.fromisoformat(per) if isinstance(per, str) else per,
+            value=float(val),
+        ))
+    return ChartData(chart_type="line", series=pts) if len(pts) >= 2 else None
+
+
+def _sector_detail_section(cur) -> Section:
+    """The navigable granularity layer: one child Section per HS group,
+    each carrying its import + export Finding. The group's Section id is
+    `_slugify_heading(name)` — the SAME slug the headline movers point
+    their drill-downs at, so those links resolve here. Groups ordered by
+    12-month value (biggest sectors first); navigation/search by `facets`
+    is the later refinement.
+    """
+    root = Section(
+        id="sector-detail", title="Sector detail", kind="sector_detail",
+        intro="Every HS group's rolling 12-month value vs the prior 12 "
+              "months, China ↔ EU-27, both flows.",
+    )
+    cur.execute(
+        """SELECT max((detail->'windows'->>'current_end')::date)
+             FROM findings
+            WHERE subkind IN ('hs_group_yoy','hs_group_yoy_export')
+              AND superseded_at IS NULL"""
+    )
+    anchor = cur.fetchone()[0]
+    if anchor is None:
+        return root
+    cur.execute(
+        """SELECT id, subkind, detail FROM findings
+            WHERE superseded_at IS NULL
+              AND subkind IN ('hs_group_yoy','hs_group_yoy_export')
+              AND (detail->'windows'->>'current_end')::date = %s""",
+        (anchor,),
+    )
+    by_group: dict[str, dict] = {}
+    for fid, subkind, detail in cur.fetchall():
+        grp = ((detail or {}).get("group") or {}).get("name") or "Unknown"
+        tot = (detail or {}).get("totals", {})
+        is_export = subkind.endswith("_export")
+        finding = Finding(
+            finding_id=fid, subkind=subkind,
+            title=(f"EU-27 {'exports' if is_export else 'imports'} of "
+                   f"{grp} {'to' if is_export else 'from'} China"),
+            metrics={
+                "flow": "export" if is_export else "import",
+                "yoy_pct": _f(tot.get("yoy_pct")),
+                "current_eur": _f(tot.get("current_12mo_eur")),
+                "yoy_pct_kg": _f(tot.get("yoy_pct_kg")),
+                "low_base": bool(tot.get("low_base")),
+            },
+            chart_data=_series_chart((detail or {}).get("monthly_series")),
+            provenance=Provenance(
+                finding_ids=[fid], source="eurostat", as_of=anchor,
+                caveat="low base" if tot.get("low_base") else None,
+            ),
+            facets=Facets(commodity=[grp]),
+        )
+        g = by_group.setdefault(grp, {"max_eur": 0.0, "findings": []})
+        g["findings"].append(finding)
+        g["max_eur"] = max(g["max_eur"], finding.metrics["current_eur"] or 0.0)
+
+    for name, g in sorted(by_group.items(), key=lambda kv: -kv[1]["max_eur"]):
+        # findings sorted export-then-import (alpha: 'export' < 'import')
+        fs = sorted(g["findings"], key=lambda f: f.metrics["flow"])
+        root.sections.append(Section(
+            id=_slugify_heading(name), title=name, kind="sector_detail",
+            findings=fs, facets=Facets(commodity=[name]),
+        ))
+    return root
+
+
 def build_report(
     source_trigger: str = "eurostat",
     data_period: date | None = None,
@@ -226,6 +313,7 @@ def build_report(
         deficit = _deficit_indicator(cur)
         if deficit is not None:
             indicators.append(deficit)
+        sector_detail = _sector_detail_section(cur)
 
     month = _fmt_month(data_period)
     items: list[HeadlineItem] = []
@@ -262,5 +350,5 @@ def build_report(
         key_indicators=indicators,
         headline=headline,
         what_changed=_what_changed(diff),
-        sections=[],  # the navigable content tree — next increment
+        sections=[sector_detail],  # the navigable content tree
     )

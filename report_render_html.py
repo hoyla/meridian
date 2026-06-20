@@ -30,7 +30,8 @@ import re
 from report_model import Headline, Indicator, Report, WhatChanged
 
 # Guardian Source tokens — resolved hexes. See
-# dev_notes/guardian-source/CONVENTIONS.md (exported from the design system).
+# ~/Code/guardian-source/CONVENTIONS.md — a shared local design-system
+# reference (kept outside this repo so all local projects can use it).
 _GUARDIAN_BLUE = "#052962"  # --brand-400, masthead
 _NEWS = "#c70000"           # --news-400, the editorial pillar rule
 _UP = "#22874d"             # --text-success, positive delta
@@ -71,12 +72,12 @@ def _inline_md(s: str) -> str:
     return s
 
 
-def _sparkline(ind: Indicator, w: int = 150, h: int = 36) -> str:
-    """Inline-SVG sparkline from the indicator's series. No axes — a
+def _sparkline_svg(chart_data, w: int = 150, h: int = 36) -> str:
+    """Inline-SVG sparkline from any ChartData series. No axes — a
     glanceable vital sign. Last point marked."""
-    if not ind.chart_data or len(ind.chart_data.series) < 2:
+    if not chart_data or len(chart_data.series) < 2:
         return ""
-    vals = [p.value for p in ind.chart_data.series]
+    vals = [p.value for p in chart_data.series]
     lo, hi = min(vals), max(vals)
     span = (hi - lo) or 1.0
     n = len(vals)
@@ -108,7 +109,7 @@ def _indicator_card(ind: Indicator) -> str:
         f'<div class="kpi-label">{html.escape(ind.label)}</div>'
         f'<div class="kpi-value">{html.escape(ind.formatted)}</div>'
         f"{delta}"
-        f'<div class="kpi-spark">{_sparkline(ind)}</div>'
+        f'<div class="kpi-spark">{_sparkline_svg(ind.chart_data)}</div>'
         f'<div class="kpi-prov">{cite}{html.escape(asof)}</div>'
         "</div>"
     )
@@ -146,6 +147,58 @@ def _headline(h: Headline) -> str:
     else:
         out.append('<p class="note">Macro/geographic lead (GACC partner/bloc '
                    'totals) not yet wired — next increment.</p>')
+    return "\n".join(out)
+
+
+def _fmt_eur(v) -> str:
+    if v is None:
+        return "—"
+    v = float(v)
+    if abs(v) >= 1e9:
+        return f"€{v / 1e9:,.1f}B"
+    if abs(v) >= 1e6:
+        return f"€{v / 1e6:,.0f}M"
+    return f"€{v:,.0f}"
+
+
+def _sector_flow_row(f) -> str:
+    flow = f.metrics.get("flow")
+    label = ("EU-27 exports to China" if flow == "export"
+             else "EU-27 imports from China")
+    yoy = f.metrics.get("yoy_pct")
+    val = _fmt_eur(f.metrics.get("current_eur"))
+    if yoy is None:
+        valstr, col = "—", _MUTED
+    else:
+        yoy = float(yoy)
+        col = _UP if yoy > 0 else _DOWN
+        valstr = f"{'+' if yoy >= 0 else '−'}{abs(yoy) * 100:.1f}% · {val}"
+    cap = ' <span class="flow-cap">low base</span>' if f.metrics.get("low_base") else ""
+    cite = (f'<span class="token">finding/{f.provenance.finding_ids[0]}</span>'
+            if f.provenance.finding_ids else "")
+    return (
+        '<div class="flow">'
+        f'<span class="flow-label">{html.escape(label)}{cap}</span>'
+        f'<span class="flow-val" style="color:{col}">{valstr}</span>'
+        f'{_sparkline_svg(f.chart_data, w=90, h=24)}'
+        f'<span class="flow-cite">{cite}</span>'
+        "</div>"
+    )
+
+
+def _sector_section(section) -> str:
+    """The sector-detail tree — one anchored block per HS group. Each
+    block's id is the group slug, so headline drill-down links land here."""
+    out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
+    if section.intro:
+        out.append(f'<p class="kicker">{html.escape(section.intro)} '
+                   f'{len(section.sections)} groups, ordered by size.</p>')
+    for grp in section.sections:
+        out.append(f'<div class="sector" id="{html.escape(grp.id)}">')
+        out.append(f'<h3 class="sector-h">{html.escape(grp.title)}</h3>')
+        for f in grp.findings:
+            out.append(_sector_flow_row(f))
+        out.append("</div>")
     return "\n".join(out)
 
 
@@ -194,6 +247,15 @@ a:hover{border-bottom-color:var(--link)}
 .drill{font-size:13px;font-weight:700;white-space:nowrap;border-bottom:none}
 .note{font-size:13px;color:var(--muted);font-style:italic}
 .since{font-family:var(--font-body);font-size:17px;line-height:1.4}
+.sector{padding:12px 0;border-bottom:1px solid var(--line)}
+.sector:target{background:#fffdf0;scroll-margin-top:12px}
+.sector-h{font-family:var(--font-headline);font-size:18px;font-weight:700;color:var(--ink);margin:0 0 6px}
+.flow{display:flex;align-items:center;gap:12px;font-size:14px;margin:4px 0}
+.flow-label{flex:1 1 auto;color:var(--ink)}
+.flow-cap{color:var(--news);font-weight:700;font-size:12px}
+.flow-val{font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}
+.flow .spark{width:90px;height:24px;flex:0 0 auto}
+.flow-cite{flex:0 0 auto}
 .llm{background:#fffbe6;border:1px solid #f3c100;border-left:4px solid #f3c100;padding:10px 14px;margin:12px 0}
 .llm-tag{font-size:12px;font-weight:700;color:#7a5c00}
 .llm-body{font-size:13px;color:#7a5c00;font-style:italic;margin-top:3px}
@@ -248,6 +310,10 @@ def render_html(report: Report) -> str:
             if slot.slot_type == "general":
                 parts.append("<section><h2 class='lead'>What the model flags "
                              "across this release</h2>" + _llm_block(slot) + "</section>")
+
+    for sec in report.sections:
+        if sec.kind == "sector_detail" and sec.sections:
+            parts.append("<section>" + _sector_section(sec) + "</section>")
 
     parts.append("<footer><h3>Where to go deeper</h3><div class='comp'>")
     for name, what in _COMPANIONS:
