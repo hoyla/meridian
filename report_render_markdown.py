@@ -90,6 +90,56 @@ def _render_what_changed(wc: WhatChanged) -> list[str]:
     ]
 
 
+def _fmt_eur_md(v) -> str:
+    if v is None:
+        return "—"
+    v = float(v)
+    if abs(v) >= 1e9:
+        return f"€{v / 1e9:,.1f}B"
+    if abs(v) >= 1e6:
+        return f"€{v / 1e6:,.0f}M"
+    return f"€{v:,.0f}"
+
+
+def _sector_flow_line(f) -> str:
+    flow = f.metrics.get("flow")
+    label = ("EU-27 exports to China" if flow == "export"
+             else "EU-27 imports from China")
+    yoy = f.metrics.get("yoy_pct")
+    if yoy is None:
+        val = "—"
+    else:
+        yoy = float(yoy)
+        val = f"{'+' if yoy >= 0 else '−'}{abs(yoy) * 100:.1f}% · {_fmt_eur_md(f.metrics.get('current_eur'))}"
+    lb = " _(low base)_" if f.metrics.get("low_base") else ""
+    cite = (f" `finding/{f.provenance.finding_ids[0]}`"
+            if f.provenance.finding_ids else "")
+    return f"- {label}: **{val}**{lb}{cite}"
+
+
+def _render_sections(sections) -> list[str]:
+    """Render the content tree (currently sector-detail) — parity with the
+    HTML portal so the LLM-facing surface carries the granularity too. The
+    `### {group}` heading auto-slugs to match the headline drill-down links."""
+    out: list[str] = []
+    for sec in sections:
+        if sec.kind != "sector_detail" or not sec.sections:
+            continue
+        out.append("## Sector detail")
+        out.append("")
+        if sec.intro:
+            out.append(f"*{sec.intro} {len(sec.sections)} groups, "
+                       "ordered by size.*")
+            out.append("")
+        for grp in sec.sections:
+            out.append(f"### {grp.title}")
+            out.append("")
+            for f in grp.findings:
+                out.append(_sector_flow_line(f))
+            out.append("")
+    return out
+
+
 def render_markdown(report: Report) -> str:
     from report_model import Report as _R  # local, keeps signature obvious
     assert isinstance(report, _R)
@@ -125,6 +175,8 @@ def render_markdown(report: Report) -> str:
         for slot in report.headline.llm_slots:
             if slot.slot_type == "general":
                 lines.extend(_llm_block(slot))
+
+    lines.extend(_render_sections(report.sections))
 
     lines.append("---")
     lines.append("")
