@@ -393,6 +393,18 @@ def _sector_section(section) -> str:
                        + " · ".join(sp) + " of EU-27 imports</div>")
         for fi in grp.findings:
             out.append(_sector_flow_row(fi))
+        top = ms.get("top_cn8") or []
+        if top:
+            out.append('<div class="detail">Top products: '
+                       + " · ".join(f'{html.escape(t["code"])} {_fmt_eur(t["eur"])}'
+                                    for t in top) + "</div>")
+        reps = ms.get("reporters") or []
+        if reps:
+            parts_r = []
+            for r in reps:
+                sh = f' ({r["share"] * 100:.0f}% of the move)' if r.get("share") is not None else ""
+                parts_r.append(html.escape(r["reporter"] or "") + sh)
+            out.append('<div class="detail">Driven by: ' + " · ".join(parts_r) + "</div>")
         out.append("</div>")
     out.append('<p id="sector-empty" class="note" style="display:none">'
                "No sector matches that filter.</p>")
@@ -454,6 +466,7 @@ a:hover{border-bottom-color:var(--link)}
 .sitc{font-size:12px;color:var(--muted);margin:0 0 4px;letter-spacing:.2px}
 .cshare{font-size:12.5px;color:var(--news);font-weight:700;margin:0 0 8px}
 .gdesc{font-family:var(--font-body);font-size:14px;line-height:1.45;color:var(--muted);margin:2px 0 8px}
+.detail{font-size:12.5px;color:var(--muted);margin:4px 0 0}
 .chips{margin:0 0 14px;font-size:13px}
 .chips-l{color:var(--muted);font-weight:700;margin-right:6px}
 .chip{font-family:var(--font-sans);font-size:12.5px;color:var(--masthead);background:var(--surface);border:1px solid var(--line);border-radius:62.5rem;padding:3px 11px;margin:0 6px 6px 0;cursor:pointer}

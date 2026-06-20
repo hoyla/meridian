@@ -324,6 +324,11 @@ def _sector_detail_section(cur) -> Section:
             if scope_label == "EU-27":
                 g["max_eur"] = max(g["max_eur"],
                                    finding.metrics["current_eur"] or 0.0)
+                if not is_export:  # rich detail lives on the EU-27 import row
+                    g["top_cn8"] = (detail or {}).get(
+                        "top_cn8_codes_in_current_12mo") or []
+                    g["reporters"] = (detail or {}).get(
+                        "per_reporter_breakdown") or []
 
     for name, g in sorted(by_group.items(), key=lambda kv: -kv[1]["max_eur"]):
         # ordered scope (EU-27, UK, combined), then export-then-import
@@ -339,6 +344,17 @@ def _sector_detail_section(cur) -> Section:
         if sv is not None or sk is not None:
             metrics = {"china_share_value": sv, "china_share_kg": sk,
                        "china_share_period": send}
+        top = (g.get("top_cn8") or [])[:3]
+        if top:
+            metrics["top_cn8"] = [{"code": t.get("hs_code"),
+                                   "eur": _f(t.get("total_eur"))} for t in top]
+        reps = sorted(g.get("reporters") or [],
+                      key=lambda r: -(r.get("share_of_group_delta_pct") or 0))[:3]
+        if reps:
+            metrics["reporters"] = [
+                {"reporter": r.get("reporter"),
+                 "share": _f(r.get("share_of_group_delta_pct")),
+                 "yoy": _f(r.get("yoy_pct"))} for r in reps]
         root.sections.append(Section(
             id=_slugify_heading(name), title=name, kind="sector_detail",
             findings=fs, metrics=metrics, intro=desc_by_name.get(name),

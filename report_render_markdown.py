@@ -253,6 +253,17 @@ def _render_sections(sections) -> list[str]:
                     out.append("")
                 for f in grp.findings:
                     out.append(_sector_flow_line(f))
+                ms = grp.metrics or {}
+                if ms.get("top_cn8"):
+                    out.append("- _Top products: " + " · ".join(
+                        f"{t['code']} {_fmt_eur_md(t['eur'])}"
+                        for t in ms["top_cn8"]) + "_")
+                if ms.get("reporters"):
+                    rp = []
+                    for r in ms["reporters"]:
+                        sh = f" ({r['share'] * 100:.0f}% of the move)" if r.get("share") is not None else ""
+                        rp.append((r.get("reporter") or "") + sh)
+                    out.append("- _Driven by: " + " · ".join(rp) + "_")
                 out.append("")
     return out
 
