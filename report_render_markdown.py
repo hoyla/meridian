@@ -264,6 +264,11 @@ def _render_sections(sections) -> list[str]:
                         sh = f" ({r['share'] * 100:.0f}% of the move)" if r.get("share") is not None else ""
                         rp.append((r.get("reporter") or "") + sh)
                     out.append("- _Driven by: " + " · ".join(rp) + "_")
+                tr = ms.get("trajectory") or {}
+                if tr:
+                    tp = [f"{flow}s {tr[flow]}" for flow in ("import", "export")
+                          if tr.get(flow)]
+                    out.append("- _Trajectory: " + " · ".join(tp) + "_")
                 out.append("")
     return out
 

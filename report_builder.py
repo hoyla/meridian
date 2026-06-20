@@ -271,6 +271,17 @@ def _sector_detail_section(cur) -> Section:
                      (detail->'windows'->>'current_end')::date DESC"""
     )
     share_by_name = {n: (_f(sv), _f(sk), end) for n, sv, sk, end in cur.fetchall()}
+    # EU-27 trajectory shape (volatile / accelerating / declining …) per group/flow.
+    cur.execute(
+        """SELECT detail->'group'->>'name', subkind, detail->>'shape_label'
+             FROM findings WHERE superseded_at IS NULL
+              AND subkind IN ('hs_group_trajectory','hs_group_trajectory_export')
+              AND detail->>'comparison_scope' = 'eu_27'"""
+    )
+    traj_by_name: dict[str, dict] = {}
+    for n, sk, shape in cur.fetchall():
+        traj_by_name.setdefault(n, {})[
+            "export" if sk.endswith("_export") else "import"] = shape
     # All three reporter scopes (EU-27 / UK / EU-27+UK) per group, each at its
     # own latest anchor (HMRC may lag Eurostat).
     scopes = [
@@ -355,6 +366,8 @@ def _sector_detail_section(cur) -> Section:
                 {"reporter": r.get("reporter"),
                  "share": _f(r.get("share_of_group_delta_pct")),
                  "yoy": _f(r.get("yoy_pct"))} for r in reps]
+        if traj_by_name.get(name):
+            metrics["trajectory"] = traj_by_name[name]
         root.sections.append(Section(
             id=_slugify_heading(name), title=name, kind="sector_detail",
             findings=fs, metrics=metrics, intro=desc_by_name.get(name),

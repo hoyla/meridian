@@ -405,6 +405,11 @@ def _sector_section(section) -> str:
                 sh = f' ({r["share"] * 100:.0f}% of the move)' if r.get("share") is not None else ""
                 parts_r.append(html.escape(r["reporter"] or "") + sh)
             out.append('<div class="detail">Driven by: ' + " · ".join(parts_r) + "</div>")
+        tr = ms.get("trajectory") or {}
+        if tr:
+            tp = [f"{flow}s {html.escape(tr[flow])}" for flow in ("import", "export")
+                  if tr.get(flow)]
+            out.append('<div class="detail">Trajectory: ' + " · ".join(tp) + "</div>")
         out.append("</div>")
     out.append('<p id="sector-empty" class="note" style="display:none">'
                "No sector matches that filter.</p>")
