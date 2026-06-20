@@ -405,8 +405,10 @@ def _sector_section(section) -> str:
                 sp.append(f"{sv * 100:.0f}% by value")
             if sk is not None:
                 sp.append(f"{sk * 100:.0f}% by volume")
+            sct = (f' <span class="token">finding/{ms["china_share_finding"]}</span>'
+                   if ms.get("china_share_finding") else "")
             out.append('<div class="cshare">China = '
-                       + " · ".join(sp) + " of EU-27 imports</div>")
+                       + " · ".join(sp) + " of EU-27 imports" + sct + "</div>")
         for fi in grp.findings:
             out.append(_sector_flow_row(fi))
         top = ms.get("top_cn8") or []
@@ -425,7 +427,9 @@ def _sector_section(section) -> str:
         if tr:
             tp = [f"{flow}s {html.escape(tr[flow])}" for flow in ("import", "export")
                   if tr.get(flow)]
-            out.append('<div class="detail">Trajectory: ' + " · ".join(tp) + "</div>")
+            tt = "".join(f' <span class="token">finding/{i}</span>'
+                         for i in (ms.get("trajectory_findings") or []))
+            out.append('<div class="detail">Trajectory: ' + " · ".join(tp) + tt + "</div>")
         out.append("</div>")
     out.append('<p id="sector-empty" class="note" style="display:none">'
                "No sector matches that filter.</p>")

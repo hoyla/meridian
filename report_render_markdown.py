@@ -261,7 +261,9 @@ def _render_sections(sections) -> list[str]:
                         sp.append(f"{ms['china_share_value'] * 100:.0f}% value")
                     if ms.get("china_share_kg") is not None:
                         sp.append(f"{ms['china_share_kg'] * 100:.0f}% volume")
-                    meta.append("China share of EU imports: " + ", ".join(sp))
+                    sct = (f" `finding/{ms['china_share_finding']}`"
+                           if ms.get("china_share_finding") else "")
+                    meta.append("China share of EU imports: " + ", ".join(sp) + sct)
                 if meta:
                     out.append("*" + " · ".join(meta) + "*")
                     out.append("")
@@ -282,7 +284,9 @@ def _render_sections(sections) -> list[str]:
                 if tr:
                     tp = [f"{flow}s {tr[flow]}" for flow in ("import", "export")
                           if tr.get(flow)]
-                    out.append("- _Trajectory: " + " · ".join(tp) + "_")
+                    tt = "".join(f" `finding/{i}`"
+                                 for i in (ms.get("trajectory_findings") or []))
+                    out.append("- _Trajectory: " + " · ".join(tp) + "_" + tt)
                 out.append("")
     return out
 

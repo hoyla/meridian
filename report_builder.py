@@ -261,7 +261,7 @@ def _sector_detail_section(cur) -> Section:
     # Latest China-share-of-EU-imports per group (partner_share).
     cur.execute(
         """SELECT DISTINCT ON (detail->'group'->>'name')
-                  detail->'group'->>'name',
+                  detail->'group'->>'name', id,
                   (detail->'totals'->>'share_value')::numeric,
                   (detail->'totals'->>'share_kg')::numeric,
                   detail->'windows'->>'current_end'
@@ -270,18 +270,21 @@ def _sector_detail_section(cur) -> Section:
             ORDER BY detail->'group'->>'name',
                      (detail->'windows'->>'current_end')::date DESC"""
     )
-    share_by_name = {n: (_f(sv), _f(sk), end) for n, sv, sk, end in cur.fetchall()}
+    share_by_name = {n: (fid, _f(sv), _f(sk), end)
+                     for n, fid, sv, sk, end in cur.fetchall()}
     # EU-27 trajectory shape (volatile / accelerating / declining …) per group/flow.
     cur.execute(
-        """SELECT detail->'group'->>'name', subkind, detail->>'shape_label'
+        """SELECT detail->'group'->>'name', id, subkind, detail->>'shape_label'
              FROM findings WHERE superseded_at IS NULL
               AND subkind IN ('hs_group_trajectory','hs_group_trajectory_export')
               AND detail->>'comparison_scope' = 'eu_27'"""
     )
     traj_by_name: dict[str, dict] = {}
-    for n, sk, shape in cur.fetchall():
+    traj_ids_by_name: dict[str, list] = {}
+    for n, fid, sk, shape in cur.fetchall():
         traj_by_name.setdefault(n, {})[
             "export" if sk.endswith("_export") else "import"] = shape
+        traj_ids_by_name.setdefault(n, []).append(fid)
     # All three reporter scopes (EU-27 / UK / EU-27+UK) per group, each at its
     # own latest anchor (HMRC may lag Eurostat).
     scopes = [
@@ -350,11 +353,11 @@ def _sector_detail_section(cur) -> Section:
         )
         themes = labels.themes_for_group(name)
         end_use = classifications.enduse_for_patterns(patterns_by_name.get(name, []))
-        sv, sk, send = share_by_name.get(name, (None, None, None))
+        sfid, sv, sk, send = share_by_name.get(name, (None, None, None, None))
         metrics = {}
         if sv is not None or sk is not None:
             metrics = {"china_share_value": sv, "china_share_kg": sk,
-                       "china_share_period": send}
+                       "china_share_period": send, "china_share_finding": sfid}
         top = (g.get("top_cn8") or [])[:3]
         if top:
             metrics["top_cn8"] = [{"code": t.get("hs_code"),
@@ -368,6 +371,7 @@ def _sector_detail_section(cur) -> Section:
                  "yoy": _f(r.get("yoy_pct"))} for r in reps]
         if traj_by_name.get(name):
             metrics["trajectory"] = traj_by_name[name]
+            metrics["trajectory_findings"] = traj_ids_by_name.get(name, [])
         root.sections.append(Section(
             id=_slugify_heading(name), title=name, kind="sector_detail",
             findings=fs, metrics=metrics, intro=desc_by_name.get(name),
