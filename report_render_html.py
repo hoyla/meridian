@@ -230,6 +230,29 @@ def _state_of_play_section(section) -> str:
     return "\n".join(out)
 
 
+def _reference_html(section) -> str:
+    m = section.metrics or {}
+    out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
+    if section.intro:
+        out.append(f'<p class="kicker">{html.escape(section.intro)}</p>')
+    sources = m.get("sources", [])
+    if sources:
+        out.append('<h3 class="ref-h">Sources</h3><ul class="ref">')
+        for s in sources:
+            out.append(f'<li><strong>{html.escape(s["source"])}</strong> — '
+                       f'{html.escape(s["note"])}</li>')
+        out.append("</ul>")
+    caveats = m.get("caveats", [])
+    if caveats:
+        out.append('<h3 class="ref-h">Caveats</h3><ul class="ref">')
+        for c in caveats:
+            detail = f' {html.escape(c["detail"])}' if c.get("detail") else ""
+            out.append(f'<li><strong>{html.escape(c["summary"])}</strong>'
+                       f'<span class="ref-code">{html.escape(c["code"])}</span>{detail}</li>')
+        out.append("</ul>")
+    return "\n".join(out)
+
+
 def _mirror_gap_html(section) -> str:
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
@@ -341,6 +364,8 @@ def _sector_section(section) -> str:
         out.append(f'<div class="sector" id="{html.escape(grp.id)}" '
                    f'data-name="{html.escape(data_name)}">')
         out.append(f'<h3 class="sector-h">{html.escape(grp.title)}</h3>')
+        if grp.intro:
+            out.append(f'<p class="gdesc">{html.escape(grp.intro)}</p>')
         if themes:
             out.append('<div class="themes">'
                        + "".join(f'<span class="theme">{html.escape(t)}</span>'
@@ -427,6 +452,7 @@ a:hover{border-bottom-color:var(--link)}
 .sector-h{font-family:var(--font-headline);font-size:18px;font-weight:700;color:var(--ink);margin:0 0 2px}
 .sitc{font-size:12px;color:var(--muted);margin:0 0 4px;letter-spacing:.2px}
 .cshare{font-size:12.5px;color:var(--news);font-weight:700;margin:0 0 8px}
+.gdesc{font-family:var(--font-body);font-size:14px;line-height:1.45;color:var(--muted);margin:2px 0 8px}
 .chips{margin:0 0 14px;font-size:13px}
 .chips-l{color:var(--muted);font-weight:700;margin-right:6px}
 .chip{font-family:var(--font-sans);font-size:12.5px;color:var(--masthead);background:var(--surface);border:1px solid var(--line);border-radius:62.5rem;padding:3px 11px;margin:0 6px 6px 0;cursor:pointer}
@@ -453,6 +479,10 @@ a:hover{border-bottom-color:var(--link)}
 .mg-g{font-size:13.5px;font-weight:700;white-space:nowrap}
 .mg-v{font-size:13.5px;color:var(--ink);margin-top:3px}
 .hub{font-size:12.5px;color:var(--muted);font-style:italic;margin-top:4px}
+.ref-h{font-family:var(--font-sans);font-size:13px;font-weight:700;color:var(--muted);margin:14px 0 6px}
+ul.ref{margin:0 0 8px;padding-left:18px}
+ul.ref li{font-size:13.5px;line-height:1.5;margin:0 0 7px;color:var(--ink)}
+.ref-code{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);background:var(--surface-alt);padding:1px 5px;border-radius:4px;margin:0 6px}
 .cov{font-weight:700;color:var(--ink);margin-right:6px}
 .cov.dark{color:var(--muted);font-weight:400;font-style:italic}
 .llm{background:#fffbe6;border:1px solid #f3c100;border-left:4px solid #f3c100;padding:10px 14px;margin:12px 0}
@@ -549,6 +579,8 @@ def render_html(report: Report) -> str:
             parts.append("<section>" + _mirror_gap_html(sec) + "</section>")
         elif sec.kind == "structural" and sec.sections:
             parts.append("<section>" + _structural_section_html(sec) + "</section>")
+        elif sec.kind == "reference":
+            parts.append("<section>" + _reference_html(sec) + "</section>")
 
     parts.append("<footer><h3>Where to go deeper</h3><div class='comp'>")
     for name, what in _COMPANIONS:

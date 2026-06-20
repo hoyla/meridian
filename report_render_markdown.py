@@ -140,7 +140,7 @@ def _render_sections(sections) -> list[str]:
     the headline drill-down links."""
     out: list[str] = []
     for sec in sections:
-        if not (sec.sections or sec.findings):
+        if not (sec.sections or sec.findings or sec.metrics):
             continue
         if sec.kind == "state_of_play":
             out.append("## State of play")
@@ -156,6 +156,26 @@ def _render_sections(sections) -> list[str]:
                     out.append("")
                 for f in sub.findings:
                     out.append(_deficit_line_md(f))
+                out.append("")
+        elif sec.kind == "reference":
+            out.append("## Methodology, sources & caveats")
+            out.append("")
+            if sec.intro:
+                out.append(f"*{sec.intro}*")
+                out.append("")
+            m = sec.metrics or {}
+            if m.get("sources"):
+                out.append("**Sources**")
+                out.append("")
+                for s in m["sources"]:
+                    out.append(f"- **{s['source']}** — {s['note']}")
+                out.append("")
+            if m.get("caveats"):
+                out.append("**Caveats**")
+                out.append("")
+                for c in m["caveats"]:
+                    detail = f" {c['detail']}" if c.get("detail") else ""
+                    out.append(f"- **{c['summary']}** (`{c['code']}`){detail}")
                 out.append("")
         elif sec.kind == "mirror_gap":
             out.append("## Mirror-trade gaps")
@@ -207,6 +227,9 @@ def _render_sections(sections) -> list[str]:
             for grp in sec.sections:
                 out.append(f"### {grp.title}")
                 out.append("")
+                if grp.intro:
+                    out.append(grp.intro)
+                    out.append("")
                 meta = []
                 if grp.facets and grp.facets.theme:
                     meta.append("themes: " + ", ".join(grp.facets.theme))

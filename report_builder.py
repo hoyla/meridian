@@ -252,9 +252,12 @@ def _sector_detail_section(cur) -> Section:
     anchor = cur.fetchone()[0]
     if anchor is None:
         return root
-    # Group HS patterns → SITC division facet (the structural spine).
-    cur.execute("SELECT name, hs_patterns FROM hs_groups")
-    patterns_by_name = {n: (p or []) for n, p in cur.fetchall()}
+    # Group HS patterns → SITC division facet (the structural spine);
+    # descriptions for the inline glossary.
+    cur.execute("SELECT name, hs_patterns, description FROM hs_groups")
+    _g = cur.fetchall()
+    patterns_by_name = {n: (p or []) for n, p, d in _g}
+    desc_by_name = {n: d for n, p, d in _g}
     # Latest China-share-of-EU-imports per group (partner_share).
     cur.execute(
         """SELECT DISTINCT ON (detail->'group'->>'name')
@@ -317,7 +320,7 @@ def _sector_detail_section(cur) -> Section:
                        "china_share_period": send}
         root.sections.append(Section(
             id=_slugify_heading(name), title=name, kind="sector_detail",
-            findings=fs, metrics=metrics,
+            findings=fs, metrics=metrics, intro=desc_by_name.get(name),
             facets=Facets(commodity=[name], sector=sectors, theme=themes,
                           end_use=end_use),
         ))
@@ -573,6 +576,38 @@ def _structural_section(cur) -> Section:
     return root
 
 
+_SOURCE_NOTES = {
+    "eurostat": "Eurostat Comext — EU-27 extra-EU imports/exports with China "
+                "(CN+HK+MO), CN8 8-digit, monthly. Imports valued CIF.",
+    "gacc": "China General Administration of Customs — China's own reported "
+            "trade, preliminary monthly releases (CNY and USD), exports FOB.",
+    "hmrc": "HMRC Overseas Trade Statistics — UK trade with China, converted "
+            "to EUR at the period's reference rate.",
+}
+
+
+def _reference_section(cur) -> Section:
+    """The endmatter — methodology orientation, the caveats that apply, and the
+    sources. The defensibility scaffolding ported from the old Findings doc
+    (reader's guide + methodology footer + sources appendix), minus the LLM
+    narrative which stays deferred."""
+    cur.execute("SELECT code, summary, detail FROM caveats ORDER BY code")
+    caveats = [{"code": c, "summary": s, "detail": d}
+               for c, s, d in cur.fetchall()]
+    cur.execute("SELECT DISTINCT source FROM releases ORDER BY source")
+    sources = [{"source": s, "note": _SOURCE_NOTES.get(s, "")}
+               for (s,) in cur.fetchall()]
+    return Section(
+        id="methodology", title="Methodology, sources & caveats",
+        kind="reference",
+        intro="How to read these figures: every value is a rolling 12-month "
+              "total compared with the prior 12 months unless stated, and "
+              "every line ends in its finding/N citation token — drillable "
+              "back to the underlying source rows.",
+        metrics={"caveats": caveats, "sources": sources},
+    )
+
+
 def build_report(
     source_trigger: str = "eurostat",
     data_period: date | None = None,
@@ -608,7 +643,8 @@ def build_report(
                 sections = [_state_of_play_section(cur),
                             _mirror_gap_section(cur),
                             _sector_detail_section(cur),
-                            _structural_section(cur)]
+                            _structural_section(cur),
+                            _reference_section(cur)]
 
     month = _fmt_month(data_period)
     llm_slots: list[LLMSlot] = []
