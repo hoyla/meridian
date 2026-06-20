@@ -157,6 +157,24 @@ def _render_sections(sections) -> list[str]:
                 for f in sub.findings:
                     out.append(_deficit_line_md(f))
                 out.append("")
+        elif sec.kind == "structural":
+            out.append("## Trade map (SITC divisions)")
+            out.append("")
+            if sec.intro:
+                out.append(f"*{sec.intro}*")
+                out.append("")
+            for d in sec.sections:
+                m = d.metrics
+                groups = m.get("groups", [])
+                if groups:
+                    cov = (f"{m.get('covered_share', 0) * 100:.0f}% in groups: "
+                           + ", ".join(g["name"] for g in groups[:6])
+                           + (f" +{len(groups) - 6} more" if len(groups) > 6 else ""))
+                else:
+                    cov = "— not in any editorial group"
+                out.append(f"- **{d.title}** — {m.get('value_share', 0) * 100:.1f}% "
+                           f"of import value · {m.get('code_count', 0)} codes · {cov}")
+            out.append("")
         elif sec.kind == "sector_detail":
             out.append("## Sector detail")
             out.append("")

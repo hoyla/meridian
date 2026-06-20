@@ -166,14 +166,17 @@ class Finding:
 class Section:
     """Recursive content tree — the source of navigable granularity.
     `sections` are sub-sections; `findings` are leaves. A node may carry
-    either or both."""
+    either or both. `metrics` lets a node be an aggregate *summary* (e.g. a
+    SITC-division node carrying its value share / coverage) rather than a
+    collection of findings."""
     id: str
     title: str
-    kind: str  # state_of_play | sector_detail | glossary | data
+    kind: str  # state_of_play | sector_detail | structural | glossary | data
     intro: Optional[str] = None
     sections: list["Section"] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     facets: Facets = field(default_factory=Facets)
+    metrics: dict = field(default_factory=dict)
 
 
 @dataclass

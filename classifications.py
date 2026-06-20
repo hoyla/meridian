@@ -140,6 +140,26 @@ def division_title(code: str) -> str:
     return SITC_DIVISION.get(code, f"div {code}")
 
 
+_CN8_DIV: dict[str, str] | None = None
+
+
+def cn8_division_map() -> dict[str, str]:
+    """CN8 -> SITC division, from the committed derived lookup
+    (reference/cn8_sitc.csv). Empty dict if absent (never breaks a render)."""
+    global _CN8_DIV
+    if _CN8_DIV is None:
+        path = OUT_DIR / "cn8_sitc.csv"
+        m: dict[str, str] = {}
+        try:
+            with open(path) as f:
+                for row in csv.DictReader(f):
+                    m[row["cn8"]] = row["sitc_division"]
+        except FileNotFoundError:
+            pass
+        _CN8_DIV = m
+    return _CN8_DIV
+
+
 def build(write: bool = True) -> dict:
     m22 = _load_conversion(HS2022_SITC4)
     m17 = _load_conversion(HS2017_SITC4)

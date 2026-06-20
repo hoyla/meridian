@@ -24,6 +24,7 @@ when the HTML renderer needs it. `facets` are likewise minimally stubbed
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date, datetime
 
 import psycopg2.extras
@@ -429,6 +430,74 @@ def _state_of_play_section(cur) -> Section:
     return root
 
 
+def _structural_section(cur) -> Section:
+    """The structural SITC-division browse — the full trade map by value,
+    surfacing the ~43% of value / 75% of codes that sit in no editorial
+    group. Each division is a *summary* node (Section.metrics): its value
+    share, how much is covered by editorial groups, code count, and the
+    groups within it. No per-code findings (those don't exist for the tail);
+    this is the spine made visible."""
+    root = Section(
+        id="trade-map", title="Trade map", kind="structural",
+        intro="Every code in the dataset by SITC division, value-weighted — "
+              "the whole structure, including what sits outside the editorial "
+              "groups. Imports, all periods.",
+    )
+    cn8div = classifications.cn8_division_map()
+    if not cn8div:
+        return root
+    cur.execute("SELECT hs_patterns FROM hs_groups")
+    pats = [p.replace("%", "") for (pp,) in cur.fetchall() for p in (pp or [])]
+
+    def covered(c):
+        return any(c.startswith(p) for p in pats)
+
+    cur.execute(
+        """SELECT o.hs_code, sum(o.value_amount) FROM observations o
+             JOIN releases r ON r.id = o.release_id
+            WHERE r.source='eurostat' AND o.flow='import'
+              AND o.hs_code IS NOT NULL
+            GROUP BY o.hs_code"""
+    )
+    dval: dict = defaultdict(float)
+    dcov: dict = defaultdict(float)
+    dn: dict = defaultdict(int)
+    total = 0.0
+    for code, val in cur.fetchall():
+        if not (code.isdigit() and len(code) == 8):
+            continue
+        d = cn8div.get(code)
+        if not d:
+            continue
+        v = float(val or 0)
+        total += v
+        dval[d] += v
+        dn[d] += 1
+        if covered(code):
+            dcov[d] += v
+
+    cur.execute("SELECT name, hs_patterns FROM hs_groups")
+    gdiv: dict = defaultdict(list)
+    for name, pp in cur.fetchall():
+        for d in classifications.sitc_divisions_for_patterns(pp or []):
+            gdiv[d].append(name)
+
+    for d in sorted(dval, key=lambda x: -dval[x]):
+        root.sections.append(Section(
+            id="sitc-" + d, title=classifications.division_title(d),
+            kind="structural", facets=Facets(sector=[d]),
+            metrics={
+                "value_share": dval[d] / total if total else 0.0,
+                "covered_share": dcov[d] / dval[d] if dval[d] else 0.0,
+                "code_count": dn[d],
+                "groups": [{"name": g, "slug": _slugify_heading(g)}
+                           for g in sorted(set(gdiv.get(d, [])))],
+            },
+        ))
+    root.metrics = {"total_codes": sum(dn.values()), "divisions": len(dval)}
+    return root
+
+
 def build_report(
     source_trigger: str = "eurostat",
     data_period: date | None = None,
@@ -462,7 +531,8 @@ def build_report(
             items = [_headline_item(m) for m in top_movers]
             if source_trigger == "eurostat":
                 sections = [_state_of_play_section(cur),
-                            _sector_detail_section(cur)]
+                            _sector_detail_section(cur),
+                            _structural_section(cur)]
 
     month = _fmt_month(data_period)
     llm_slots: list[LLMSlot] = []

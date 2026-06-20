@@ -230,6 +230,43 @@ def _state_of_play_section(section) -> str:
     return "\n".join(out)
 
 
+def _structural_section_html(section) -> str:
+    """The trade-map browse: SITC divisions, value-weighted, each showing its
+    share, code count, coverage by editorial groups, and the groups within —
+    so the ~43% of value in no group is visible (a 'no editorial group' tail)."""
+    out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
+    if section.intro:
+        out.append(f'<p class="kicker">{html.escape(section.intro)}</p>')
+    divs = section.sections
+    maxshare = max((d.metrics.get("value_share", 0) for d in divs), default=1) or 1
+    for d in divs:
+        m = d.metrics
+        share = m.get("value_share", 0)
+        cov = m.get("covered_share", 0)
+        n = m.get("code_count", 0)
+        groups = m.get("groups", [])
+        w = max(1, round(share / maxshare * 100))
+        if groups:
+            links = " · ".join(
+                f'<a href="#{html.escape(g["slug"])}">{html.escape(g["name"])}</a>'
+                for g in groups[:6]
+            )
+            extra = f" +{len(groups) - 6} more" if len(groups) > 6 else ""
+            cover = (f'<span class="cov">{cov * 100:.0f}% in groups</span> '
+                     + links + html.escape(extra))
+        else:
+            cover = '<span class="cov dark">— not in any editorial group</span>'
+        out.append(
+            f'<div class="tmrow" id="{html.escape(d.id)}">'
+            f'<div class="tmhead"><span class="tmname">{html.escape(d.title)}</span>'
+            f'<span class="tmval">{share * 100:.1f}% · {n} codes</span></div>'
+            f'<div class="tmbar"><div class="tmfill" style="width:{w}%"></div></div>'
+            f'<div class="tmgroups">{cover}</div>'
+            "</div>"
+        )
+    return "\n".join(out)
+
+
 def _sector_section(section) -> str:
     """The sector-detail tree — one anchored block per HS group. Each
     block's id is the group slug, so headline drill-down links land here."""
@@ -353,6 +390,15 @@ a:hover{border-bottom-color:var(--link)}
 .flow-val{font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}
 .flow .spark{width:90px;height:24px;flex:0 0 auto}
 .flow-cite{flex:0 0 auto}
+.tmrow{padding:10px 0;border-bottom:1px solid var(--line)}
+.tmhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.tmname{font-family:var(--font-headline);font-size:16px;font-weight:700;color:var(--ink)}
+.tmval{font-size:13px;font-weight:700;color:var(--ink);white-space:nowrap;font-variant-numeric:tabular-nums}
+.tmbar{height:6px;background:var(--surface-alt);margin:5px 0 5px;overflow:hidden}
+.tmfill{height:6px;background:var(--masthead)}
+.tmgroups{font-size:12.5px;color:var(--muted)}
+.cov{font-weight:700;color:var(--ink);margin-right:6px}
+.cov.dark{color:var(--muted);font-weight:400;font-style:italic}
 .llm{background:#fffbe6;border:1px solid #f3c100;border-left:4px solid #f3c100;padding:10px 14px;margin:12px 0}
 .llm-tag{font-size:12px;font-weight:700;color:#7a5c00}
 .llm-body{font-size:13px;color:#7a5c00;font-style:italic;margin-top:3px}
@@ -443,6 +489,8 @@ def render_html(report: Report) -> str:
             parts.append("<section>" + _state_of_play_section(sec) + "</section>")
         elif sec.kind == "sector_detail" and sec.sections:
             parts.append("<section>" + _sector_section(sec) + "</section>")
+        elif sec.kind == "structural" and sec.sections:
+            parts.append("<section>" + _structural_section_html(sec) + "</section>")
 
     parts.append("<footer><h3>Where to go deeper</h3><div class='comp'>")
     for name, what in _COMPANIONS:
