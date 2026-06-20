@@ -127,6 +127,8 @@ def _deficit_line_md(f) -> str:
     m = f.metrics
     per_day = m.get("per_day_eur")
     pd = f" · €{per_day / 1e6:,.0f}M/day" if per_day else ""
+    cn = m.get("cn_per_day_eur")
+    cn_note = f" (China reports €{cn / 1e6:,.0f}M/day)" if cn else ""
     yoy = m.get("yoy_pct")
     delta = ""
     if yoy is not None:
@@ -134,7 +136,7 @@ def _deficit_line_md(f) -> str:
         delta = f" · {'+' if yoy >= 0 else '−'}{abs(yoy) * 100:.1f}% YoY"
     cite = (f" `finding/{f.provenance.finding_ids[0]}`"
             if f.provenance.finding_ids else "")
-    return f"- {m.get('scope', '')}: **{_fmt_eur_md(m.get('deficit_eur'))}**{pd}{delta}{cite}"
+    return f"- {m.get('scope', '')}: **{_fmt_eur_md(m.get('deficit_eur'))}**{pd}{delta}{cn_note}{cite}"
 
 
 def _render_sections(sections) -> list[str]:
@@ -204,6 +206,9 @@ def _render_sections(sections) -> list[str]:
                 ex = m.get("excess_pct")
                 exc = (f" · {'+' if (ex or 0) >= 0 else '−'}{abs(ex) * 100:.1f}% "
                        "beyond CIF/FOB baseline") if ex is not None else ""
+                z = m.get("zscore")
+                zn = (f" · last flagged unusual {m.get('zscore_period') or ''}: {z:.1f}σ"
+                      if z is not None else "")
                 hub = (f" ⚓ {m['hub']}: {m['hub_notes'][:160]}"
                        if m.get("hub") and m.get("hub_notes") else "")
                 cite = (f" `finding/{f.provenance.finding_ids[0]}`"
@@ -212,7 +217,7 @@ def _render_sections(sections) -> list[str]:
                     f"- **China ↔ {m.get('partner', '')}**: China reports "
                     f"{_fmt_eur_md(m.get('gacc_eur'))}, partner reports "
                     f"{_fmt_eur_md(m.get('eurostat_eur'))} — gap "
-                    f"{_fmt_eur_md(m.get('gap_eur'))} ({gp:+.1f}%){exc}.{cite}{hub}")
+                    f"{_fmt_eur_md(m.get('gap_eur'))} ({gp:+.1f}%){exc}{zn}.{cite}{hub}")
             out.append("")
         elif sec.kind == "structural":
             out.append("## Trade map (SITC divisions)")
@@ -282,11 +287,22 @@ def _render_sections(sections) -> list[str]:
                     out.append("- _Driven by: " + " · ".join(rp) + "_")
                 tr = ms.get("trajectory") or {}
                 if tr:
-                    tp = [f"{flow}s {tr[flow]}" for flow in ("import", "export")
-                          if tr.get(flow)]
+                    parts_t = []
+                    for scope in ("EU-27", "UK", "EU-27+UK"):
+                        fl = tr.get(scope)
+                        if not fl:
+                            continue
+                        sub = ", ".join(f"{flow}s {fl[flow]}"
+                                        for flow in ("import", "export") if fl.get(flow))
+                        parts_t.append(f"{scope}: {sub}")
                     tt = "".join(f" `finding/{i}`"
                                  for i in (ms.get("trajectory_findings") or []))
-                    out.append("- _Trajectory: " + " · ".join(tp) + "_" + tt)
+                    out.append("- _Trajectory — " + " · ".join(parts_t) + "_" + tt)
+                if ms.get("china_export_share_value") is not None:
+                    et = (f" `finding/{ms['china_export_share_finding']}`"
+                          if ms.get("china_export_share_finding") else "")
+                    out.append(f"- _China takes {ms['china_export_share_value'] * 100:.1f}% "
+                               f"of EU-27 exports of this group_{et}")
                 out.append("")
     return out
 

@@ -199,6 +199,9 @@ def _deficit_row(f) -> str:
     m = f.metrics
     per_day = m.get("per_day_eur")
     pd = f" · €{per_day / 1e6:,.0f}M/day" if per_day else ""
+    cn = m.get("cn_per_day_eur")
+    cn_note = (f' <span style="color:{_MUTED}">(China reports €{cn / 1e6:,.0f}M/day)</span>'
+               if cn else "")
     yoy = m.get("yoy_pct")
     delta = ""
     if yoy is not None:
@@ -211,7 +214,7 @@ def _deficit_row(f) -> str:
     return (
         '<div class="flow">'
         f'<span class="flow-label">{html.escape(m.get("scope", ""))}</span>'
-        f'<span class="flow-val">{_fmt_eur(m.get("deficit_eur"))}{pd}{delta}</span>'
+        f'<span class="flow-val">{_fmt_eur(m.get("deficit_eur"))}{pd}{delta}{cn_note}</span>'
         f'{_sparkline_svg(f.chart_data, w=90, h=24)}'
         f'<span class="flow-cite">{cite}</span>'
         "</div>"
@@ -272,6 +275,9 @@ def _mirror_gap_html(section) -> str:
             sign = "+" if ex >= 0 else "−"
             excess = (f' · <span style="color:{exc_col}">{sign}{abs(ex) * 100:.1f}% '
                       f'beyond CIF/FOB baseline</span>')
+        z = m.get("zscore")
+        znote = (f' · <span class="hub">last flagged unusual {html.escape(str(m.get("zscore_period") or ""))}: '
+                 f'{z:.1f}σ</span>' if z is not None else "")
         hub = ""
         if m.get("hub") and m.get("hub_notes"):
             hub = (f'<div class="hub">⚓ {html.escape(m["hub"])} — '
@@ -281,7 +287,7 @@ def _mirror_gap_html(section) -> str:
         out.append(
             '<div class="mg">'
             f'<div class="mg-h"><span class="mg-p">China ↔ {html.escape(m.get("partner", ""))}</span>'
-            f'<span class="mg-g" style="color:{col}">gap {_fmt_eur(gap)} ({gp:+.1f}%){excess}</span></div>'
+            f'<span class="mg-g" style="color:{col}">gap {_fmt_eur(gap)} ({gp:+.1f}%){excess}{znote}</span></div>'
             f'<div class="mg-v">China reports {_fmt_eur(m.get("gacc_eur"))} · '
             f'partner reports {_fmt_eur(m.get("eurostat_eur"))} {cite}</div>'
             f"{hub}"
@@ -425,11 +431,24 @@ def _sector_section(section) -> str:
             out.append('<div class="detail">Driven by: ' + " · ".join(parts_r) + "</div>")
         tr = ms.get("trajectory") or {}
         if tr:
-            tp = [f"{flow}s {html.escape(tr[flow])}" for flow in ("import", "export")
-                  if tr.get(flow)]
+            parts_t = []
+            for scope in ("EU-27", "UK", "EU-27+UK"):
+                fl = tr.get(scope)
+                if not fl:
+                    continue
+                sub = ", ".join(f"{flow}s {html.escape(fl[flow])}"
+                                for flow in ("import", "export") if fl.get(flow))
+                parts_t.append(f"<em>{scope}</em>: {sub}")
             tt = "".join(f' <span class="token">finding/{i}</span>'
                          for i in (ms.get("trajectory_findings") or []))
-            out.append('<div class="detail">Trajectory: ' + " · ".join(tp) + tt + "</div>")
+            out.append('<div class="detail">Trajectory — ' + " · ".join(parts_t)
+                       + tt + "</div>")
+        ev = ms.get("china_export_share_value")
+        if ev is not None:
+            et = (f' <span class="token">finding/{ms["china_export_share_finding"]}</span>'
+                  if ms.get("china_export_share_finding") else "")
+            out.append(f'<div class="detail">China takes {ev * 100:.1f}% '
+                       f"of EU-27 exports of this group{et}</div>")
         out.append("</div>")
     out.append('<p id="sector-empty" class="note" style="display:none">'
                "No sector matches that filter.</p>")

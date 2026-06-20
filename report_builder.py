@@ -272,18 +272,32 @@ def _sector_detail_section(cur) -> Section:
     )
     share_by_name = {n: (fid, _f(sv), _f(sk), end)
                      for n, fid, sv, sk, end in cur.fetchall()}
-    # EU-27 trajectory shape (volatile / accelerating / declining …) per group/flow.
+    # China's share of EU-27 *exports* of the group (China as a destination).
     cur.execute(
-        """SELECT detail->'group'->>'name', id, subkind, detail->>'shape_label'
+        """SELECT DISTINCT ON (detail->'group'->>'name')
+                  detail->'group'->>'name', id,
+                  (detail->'totals'->>'share_value')::numeric
+             FROM findings
+            WHERE superseded_at IS NULL AND subkind='partner_share_export'
+            ORDER BY detail->'group'->>'name',
+                     (detail->'windows'->>'current_end')::date DESC"""
+    )
+    export_share_by_name = {n: (fid, _f(sv)) for n, fid, sv in cur.fetchall()}
+    # Trajectory shape (volatile / accelerating / declining …) per group, all
+    # three scopes × flow.
+    _SCOPE_LABEL = {"eu_27": "EU-27", "uk": "UK", "eu_27_plus_uk": "EU-27+UK"}
+    cur.execute(
+        """SELECT detail->'group'->>'name', id, subkind, detail->>'shape_label',
+                  detail->>'comparison_scope'
              FROM findings WHERE superseded_at IS NULL
-              AND subkind IN ('hs_group_trajectory','hs_group_trajectory_export')
-              AND detail->>'comparison_scope' = 'eu_27'"""
+              AND subkind LIKE 'hs_group_trajectory%'"""
     )
     traj_by_name: dict[str, dict] = {}
     traj_ids_by_name: dict[str, list] = {}
-    for n, fid, sk, shape in cur.fetchall():
-        traj_by_name.setdefault(n, {})[
-            "export" if sk.endswith("_export") else "import"] = shape
+    for n, fid, sk, shape, scope in cur.fetchall():
+        sl = _SCOPE_LABEL.get(scope, scope)
+        flow = "export" if sk.endswith("_export") else "import"
+        traj_by_name.setdefault(n, {}).setdefault(sl, {})[flow] = shape
         traj_ids_by_name.setdefault(n, []).append(fid)
     # All three reporter scopes (EU-27 / UK / EU-27+UK) per group, each at its
     # own latest anchor (HMRC may lag Eurostat).
@@ -372,6 +386,10 @@ def _sector_detail_section(cur) -> Section:
         if traj_by_name.get(name):
             metrics["trajectory"] = traj_by_name[name]
             metrics["trajectory_findings"] = traj_ids_by_name.get(name, [])
+        efid, esv = export_share_by_name.get(name, (None, None))
+        if esv is not None:
+            metrics["china_export_share_value"] = esv
+            metrics["china_export_share_finding"] = efid
         root.sections.append(Section(
             id=_slugify_heading(name), title=name, kind="sector_detail",
             findings=fs, metrics=metrics, intro=desc_by_name.get(name),
@@ -447,10 +465,24 @@ def _gacc_macro_items(cur, period) -> list[HeadlineItem]:
 
 
 _TB_SCOPES = [
-    ("trade_balance", "EU-27 (Eurostat)", "eurostat"),
-    ("trade_balance_uk", "UK (HMRC)", "hmrc"),
-    ("trade_balance_combined", "EU-27 + UK", "cross_source"),
+    ("trade_balance", "trade_balance_cn_only", "EU-27 (Eurostat)", "eurostat"),
+    ("trade_balance_uk", "trade_balance_uk_cn_only", "UK (HMRC)", "hmrc"),
+    ("trade_balance_combined", "trade_balance_combined_cn_only",
+     "EU-27 + UK", "cross_source"),
 ]
+
+
+def _latest_deficit_per_day(cur, subkind):
+    """(finding_id, deficit_per_day_eur) for the latest finding of a
+    trade-balance subkind — used for the China-reported counterpart."""
+    cur.execute(
+        """SELECT id, (detail->'totals'->'rolling_12mo'->>'deficit_per_day_eur')::numeric
+             FROM findings WHERE superseded_at IS NULL AND subkind=%s
+             ORDER BY (detail->'windows'->>'anchor_period')::date DESC LIMIT 1""",
+        (subkind,),
+    )
+    r = cur.fetchone()
+    return (r[0], _f(r[1])) if r else (None, None)
 
 
 def _state_of_play_section(cur) -> Section:
@@ -467,7 +499,7 @@ def _state_of_play_section(cur) -> Section:
         title="Europe's goods-trade deficit with China", kind="state_of_play",
         intro="The standing level by reporter scope, on the CN+HK+MO envelope.",
     )
-    for subkind, label, source in _TB_SCOPES:
+    for subkind, cn_subkind, label, source in _TB_SCOPES:
         cur.execute(
             """SELECT id, detail FROM findings
                 WHERE superseded_at IS NULL AND subkind = %s
@@ -479,6 +511,7 @@ def _state_of_play_section(cur) -> Section:
         if row is None:
             continue
         fid, d = row["id"], row["detail"]
+        cn_fid, cn_per_day = _latest_deficit_per_day(cur, cn_subkind)
         roll = (d or {}).get("totals", {}).get("rolling_12mo", {})
         anchor = (d or {}).get("windows", {}).get("anchor_period")
         as_of = date.fromisoformat(anchor) if isinstance(anchor, str) else None
@@ -498,10 +531,14 @@ def _state_of_play_section(cur) -> Section:
                 "deficit_eur": _f(roll.get("deficit_eur")),
                 "per_day_eur": _f(roll.get("deficit_per_day_eur")),
                 "yoy_pct": _f(roll.get("yoy_pct")),
+                "cn_per_day_eur": cn_per_day,  # China-reported counterpart
+                "cn_finding": cn_fid,
             },
             chart_data=(ChartData(chart_type="line", series=series)
                         if len(series) >= 2 else None),
-            provenance=Provenance(finding_ids=[fid], source=source, as_of=as_of),
+            provenance=Provenance(
+                finding_ids=[fid] + ([cn_fid] if cn_fid else []),
+                source=source, as_of=as_of),
         ))
     if deficit.findings:
         root.sections.append(deficit)
@@ -532,12 +569,22 @@ def _mirror_gap_section(cur) -> Section:
         return root
     latest = max(r[0] for r in rows)
     as_of = date.fromisoformat(latest + "-01") if latest else None
+    # Latest z-score per partner (how unusual the gap is vs its 6-mo baseline).
+    cur.execute(
+        """SELECT DISTINCT ON (detail->>'iso2') detail->>'iso2', id,
+                  (detail->>'z_score')::numeric, detail->>'period'
+             FROM findings WHERE superseded_at IS NULL
+              AND subkind='mirror_gap_zscore'
+            ORDER BY detail->>'iso2', (detail->>'period')::date DESC"""
+    )
+    zby = {iso: (zid, _f(z), per2) for iso, zid, z, per2 in cur.fetchall()}
     for per, fid, title, d in rows:
         if per != latest:
             continue
         d = d or {}
         hub = d.get("transshipment_hub") or {}
         pm = re.search(r"China ↔ ([^,]+),", title or "")
+        zid, zval, zper = zby.get(d.get("iso2"), (None, None, None))
         root.findings.append(Finding(
             finding_id=fid, subkind="mirror_gap",
             title=title,
@@ -551,9 +598,11 @@ def _mirror_gap_section(cur) -> Section:
                 "baseline_pct": _f(d.get("cif_fob_baseline_pct")),
                 "hub": hub.get("iso2"),
                 "hub_notes": hub.get("notes"),
+                "zscore": zval, "zscore_period": zper,
             },
             provenance=Provenance(
-                finding_ids=[fid], source="cross_source", as_of=as_of,
+                finding_ids=[fid] + ([zid] if zid else []),
+                source="cross_source", as_of=as_of,
                 caveat=", ".join(d.get("caveat_codes") or []) or None,
             ),
         ))
