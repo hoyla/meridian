@@ -255,6 +255,19 @@ def _sector_detail_section(cur) -> Section:
     # Group HS patterns → SITC division facet (the structural spine).
     cur.execute("SELECT name, hs_patterns FROM hs_groups")
     patterns_by_name = {n: (p or []) for n, p in cur.fetchall()}
+    # Latest China-share-of-EU-imports per group (partner_share).
+    cur.execute(
+        """SELECT DISTINCT ON (detail->'group'->>'name')
+                  detail->'group'->>'name',
+                  (detail->'totals'->>'share_value')::numeric,
+                  (detail->'totals'->>'share_kg')::numeric,
+                  detail->'windows'->>'current_end'
+             FROM findings
+            WHERE superseded_at IS NULL AND subkind='partner_share'
+            ORDER BY detail->'group'->>'name',
+                     (detail->'windows'->>'current_end')::date DESC"""
+    )
+    share_by_name = {n: (_f(sv), _f(sk), end) for n, sv, sk, end in cur.fetchall()}
     cur.execute(
         """SELECT id, subkind, detail FROM findings
             WHERE superseded_at IS NULL
@@ -297,9 +310,14 @@ def _sector_detail_section(cur) -> Section:
         )
         themes = labels.themes_for_group(name)
         end_use = classifications.enduse_for_patterns(patterns_by_name.get(name, []))
+        sv, sk, send = share_by_name.get(name, (None, None, None))
+        metrics = {}
+        if sv is not None or sk is not None:
+            metrics = {"china_share_value": sv, "china_share_kg": sk,
+                       "china_share_period": send}
         root.sections.append(Section(
             id=_slugify_heading(name), title=name, kind="sector_detail",
-            findings=fs,
+            findings=fs, metrics=metrics,
             facets=Facets(commodity=[name], sector=sectors, theme=themes,
                           end_use=end_use),
         ))

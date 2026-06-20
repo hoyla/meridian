@@ -355,6 +355,16 @@ def _sector_section(section) -> str:
             if end_use:
                 bits.append("end-use · " + ", ".join(html.escape(e) for e in end_use))
             out.append('<div class="sitc">' + "  |  ".join(bits) + "</div>")
+        ms = grp.metrics or {}
+        sv, sk = ms.get("china_share_value"), ms.get("china_share_kg")
+        if sv is not None or sk is not None:
+            sp = []
+            if sv is not None:
+                sp.append(f"{sv * 100:.0f}% by value")
+            if sk is not None:
+                sp.append(f"{sk * 100:.0f}% by volume")
+            out.append('<div class="cshare">China = '
+                       + " · ".join(sp) + " of EU-27 imports</div>")
         for fi in grp.findings:
             out.append(_sector_flow_row(fi))
         out.append("</div>")
@@ -415,7 +425,8 @@ a:hover{border-bottom-color:var(--link)}
 .sector{padding:12px 0;border-bottom:1px solid var(--line)}
 .sector:target{background:#fffdf0;scroll-margin-top:12px}
 .sector-h{font-family:var(--font-headline);font-size:18px;font-weight:700;color:var(--ink);margin:0 0 2px}
-.sitc{font-size:12px;color:var(--muted);margin:0 0 8px;letter-spacing:.2px}
+.sitc{font-size:12px;color:var(--muted);margin:0 0 4px;letter-spacing:.2px}
+.cshare{font-size:12.5px;color:var(--news);font-weight:700;margin:0 0 8px}
 .chips{margin:0 0 14px;font-size:13px}
 .chips-l{color:var(--muted);font-weight:700;margin-right:6px}
 .chip{font-family:var(--font-sans);font-size:12.5px;color:var(--masthead);background:var(--surface);border:1px solid var(--line);border-radius:62.5rem;padding:3px 11px;margin:0 6px 6px 0;cursor:pointer}

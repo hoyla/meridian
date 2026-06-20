@@ -216,6 +216,14 @@ def _render_sections(sections) -> list[str]:
                         division_title(c) for c in grp.facets.sector[:3]))
                 if grp.facets and grp.facets.end_use:
                     meta.append("end-use: " + ", ".join(grp.facets.end_use))
+                ms = grp.metrics or {}
+                if ms.get("china_share_value") is not None or ms.get("china_share_kg") is not None:
+                    sp = []
+                    if ms.get("china_share_value") is not None:
+                        sp.append(f"{ms['china_share_value'] * 100:.0f}% value")
+                    if ms.get("china_share_kg") is not None:
+                        sp.append(f"{ms['china_share_kg'] * 100:.0f}% volume")
+                    meta.append("China share of EU imports: " + ", ".join(sp))
                 if meta:
                     out.append("*" + " · ".join(meta) + "*")
                     out.append("")
