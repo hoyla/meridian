@@ -193,6 +193,13 @@ def _sector_section(section) -> str:
     if section.intro:
         out.append(f'<p class="kicker">{html.escape(section.intro)} '
                    f'{len(section.sections)} groups, ordered by size.</p>')
+    if section.sections:
+        links = " · ".join(
+            f'<a href="#{html.escape(g.id)}">{html.escape(g.title)}</a>'
+            for g in section.sections
+        )
+        out.append('<nav class="jump"><span class="jump-l">Jump to:</span> '
+                   + links + "</nav>")
     for grp in section.sections:
         out.append(f'<div class="sector" id="{html.escape(grp.id)}">')
         out.append(f'<h3 class="sector-h">{html.escape(grp.title)}</h3>')
@@ -247,6 +254,10 @@ a:hover{border-bottom-color:var(--link)}
 .drill{font-size:13px;font-weight:700;white-space:nowrap;border-bottom:none}
 .note{font-size:13px;color:var(--muted);font-style:italic}
 .since{font-family:var(--font-body);font-size:17px;line-height:1.4}
+.jump{font-size:13px;line-height:1.95;margin:0 0 6px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.jump a{border-bottom:none;white-space:nowrap}
+.jump a:hover{border-bottom:1px solid var(--link)}
+.jump-l{color:var(--muted);font-weight:700;margin-right:6px}
 .sector{padding:12px 0;border-bottom:1px solid var(--line)}
 .sector:target{background:#fffdf0;scroll-margin-top:12px}
 .sector-h{font-family:var(--font-headline);font-size:18px;font-weight:700;color:var(--ink);margin:0 0 6px}
