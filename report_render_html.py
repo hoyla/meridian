@@ -142,11 +142,16 @@ def _headline(h: Headline) -> str:
         for slot in h.llm_slots:
             if slot.slot_type == "specific":
                 out.append(_llm_block(slot))
-        out.append('<p class="note">The smaller and shakier moves are in '
-                   '<strong>Sector detail</strong> — not dropped, just not headlined.</p>')
+        if h.variant == "eurostat":
+            out.append('<p class="note">The smaller and shakier moves are in '
+                       '<strong>Sector detail</strong> — not dropped, just not '
+                       'headlined.</p>')
+        elif h.variant == "gacc":
+            out.append('<p class="note">China&#39;s per-country detail (24 '
+                       'partners each way) is the deeper layer — not yet '
+                       'surfaced.</p>')
     else:
-        out.append('<p class="note">Macro/geographic lead (GACC partner/bloc '
-                   'totals) not yet wired — next increment.</p>')
+        out.append('<p class="note">No headline items this cycle.</p>')
     return "\n".join(out)
 
 

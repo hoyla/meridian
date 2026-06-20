@@ -61,18 +61,21 @@ def _render_headline(h: Headline) -> list[str]:
             lines.append(f"{i}. {item.prose}")
         lines.append("")
     else:
-        lines.append(
-            "_Macro/geographic lead not yet wired into the model "
-            "(GACC partner/bloc totals) — next increment._"
-        )
+        lines.append("_No headline items this cycle._")
         lines.append("")
     for slot in h.llm_slots:
         if slot.slot_type == "specific":
             lines.extend(_llm_block(slot))
-    if h.items:
+    if h.items and h.variant == "eurostat":
         lines.append(
             "*The smaller and shakier moves are in the **Sector detail** "
             "tab — not dropped, just not headlined.*"
+        )
+        lines.append("")
+    elif h.items and h.variant == "gacc":
+        lines.append(
+            "*China's per-country detail (24 partners each way) is the "
+            "deeper layer — not yet surfaced.*"
         )
         lines.append("")
     return lines

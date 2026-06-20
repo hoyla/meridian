@@ -292,6 +292,71 @@ def _sector_detail_section(cur) -> Section:
     return root
 
 
+def _fmt_eur_b(v) -> str:
+    if v is None:
+        return "—"
+    v = float(v)
+    if abs(v) >= 1e12:
+        return f"€{v / 1e12:,.1f}T"
+    return f"€{v / 1e9:,.1f}B"
+
+
+def _gacc_latest_period(cur) -> date | None:
+    cur.execute(
+        """SELECT max((detail->'windows'->>'current_end')::date)
+             FROM findings
+            WHERE subkind = 'gacc_aggregate_yoy' AND superseded_at IS NULL"""
+    )
+    return cur.fetchone()[0]
+
+
+def _gacc_macro_items(cur, period) -> list[HeadlineItem]:
+    """The GACC variant's macro/geographic lead: China's own reported
+    exports and imports by partner *bloc* (ASEAN / Africa / Latin America /
+    Total), both flows. The bilateral (per-country) detail is the deeper
+    layer, a future GACC sections tree."""
+    if period is None:
+        return []
+    cur.execute(
+        """SELECT id, subkind, detail FROM findings
+            WHERE superseded_at IS NULL
+              AND subkind IN ('gacc_aggregate_yoy','gacc_aggregate_yoy_import')
+              AND (detail->'windows'->>'current_end')::date = %s""",
+        (period,),
+    )
+    items: list[HeadlineItem] = []
+    for fid, subkind, detail in cur.fetchall():
+        is_export = not subkind.endswith("_import")
+        bloc = ((detail or {}).get("aggregate") or {}).get("raw_label") or "partners"
+        tot = (detail or {}).get("totals", {})
+        yoy = _f(tot.get("yoy_pct"))
+        eur = _f(tot.get("current_12mo_eur"))
+        verb = "rose" if (yoy or 0) > 0 else "fell"
+        subj = (f"China's exports to {bloc}" if is_export
+                else f"China's imports from {bloc}")
+        pct = f"{abs(yoy) * 100:.1f}%" if yoy is not None else "—"
+        items.append(HeadlineItem(
+            subject={"scope": "china",
+                     "flow": "export" if is_export else "import",
+                     "group_name": bloc},
+            metrics={"direction": verb,
+                     "pct": abs(yoy) if yoy is not None else None,
+                     "value_eur": eur},
+            stability={"badge": None, "hedge_phrase": None},
+            prose=(f"**{subj}** {verb} {pct} by value in the 12 months to "
+                   f"{_fmt_month(period)}, to {_fmt_eur_b(eur)}. "
+                   f"`finding/{fid}`"),
+            provenance=Provenance(finding_ids=[fid], source="gacc", as_of=period),
+            facets=Facets(partner=[bloc]),
+        ))
+    # Total first, then by magnitude of move.
+    items.sort(key=lambda it: (
+        0 if it.subject["group_name"].lower() == "total" else 1,
+        -(it.metrics["pct"] or 0),
+    ))
+    return items
+
+
 def build_report(
     source_trigger: str = "eurostat",
     data_period: date | None = None,
@@ -307,24 +372,32 @@ def build_report(
         predictability = _compute_predictability_per_group(cur)
         top_movers = _compute_top_movers(cur, predictability=predictability)
         diff = _compute_diff(cur, baseline_brief_run_id=diff_baseline_brief_run_id)
-        if data_period is None and top_movers:
-            data_period = top_movers[0].get("current_end")
         indicators = []
         deficit = _deficit_indicator(cur)
         if deficit is not None:
             indicators.append(deficit)
-        sector_detail = _sector_detail_section(cur)
+
+        # Variant-shaped lead + period (Q1).
+        items: list[HeadlineItem] = []
+        sections = []
+        if source_trigger == "gacc":
+            if data_period is None:
+                data_period = _gacc_latest_period(cur)
+            items = _gacc_macro_items(cur, data_period)
+        else:  # eurostat / hmrc: HS-sector movers + the EU-27 sector tree
+            if data_period is None and top_movers:
+                data_period = top_movers[0].get("current_end")
+            items = [_headline_item(m) for m in top_movers]
+            if source_trigger == "eurostat":
+                sections = [_sector_detail_section(cur)]
 
     month = _fmt_month(data_period)
-    items: list[HeadlineItem] = []
     llm_slots: list[LLMSlot] = []
-    if variant_cfg["has_sector_movers"]:
-        items = [_headline_item(m) for m in top_movers]
-        if items:
-            llm_slots.append(LLMSlot(
-                slot_type="specific",
-                grounded_in=items[0].provenance.finding_ids,
-            ))
+    if items:
+        llm_slots.append(LLMSlot(
+            slot_type="specific",
+            grounded_in=items[0].provenance.finding_ids,
+        ))
     llm_slots.append(LLMSlot(
         slot_type="general",
         grounded_in=[i.provenance.finding_ids[0] for i in items if i.provenance.finding_ids],
@@ -350,5 +423,5 @@ def build_report(
         key_indicators=indicators,
         headline=headline,
         what_changed=_what_changed(diff),
-        sections=[sector_detail],  # the navigable content tree
+        sections=sections,  # the navigable content tree (Eurostat variant)
     )
