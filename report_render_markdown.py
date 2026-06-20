@@ -74,8 +74,7 @@ def _render_headline(h: Headline) -> list[str]:
         lines.append("")
     elif h.items and h.variant == "gacc":
         lines.append(
-            "*China's per-country detail (24 partners each way) is the "
-            "deeper layer — not yet surfaced.*"
+            "*China's per-country detail (24 partners each way) is below.*"
         )
         lines.append("")
     return lines
@@ -107,8 +106,11 @@ def _fmt_eur_md(v) -> str:
 def _sector_flow_line(f) -> str:
     flow = f.metrics.get("flow")
     scope = f.metrics.get("scope", "EU-27")
-    label = (f"{scope} exports to China" if flow == "export"
-             else f"{scope} imports from China")
+    if scope == "China":
+        label = "China's exports" if flow == "export" else "China's imports"
+    else:
+        label = (f"{scope} exports to China" if flow == "export"
+                 else f"{scope} imports from China")
     yoy = f.metrics.get("yoy_pct")
     if yoy is None:
         val = "—"
@@ -177,6 +179,18 @@ def _render_sections(sections) -> list[str]:
                 for c in m["caveats"]:
                     detail = f" {c['detail']}" if c.get("detail") else ""
                     out.append(f"- **{c['summary']}** (`{c['code']}`){detail}")
+                out.append("")
+        elif sec.kind == "gacc_bilateral":
+            out.append("## China's trade by partner (GACC)")
+            out.append("")
+            if sec.intro:
+                out.append(f"*{sec.intro} {len(sec.sections)} partners.*")
+                out.append("")
+            for p in sec.sections:
+                out.append(f"### {p.title}")
+                out.append("")
+                for f in p.findings:
+                    out.append(_sector_flow_line(f))
                 out.append("")
         elif sec.kind == "mirror_gap":
             out.append("## Mirror-trade gaps")

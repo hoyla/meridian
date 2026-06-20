@@ -149,8 +149,7 @@ def _headline(h: Headline) -> str:
                        'headlined.</p>')
         elif h.variant == "gacc":
             out.append('<p class="note">China&#39;s per-country detail (24 '
-                       'partners each way) is the deeper layer — not yet '
-                       'surfaced.</p>')
+                       'partners each way) is below.</p>')
     else:
         out.append('<p class="note">No headline items this cycle.</p>')
     return "\n".join(out)
@@ -170,8 +169,11 @@ def _fmt_eur(v) -> str:
 def _sector_flow_row(f) -> str:
     flow = f.metrics.get("flow")
     scope = f.metrics.get("scope", "EU-27")
-    label = (f"{scope} exports to China" if flow == "export"
-             else f"{scope} imports from China")
+    if scope == "China":  # GACC bilateral — the partner is the heading
+        label = "China's exports" if flow == "export" else "China's imports"
+    else:
+        label = (f"{scope} exports to China" if flow == "export"
+                 else f"{scope} imports from China")
     yoy = f.metrics.get("yoy_pct")
     val = _fmt_eur(f.metrics.get("current_eur"))
     if yoy is None:
@@ -285,6 +287,20 @@ def _mirror_gap_html(section) -> str:
             f"{hub}"
             "</div>"
         )
+    return "\n".join(out)
+
+
+def _gacc_bilateral_html(section) -> str:
+    out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
+    if section.intro:
+        out.append(f'<p class="kicker">{html.escape(section.intro)} '
+                   f'{len(section.sections)} partners, biggest first.</p>')
+    for p in section.sections:
+        out.append(f'<div class="sector" id="{html.escape(p.id)}">')
+        out.append(f'<h3 class="sector-h">{html.escape(p.title)}</h3>')
+        for f in p.findings:
+            out.append(_sector_flow_row(f))
+        out.append("</div>")
     return "\n".join(out)
 
 
@@ -598,6 +614,8 @@ def render_html(report: Report) -> str:
             parts.append("<section>" + _mirror_gap_html(sec) + "</section>")
         elif sec.kind == "structural" and sec.sections:
             parts.append("<section>" + _structural_section_html(sec) + "</section>")
+        elif sec.kind == "gacc_bilateral" and sec.sections:
+            parts.append("<section>" + _gacc_bilateral_html(sec) + "</section>")
         elif sec.kind == "reference":
             parts.append("<section>" + _reference_html(sec) + "</section>")
 

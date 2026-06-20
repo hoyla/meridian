@@ -658,6 +658,52 @@ def _reference_section(cur) -> Section:
     )
 
 
+def _gacc_bilateral_section(cur, period) -> Section:
+    """The GACC variant's deeper layer: China's own reported trade with each
+    of its ~24 named partner countries (both flows), under the bloc-level
+    macro lead."""
+    root = Section(
+        id="gacc-bilateral", title="China's trade by partner (GACC)",
+        kind="gacc_bilateral",
+        intro="China's own reported exports and imports by partner country, "
+              "rolling 12 months — the per-country detail under the bloc lead.",
+    )
+    if period is None:
+        return root
+    cur.execute(
+        """SELECT id, subkind, detail FROM findings WHERE superseded_at IS NULL
+            AND subkind IN ('gacc_bilateral_aggregate_yoy',
+                            'gacc_bilateral_aggregate_yoy_import')
+            AND (detail->'windows'->>'current_end')::date = %s""",
+        (period,),
+    )
+    by_partner: dict[str, dict] = {}
+    for fid, subkind, detail in cur.fetchall():
+        partner = ((detail or {}).get("partner") or {}).get("raw_label") or "?"
+        is_export = not subkind.endswith("_import")
+        tot = (detail or {}).get("totals", {})
+        finding = Finding(
+            finding_id=fid, subkind=subkind,
+            title=(f"China {'exports to' if is_export else 'imports from'} {partner}"),
+            metrics={"scope": "China", "flow": "export" if is_export else "import",
+                     "yoy_pct": _f(tot.get("yoy_pct")),
+                     "current_eur": _f(tot.get("current_12mo_eur"))},
+            chart_data=_series_chart((detail or {}).get("monthly_series")),
+            provenance=Provenance(finding_ids=[fid], source="gacc", as_of=period),
+        )
+        p = by_partner.setdefault(partner, {"max_eur": 0.0, "findings": []})
+        p["findings"].append(finding)
+        p["max_eur"] = max(p["max_eur"], finding.metrics["current_eur"] or 0.0)
+    for name, p in sorted(by_partner.items(), key=lambda kv: -kv[1]["max_eur"]):
+        fs = sorted(p["findings"], key=lambda f: f.metrics["flow"])
+        root.sections.append(Section(
+            id="gacc-" + _slugify_heading(name), title=name,
+            kind="gacc_bilateral", findings=fs,
+            facets=Facets(partner=[name]),
+        ))
+    return root
+
+
 def build_report(
     source_trigger: str = "eurostat",
     data_period: date | None = None,
@@ -685,6 +731,7 @@ def build_report(
             if data_period is None:
                 data_period = _gacc_latest_period(cur)
             items = _gacc_macro_items(cur, data_period)
+            sections = [_gacc_bilateral_section(cur, data_period)]
         else:  # eurostat / hmrc: HS-sector movers + the EU-27 sector tree
             if data_period is None and top_movers:
                 data_period = top_movers[0].get("current_end")
