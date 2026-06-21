@@ -192,10 +192,11 @@ def _parse_questions(raw: str) -> list[dict] | None:
 
 
 def _default_backend():
-    """Dev default is the CLI (Max subscription, no API key). If LLM_BACKEND is
-    set (e.g. claude_api in production) honour it via make_backend()."""
-    if os.environ.get("LLM_BACKEND"):
-        return make_backend()
+    """Dev default is the CLI (Max subscription, no API key). If a backend is
+    configured for takes — LLM_TAKES_BACKEND, or the global LLM_BACKEND (e.g.
+    claude_api in production) — honour it via make_backend(role='takes')."""
+    if os.environ.get("LLM_TAKES_BACKEND") or os.environ.get("LLM_BACKEND"):
+        return make_backend(role="takes")
     return ClaudeCLIBackend()
 
 
