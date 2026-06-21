@@ -35,6 +35,16 @@ def _sample_report() -> rm.Report:
         chart_data=rm.ChartData(chart_type="sparkline", series=series),
         provenance=rm.Provenance(finding_ids=[1], source="eurostat", as_of=date(2026, 4, 1)),
     )
+    level_ind = rm.Indicator(
+        key="eu_china_imports_12mo", label="EU-27 imports (12mo)", value=5.6e11,
+        unit="eur", formatted="€561.37B", chart="bignumber",
+        provenance=rm.Provenance(finding_ids=[1], source="eurostat", as_of=date(2026, 4, 1)),
+    )
+    donut_ind = rm.Indicator(
+        key="china_import_share", label="China share of EU imports", value=0.23,
+        unit="share", formatted="23%", chart="donut",
+        provenance=rm.Provenance(source="eurostat", as_of=date(2026, 4, 1)),
+    )
     headline = rm.Headline(
         variant="eurostat", lead_title="What April changed", note="note.",
         items=[rm.HeadlineItem(
@@ -54,8 +64,12 @@ def _sample_report() -> rm.Report:
                 ]))],
         llm_slots=[rm.LLMSlot(slot_type="general", grounded_in=[2])],
     )
-    what_changed = rm.WhatChanged(regime="movement", summary="3 findings shifted.",
-                                  new_count=1)
+    what_changed = rm.WhatChanged(
+        regime="movement", summary="3 findings shifted.", new_count=49,
+        new_by_subkind=[
+            {"subkind": "hs_group_yoy", "label": "year-on-year change for an HS group",
+             "count": 44},
+            {"subkind": "mirror_gap", "label": "mirror-trade gap", "count": 5}])
     state = rm.Section(
         id="state-of-play", title="State of play", kind="state_of_play",
         sections=[rm.Section(
@@ -76,6 +90,8 @@ def _sample_report() -> rm.Report:
             provenance=rm.Provenance(finding_ids=[3, 8], source="cross_source"))])
     group = rm.Section(
         id="cars", title="Cars", kind="sector_detail", intro="Passenger cars.",
+        about="**How to read each group.** Every figure is a 12-month total.\n"
+              "\n- value vs volume\n- low base means quote the € amount",
         facets=rm.Facets(commodity=["Cars"], sector=["78"], theme=["EV supply chain"],
                          end_use=["Consumption"]),
         metrics={"china_share_value": 0.19, "china_share_kg": 0.24,
@@ -89,11 +105,24 @@ def _sample_report() -> rm.Report:
         findings=[rm.Finding(
             finding_id=2, subkind="hs_group_yoy_export", title="EU-27 exports of Cars",
             metrics={"scope": "EU-27", "flow": "export", "yoy_pct": -0.4,
-                     "current_eur": 7.5e9, "low_base": False},
+                     "current_eur": 7.5e9, "low_base": False,
+                     "sm_yoy_pct": -0.62, "sm_yoy_pct_kg": -0.5,
+                     "sm_period": "2026-04-01"},
             chart_data=rm.ChartData(chart_type="line", series=series),
-            provenance=rm.Provenance(finding_ids=[2]))])
+            provenance=rm.Provenance(finding_ids=[2])),
+            rm.Finding(
+            finding_id=12, subkind="hs_group_yoy", title="EU-27 imports of Cars",
+            metrics={"scope": "EU-27", "flow": "import", "yoy_pct": 0.23,
+                     "current_eur": 1.6e10, "low_base": False,
+                     "sm_yoy_pct": 0.82, "sm_period": "2026-04-01",
+                     "caveats": ["partial_window"]},
+            chart_data=rm.ChartData(chart_type="line", series=series),
+            provenance=rm.Provenance(finding_ids=[12]))])
     sector = rm.Section(id="sector-detail", title="Sector detail", kind="sector_detail",
-                        intro="Every group.", sections=[group])
+                        intro="Every group.",
+                        about="Reading the numbers: value vs volume; **low base** "
+                              "means quote the € amount.\n\n- 12-month vs latest month",
+                        sections=[group])
     structural = rm.Section(
         id="trade-map", title="Trade map", kind="structural", intro="By division.",
         provenance=rm.Provenance(source="eurostat", as_of=date(2026, 4, 1)),
@@ -111,10 +140,41 @@ def _sample_report() -> rm.Report:
             metrics={"value_share": 0.0001, "covered_share": 0.0, "value_eur": 5.5e7,
                      "code_count": 2, "groups": []})])
     reference = rm.Section(
-        id="methodology", title="Methodology, sources & caveats", kind="reference",
+        id="methodology", title="Methodology & caveats", kind="reference",
         intro="How to read.",
+        about="Every value is a rolling 12-month total. See [methodology.md §2]"
+              "(methodology.md#scopes) for detail.",
         metrics={"caveats": [{"code": "cif_fob", "summary": "CIF vs FOB", "detail": "…"}],
-                 "sources": [{"source": "eurostat", "note": "Comext."}]})
+                 "guides": [{"title": "The three comparison scopes",
+                             "body": "EU-27 is **Eurostat**.\n\n- UK is HMRC"}]})
+    sources = rm.Section(
+        id="sources", title="Sources & coverage", kind="sources",
+        intro="What this rests on.",
+        metrics={"sources": [{"source": "eurostat", "note": "Comext."}],
+                 "coverage": [{"source": "eurostat", "start": "2017-01-01",
+                               "end": "2026-04-01", "releases": 111}],
+                 "manifest": [{"family": "HS-group year-on-year (price & volume)",
+                               "count": 3509}],
+                 "manifest_total": 3509,
+                 "appendix": [{"source": "eurostat", "total": 111, "recent": [
+                     {"period": "2026-04-01", "title": "April 2026",
+                      "url": "https://ec.europa.eu/eurostat/x",
+                      "fetched": "2026-06-01"}]}]})
+    glossary = rm.Section(
+        id="glossary", title="Glossary", kind="glossary",
+        intro="Definitions.",
+        metrics={"groups": [{"title": "Economic & data terms", "terms": [
+            {"term": "CIF / FOB", "body": "CIF includes freight.\n\n- FOB does not"},
+            {"term": "Mirror gap", "body": "The two sides' books differ."}]}]})
+    data = rm.Section(
+        id="tables", title="Tables", kind="data", intro="The findings as tables.",
+        metrics={"tables": [
+            {"name": "summary", "description": "one row per group",
+             "headers": ["group", "yoy"], "rows": [["Cars", 0.23], ["Steel", -0.1]],
+             "total_rows": 2, "shown_rows": 2, "inline": True},
+            {"name": "hs_yoy_imports", "description": "full detail",
+             "headers": ["group"], "rows": [], "total_rows": 3509,
+             "shown_rows": 0, "inline": False}]})
     gacc_bi = rm.Section(
         id="gacc-bilateral", title="China's trade by partner (GACC)",
         kind="gacc_bilateral", intro="By partner.",
@@ -128,9 +188,11 @@ def _sample_report() -> rm.Report:
                 provenance=rm.Provenance(finding_ids=[10], source="gacc"))])])
     meta = rm.ReportMeta(data_period=date(2026, 4, 1), variant="eurostat",
                          snapshot_id="t", generated_at=datetime(2026, 6, 20, 12, 0))
-    return rm.Report(meta=meta, key_indicators=[deficit_ind], headline=headline,
-                     what_changed=what_changed,
-                     sections=[state, mirror, sector, structural, reference, gacc_bi])
+    return rm.Report(meta=meta,
+                     key_indicators=[deficit_ind, level_ind, donut_ind],
+                     headline=headline, what_changed=what_changed,
+                     sections=[state, mirror, sector, structural, gacc_bi,
+                               sources, data, reference, glossary])
 
 
 # ---- model serialisation ----
@@ -151,7 +213,7 @@ def test_markdown_renders_all_sections():
     md = render_markdown(_sample_report())
     for marker in ("# Headlines", "## Key indicators", "## State of play",
                    "## Mirror-trade gaps", "## Sector detail", "## Trade map",
-                   "## Methodology, sources & caveats",
+                   "## Methodology & caveats", "## Sources & coverage",
                    "## China's trade by partner (GACC)"):
         assert marker in md, marker
     assert "China reports" in md          # cn-only deficit
@@ -216,6 +278,243 @@ def test_fmt_eur_shared_handles_trillions():
     assert _fmt_eur(1.2e12) == "€1.20T"
     assert _fmt_eur(4.6e11) == "€460.00B"
     assert _fmt_eur(None) == "—"
+
+
+# ---- tabbed portal + the restored Findings-doc surfaces (no DB) ----
+
+def test_html_is_tabbed_and_routes_sections():
+    """The page is tabbed; data → Tables, reference → Methodology, glossary →
+    Glossary; everything else → Briefing. Tab router JS is embedded; degrades to
+    plain anchored panels with no JS."""
+    h = render_html(_sample_report())
+    assert 'class="tabs"' in h
+    for href in ("#tab-briefing", "#tab-tables", "#tab-sources",
+                 "#tab-methodology", "#tab-glossary"):
+        assert f'href="{href}"' in h, href
+    for pid in ("tab-briefing", "tab-tables", "tab-sources",
+                "tab-methodology", "tab-glossary"):
+        assert f'id="{pid}"' in h, pid
+    assert "hashchange" in h               # tab router present
+    assert 'class="badge"' in h            # count badges (terms / tables)
+
+
+def test_more_about_is_a_collapsed_disclosure():
+    h = render_html(_sample_report())
+    assert '<details class="more">' in h
+    assert "More about this section" in h
+    assert "Reading the numbers" in h      # the sector about copy
+    md = render_markdown(_sample_report())
+    assert "More about this section" in md
+
+
+def test_key_indicators_level_and_donut_render():
+    h = render_html(_sample_report())
+    assert "€561.37B" in h                 # bignumber level
+    assert 'class="donut"' in h            # part-of-whole donut
+    assert ">23%</text>" in h              # donut centre percentage
+    assert "€561.37B" in render_markdown(_sample_report())
+
+
+def test_latest_month_register_in_sector_rows():
+    assert "latest mo" in render_html(_sample_report())
+    assert "latest mo" in render_markdown(_sample_report())
+
+
+def test_sector_group_charts_line_and_bar_side_by_side():
+    h = render_html(_sample_report())
+    assert 'class="chart-row"' in h        # side-by-side container (wide viewports)
+    assert 'class="chartcard"' in h and 'class="cc-meta"' in h  # meta-left card
+    assert "latest 12 months" in h         # line legend
+    assert ">Imports<" in h and ">Exports<" in h  # the imports-vs-exports bar
+    # charts are labelled by their group, not a generic repeated headline
+    assert "Cars: EU-27 imports from China" in h
+    assert "Cars: imports vs exports" in h
+
+
+def test_sector_group_deep_detail_behind_expander():
+    """Charts + top products + drivers + trajectory collapse behind a per-group
+    'Show detail & charts' expander; the flow rows stay visible."""
+    h = render_html(_sample_report())
+    assert 'class="gdetail"' in h and "Show detail" in h
+    assert 'class="chart-row"' in h and "Top products" in h  # inside the expander
+
+
+def test_per_row_caveat_flags():
+    h = render_html(_sample_report())
+    assert 'class="flow-cav"' in h and "partial window" in h   # humanised code
+    assert "(partial window)" in render_markdown(_sample_report())
+
+
+def test_what_changed_new_findings_breakdown():
+    h = render_html(_sample_report())
+    assert "New findings this cycle" in h
+    assert "44" in h and "year-on-year change for an HS group" in h
+    md = render_markdown(_sample_report())
+    assert "44 new — year-on-year change for an HS group" in md
+
+
+def test_sources_release_appendix():
+    r = _sample_report()
+    h = render_html(r)
+    assert "Release appendix" in h
+    assert "ec.europa.eu/eurostat/x" in h and "fetched 2026-06-01" in h
+    md = render_markdown(r)
+    assert "Release appendix" in md and "ec.europa.eu/eurostat/x" in md
+
+
+def test_glossary_renders_in_both_surfaces():
+    r = _sample_report()
+    h = render_html(r)
+    assert 'class="gloss-item"' in h and 'id="glossary-filter"' in h
+    assert "CIF / FOB" in h and "CIF includes freight" in h
+    md = render_markdown(r)
+    assert "## Glossary" in md and "**CIF / FOB**" in md
+
+
+def test_tables_tab_inline_and_download_only():
+    r = _sample_report()
+    h = render_html(r)
+    assert "Download Excel workbook" in h and 'href="data.xlsx"' in h
+    assert "Copy as TSV" in h and 'class="dtable"' in h
+    assert ">Cars<" in h                   # an inline cell
+    assert "hs_yoy_imports" in h and "3,509 rows" in h  # download-only, count shown
+    md = render_markdown(r)
+    assert "## Tables" in md and "hs_yoy_imports" in md
+
+
+def test_gacc_bilateral_per_partner_expanders():
+    """Progressive disclosure: each partner is a collapsed <details> button with
+    a headline figure, expanding to its flows on click."""
+    h = render_html(_sample_report())
+    assert 'class="partner"' in h and "<summary>" in h
+    assert "United States" in h
+    assert "China's exports" in h and "€460.00B" in h   # headline in the summary
+    md = render_markdown(_sample_report())               # LLM surface keeps it flat
+    assert "## China's trade by partner (GACC)" in md
+
+
+def test_methodology_tab_shows_about_and_guides():
+    r = _sample_report()
+    h = render_html(r)
+    assert "The three comparison scopes" in h    # a guide
+    assert "Caveats" in h                          # caveats stay in Methodology
+    assert "The three comparison scopes" in render_markdown(r)
+
+
+def test_sources_tab_groups_provenance_and_trade_map():
+    """Sources & coverage = data sources + period coverage + findings manifest,
+    plus the Trade Map (moved off Briefing) in the SAME tab."""
+    r = _sample_report()
+    h = render_html(r)
+    assert 'id="tab-sources"' in h
+    assert "Data sources" in h and "Period coverage" in h
+    assert "Findings included" in h and "3,509" in h     # humanised manifest
+    assert "2026-04-01" in h                              # coverage end date
+    # the Trade Map renders inside the Sources tab, not Briefing
+    si = h.index('id="tab-sources"')
+    assert 'class="tmrow"' in h
+    assert h.index('class="tmrow"') > si                  # tmrow sits in the sources panel
+    assert "Road vehicles" in h                            # a division title
+    md = render_markdown(r)
+    assert "## Sources & coverage" in md and "111 releases" in md
+
+
+def test_md_blocks_to_html_paragraphs_bullets_inline():
+    from report_render_html import _md_blocks_to_html
+    out = _md_blocks_to_html("A **bold** line.\n\n- one\n- two")
+    assert "<p>A <strong>bold</strong> line.</p>" in out
+    assert "<ul><li>one</li><li>two</li></ul>" in out
+
+
+def test_inline_md_drops_dead_internal_link_to_text():
+    out = _inline_md("see [methodology.md §2](methodology.md#scopes) here")
+    assert "methodology.md §2" in out      # text kept
+    assert "href=" not in out              # dead cross-doc target dropped
+
+
+def test_line_chart_two_tone_split_with_axes():
+    from report_render_html import _line_chart_svg
+    from datetime import date as d
+    pts = [rm.SeriesPoint(period=d(2024, m % 12 + 1, 1), value=float(m))
+           for m in range(24)]
+    svg = _line_chart_svg(rm.ChartData(chart_type="line", series=pts))
+    assert "<svg" in svg
+    assert svg.count("polyline") == 2      # prior (grey) + current (red) segments
+    # axes: ≥3 y + ≥3 x labels, and gridlines (horizontal + intermediate vertical)
+    assert svg.count("<text") >= 6
+    assert svg.count("<line") >= 6
+
+
+def test_x_tick_indices_show_intermediate_dates():
+    from report_render_html import _x_tick_indices
+    t = _x_tick_indices(111)               # ~9-year deficit → year-ish steps
+    assert t[0] == 0 and t[-1] == 110 and 4 <= len(t) <= 7  # not just two ends
+    t2 = _x_tick_indices(24)               # 2-year sector → 6-month steps
+    assert t2[0] == 0 and t2[-1] == 23 and len(t2) >= 4
+    assert _x_tick_indices(2) == [0, 1]
+
+
+def test_bar_chart_zero_based_and_labelled():
+    from report_render_html import _bar_chart_svg
+    svg = _bar_chart_svg([{"label": "Imports", "value": 1.6e10},
+                          {"label": "Exports", "value": 7.5e9}])
+    assert svg.count("<rect") == 2
+    assert ">Imports<" in svg and ">Exports<" in svg
+    assert "€16.00B" in svg                 # value label on the bar
+    assert _bar_chart_svg([]) == ""
+
+
+def test_chart_card_puts_meta_left_of_plot():
+    from report_render_html import _chart_card
+    out = _chart_card("Title", "€5B", "legend", "<svg></svg>")
+    assert 'class="cc-meta"' in out and 'class="cc-plot"' in out
+    assert "Title" in out and "€5B" in out and "legend" in out
+    assert _chart_card("T", "", "", "") == ""   # no svg → nothing
+
+
+def test_donut_svg_clamps_and_labels():
+    from report_render_html import _donut_svg
+    assert "50%" in _donut_svg(0.5)
+    assert "100%" in _donut_svg(1.7)       # clamped to 1.0
+    assert "0%" in _donut_svg(-1)          # clamped to 0.0
+
+
+def test_parse_glossary_md_groups_and_terms():
+    from report_builder import _parse_glossary_md
+    text = ("# Glossary\nintro\n## Cat A\n### Term1\nbody1 line\n### Term2\n"
+            "body2\n## Cat B\n### T3\nb3")
+    groups = _parse_glossary_md(text)
+    assert [g["title"] for g in groups] == ["Cat A", "Cat B"]
+    assert groups[0]["terms"][0] == {"term": "Term1", "body": "body1 line"}
+    assert len(groups[0]["terms"]) == 2
+
+
+def test_jsonable_cell_coerces_for_snapshot():
+    from report_builder import _jsonable_cell
+    from decimal import Decimal
+    from datetime import date as d
+    assert _jsonable_cell(Decimal("1.5")) == 1.5
+    assert _jsonable_cell(d(2026, 4, 1)) == "2026-04-01"
+    assert _jsonable_cell(None) is None
+    assert _jsonable_cell(3) == 3 and _jsonable_cell("x") == "x"
+
+
+def test_data_cells_comma_quantities_not_identifiers():
+    """Thousands commas so a count reads as a count (2,018) not a year (2018) —
+    but NOT on identifier / code / year columns (a finding id 71942 must not
+    become 71,942)."""
+    from report_render_html import _fmt_cell
+    assert _fmt_cell(2018, "ytd_months") == "2,018"          # a count → commas
+    assert _fmt_cell(28326997748.3, "r12_import_eur") == "28,326,997,748.3"
+    assert _fmt_cell(71942, "finding_id") == "71942"         # id → no commas
+    assert _fmt_cell(2018, "anchor_year") == "2018"          # year → no commas
+    assert _fmt_cell(85076000, "product_nc") == "85076000"   # code → no commas
+
+
+def test_data_table_cells_carry_raw_for_clean_paste():
+    h = render_html(_sample_report())
+    assert "data-raw=" in h                       # ungrouped value on numeric cells
+    assert "getAttribute('data-raw')" in h        # TSV copy prefers it over commas
 
 
 # ---- LLM per-finding take (the v1 layer) ----

@@ -21,11 +21,17 @@ from __future__ import annotations
 import os
 
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.middleware.gzip import GZipMiddleware
 from google.cloud import storage
 
 BUCKET = os.environ.get("PORTAL_BUCKET", "")
 app = FastAPI(title="Meridian portal")
+# The rendered index.html and report.json are large (hundreds of KB of text);
+# gzip cuts the transfer ~5-6× — Cloud Run does not compress for us.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 _storage = storage.Client() if BUCKET else None
+
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _read(path: str) -> bytes | None:
@@ -60,3 +66,17 @@ def report_json() -> Response:
     if data is None:
         raise HTTPException(status_code=404, detail="No snapshot published yet.")
     return Response(content=data, media_type="application/json")
+
+
+@app.get("/data.xlsx")
+def data_xlsx() -> Response:
+    """The journalist spreadsheet (every tab, every row) — the Tables tab's
+    'Download Excel workbook'. Published alongside the snapshot; 404 if a
+    snapshot was made without one (e.g. an --portal-snapshot-only refresh)."""
+    data = _read("latest/data.xlsx")
+    if data is None:
+        raise HTTPException(status_code=404, detail="No workbook in this snapshot.")
+    return Response(
+        content=data, media_type=_XLSX_MIME,
+        headers={"Content-Disposition": 'attachment; filename="meridian-data.xlsx"'},
+    )

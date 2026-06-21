@@ -149,6 +149,9 @@ class WhatChanged:
     summary: str  # the 'since the last pack' digest prose
     significant: list[Shift] = field(default_factory=list)
     new_count: int = 0
+    # Per-subkind breakdown of new findings (the Findings-doc Tier-1 "N new —
+    # <type>" list), surfaced behind an expander. [{subkind, label, count}].
+    new_by_subkind: list = field(default_factory=list)
 
 
 @dataclass
@@ -176,6 +179,11 @@ class Section:
     title: str
     kind: str  # state_of_play | sector_detail | structural | glossary | data
     intro: Optional[str] = None
+    # `about` is the longer "More about this section" explanatory copy (light
+    # markdown), collapsed by default in the portal. `intro` is the one-line
+    # kicker shown always; `about` is the optional deeper context a reader can
+    # expand — the explanatory matter ported from the long Findings preamble.
+    about: Optional[str] = None
     sections: list["Section"] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     facets: Facets = field(default_factory=Facets)
