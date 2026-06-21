@@ -566,10 +566,10 @@ ul.ref li{font-size:13.5px;line-height:1.5;margin:0 0 7px;color:var(--ink)}
 .llm{background:#fffbe6;border:1px solid #f3c100;border-left:4px solid #f3c100;padding:10px 14px;margin:12px 0}
 .llm-tag{font-size:12px;font-weight:700;color:#7a5c00}
 .llm-body{font-size:13px;color:#7a5c00;font-style:italic;margin-top:3px}
-.take{background:#f6f7f9;border:1px dashed #b9c0cc;border-left:3px solid #8a93a3;padding:8px 12px;margin:8px 0 4px;border-radius:3px}
-.take-tag{font-size:11px;font-weight:700;letter-spacing:.02em;color:#5b6573;text-transform:uppercase}
+.take{background:#fffbe6;border:1px solid #f3c100;border-left:4px solid #f3c100;padding:8px 12px;margin:8px 0 4px}
+.take-tag{font-family:var(--font-sans);font-size:14px;font-weight:700;letter-spacing:.02em;color:#7a5c00;text-transform:uppercase}
 .take-qs{margin:6px 0 0;padding-left:18px}
-.take-qs li{font-size:14px;line-height:1.45;color:#3a4250;margin:0 0 5px;font-family:var(--font-body)}
+.take .take-qs li{font-family:var(--font-sans);font-size:14px;line-height:1.45;color:#7a5c00;margin:0 0 5px}
 footer{padding:18px 28px 28px;border-top:1px solid var(--line)}
 footer h3{font-size:13px;font-weight:700;color:var(--muted);margin:0 0 10px}
 .comp{display:flex;flex-wrap:wrap;gap:12px}
