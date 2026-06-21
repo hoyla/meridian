@@ -178,6 +178,12 @@ class Section:
     findings: list[Finding] = field(default_factory=list)
     facets: Facets = field(default_factory=Facets)
     metrics: dict = field(default_factory=dict)
+    # An aggregate/summary node (one carrying `metrics` rather than per-leaf
+    # `findings`) computes its numbers live, so it has no child finding to
+    # inherit provenance from — it carries its own (source + as_of + method),
+    # keeping invariant 1 true for aggregates too. Leaf-bearing sections leave
+    # this empty; their findings carry the provenance.
+    provenance: Provenance = field(default_factory=Provenance)
 
 
 @dataclass

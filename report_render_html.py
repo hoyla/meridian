@@ -27,6 +27,7 @@ from __future__ import annotations
 import html
 import re
 
+from briefing_pack._helpers import _fmt_eur
 from report_model import Headline, Indicator, Report, WhatChanged
 from classifications import division_title  # static SITC title lookup
 
@@ -153,17 +154,6 @@ def _headline(h: Headline) -> str:
     else:
         out.append('<p class="note">No headline items this cycle.</p>')
     return "\n".join(out)
-
-
-def _fmt_eur(v) -> str:
-    if v is None:
-        return "—"
-    v = float(v)
-    if abs(v) >= 1e9:
-        return f"€{v / 1e9:,.1f}B"
-    if abs(v) >= 1e6:
-        return f"€{v / 1e6:,.0f}M"
-    return f"€{v:,.0f}"
 
 
 def _sector_flow_row(f) -> str:
@@ -317,6 +307,21 @@ def _structural_section_html(section) -> str:
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
         out.append(f'<p class="kicker">{html.escape(section.intro)}</p>')
+    # These are live aggregates with no per-code finding, so they carry the
+    # section's own provenance (source + as-of + total) rather than a finding
+    # token — the trade-map numbers stay attributable.
+    p = getattr(section, "provenance", None)
+    if p and (p.source or p.as_of):
+        bits = []
+        if p.source:
+            bits.append(f"Source: {html.escape(p.source)}")
+        if p.as_of:
+            bits.append(f"as of {html.escape(str(p.as_of))}")
+        tot = (section.metrics or {}).get("total_eur")
+        if tot:
+            bits.append(f"total {html.escape(_fmt_eur(tot))}")
+        out.append(f'<p class="source">{" · ".join(bits)} · live aggregate, '
+                   "no per-code finding.</p>")
     divs = section.sections
     maxshare = max((d.metrics.get("value_share", 0) for d in divs), default=1) or 1
     for d in divs:
@@ -491,6 +496,7 @@ section{padding:18px 28px}
 .kpi-prov{margin-top:8px;font-size:12px;color:var(--muted)}
 h2.lead{font-family:var(--font-headline);font-size:26px;line-height:1.15;color:var(--ink);margin:4px 0 6px;font-weight:700}
 .kicker{color:var(--muted);font-size:14px;margin:0 0 12px}
+.source{color:var(--muted);font-size:12px;margin:0 0 12px;font-style:italic}
 ol.movers{margin:0;padding-left:24px}
 ol.movers li{font-family:var(--font-body);font-size:17px;line-height:1.4;margin:0 0 14px}
 ol.movers li strong{color:var(--ink);font-weight:700}
@@ -635,7 +641,7 @@ def render_html(report: Report) -> str:
             parts.append("<section>" + _sector_section(sec) + "</section>")
         elif sec.kind == "mirror_gap" and sec.findings:
             parts.append("<section>" + _mirror_gap_html(sec) + "</section>")
-        elif sec.kind == "structural" and sec.sections:
+        elif sec.kind == "structural" and (sec.sections or sec.metrics):
             parts.append("<section>" + _structural_section_html(sec) + "</section>")
         elif sec.kind == "gacc_bilateral" and sec.sections:
             parts.append("<section>" + _gacc_bilateral_html(sec) + "</section>")

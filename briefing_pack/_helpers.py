@@ -76,6 +76,8 @@ def _fmt_eur(v: Any) -> str:
     if v is None:
         return "—"
     n = float(v)
+    if abs(n) >= 1e12:
+        return f"€{n / 1e12:.2f}T"
     if abs(n) >= 1e9:
         return f"€{n / 1e9:.2f}B"
     if abs(n) >= 1e6:
