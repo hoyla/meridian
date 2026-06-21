@@ -839,25 +839,29 @@ def _mirror_gap_html(section) -> str:
                    f'{html.escape(m["hub_notes"][:200])}</div>')
         cite = (f'<span class="token">finding/{f.provenance.finding_ids[0]}</span>'
                 if f.provenance.finding_ids else "")
-        # Container-ship pictograph — only where the excess over the freight
-        # baseline is materially positive (≈1+ container); the bloc and the
-        # net-negative partners get none, which is the honest read.
-        ship = ""
+        # Container-ship pictograph beside the text — only where the excess over
+        # the freight baseline is materially positive (≈1+ container); the bloc
+        # and the net-negative partners get none, which is the honest read.
+        ship_svg = ship_cap = ""
         if ex is not None and ex >= 0.03:
+            ship_svg = f'<div class="mg-ship">{_container_gauge_svg(ex)}</div>'
             cap = (f"Highlighted: the {ex * 100:.1f}% of "
                    f"{m.get('partner', '')}'s reported imports from China beyond "
                    "what China's own export figures + normal freight explain "
                    "(each block ≈ 4%).")
-            ship = (f'<figure class="ship-wrap">{_container_gauge_svg(ex)}'
-                    f'<figcaption class="ship-cap">{html.escape(cap)}</figcaption>'
-                    "</figure>")
+            ship_cap = f'<div class="ship-cap">{html.escape(cap)}</div>'
+        # Text block (heading → gap stats below it → reports + finding token),
+        # with the ship beside it; the small captions go full width below both.
+        gapline = (f'<div class="mg-g" style="color:{col}">gap {_fmt_eur(gap)} '
+                   f'({gp:+.1f}%){excess}{znote}</div>')
         out.append(
-            '<div class="mg">'
-            f'<div class="mg-h"><span class="mg-p">China ↔ {html.escape(m.get("partner", ""))}</span>'
-            f'<span class="mg-g" style="color:{col}">gap {_fmt_eur(gap)} ({gp:+.1f}%){excess}{znote}</span></div>'
+            '<div class="mg"><div class="mg-main"><div class="mg-text">'
+            f'<div class="mg-p">China ↔ {html.escape(m.get("partner", ""))}</div>'
+            f'{gapline}'
             f'<div class="mg-v">China reports {_fmt_eur(m.get("gacc_eur"))} · '
             f'partner reports {_fmt_eur(m.get("eurostat_eur"))} {cite}</div>'
-            f"{hub}{ship}"
+            f'</div>{ship_svg}</div>'
+            f"{hub}{ship_cap}"
             "</div>"
         )
     return "\n".join(out)
@@ -1208,12 +1212,13 @@ details.gdetail[open]>summary::before{content:"▾ "}
 .tmfill{height:6px;background:var(--masthead)}
 .tmgroups{font-size:12.5px;color:var(--muted)}
 .mg{padding:11px 0;border-bottom:1px solid var(--line)}
-.mg-h{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
+.mg-main{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.mg-text{flex:1 1 260px;min-width:0}
+.mg-ship{flex:0 0 auto}
 .mg-p{font-family:var(--font-headline);font-size:16px;font-weight:700;color:var(--ink)}
-.mg-g{font-size:13.5px;font-weight:700;white-space:nowrap}
+.mg-g{font-size:13.5px;font-weight:700;margin-top:2px}
 .mg-v{font-size:13.5px;color:var(--ink);margin-top:3px}
-.hub{font-size:12.5px;color:var(--muted);font-style:italic;margin-top:4px}
-.ship-wrap{margin:7px 0 2px}
+.hub{font-size:12.5px;color:var(--muted);font-style:italic;margin-top:6px}
 .ship{display:block;max-width:240px}
 .ship-cap{font-size:11.5px;color:var(--muted);font-style:italic;margin-top:2px}
 .ref-h{font-family:var(--font-sans);font-size:13px;font-weight:700;color:var(--muted);margin:14px 0 6px}
