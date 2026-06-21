@@ -1169,8 +1169,6 @@ ul.ref li{font-size:13.5px;line-height:1.5;margin:0 0 7px;color:var(--ink)}
 .tab{padding:12px 16px;color:var(--muted);font-family:var(--font-sans);font-weight:600;font-size:15px;border-bottom:4px solid transparent;margin-bottom:-1px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
 .tab:hover{color:var(--ink);border-bottom-color:transparent}
 .tab.active{color:var(--masthead);border-bottom-color:var(--masthead)}
-.tab .badge{display:inline-block;min-width:1.4em;text-align:center;background:#ededed;color:var(--ink);border-radius:62.5rem;padding:0 8px;font-size:12px;font-weight:700}
-.tab.active .badge{background:var(--masthead);color:#fff}
 .tabpanel.hide{display:none}
 .sector:target{scroll-margin-top:64px}
 /* "More about this section" disclosure */
@@ -1420,14 +1418,13 @@ def render_html(report: Report) -> str:
         # 'structural' (the Trade Map) is NOT here — it moved to the Sources &
         # coverage tab below.
 
-    # --- tabs: (key, label, badge, panel-html). Only built when they have
-    # content, so a GACC variant with no data tab simply shows fewer tabs.
-    tabdefs: list[tuple[str, str, int | None, str]] = [
-        ("briefing", "Briefing", None, "".join(brief)),
+    # --- tabs: (key, label, panel-html). Only built when they have content, so a
+    # GACC variant with no data tab simply shows fewer tabs.
+    tabdefs: list[tuple[str, str, str]] = [
+        ("briefing", "Briefing", "".join(brief)),
     ]
     if data_sec is not None and (data_sec.metrics or {}).get("tables"):
-        n = len((data_sec.metrics or {}).get("tables") or [])
-        tabdefs.append(("tables", "Tables", n,
+        tabdefs.append(("tables", "Tables",
                         "<section>" + _data_tables_html(data_sec) + "</section>"))
     # Sources & coverage = provenance/coverage (sources, period coverage,
     # findings manifest) + the Trade Map (moved off Briefing), one tab.
@@ -1437,26 +1434,22 @@ def render_html(report: Report) -> str:
     if structural_sec is not None and (structural_sec.sections or structural_sec.metrics):
         src_parts.append("<section>" + _structural_section_html(structural_sec) + "</section>")
     if src_parts:
-        tabdefs.append(("sources", "Sources & coverage", None, "".join(src_parts)))
+        tabdefs.append(("sources", "Sources & coverage", "".join(src_parts)))
     if ref_sec is not None:
-        tabdefs.append(("methodology", "Methodology", None,
+        tabdefs.append(("methodology", "Methodology",
                         "<section>" + _reference_html(ref_sec) + "</section>"))
     if gloss_sec is not None and (gloss_sec.metrics or {}).get("groups"):
-        n = sum(len(g.get("terms", []))
-                for g in (gloss_sec.metrics or {}).get("groups") or [])
-        tabdefs.append(("glossary", "Glossary", n,
+        tabdefs.append(("glossary", "Glossary",
                         "<section>" + _glossary_html(gloss_sec) + "</section>"))
 
     nav = '<nav class="tabs" role="tablist">' + "".join(
         f'<a class="tab{" active" if i == 0 else ""}" href="#tab-{key}">'
-        f'{html.escape(label)}'
-        + (f' <span class="badge">{badge:,}</span>' if badge else "")
-        + "</a>"
-        for i, (key, label, badge, _h) in enumerate(tabdefs)
+        f'{html.escape(label)}</a>'
+        for i, (key, label, _h) in enumerate(tabdefs)
     ) + "</nav>"
     panels = "".join(
         f'<div class="tabpanel{" hide" if i else ""}" id="tab-{key}">{panel}</div>'
-        for i, (key, _l, _b, panel) in enumerate(tabdefs)
+        for i, (key, _l, panel) in enumerate(tabdefs)
     )
 
     gen = m.generated_at

@@ -295,7 +295,7 @@ def test_html_is_tabbed_and_routes_sections():
                 "tab-methodology", "tab-glossary"):
         assert f'id="{pid}"' in h, pid
     assert "hashchange" in h               # tab router present
-    assert 'class="badge"' in h            # count badges (terms / tables)
+    assert 'class="badge"' not in h        # no count badges in tab names
 
 
 def test_more_about_is_a_collapsed_disclosure():
