@@ -1,0 +1,4 @@
+# Pin before any real deployment; loose for the prototype.
+fastapi
+uvicorn[standard]
+google-cloud-storage
