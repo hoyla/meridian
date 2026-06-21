@@ -441,3 +441,52 @@ def test_publish_period_read_from_snapshot(tmp_path):
     (pd / "report.json").write_text(json.dumps({"meta": {"data_period": "2026-04-01"}}))
     assert portal_publish._period_from_snapshot(pd) == "2026-04-01"
     assert portal_publish._period_from_snapshot(tmp_path) is None
+
+
+# --------------------------------------------------------------------------
+# General "one other thing worth a look" take (release-level LLMSlot)
+# --------------------------------------------------------------------------
+
+def test_general_take_validate():
+    """The general take's guards: finding_id on the shortlist, a question
+    present, a word cap, and every number round-trips to the candidate's facts."""
+    import llm_general_take as gt
+    shortlist = [{
+        "finding_id": 1, "subject": "Magnets", "kinds": ["china_dependency"],
+        "facts": {"yoy_pct": -0.23, "china_import_share": 0.92},
+        "prov": {"yoy_pct": 71, "china_import_share": 1},
+    }]
+    assert gt._validate({"finding_id": 1, "take": "Magnets fell 23% with China at 92% — worth a look?"}, shortlist)[0]
+    assert not gt._validate({"finding_id": 999, "take": "anything?"}, shortlist)[0]        # not shortlisted
+    assert not gt._validate({"finding_id": 1, "take": "Magnets fell 23%."}, shortlist)[0]  # no question
+    assert not gt._validate({"finding_id": 1, "take": "Magnets fell 50%?"}, shortlist)[0]  # unverified number
+    assert not gt._validate({"finding_id": 1, "take": "word " * 80 + "?"}, shortlist)[0]   # too long
+
+
+def test_general_take_render_html_and_md():
+    """Renders the 'One other thing worth a look' box with the paragraph + the
+    citation tokens when generated; nothing when placeholder/empty."""
+    import report_render_html as rh
+    import report_render_markdown as rmd
+    gen = rm.LLMSlot(slot_type="general", status="generated",
+                     content="China supplied 92% — worth a look?", grounded_in=[5, 9])
+    html = rh._general_take_html(gen)
+    assert "One other thing worth a look" in html
+    assert "92%" in html and "finding/5" in html and "finding/9" in html
+    md = rmd._general_take_md(gen)
+    assert any("One other thing worth a look" in line for line in md)
+    assert any("finding/5" in line for line in md)
+    empty = rm.LLMSlot(slot_type="general", status="placeholder", grounded_in=[5])
+    assert rh._general_take_html(empty) == ""
+    assert rmd._general_take_md(empty) == []
+
+
+def test_general_take_shortlist_excludes_headline_and_keeps_provenance():
+    """The shortlist drops headline subjects, and each numeric fact carries its
+    own source finding (a candidate's numbers can come from different findings)."""
+    import llm_general_take as gt
+    sl = gt.build_general_shortlist(_sample_report())   # headline subject = "Cars"
+    subjects = {c["subject"] for c in sl}
+    assert "Cars" not in subjects
+    mg = next((c for c in sl if "mirror" in c["subject"].lower()), None)
+    assert mg is not None and all(isinstance(fid, int) for fid in mg["prov"].values())

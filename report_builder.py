@@ -884,10 +884,31 @@ def build_report(
         snapshot_id=f"{source_trigger}-{data_period}-{generated_at:%Y%m%dT%H%M%S}",
         generated_at=generated_at,
     )
-    return Report(
+    report = Report(
         meta=meta,
         key_indicators=indicators,
         headline=headline,
         what_changed=_what_changed(diff),
         sections=sections,  # the navigable content tree (Eurostat variant)
     )
+    # Across-release 'general' take — "One other thing worth a look". It selects
+    # from a shortlist of NON-headline findings, so it needs the finished report
+    # and runs last. Best-effort: a failure or abstention leaves the stub slot
+    # (no content), and the render simply shows nothing.
+    if generate_takes and source_trigger == "eurostat":
+        try:
+            from llm_general_take import generate_general_take
+            gt = generate_general_take(report)
+            if gt:
+                report.headline.llm_slots = [LLMSlot(
+                    slot_type="general",
+                    grounded_in=gt["citations"],
+                    status="generated",
+                    content=gt["take"],
+                )]
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "general take failed; leaving the placeholder slot"
+            )
+    return report
