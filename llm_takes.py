@@ -49,9 +49,15 @@ Output a JSON object, nothing else:
 
 Hard rules — violating any one gets your whole output silently rejected:
 
-1. EVERY item is a QUESTION: interrogative, exactly one sentence, ending in "?".
-   Never a statement or a conclusion. Write "Is this rise volume- or
+1. EVERY item is a QUESTION — a single interrogative sentence containing "?".
+   Never a statement or conclusion: write "Is this rise volume- or
    price-driven?", never "This rise is volume-driven."
+   Leading questions are GOOD — a question may point at its likely answer when
+   the facts support it; that is often the most useful kind. But WHENEVER a
+   question implies or embeds its own answer, append this EXACT marker right
+   after the "?":  (NB: hypothesis, not a finding)
+   so the hedge travels with the sentence if a reporter copies it. A genuinely
+   open question (one that implies no answer) does not need the marker.
 2. EVERY number you mention MUST appear in the FACTS block, unchanged. You may
    round +34.2% to "34%" but not to "35%". Prefer to phrase questions
    qualitatively; cite a figure only when it sharpens the question.
@@ -63,8 +69,13 @@ Hard rules — violating any one gets your whole output silently rejected:
 4. Ground every question in what the FACTS make salient: the direction and size
    of the move, the volume-vs-value (kg vs EUR) split, member-state
    concentration, trajectory shape, China's import/export share, any caveat.
-5. Brevity over coverage: 1–3 questions, one sharp question beats three weak
-   ones. If the finding is flat or featureless, return fewer — even one.
+5. DEFAULT TO ONE OR TWO questions; three is the rare exception, not the norm —
+   allowed only for an unusually rich finding where a third question is genuinely
+   non-obvious. Do NOT add a question just because a generic axis is available:
+   volume-vs-price, member-state concentration, and policy/timing apply to
+   almost EVERY finding, so raise one of those only when THIS finding's facts
+   make it specifically pointed. One sharp question beats three generic ones; a
+   flat or featureless finding may warrant just one.
 6. Always name the scope and parties — "EU-27 imports from China", "UK exports
    to China" — never bare "imports" or "exports".
 7. Output VALID JSON ONLY. No markdown, no preamble, no code fences.
