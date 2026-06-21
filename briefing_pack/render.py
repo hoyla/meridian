@@ -41,7 +41,6 @@ from briefing_pack.sections.diff import (
 )
 from briefing_pack.sections.front_page import _section_front_page
 from briefing_pack.sections.headline import _section_headline
-from briefing_pack.sections.headlines import _section_headlines
 from briefing_pack.sections.hs_yoy_movers import _section_hs_yoy_movers
 from briefing_pack.sections.llm_narratives import (
     _section_llm_narratives,
@@ -287,41 +286,6 @@ def render(
         sections.append(_section_about_findings())
 
     return "\n".join(s.markdown for s in sections if s.markdown).rstrip() + "\n"
-
-
-def render_headlines(
-    source_trigger: str = "eurostat",
-    data_period: date | None = None,
-    diff_baseline_brief_run_id: int | None = None,
-) -> str:
-    """Render the standalone Headlines tab — the per-release entry doc.
-
-    Reuses the same deterministic builders as `render()` (top movers,
-    the since-last-pack diff) so Headlines and the Findings tiers can
-    never disagree about the cycle. `source_trigger` selects the variant
-    (Q1); defaults to 'eurostat' because every periodic export today is
-    Eurostat-triggered. `data_period` defaults to the latest anchor in
-    the top-movers family, falling back to the latest Eurostat period.
-
-    Deliberately omits the standing €1bn/day deficit: it's a *level*, and
-    under the ratified Q3 cut ("Headlines = what changed") levels live in
-    the State-of-play companion. Whether to surface it as a one-line
-    standing-context anchor at the top of Headlines is an open editorial
-    call, not silently resolved here.
-    """
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-        predictability = _compute_predictability_per_group(cur)
-        top_movers = _compute_top_movers(cur, predictability=predictability)
-        diff = _compute_diff(cur, baseline_brief_run_id=diff_baseline_brief_run_id)
-        if data_period is None:
-            if top_movers:
-                data_period = top_movers[0].get("current_end")
-            if data_period is None:
-                data_period = latest_eurostat_period()
-        section = _section_headlines(
-            top_movers, diff, data_period, source_trigger=source_trigger,
-        )
-    return section.markdown.rstrip() + "\n"
 
 
 def render_leads(

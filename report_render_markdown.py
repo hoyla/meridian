@@ -4,13 +4,14 @@ model (`report_model.Report`).
 This is the proof that the spine works: it consumes only the model, no DB
 and no analysis, and emits the LLM-facing markdown surface. The HTML
 portal and any docx fallback are sibling renderers over the same model —
-none canonical. Demonstrates that `briefing_pack/sections/headlines.py`
-(which built markdown by hand) is now redundant: the structure lives in
-the model, the prose in its `prose` fields, and this file only formats.
+none canonical. It supersedes the earlier hand-built markdown prototype:
+the structure now lives in the model, the prose in its `prose` fields, and
+this file only formats.
 """
 
 from __future__ import annotations
 
+from briefing_pack._helpers import _fmt_eur
 from report_model import Headline, Indicator, Report, WhatChanged
 
 _COMPANIONS = (
@@ -92,17 +93,6 @@ def _render_what_changed(wc: WhatChanged) -> list[str]:
     ]
 
 
-def _fmt_eur_md(v) -> str:
-    if v is None:
-        return "—"
-    v = float(v)
-    if abs(v) >= 1e9:
-        return f"€{v / 1e9:,.1f}B"
-    if abs(v) >= 1e6:
-        return f"€{v / 1e6:,.0f}M"
-    return f"€{v:,.0f}"
-
-
 def _sector_flow_line(f) -> str:
     flow = f.metrics.get("flow")
     scope = f.metrics.get("scope", "EU-27")
@@ -116,7 +106,7 @@ def _sector_flow_line(f) -> str:
         val = "—"
     else:
         yoy = float(yoy)
-        val = f"{'+' if yoy >= 0 else '−'}{abs(yoy) * 100:.1f}% · {_fmt_eur_md(f.metrics.get('current_eur'))}"
+        val = f"{'+' if yoy >= 0 else '−'}{abs(yoy) * 100:.1f}% · {_fmt_eur(f.metrics.get('current_eur'))}"
     lb = " _(low base)_" if f.metrics.get("low_base") else ""
     cite = (f" `finding/{f.provenance.finding_ids[0]}`"
             if f.provenance.finding_ids else "")
@@ -136,13 +126,32 @@ def _deficit_line_md(f) -> str:
         delta = f" · {'+' if yoy >= 0 else '−'}{abs(yoy) * 100:.1f}% YoY"
     cite = (f" `finding/{f.provenance.finding_ids[0]}`"
             if f.provenance.finding_ids else "")
-    return f"- {m.get('scope', '')}: **{_fmt_eur_md(m.get('deficit_eur'))}**{pd}{delta}{cn_note}{cite}"
+    return f"- {m.get('scope', '')}: **{_fmt_eur(m.get('deficit_eur'))}**{pd}{delta}{cn_note}{cite}"
+
+
+def _prov_note(sec) -> str | None:
+    """A source/as-of line for an aggregate section with no per-leaf finding
+    to cite (the trade map) — keeps its numbers provenance-bearing."""
+    p = getattr(sec, "provenance", None)
+    if not p or not (p.source or p.as_of):
+        return None
+    bits = []
+    if p.source:
+        bits.append(f"Source: {p.source}")
+    if p.as_of:
+        bits.append(f"as of {p.as_of}")
+    tot = (sec.metrics or {}).get("total_eur")
+    if tot:
+        bits.append(f"total {_fmt_eur(tot)}")
+    return "*" + " · ".join(bits) + " · live aggregate, no per-code finding.*"
 
 
 def _render_sections(sections) -> list[str]:
     """Render the content tree — parity with the HTML portal so the
-    LLM-facing surface carries it too. `### {heading}` auto-slugs to match
-    the headline drill-down links."""
+    LLM-facing surface carries it too. Each linkable heading carries an
+    explicit `<a id>` anchor (the model's slug, the same id the HTML portal
+    uses) so headline drill-downs resolve without depending on the host
+    markdown engine's auto-slug rule."""
     out: list[str] = []
     for sec in sections:
         if not (sec.sections or sec.findings or sec.metrics):
@@ -215,15 +224,19 @@ def _render_sections(sections) -> list[str]:
                         if f.provenance.finding_ids else "")
                 out.append(
                     f"- **China ↔ {m.get('partner', '')}**: China reports "
-                    f"{_fmt_eur_md(m.get('gacc_eur'))}, partner reports "
-                    f"{_fmt_eur_md(m.get('eurostat_eur'))} — gap "
-                    f"{_fmt_eur_md(m.get('gap_eur'))} ({gp:+.1f}%){exc}{zn}.{cite}{hub}")
+                    f"{_fmt_eur(m.get('gacc_eur'))}, partner reports "
+                    f"{_fmt_eur(m.get('eurostat_eur'))} — gap "
+                    f"{_fmt_eur(m.get('gap_eur'))} ({gp:+.1f}%){exc}{zn}.{cite}{hub}")
             out.append("")
         elif sec.kind == "structural":
             out.append("## Trade map (SITC divisions)")
             out.append("")
             if sec.intro:
                 out.append(f"*{sec.intro}*")
+                out.append("")
+            note = _prov_note(sec)
+            if note:
+                out.append(note)
                 out.append("")
             for d in sec.sections:
                 m = d.metrics
@@ -245,6 +258,7 @@ def _render_sections(sections) -> list[str]:
                            "ordered by size.*")
                 out.append("")
             for grp in sec.sections:
+                out.append(f'<a id="{grp.id}"></a>')
                 out.append(f"### {grp.title}")
                 out.append("")
                 if grp.intro:
@@ -277,7 +291,7 @@ def _render_sections(sections) -> list[str]:
                 ms = grp.metrics or {}
                 if ms.get("top_cn8"):
                     out.append("- _Top products: " + " · ".join(
-                        f"{t['code']} {_fmt_eur_md(t['eur'])}"
+                        f"{t['code']} {_fmt_eur(t['eur'])}"
                         for t in ms["top_cn8"]) + "_")
                 if ms.get("reporters"):
                     rp = []

@@ -89,11 +89,20 @@ def _sample_report() -> rm.Report:
                         intro="Every group.", sections=[group])
     structural = rm.Section(
         id="trade-map", title="Trade map", kind="structural", intro="By division.",
+        provenance=rm.Provenance(source="eurostat", as_of=date(2026, 4, 1)),
+        metrics={"total_codes": 199, "divisions": 2, "total_eur": 5.5e11},
         sections=[rm.Section(
             id="sitc-78", title="Road vehicles", kind="structural",
             facets=rm.Facets(sector=["78"]),
-            metrics={"value_share": 0.038, "covered_share": 1.0, "code_count": 197,
-                     "groups": [{"name": "Cars", "slug": "cars"}]})])
+            provenance=rm.Provenance(source="eurostat", as_of=date(2026, 4, 1)),
+            metrics={"value_share": 0.9999, "covered_share": 1.0, "value_eur": 5.5e11,
+                     "code_count": 197, "groups": [{"name": "Cars", "slug": "cars"}]}),
+            rm.Section(
+            id="sitc-unclassified", title="Unclassified (no SITC division)",
+            kind="structural", facets=rm.Facets(sector=[]),
+            provenance=rm.Provenance(source="eurostat", as_of=date(2026, 4, 1)),
+            metrics={"value_share": 0.0001, "covered_share": 0.0, "value_eur": 5.5e7,
+                     "code_count": 2, "groups": []})])
     reference = rm.Section(
         id="methodology", title="Methodology, sources & caveats", kind="reference",
         intro="How to read.",
@@ -164,6 +173,42 @@ def test_inline_md_handles_link_nested_in_bold():
     assert '<a href="#cars">Cars</a>' in out
     assert "<strong>" in out
     assert "\x00" not in out              # no unrestored placeholder
+
+
+def test_structural_section_is_attributed_in_both_renderers():
+    """The trade-map aggregates have no per-code finding, so the section must
+    carry its own source/as-of and the renderers must surface it — numbers stay
+    attributable (global principle 7). The unclassified remainder is shown, not
+    silently dropped."""
+    r = _sample_report()
+    md = render_markdown(r)
+    html = render_html(r)
+    assert "Source: eurostat" in md
+    assert "live aggregate, no per-code finding" in md
+    assert "Unclassified (no SITC division)" in md   # partition remainder
+    assert 'class="source"' in html
+    # the section-level provenance survives serialisation
+    d = rm.to_dict(r)
+    tm = next(s for s in d["sections"] if s["kind"] == "structural")
+    assert tm["provenance"]["source"] == "eurostat"
+    assert tm["provenance"]["as_of"] == "2026-04-01"
+
+
+def test_markdown_sector_headings_carry_explicit_anchors():
+    """Headline drill-downs target the group slug; the markdown heading carries
+    an explicit <a id> (the model's slug) so the link resolves without relying
+    on the host engine's auto-slug rule — the failure class fixed for docx."""
+    md = render_markdown(_sample_report())
+    assert '<a id="cars"></a>' in md
+
+
+def test_fmt_eur_shared_handles_trillions():
+    """The single shared formatter (no per-renderer copies) covers the €T tier
+    the GACC macro needs, so the same value reads identically everywhere."""
+    from briefing_pack._helpers import _fmt_eur
+    assert _fmt_eur(1.2e12) == "€1.20T"
+    assert _fmt_eur(4.6e11) == "€460.00B"
+    assert _fmt_eur(None) == "—"
 
 
 # ---- labels (theme layer) ----
@@ -251,3 +296,43 @@ def test_build_report_surfaces_a_seeded_group(clean_db, test_db_url):
     r = build_report(source_trigger="eurostat")
     sd = [s for s in r.sections if s.kind == "sector_detail"]
     assert sd and any(g.title == name for g in sd[0].sections)
+
+
+def test_gacc_macro_item_with_null_yoy_states_level_not_direction(clean_db, test_db_url):
+    """A GACC bloc finding with no YoY must read as a level ('stood at'), never
+    assert a direction ('fell') for a change the data doesn't carry."""
+    from datetime import date
+    from report_builder import build_report
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute("INSERT INTO scrape_runs (status, source_url) "
+                    "VALUES ('success', 'test://seed') RETURNING id")
+        run = cur.fetchone()[0]
+        detail = {"aggregate": {"raw_label": "ASEAN"},
+                  "totals": {"current_12mo_eur": 4.5e9},   # deliberately no yoy_pct
+                  "windows": {"current_end": "2026-04-01"}}
+        cur.execute(
+            "INSERT INTO findings (scrape_run_id, kind, subkind, detail, "
+            "natural_key_hash) VALUES (%s,'anomaly','gacc_aggregate_yoy',%s::jsonb,'nkg1')",
+            (run, json.dumps(detail)),
+        )
+    r = build_report(source_trigger="gacc", data_period=date(2026, 4, 1))
+    prose = " ".join(i.prose for i in r.headline.items)
+    assert "ASEAN" in prose
+    assert "stood at" in prose
+    assert "fell" not in prose          # never a fabricated direction
+
+
+def test_structural_section_partitions_and_is_attributed(clean_db):
+    """If the trade map has divisions, their value shares sum to ~1 (a true
+    partition — the unclassified remainder is included, nothing dropped) and the
+    section carries its source. Skips gracefully when the test DB has no
+    eurostat_raw_rows data."""
+    from report_builder import build_report
+    r = build_report(source_trigger="eurostat")
+    tm = [s for s in r.sections if s.kind == "structural"]
+    if not tm or not tm[0].sections:
+        pytest.skip("no eurostat_raw_rows data in test DB")
+    shares = [d.metrics.get("value_share", 0) for d in tm[0].sections]
+    assert abs(sum(shares) - 1.0) < 1e-6
+    assert tm[0].provenance.source == "eurostat"
+    assert tm[0].metrics.get("total_eur", 0) > 0

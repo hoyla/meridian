@@ -34,11 +34,17 @@ from briefing_pack._helpers import (
     _compute_predictability_per_group,
     _compute_top_movers,
     _conn,
+    _fmt_eur,
     _fmt_month,
     _slugify_heading,
 )
 from briefing_pack.sections.diff import _compute_diff
 from briefing_pack.sections.front_page import _mover_sentence
+from anomalies import (
+    EU27_EXCLUDE_REPORTERS,
+    EUROSTAT_PARTNERS,
+    _months_back,
+)
 import classifications
 import labels
 from report_model import (
@@ -399,15 +405,6 @@ def _sector_detail_section(cur) -> Section:
     return root
 
 
-def _fmt_eur_b(v) -> str:
-    if v is None:
-        return "—"
-    v = float(v)
-    if abs(v) >= 1e12:
-        return f"€{v / 1e12:,.1f}T"
-    return f"€{v / 1e9:,.1f}B"
-
-
 def _gacc_latest_period(cur) -> date | None:
     cur.execute(
         """SELECT max((detail->'windows'->>'current_end')::date)
@@ -438,10 +435,22 @@ def _gacc_macro_items(cur, period) -> list[HeadlineItem]:
         tot = (detail or {}).get("totals", {})
         yoy = _f(tot.get("yoy_pct"))
         eur = _f(tot.get("current_12mo_eur"))
-        verb = "rose" if (yoy or 0) > 0 else "fell"
         subj = (f"China's exports to {bloc}" if is_export
                 else f"China's imports from {bloc}")
-        pct = f"{abs(yoy) * 100:.1f}%" if yoy is not None else "—"
+        # No YoY → state the level, never a direction. Asserting "fell" for a
+        # missing change (e.g. a first-period bloc) publishes a move the data
+        # doesn't support; the magnitude was already dashed out, so the verb
+        # must be too.
+        if yoy is None:
+            verb = None
+            prose = (f"**{subj}** stood at {_fmt_eur(eur)} in the 12 months "
+                     f"to {_fmt_month(period)} (year-on-year change "
+                     f"unavailable). `finding/{fid}`")
+        else:
+            verb = "rose" if yoy > 0 else "fell"
+            prose = (f"**{subj}** {verb} {abs(yoy) * 100:.1f}% by value in "
+                     f"the 12 months to {_fmt_month(period)}, to "
+                     f"{_fmt_eur(eur)}. `finding/{fid}`")
         items.append(HeadlineItem(
             subject={"scope": "china",
                      "flow": "export" if is_export else "import",
@@ -450,9 +459,7 @@ def _gacc_macro_items(cur, period) -> list[HeadlineItem]:
                      "pct": abs(yoy) if yoy is not None else None,
                      "value_eur": eur},
             stability={"badge": None, "hedge_phrase": None},
-            prose=(f"**{subj}** {verb} {pct} by value in the 12 months to "
-                   f"{_fmt_month(period)}, to {_fmt_eur_b(eur)}. "
-                   f"`finding/{fid}`"),
+            prose=prose,
             provenance=Provenance(finding_ids=[fid], source="gacc", as_of=period),
             facets=Facets(partner=[bloc]),
         ))
@@ -611,47 +618,74 @@ def _mirror_gap_section(cur) -> Section:
     return root
 
 
-def _structural_section(cur) -> Section:
+_UNCLASSIFIED = "unclassified"
+
+
+def _structural_section(cur, anchor: date | None) -> Section:
     """The structural SITC-division browse — the full trade map by value,
-    surfacing the ~43% of value / 75% of codes that sit in no editorial
-    group. Each division is a *summary* node (Section.metrics): its value
-    share, how much is covered by editorial groups, code count, and the
-    groups within it. No per-code findings (those don't exist for the tail);
-    this is the spine made visible."""
+    surfacing the value / codes that sit in no editorial group. Each division
+    is a *summary* node (Section.metrics): its value share, how much is covered
+    by editorial groups, code count, and the groups within it. No per-code
+    findings (those don't exist for the tail); this is the spine made visible.
+
+    Value is the rolling 12-month EU-27 import total to `anchor`, summed from
+    the canonical Eurostat CN8 detail (`eurostat_raw_rows`) with the *same*
+    partner envelope (CN+HK+MO), EU-27 reporter set, flow and window the
+    sector-detail findings use — so the trade map reconciles with them by
+    construction. It must NOT re-aggregate `observations`: that table mixes
+    period_kinds, every release snapshot, and the `000TOTAL` aggregate row, so
+    a naive sum there multiply-counts (~8× on real data).
+
+    Real 8-digit CN8 codes partition the total (they sum to ~99% of the
+    `000TOTAL` all-goods figure); the tiny remainder with no SITC mapping is
+    kept as an explicit `unclassified` bucket rather than silently dropped, so
+    the division shares sum to the true total."""
+    cn8div = classifications.cn8_division_map()
+    if anchor is None:
+        cur.execute("SELECT max(period) FROM eurostat_raw_rows WHERE flow = 1")
+        anchor = cur.fetchone()[0]
+    if not cn8div or anchor is None:
+        return Section(id="trade-map", title="Trade map", kind="structural")
+
     root = Section(
         id="trade-map", title="Trade map", kind="structural",
-        intro="Every code in the dataset by SITC division, value-weighted — "
-              "the whole structure, including what sits outside the editorial "
-              "groups. Imports, all periods.",
+        intro="Every CN8 code by SITC division, value-weighted — the whole "
+              "structure, including the value outside the editorial groups. "
+              f"EU-27 imports from China (CN+HK+MO), rolling 12 months to "
+              f"{_fmt_month(anchor)}.",
+        provenance=Provenance(source="eurostat", as_of=anchor),
     )
-    cn8div = classifications.cn8_division_map()
-    if not cn8div:
-        return root
+    start = _months_back(anchor, 11)
+
     cur.execute("SELECT hs_patterns FROM hs_groups")
     pats = [p.replace("%", "") for (pp,) in cur.fetchall() for p in (pp or [])]
 
     def covered(c):
         return any(c.startswith(p) for p in pats)
 
+    # Per-CN8 value over the rolling 12 months, EU-27 imports from CN+HK+MO —
+    # mirrors anomalies._hs_group_top_cn8s, minus the pattern filter (all codes).
     cur.execute(
-        """SELECT o.hs_code, sum(o.value_amount) FROM observations o
-             JOIN releases r ON r.id = o.release_id
-            WHERE r.source='eurostat' AND o.flow='import'
-              AND o.hs_code IS NOT NULL
-            GROUP BY o.hs_code"""
+        """SELECT product_nc, sum(value_eur) FROM eurostat_raw_rows
+            WHERE flow = 1
+              AND partner = ANY(%s)
+              AND reporter <> ALL(%s)
+              AND period >= %s AND period <= %s
+            GROUP BY product_nc""",
+        (list(EUROSTAT_PARTNERS), list(EU27_EXCLUDE_REPORTERS), start, anchor),
     )
     dval: dict = defaultdict(float)
     dcov: dict = defaultdict(float)
     dn: dict = defaultdict(int)
     total = 0.0
     for code, val in cur.fetchall():
-        if not (code.isdigit() and len(code) == 8):
-            continue
-        d = cn8div.get(code)
-        if not d:
+        # Real 8-digit CN8 only — excludes 000TOTAL and the NNXXXXXX
+        # confidential-aggregate codes, which would double-count the detail.
+        if not (code and code.isdigit() and len(code) == 8):
             continue
         v = float(val or 0)
         total += v
+        d = cn8div.get(code) or _UNCLASSIFIED
         dval[d] += v
         dn[d] += 1
         if covered(code):
@@ -663,19 +697,30 @@ def _structural_section(cur) -> Section:
         for d in classifications.sitc_divisions_for_patterns(pp or []):
             gdiv[d].append(name)
 
-    for d in sorted(dval, key=lambda x: -dval[x]):
+    # Real divisions by value desc; the unclassified remainder always last.
+    order = sorted((d for d in dval if d != _UNCLASSIFIED), key=lambda x: -dval[x])
+    if _UNCLASSIFIED in dval:
+        order.append(_UNCLASSIFIED)
+    for d in order:
+        is_uncl = d == _UNCLASSIFIED
         root.sections.append(Section(
-            id="sitc-" + d, title=classifications.division_title(d),
-            kind="structural", facets=Facets(sector=[d]),
+            id="sitc-" + d,
+            title=("Unclassified (no SITC division)" if is_uncl
+                   else classifications.division_title(d)),
+            kind="structural",
+            facets=Facets(sector=[] if is_uncl else [d]),
             metrics={
                 "value_share": dval[d] / total if total else 0.0,
                 "covered_share": dcov[d] / dval[d] if dval[d] else 0.0,
+                "value_eur": dval[d],
                 "code_count": dn[d],
                 "groups": [{"name": g, "slug": _slugify_heading(g)}
                            for g in sorted(set(gdiv.get(d, [])))],
             },
+            provenance=Provenance(source="eurostat", as_of=anchor),
         ))
-    root.metrics = {"total_codes": sum(dn.values()), "divisions": len(dval)}
+    root.metrics = {"total_codes": sum(dn.values()), "divisions": len(dval),
+                    "total_eur": total}
     return root
 
 
@@ -793,7 +838,7 @@ def build_report(
                 sections = [_state_of_play_section(cur),
                             _mirror_gap_section(cur),
                             _sector_detail_section(cur),
-                            _structural_section(cur),
+                            _structural_section(cur, data_period),
                             _reference_section(cur)]
 
     month = _fmt_month(data_period)
