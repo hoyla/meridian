@@ -79,8 +79,8 @@ tool is built on**.
    - *Correction logged in discussion:* the personal-vs-Guardian Anthropic
      account boundary applies to **Claude Code** (the dev tool), not to the
      deployed meridian app's own LLM credential — so it is not an argument
-     against a cloud model for the app. The only real item is which API account
-     the deployed app bills to.
+     against a cloud model for the app. The only real item — which API account
+     the deployed app bills to — is settled in *Model access & billing* below.
 
 6. **Strictly additive; never blocks.** If generation fails or is rejected, the
    slot stays a placeholder. The deterministic report is complete without it.
@@ -115,6 +115,79 @@ something I didn't know?"* That bar belongs to v2. Showing generic v1 questions
 to a specialist (Lisa) risks a false-negative that kills a good idea on the
 wrong evidence.
 
+## v1 prompt-design brief — per-finding leading-question take
+
+- **Goal:** for each of the ~5 top movers, emit **1–3 leading questions** that
+  orient a reporter toward what to check. Questions only — never assertions. v1
+  names *axes* to investigate; it asserts no specific external facts (those need
+  retrieval = v2).
+- **Input = the assembled prompt**, built from the finding's own facts (reuse the
+  `llm_framing._build_facts`-style assembly): group/commodity, the move
+  (direction, %, 12-month value + window), volume-vs-value split if present,
+  member-state concentration, trajectory shape, China-share, and any
+  `grounded_in` related findings. The model may reference *only* these facts.
+- **System role:** a trade-desk assistant that proposes investigative angles as
+  questions, in house discipline — interrogative form, grounded only in the
+  supplied facts, no invented specifics.
+- **Hard constraints to encode:**
+  - Output is questions, each a single sentence; no declarative claims.
+  - No number that isn't in the supplied facts.
+  - v1 probes *categories* — volume-vs-price, member-state concentration, timing
+    vs known policy/capacity shifts — but does **not** name specific external
+    events / dates / companies (that's v2-with-retrieval).
+  - Brevity over coverage; one good question beats three weak ones.
+- **Output format:** structured JSON like the existing pipeline (`format=json`),
+  e.g. `{"questions": [{"q": "...", "axis": "timing"}, ...]}` — clean to render
+  and to validate.
+- **Guardrail (reuse verify-or-reject):** the existing numeric verifier already
+  rejects out-of-tolerance numbers. Add two cheap checks: reject output that
+  (a) contains a number absent from the facts, or (b) isn't interrogative. Log
+  via `llm_rejection_log`; on reject → the slot stays a placeholder (never
+  blocks).
+- **Tuning knobs:** temperature (the pipeline uses 0.2 for rationales; questions
+  may want slightly more range — treat as a dial); number of questions (start at
+  max 2–3).
+- **v2 hook:** identical prompt + a retrieval tool; the only change is relaxing
+  "no specific external facts" to "specific external facts allowed iff retrieved
+  and cited" — keeping *facts cited, connections questioned*.
+- **Not a prompt concern:** the "machine hypotheses, unverified" visual
+  segregation is a renderer / design-system job, not something the prompt
+  enforces.
+
+*Caveat: exact `llm_framing.py` symbol names want re-checking before wiring; this
+is design intent. The actual question wording needs real iteration against live
+findings — that's the part to spend care on.*
+
+## Model access & billing
+
+Resolves the credential/auth question left open by Decision 5.
+
+- **Production: the Anthropic API**, a separate pay-as-you-go key — *not* part of
+  a Max subscription (the API bills per token from its own key). Don't optimise
+  the cost away: this runs ~once a month × ~5 short takes, so even with v2
+  retrieval the spend is cents per run, well under a dollar a month. (Verify
+  current per-token pricing when provisioning the key.)
+- **Dev/setup: ride the Max subscription via the Claude Code CLI** (`claude -p`),
+  which draws on the subscription rather than API billing — key-free iteration.
+  But iterate on the *real assembled prompt*, not hand-typed ones: have the code
+  build the prompt from a finding's `grounded_in` facts and pipe it in
+  (`python -m <build_prompt> <finding_id> | claude -p`), so the dev loop stays
+  representative.
+- **Architecture: a one-line backend swap** via the existing `LLMBackend`
+  Protocol — a `ClaudeCLIBackend` (laptop/dev, subscription auth) and a
+  `ClaudeAPIBackend` (production, API key), selected by env var like the current
+  `LLM_BACKEND`. Cloud Run needs the API key regardless — you can't carry an
+  interactive Max login onto a scale-to-zero server, so the CLI route is
+  laptop-only.
+- **Sequencing: the auth choice blocks nothing.** The first buildable piece is
+  prompt-assembly (finding facts → leading-question prompt), which is
+  backend-agnostic and the hard/interesting part. Build that first; the
+  CLI-vs-API backend is a trivial final swap.
+- **Verify against Anthropic's docs:** current per-token pricing, and the ToS
+  stance on programmatic subscription use (subscriptions are
+  interactive-intended; the API is the sanctioned path for automated/production
+  workloads).
+
 ## Consequence: the old `narrative_hs_group` leads
 
 The new in-place leading-questions take is a *fresh* generation, not a
@@ -134,8 +207,9 @@ separately once v1 of the specific take is proven.
 
 ## Open / next
 
-- The frontier model choice + how the deployed app authenticates to it
-  (ops/credential decision, independent of Claude Code).
+- Before provisioning, verify against Anthropic's docs: current per-token pricing
+  and the ToS stance on programmatic subscription use (see *Model access &
+  billing*, which settles the model/auth choice itself).
 - v2 retrieval design: which search/news source; the tool-use loop; validating
   that cited links are real and relevant (extend the rejection-log discipline to
   the question layer).
