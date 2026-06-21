@@ -329,22 +329,33 @@ def _container_gauge_svg(frac: float, *, n: int = 24) -> str:
     illustrative stack; it is NOT a real container count. Two fills only (muted
     base + brand highlight) so it informs without shouting."""
     frac = max(0.0, min(1.0, float(frac)))
-    k = max(1, round(frac * n))
-    W, H = 260, 56
-    padL, padR, top, deck = 6, 6, 12, 33
-    cw = (W - padL - padR) / n
+    k = max(1, round(frac * n))              # highlighted containers, filled from the bow
+    W, H = 300, 64
+    top, deck, bottom = 16, 42, 56           # stack top, deck line, hull bottom
+    cstart, cend = 36, 282                    # container tier (stern area kept clear at left)
+    rows = 2
+    cols = max(1, n // rows)
+    cw = (cend - cstart) / cols
+    ch = (deck - top) / rows
     gap = 1.4
-    boxes = "".join(
-        f'<rect x="{padL + i * cw + gap:.1f}" y="{top}" '
-        f'width="{cw - 2 * gap:.1f}" height="{deck - top}" rx="1" '
-        f'fill="{_GUARDIAN_BLUE if i >= n - k else _SHIP_BASE}"/>'
-        for i in range(n)
-    )
-    hull = (f'<path d="M{padL},{deck} L{W - padR},{deck} L{W - padR - 16},{H - 5} '
-            f'L{padL + 16},{H - 5} Z" fill="{_SHIP_BASE}"/>')
-    return (f'<svg class="ship" viewBox="0 0 {W} {H}" width="220" role="img" '
+    cells = []
+    for c in range(cols):
+        for r in range(rows):
+            rank = (cols - 1 - c) * rows + r  # 0 = bow (rightmost); fill the band from there
+            cells.append(
+                f'<rect x="{cstart + c * cw + gap:.1f}" y="{top + r * ch + gap:.1f}" '
+                f'width="{cw - 2 * gap:.1f}" height="{ch - 2 * gap:.1f}" rx="1" '
+                f'fill="{_GUARDIAN_BLUE if rank < k else _SHIP_BASE}"/>')
+    boxes = "".join(cells)
+    # Squared (slim, slightly-raked) stern at the left; raked pointed bow at the
+    # right — and a slim aft funnel + bridge so it reads as a ship, not a barge.
+    hull = (f'<path d="M10,{deck} L286,{deck} L296,{deck + 7} L282,{bottom} '
+            f'L16,{bottom} Z" fill="{_SHIP_BASE}"/>')
+    bridge = f'<rect x="14" y="24" width="15" height="{deck - 24}" rx="1" fill="{_SHIP_BASE}"/>'
+    funnel = f'<rect x="18.5" y="6" width="6" height="18" rx="1.5" fill="{_SHIP_BASE}"/>'
+    return (f'<svg class="ship" viewBox="0 0 {W} {H}" width="240" role="img" '
             f'aria-label="about {frac * 100:.0f}% beyond the freight baseline">'
-            + hull + boxes + "</svg>")
+            + hull + bridge + funnel + boxes + "</svg>")
 
 
 def _more_about(section) -> str:
@@ -1203,7 +1214,7 @@ details.gdetail[open]>summary::before{content:"▾ "}
 .mg-v{font-size:13.5px;color:var(--ink);margin-top:3px}
 .hub{font-size:12.5px;color:var(--muted);font-style:italic;margin-top:4px}
 .ship-wrap{margin:7px 0 2px}
-.ship{display:block;max-width:220px}
+.ship{display:block;max-width:240px}
 .ship-cap{font-size:11.5px;color:var(--muted);font-style:italic;margin-top:2px}
 .ref-h{font-family:var(--font-sans);font-size:13px;font-weight:700;color:var(--muted);margin:14px 0 6px}
 ul.ref{margin:0 0 8px;padding-left:18px}

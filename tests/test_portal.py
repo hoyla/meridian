@@ -496,7 +496,7 @@ def test_chart_card_puts_meta_left_of_plot():
 def test_container_gauge_two_fills_and_highlight_band():
     from report_render_html import _container_gauge_svg, _GUARDIAN_BLUE, _SHIP_BASE
     svg = _container_gauge_svg(0.135, n=24)
-    assert "<svg" in svg and svg.count("<rect") == 24      # deck containers
+    assert "<svg" in svg and svg.count("<rect") >= 24      # 24 containers (+ funnel/bridge)
     assert _GUARDIAN_BLUE in svg and _SHIP_BASE in svg     # exactly two fills
     assert svg.count(_GUARDIAN_BLUE) == 3                  # round(0.135*24) highlighted
 
