@@ -394,13 +394,31 @@ def test_periodic_writes_portal_snapshot(clean_db, tmp_path):
     + index.html into 04_Portal/. Exercised via the helper (no full cycle, no
     LLM); build_report runs against the clean schema."""
     import periodic
-    pdir = periodic._write_portal_snapshot(str(tmp_path), None, generate_takes=False)
+    pdir = periodic.write_portal_snapshot(str(tmp_path), None, generate_takes=False)
     assert pdir is not None
     p = tmp_path / "04_Portal"
     assert (p / "report.json").exists() and (p / "index.html").exists()
     snap = json.loads((p / "report.json").read_text())
     assert snap["meta"]["variant"] == "eurostat"
     assert (p / "index.html").read_text().startswith("<!doctype html")
+
+
+def test_portal_snapshot_records_no_brief_run(clean_db, test_db_url, tmp_path):
+    """The standalone snapshot must NOT insert a brief_runs row — that's the
+    whole reason --portal-snapshot exists apart from --periodic-run: an
+    on-demand render that never advances the subscriber cycle or moves the
+    'since last brief' baseline."""
+    import periodic
+
+    def _brief_runs() -> int:
+        with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM brief_runs")
+            return cur.fetchone()[0]
+
+    before = _brief_runs()
+    pdir = periodic.write_portal_snapshot(str(tmp_path), None, generate_takes=False)
+    assert pdir is not None
+    assert _brief_runs() == before  # no cycle advanced by snapshotting
 
 
 def test_publish_snapshot_validates_before_touching_gcs(tmp_path, monkeypatch):

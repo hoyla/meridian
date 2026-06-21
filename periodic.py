@@ -116,7 +116,7 @@ class PeriodicRunResult:
         return "\n".join(lines)
 
 
-def _write_portal_snapshot(
+def write_portal_snapshot(
     bundle_dir: str, data_period, *, generate_takes: bool,
 ) -> str | None:
     """Write the portal snapshot into `<bundle_dir>/04_Portal/`: report.json
@@ -124,7 +124,13 @@ def _write_portal_snapshot(
     rendered preview). Best-effort — returns the dir on success, None on any
     failure, so a portal problem never disturbs the findings/docx bundle.
     Eurostat-triggered cycle → the eurostat variant. `generate_takes` runs the
-    per-finding LLM takes (needs a backend); default off."""
+    per-finding LLM takes (needs a backend); default off.
+
+    Read-only: it builds from existing findings and writes two files — it
+    records NO brief_runs row. That's load-bearing for the standalone
+    `--portal-snapshot` caller, which must refresh the portal on demand
+    without advancing the subscriber cycle or moving the 'since last brief'
+    baseline."""
     try:
         from pathlib import Path
         import report_model
@@ -408,7 +414,7 @@ def run_periodic(
 
     # --- Step 5: portal snapshot into the same bundle (additive, best-effort). ---
     log.info("periodic-run: building portal snapshot (takes=%s)", generate_takes)
-    portal_dir = _write_portal_snapshot(
+    portal_dir = write_portal_snapshot(
         bundle_dir, latest_data, generate_takes=generate_takes,
     )
 
