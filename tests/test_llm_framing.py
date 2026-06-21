@@ -183,6 +183,19 @@ def test_verify_numbers_ignores_hs_code_references():
     assert ok is True
 
 
+def test_verify_numbers_ignores_cn8_code_references():
+    """Single-CN8 groups embed the 8-digit code in their name (e.g. 'Sintered
+    NdFeB magnets (CN8 85051110)'), so the LLM writes 'CN8 85051110' into a
+    take. The code is scaffolding, not a fact — the verifier strips 'CN8 NNNN'
+    the same way it strips 'HS NNNN'. Without this, the general take is rejected
+    for citing an 'unverifiable' 8-digit number."""
+    facts = {"imports": {"yoy_pct": -0.23, "china_share": 0.92}}
+    ok, _ = llm_framing.verify_numbers(
+        "Imports of magnets (CN8 85051110) fell 23% while China held 92%.", facts,
+    )
+    assert ok is True
+
+
 def test_verify_numbers_walks_nested_facts():
     """Numbers at any depth count as 'available facts'."""
     facts = {

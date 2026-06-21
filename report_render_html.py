@@ -146,6 +146,28 @@ def _take_block_html(take) -> str:
     )
 
 
+def _general_take_html(slot) -> str:
+    """The across-release 'One other thing worth a look' — one machine
+    hypothesis (a short paragraph ending in a leading question) pointing at a
+    buried, non-headline finding, with per-fact citations. Renders nothing
+    unless generated (a quiet release / abstention shows no box)."""
+    if slot is None or slot.status != "generated" or not slot.content:
+        return ""
+    cites = " ".join(
+        f'<span class="token">finding/{int(fid)}</span>'
+        for fid in (slot.grounded_in or [])
+    )
+    return (
+        '<h2 class="lead">One other thing worth a look</h2>'
+        '<div class="take">'
+        '<div class="take-tag">◆ Machine hypothesis — one unverified lead from '
+        'beyond the headlines, not a finding</div>'
+        f'<p class="take-prose">{html.escape(slot.content)}</p>'
+        + (f'<p class="take-cite">{cites}</p>' if cites else "")
+        + "</div>"
+    )
+
+
 def _headline(h: Headline) -> str:
     out = [f'<h2 class="lead">{html.escape(h.lead_title)}</h2>']
     if h.items:
@@ -570,6 +592,8 @@ ul.ref li{font-size:13.5px;line-height:1.5;margin:0 0 7px;color:var(--ink)}
 .take-tag{font-family:var(--font-sans);font-size:14px;font-weight:700;letter-spacing:.02em;color:#7a5c00;text-transform:uppercase}
 .take-qs{margin:6px 0 0;padding-left:18px}
 .take .take-qs li{font-family:var(--font-sans);font-size:14px;line-height:1.45;color:#7a5c00;margin:0 0 5px}
+.take-prose{font-family:var(--font-sans);font-size:14.5px;line-height:1.5;color:#7a5c00;margin:6px 0 0}
+.take-cite{font-size:12px;color:#7a5c00;margin:7px 0 0;opacity:.85}
 footer{padding:18px 28px 28px;border-top:1px solid var(--line)}
 footer h3{font-size:13px;font-weight:700;color:var(--muted);margin:0 0 10px}
 .comp{display:flex;flex-wrap:wrap;gap:12px}
@@ -644,13 +668,16 @@ def render_html(report: Report) -> str:
 
     if report.headline:
         parts.append("<section>" + _headline(report.headline) + "</section>")
-    if report.what_changed:
-        parts.append("<section>" + _what_changed(report.what_changed) + "</section>")
-    if report.headline:
+        # 'One other thing worth a look' sits directly under the headline — by
+        # here the reader is fluent in the machine-hypothesis boxes from the
+        # movers, so it lands as the natural "...and one other thing" coda.
         for slot in report.headline.llm_slots:
             if slot.slot_type == "general":
-                parts.append("<section><h2 class='lead'>What the model flags "
-                             "across this release</h2>" + _llm_block(slot) + "</section>")
+                block = _general_take_html(slot)
+                if block:
+                    parts.append("<section>" + block + "</section>")
+    if report.what_changed:
+        parts.append("<section>" + _what_changed(report.what_changed) + "</section>")
 
     for sec in report.sections:
         if sec.kind == "state_of_play" and sec.sections:

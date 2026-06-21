@@ -686,13 +686,13 @@ _TIME_PERIOD_RE = re.compile(
     r"\b\d+(?:[-\s]+)(?:month|year|day|week|quarter|period|window)s?\b",
     re.IGNORECASE,
 )
-# HS-code references: groups whose name embeds an HS code (e.g.
-# "Antibiotics (HS 2941)") prompt the LLM to write that code into the
-# anomaly summary or rationale ("imports under HS 2941..."). The code is
-# editorial scaffolding, not a fact to verify. Strip patterns of the form
-# "HS NNNN" (4-8 digits) before extraction so the verifier doesn't pick
-# up a 4-digit HS code as an unverifiable count.
-_HS_CODE_RE = re.compile(r"\bHS\s*\d{4,8}\b", re.IGNORECASE)
+# HS / CN8 code references: groups whose name embeds a customs code (e.g.
+# "Antibiotics (HS 2941)" or "Sintered NdFeB magnets (CN8 85051110)") prompt
+# the LLM to write that code into the prose ("imports under HS 2941...",
+# "CN8 85051110, where China holds..."). The code is editorial scaffolding,
+# not a fact to verify. Strip "HS NNNN" / "CN8 NNNN" (4-8 digits) before
+# extraction so the verifier doesn't pick up the code as an unverifiable count.
+_HS_CODE_RE = re.compile(r"\b(?:HS|CN8)\s*\d{4,8}\b", re.IGNORECASE)
 # Geo-economic labels: when the prompt requires the LLM to write
 # "EU-27 imports from China" (rule G), the bare "27" in "EU-27" reaches
 # number extraction as an unverifiable count. Strip "EU-NN" / "G7" /

@@ -62,6 +62,27 @@ def _take_block_md(take) -> list[str]:
     return out
 
 
+def _general_take_md(slot) -> list[str]:
+    """The across-release 'One other thing worth a look' — one machine
+    hypothesis (a short paragraph ending in a leading question) pointing at a
+    buried, non-headline finding, with its citations. Empty unless generated."""
+    if slot is None or slot.status != "generated" or not slot.content:
+        return []
+    cites = " ".join(f"`finding/{int(fid)}`" for fid in (slot.grounded_in or []))
+    out = [
+        "## One other thing worth a look",
+        "",
+        "> 🔶 **Machine hypothesis** — one unverified lead from beyond the "
+        "headlines, not a finding:",
+        ">",
+        f"> {slot.content}",
+    ]
+    if cites:
+        out += [">", f"> _Sources: {cites}_"]
+    out.append("")
+    return out
+
+
 def _render_headline(h: Headline) -> list[str]:
     lines = [f"## {h.lead_title}", ""]
     if h.items:
@@ -357,16 +378,14 @@ def render_markdown(report: Report) -> str:
 
     if report.headline:
         lines.extend(_render_headline(report.headline))
-    if report.what_changed:
-        lines.extend(_render_what_changed(report.what_changed))
-
-    # The general LLM slot sits at the end (once per release).
-    if report.headline:
-        lines.append("## What the model flags across this release")
-        lines.append("")
+        # 'One other thing worth a look' — directly under the headline, the
+        # natural "...and one other thing" coda (the reader has just seen the
+        # take boxes on the movers). Empty unless a take was generated.
         for slot in report.headline.llm_slots:
             if slot.slot_type == "general":
-                lines.extend(_llm_block(slot))
+                lines.extend(_general_take_md(slot))
+    if report.what_changed:
+        lines.extend(_render_what_changed(report.what_changed))
 
     lines.extend(_render_sections(report.sections))
 
