@@ -698,6 +698,21 @@ def main() -> None:
              "(default meridian-portal) / PORTAL_REGION. Flip back to 0 by hand.",
     )
     p.add_argument(
+        "--portal-snapshot", nargs="?", const="exports/portal-snapshot",
+        default=None, metavar="DIR",
+        help=(
+            "Build a standalone portal snapshot (report.json + index.html) "
+            "into DIR/04_Portal/ WITHOUT recording a brief_runs row — an "
+            "on-demand render that does NOT advance the subscriber cycle or "
+            "move the 'since last brief' baseline (unlike --periodic-run, "
+            "which always records). DIR defaults to exports/portal-snapshot. "
+            "Honours --portal-takes. If --portal-bucket (or PORTAL_BUCKET) is "
+            "set it also publishes to GCS (and --portal-warm warms the "
+            "service); otherwise it writes locally and prints the path for a "
+            "later --upload-to-portal."
+        ),
+    )
+    p.add_argument(
         "--with-provenance", action="store_true",
         help=(
             "With --briefing-pack: also bundle per-finding provenance files "
@@ -933,6 +948,50 @@ def main() -> None:
         out.write_text(_rg.render_groups())
         log.info("Wrote groups glossary to %s (%d bytes)", out, out.stat().st_size)
         print(out)
+        return
+
+    if args.portal_snapshot is not None:
+        # Standalone, on-demand portal snapshot. Reuses the exact read-only
+        # path periodic-run uses for 04_Portal/, but records NO brief_runs row
+        # — so refreshing the live portal never advances the subscriber cycle
+        # or moves the 'since last brief' baseline. Publishes too when a bucket
+        # is configured (the common "refresh the portal now" case).
+        # NB: briefing_pack and periodic are module-level imports — do NOT
+        # re-import locally here, or Python makes them function-local and the
+        # earlier briefing_pack.DEFAULT_TOP_N at parser-build time breaks.
+        out_dir = args.portal_snapshot
+        period = briefing_pack.latest_eurostat_period()
+        if period is None:
+            print("No Eurostat data ingested yet — nothing to snapshot "
+                  "(ingest a period first).")
+            return
+        portal_dir = periodic.write_portal_snapshot(
+            out_dir, period, generate_takes=args.portal_takes,
+        )
+        if portal_dir is None:
+            print("Portal snapshot failed — see logs.")
+            return
+        print(f"Portal snapshot written to {portal_dir} "
+              f"(data_period {period}; no brief_runs row — cycle unaffected).")
+        bucket = args.portal_bucket or os.environ.get("PORTAL_BUCKET")
+        if bucket:
+            import portal_publish
+            written = portal_publish.publish_snapshot(out_dir, bucket=bucket)
+            print("Published:")
+            for dest in written:
+                print(f"  {dest}")
+            if args.portal_warm:
+                service = os.environ.get("PORTAL_SERVICE", "meridian-portal")
+                region = os.environ.get("PORTAL_REGION")
+                if region:
+                    ok = portal_publish.warm_service(service, region)
+                    print(f"  warmed {service} (min-instances=1): "
+                          f"{'ok' if ok else 'failed — see logs'}")
+                else:
+                    print("  --portal-warm skipped: set PORTAL_REGION")
+        else:
+            print(f"  To publish: python scrape.py --upload-to-portal "
+                  f"{out_dir} --portal-bucket <NAME>")
         return
 
     if args.upload_to_portal:
