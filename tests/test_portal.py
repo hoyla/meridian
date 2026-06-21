@@ -43,9 +43,16 @@ def _sample_report() -> rm.Report:
             stability={"badge": "🟡", "hedge_phrase": None},
             prose="**EU-27 exports of [Cars](#cars) to China** fell 40% `finding/2`",
             drill_down="cars",
-            provenance=rm.Provenance(finding_ids=[2], source="eurostat"))],
-        llm_slots=[rm.LLMSlot(slot_type="specific", grounded_in=[2]),
-                   rm.LLMSlot(slot_type="general", grounded_in=[2])],
+            provenance=rm.Provenance(finding_ids=[2], source="eurostat"),
+            take=rm.LLMSlot(
+                slot_type="specific", grounded_in=[2], status="generated",
+                questions=[
+                    {"q": "Is the 40% fall volume-driven? (NB: hypothesis, not a finding)",
+                     "axis": "volume-vs-value"},
+                    {"q": "Is one member state behind the drop?",
+                     "axis": "concentration"},
+                ]))],
+        llm_slots=[rm.LLMSlot(slot_type="general", grounded_in=[2])],
     )
     what_changed = rm.WhatChanged(regime="movement", summary="3 findings shifted.",
                                   new_count=1)
@@ -209,6 +216,50 @@ def test_fmt_eur_shared_handles_trillions():
     assert _fmt_eur(1.2e12) == "€1.20T"
     assert _fmt_eur(4.6e11) == "€460.00B"
     assert _fmt_eur(None) == "—"
+
+
+# ---- LLM per-finding take (the v1 layer) ----
+
+def test_headline_take_renders_segregated_in_both_surfaces():
+    """A generated take renders as a 'machine hypotheses — unverified' block
+    under its mover, in both renderers, with the hedge in the text so it
+    survives copy-paste; and it round-trips through serialisation."""
+    r = _sample_report()
+    md = render_markdown(r)
+    html = render_html(r)
+    assert "Machine hypotheses" in md
+    assert "leads to explore, not findings" in md
+    assert "Is the 40% fall volume-driven?" in md
+    assert 'class="take"' in html
+    assert "Is the 40% fall volume-driven?" in html
+    take = rm.to_dict(r)["headline"]["items"][0]["take"]
+    assert take["status"] == "generated"
+    assert take["questions"][0]["axis"] == "volume-vs-value"
+
+
+def test_take_parse_questions():
+    from llm_takes import _parse_questions
+    assert _parse_questions('{"questions":[{"q":"Is X up?","axis":"a"}]}') == [
+        {"q": "Is X up?", "axis": "a"}]
+    assert _parse_questions('```json\n{"questions":[{"q":"Is X up?"}]}\n```') == [
+        {"q": "Is X up?", "axis": ""}]          # tolerates a code fence
+    assert _parse_questions("not json at all") is None
+    assert _parse_questions('{"questions":[]}') is None
+    assert _parse_questions('{"nope":1}') is None
+
+
+def test_take_validate_is_the_safety_contract():
+    """The guard: every question interrogative, no number absent from the facts
+    (reusing verify_numbers). This is what rejected the live Permanent-magnets
+    take that cited a 93% not in its facts."""
+    from llm_takes import _validate_questions
+    facts = {"scopes": {"eu_27": {"imports": {"yoy_pct": 0.355}}}}
+    assert _validate_questions(
+        [{"q": "Is the +35.5% rise volume-driven?", "axis": "x"}], facts) is None
+    rej = _validate_questions([{"q": "Is the 93% share large?", "axis": "x"}], facts)
+    assert rej and rej["reason"] == "number_not_in_facts"
+    rej = _validate_questions([{"q": "This rise is volume-driven.", "axis": "x"}], facts)
+    assert rej and rej["reason"] == "not_interrogative"
 
 
 # ---- labels (theme layer) ----

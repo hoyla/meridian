@@ -108,6 +108,7 @@ class HeadlineItem:
     drill_down: Optional[str] = None  # ref id → Section / Finding
     provenance: Provenance = field(default_factory=Provenance)
     facets: Facets = field(default_factory=Facets)
+    take: Optional["LLMSlot"] = None  # the per-finding LLM take (leading questions)
 
 
 @dataclass
@@ -117,7 +118,8 @@ class LLMSlot:
     slot_type: Literal["specific", "general"]
     grounded_in: list[int] = field(default_factory=list)  # finding ids
     status: Literal["placeholder", "generated"] = "placeholder"
-    content: Optional[str] = None
+    content: Optional[str] = None  # prose form (the general slot / future)
+    questions: list[dict] = field(default_factory=list)  # v1 specific take: [{q, axis}]
 
 
 @dataclass

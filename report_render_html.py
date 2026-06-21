@@ -130,6 +130,22 @@ def _llm_block(slot) -> str:
     )
 
 
+def _take_block_html(take) -> str:
+    """The per-finding LLM take — leading questions in a visually segregated
+    block (the reliable 'unverified, leads only' hedge). A placeholder
+    (rejected/ungenerated) renders nothing; the deterministic mover stands."""
+    if take is None or take.status != "generated" or not take.questions:
+        return ""
+    qs = "".join(f"<li>{html.escape(q.get('q', ''))}</li>" for q in take.questions)
+    return (
+        '<div class="take">'
+        '<div class="take-tag">◆ Machine hypotheses — unverified leads to '
+        'explore, not findings</div>'
+        f'<ul class="take-qs">{qs}</ul>'
+        "</div>"
+    )
+
+
 def _headline(h: Headline) -> str:
     out = [f'<h2 class="lead">{html.escape(h.lead_title)}</h2>']
     if h.items:
@@ -139,11 +155,9 @@ def _headline(h: Headline) -> str:
         for item in h.items:
             dd = (f'<a class="drill" href="#{html.escape(item.drill_down)}">detail ›</a>'
                   if item.drill_down else "")
-            out.append(f'<li>{_inline_md(item.prose)} {dd}</li>')
+            out.append(f'<li>{_inline_md(item.prose)} {dd}'
+                       f'{_take_block_html(item.take)}</li>')
         out.append("</ol>")
-        for slot in h.llm_slots:
-            if slot.slot_type == "specific":
-                out.append(_llm_block(slot))
         if h.variant == "eurostat":
             out.append('<p class="note">The smaller and shakier moves are in '
                        '<strong>Sector detail</strong> — not dropped, just not '
@@ -552,6 +566,10 @@ ul.ref li{font-size:13.5px;line-height:1.5;margin:0 0 7px;color:var(--ink)}
 .llm{background:#fffbe6;border:1px solid #f3c100;border-left:4px solid #f3c100;padding:10px 14px;margin:12px 0}
 .llm-tag{font-size:12px;font-weight:700;color:#7a5c00}
 .llm-body{font-size:13px;color:#7a5c00;font-style:italic;margin-top:3px}
+.take{background:#f6f7f9;border:1px dashed #b9c0cc;border-left:3px solid #8a93a3;padding:8px 12px;margin:8px 0 4px;border-radius:3px}
+.take-tag{font-size:11px;font-weight:700;letter-spacing:.02em;color:#5b6573;text-transform:uppercase}
+.take-qs{margin:6px 0 0;padding-left:18px}
+.take-qs li{font-size:14px;line-height:1.45;color:#3a4250;margin:0 0 5px;font-family:var(--font-body)}
 footer{padding:18px 28px 28px;border-top:1px solid var(--line)}
 footer h3{font-size:13px;font-weight:700;color:var(--muted);margin:0 0 10px}
 .comp{display:flex;flex-wrap:wrap;gap:12px}

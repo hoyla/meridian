@@ -195,6 +195,27 @@ def _default_backend():
     return ClaudeCLIBackend()
 
 
+def _validate_questions(questions: list[dict], facts: dict) -> dict | None:
+    """Verify-or-reject. Returns a rejection dict on the first failure, else
+    None. Each question must be interrogative (contain '?') and cite no number
+    absent from the facts (reusing llm_framing.verify_numbers). Pure — no DB,
+    no LLM — so it's unit-testable in isolation."""
+    for item in questions:
+        q = item["q"]
+        if "?" not in q:  # interrogative form is the safety contract
+            return {"reason": "not_interrogative", "detail": q[:300]}
+        ok, failures = verify_numbers(q, facts)
+        if not ok:
+            f0 = failures[0]
+            return {
+                "reason": "number_not_in_facts",
+                "detail": f"{f0.raw_text} ({f0.kind})",
+                "closest_fact_path": f0.closest_fact_path,
+                "closest_fact_value": f0.closest_fact_value,
+            }
+    return None
+
+
 def generate_take(
     group_name: str, backend=None, *, scrape_run_id: int | None = None,
 ) -> list[dict] | None:
@@ -227,28 +248,17 @@ def generate_take(
                       reason="json_parse_error", raw_output=raw[:4000])
         return None
 
-    for item in questions:
-        q = item["q"]
-        if "?" not in q:  # interrogative form is the safety contract
-            log.warning("take rejected (not interrogative) for %r", group_name)
-            log_rejection(scrape_run_id=scrape_run_id, cluster_name=group_name,
-                          model=model_name, stage="validate",
-                          reason="not_interrogative", detail=q[:300],
-                          raw_output=raw[:4000])
-            return None
-        ok, failures = verify_numbers(q, facts)
-        if not ok:
-            f0 = failures[0]
-            log.warning("take rejected (number not in facts) for %r: %s",
-                        group_name, f0.raw_text)
-            log_rejection(scrape_run_id=scrape_run_id, cluster_name=group_name,
-                          model=model_name, stage="validate",
-                          reason="number_not_in_facts",
-                          detail=f"{f0.raw_text} ({f0.kind})",
-                          raw_output=raw[:4000],
-                          closest_fact_path=f0.closest_fact_path,
-                          closest_fact_value=f0.closest_fact_value)
-            return None
+    rejection = _validate_questions(questions, facts)
+    if rejection is not None:
+        log.warning("take rejected (%s) for %r: %s",
+                    rejection["reason"], group_name, rejection.get("detail", ""))
+        log_rejection(scrape_run_id=scrape_run_id, cluster_name=group_name,
+                      model=model_name, stage="validate",
+                      reason=rejection["reason"], detail=rejection.get("detail"),
+                      raw_output=raw[:4000],
+                      closest_fact_path=rejection.get("closest_fact_path"),
+                      closest_fact_value=rejection.get("closest_fact_value"))
+        return None
 
     return questions
 
