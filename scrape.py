@@ -677,6 +677,27 @@ def main() -> None:
         ),
     )
     p.add_argument(
+        "--upload-to-portal", metavar="BUNDLE_DIR",
+        help=(
+            "Upload a bundle's 04_Portal snapshot (report.json + index.html) to "
+            "the portal's GCS bucket: gs://<bucket>/latest/ (what the Cloud Run "
+            "service serves) plus a per-period archive. Bucket from "
+            "--portal-bucket or the PORTAL_BUCKET env var. Run by hand after "
+            "`--periodic-run`; needs gcloud Application Default Credentials."
+        ),
+    )
+    p.add_argument(
+        "--portal-bucket", metavar="NAME", default=None,
+        help="GCS bucket for --upload-to-portal (default: PORTAL_BUCKET env).",
+    )
+    p.add_argument(
+        "--portal-warm", action="store_true",
+        help="With --upload-to-portal: warm the Cloud Run service "
+             "(--min-instances=1) so the freshly published report has no "
+             "cold-start delay. Service/region from PORTAL_SERVICE "
+             "(default meridian-portal) / PORTAL_REGION. Flip back to 0 by hand.",
+    )
+    p.add_argument(
         "--with-provenance", action="store_true",
         help=(
             "With --briefing-pack: also bundle per-finding provenance files "
@@ -912,6 +933,25 @@ def main() -> None:
         out.write_text(_rg.render_groups())
         log.info("Wrote groups glossary to %s (%d bytes)", out, out.stat().st_size)
         print(out)
+        return
+
+    if args.upload_to_portal:
+        import portal_publish
+        written = portal_publish.publish_snapshot(
+            args.upload_to_portal, bucket=args.portal_bucket,
+        )
+        print("Portal snapshot published:")
+        for dest in written:
+            print(f"  {dest}")
+        if args.portal_warm:
+            service = os.environ.get("PORTAL_SERVICE", "meridian-portal")
+            region = os.environ.get("PORTAL_REGION")
+            if region:
+                ok = portal_publish.warm_service(service, region)
+                print(f"  warmed {service} (min-instances=1): "
+                      f"{'ok' if ok else 'failed — see logs'}")
+            else:
+                print("  --portal-warm skipped: set PORTAL_REGION")
         return
 
     if args.upload_to_drive:
