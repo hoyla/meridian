@@ -331,7 +331,8 @@ def _render_sections(sections) -> list[str]:
             out.extend(_about_md(sec))
             for grp in sec.sections:
                 out.append(f'<a id="{grp.id}"></a>')
-                out.append(f"### {grp.title}")
+                badge = ((grp.metrics or {}).get("predictability") or {}).get("badge")
+                out.append(f"### {grp.title}" + (f" {badge}" if badge else ""))
                 out.append("")
                 if grp.intro:
                     out.append(grp.intro)

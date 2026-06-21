@@ -41,6 +41,7 @@ _DOWN = "#c70000"           # --text-error, negative delta
 _LINK = "#0077b6"           # --brand-500 / --text-link
 _MUTED = "#707070"          # --neutral-46
 _LINE = "#dcdcdc"           # --border-primary, hairline
+_SHIP_BASE = "#c3cbd4"      # muted blue-grey, the container-pictograph base
 
 def _inline_md(s: str) -> str:
     """Minimal inline markdown -> HTML for prose fields (Fork-A wrinkle).
@@ -319,6 +320,42 @@ def _donut_svg(share: float, *, size: int = 116, label: str = "") -> str:
         f'class="donut-pct">{share * 100:.0f}%</text>'
         "</svg>"
     )
+
+
+def _container_gauge_svg(frac: float, *, n: int = 24) -> str:
+    """A small, muted container-ship pictograph: n deck containers on a hull, the
+    last round(frac·n) highlighted. It illustrates ONE ratio — the mirror-gap
+    excess over the CIF/FOB freight baseline — as a proportion of a fixed,
+    illustrative stack; it is NOT a real container count. Two fills only (muted
+    base + brand highlight) so it informs without shouting."""
+    frac = max(0.0, min(1.0, float(frac)))
+    k = max(1, round(frac * n))              # highlighted containers, filled from the bow
+    W, H = 300, 64
+    top, deck, bottom = 16, 42, 56           # stack top, deck line, hull bottom
+    cstart, cend = 36, 282                    # container tier (stern area kept clear at left)
+    rows = 2
+    cols = max(1, n // rows)
+    cw = (cend - cstart) / cols
+    ch = (deck - top) / rows
+    gap = 1.4
+    cells = []
+    for c in range(cols):
+        for r in range(rows):
+            rank = (cols - 1 - c) * rows + r  # 0 = bow (rightmost); fill the band from there
+            cells.append(
+                f'<rect x="{cstart + c * cw + gap:.1f}" y="{top + r * ch + gap:.1f}" '
+                f'width="{cw - 2 * gap:.1f}" height="{ch - 2 * gap:.1f}" rx="1" '
+                f'fill="{_GUARDIAN_BLUE if rank < k else _SHIP_BASE}"/>')
+    boxes = "".join(cells)
+    # Squared (slim, slightly-raked) stern at the left; raked pointed bow at the
+    # right — and a slim aft funnel + bridge so it reads as a ship, not a barge.
+    hull = (f'<path d="M10,{deck} L286,{deck} L296,{deck + 7} L282,{bottom} '
+            f'L16,{bottom} Z" fill="{_SHIP_BASE}"/>')
+    bridge = f'<rect x="14" y="24" width="15" height="{deck - 24}" rx="1" fill="{_SHIP_BASE}"/>'
+    funnel = f'<rect x="18.5" y="6" width="6" height="18" rx="1.5" fill="{_SHIP_BASE}"/>'
+    return (f'<svg class="ship" viewBox="0 0 {W} {H}" width="240" role="img" '
+            f'aria-label="about {frac * 100:.0f}% beyond the freight baseline">'
+            + hull + bridge + funnel + boxes + "</svg>")
 
 
 def _more_about(section) -> str:
@@ -802,13 +839,29 @@ def _mirror_gap_html(section) -> str:
                    f'{html.escape(m["hub_notes"][:200])}</div>')
         cite = (f'<span class="token">finding/{f.provenance.finding_ids[0]}</span>'
                 if f.provenance.finding_ids else "")
+        # Container-ship pictograph beside the text — only where the excess over
+        # the freight baseline is materially positive (≈1+ container); the bloc
+        # and the net-negative partners get none, which is the honest read.
+        ship_svg = ship_cap = ""
+        if ex is not None and ex >= 0.03:
+            ship_svg = f'<div class="mg-ship">{_container_gauge_svg(ex)}</div>'
+            cap = (f"Highlighted: the {ex * 100:.1f}% of "
+                   f"{m.get('partner', '')}'s reported imports from China beyond "
+                   "what China's own export figures + normal freight explain "
+                   "(each block ≈ 4%).")
+            ship_cap = f'<div class="ship-cap">{html.escape(cap)}</div>'
+        # Text block (heading → gap stats below it → reports + finding token),
+        # with the ship beside it; the small captions go full width below both.
+        gapline = (f'<div class="mg-g" style="color:{col}">gap {_fmt_eur(gap)} '
+                   f'({gp:+.1f}%){excess}{znote}</div>')
         out.append(
-            '<div class="mg">'
-            f'<div class="mg-h"><span class="mg-p">China ↔ {html.escape(m.get("partner", ""))}</span>'
-            f'<span class="mg-g" style="color:{col}">gap {_fmt_eur(gap)} ({gp:+.1f}%){excess}{znote}</span></div>'
+            '<div class="mg"><div class="mg-main"><div class="mg-text">'
+            f'<div class="mg-p">China ↔ {html.escape(m.get("partner", ""))}</div>'
+            f'{gapline}'
             f'<div class="mg-v">China reports {_fmt_eur(m.get("gacc_eur"))} · '
             f'partner reports {_fmt_eur(m.get("eurostat_eur"))} {cite}</div>'
-            f"{hub}"
+            f'</div>{ship_svg}</div>'
+            f"{hub}{ship_cap}"
             "</div>"
         )
     return "\n".join(out)
@@ -941,11 +994,25 @@ def _sector_section(section) -> str:
         end_use = f.end_use if f else []
         # SITC division names + theme names + end-use join the filter index,
         # so "machinery", "xinjiang" or "capital" all find groups.
+        pb = (grp.metrics or {}).get("predictability") or {}
+        pbadge = pb.get("badge")
+        plabel = {"🟢": "reliable", "🟡": "mixed", "🔴": "volatile"}.get(pbadge, "")
+        # 'reliable'/'mixed'/'volatile' join the filter index, so you can filter
+        # to e.g. only the volatile groups.
         data_name = (grp.title + " " + " ".join(titles) + " "
-                     + " ".join(themes) + " " + " ".join(end_use)).lower()
+                     + " ".join(themes) + " " + " ".join(end_use) + " "
+                     + plabel).lower()
         out.append(f'<div class="sector" id="{html.escape(grp.id)}" '
                    f'data-name="{html.escape(data_name)}">')
-        out.append(f'<h3 class="sector-h">{html.escape(grp.title)}</h3>')
+        badge_html = ""
+        if pbadge:
+            pct = pb.get("persistence_pct")
+            tip = (f"{plabel.capitalize()} — {pct * 100:.0f}% of this group's "
+                   "year-on-year views held over the past 6 months"
+                   if pct is not None else plabel.capitalize())
+            badge_html = (f' <span class="pred" title="{html.escape(tip)}">'
+                          f"{pbadge}</span>")
+        out.append(f'<h3 class="sector-h">{html.escape(grp.title)}{badge_html}</h3>')
         if grp.intro:
             out.append(f'<p class="gdesc">{html.escape(grp.intro)}</p>')
         if themes:
@@ -1113,6 +1180,7 @@ a:hover{border-bottom-color:var(--link)}
 .sector{padding:12px 0;border-bottom:1px solid var(--line)}
 .sector:target{background:#dcebfa;scroll-margin-top:12px}
 .sector-h{font-family:var(--font-headline);font-size:18px;font-weight:700;color:var(--ink);margin:0 0 2px}
+.pred{cursor:help;font-size:15px;vertical-align:baseline}
 .sitc{font-size:12px;color:var(--muted);margin:0 0 4px;letter-spacing:.2px}
 .cshare{font-size:12.5px;color:var(--news);font-weight:700;margin:0 0 8px}
 .gdesc{font-family:var(--font-body);font-size:14px;line-height:1.45;color:var(--muted);margin:2px 0 8px}
@@ -1144,11 +1212,15 @@ details.gdetail[open]>summary::before{content:"▾ "}
 .tmfill{height:6px;background:var(--masthead)}
 .tmgroups{font-size:12.5px;color:var(--muted)}
 .mg{padding:11px 0;border-bottom:1px solid var(--line)}
-.mg-h{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
+.mg-main{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.mg-text{flex:1 1 260px;min-width:0}
+.mg-ship{flex:0 0 auto}
 .mg-p{font-family:var(--font-headline);font-size:16px;font-weight:700;color:var(--ink)}
-.mg-g{font-size:13.5px;font-weight:700;white-space:nowrap}
+.mg-g{font-size:13.5px;font-weight:700;margin-top:2px}
 .mg-v{font-size:13.5px;color:var(--ink);margin-top:3px}
-.hub{font-size:12.5px;color:var(--muted);font-style:italic;margin-top:4px}
+.hub{font-size:12.5px;color:var(--muted);font-style:italic;margin-top:6px}
+.ship{display:block;max-width:240px}
+.ship-cap{font-size:11.5px;color:var(--muted);font-style:italic;margin-top:2px}
 .ref-h{font-family:var(--font-sans);font-size:13px;font-weight:700;color:var(--muted);margin:14px 0 6px}
 ul.ref{margin:0 0 8px;padding-left:18px}
 ul.ref li{font-size:13.5px;line-height:1.5;margin:0 0 7px;color:var(--ink)}
@@ -1169,8 +1241,6 @@ ul.ref li{font-size:13.5px;line-height:1.5;margin:0 0 7px;color:var(--ink)}
 .tab{padding:12px 16px;color:var(--muted);font-family:var(--font-sans);font-weight:600;font-size:15px;border-bottom:4px solid transparent;margin-bottom:-1px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
 .tab:hover{color:var(--ink);border-bottom-color:transparent}
 .tab.active{color:var(--masthead);border-bottom-color:var(--masthead)}
-.tab .badge{display:inline-block;min-width:1.4em;text-align:center;background:#ededed;color:var(--ink);border-radius:62.5rem;padding:0 8px;font-size:12px;font-weight:700}
-.tab.active .badge{background:var(--masthead);color:#fff}
 .tabpanel.hide{display:none}
 .sector:target{scroll-margin-top:64px}
 /* "More about this section" disclosure */
@@ -1420,14 +1490,13 @@ def render_html(report: Report) -> str:
         # 'structural' (the Trade Map) is NOT here — it moved to the Sources &
         # coverage tab below.
 
-    # --- tabs: (key, label, badge, panel-html). Only built when they have
-    # content, so a GACC variant with no data tab simply shows fewer tabs.
-    tabdefs: list[tuple[str, str, int | None, str]] = [
-        ("briefing", "Briefing", None, "".join(brief)),
+    # --- tabs: (key, label, panel-html). Only built when they have content, so a
+    # GACC variant with no data tab simply shows fewer tabs.
+    tabdefs: list[tuple[str, str, str]] = [
+        ("briefing", "Briefing", "".join(brief)),
     ]
     if data_sec is not None and (data_sec.metrics or {}).get("tables"):
-        n = len((data_sec.metrics or {}).get("tables") or [])
-        tabdefs.append(("tables", "Tables", n,
+        tabdefs.append(("tables", "Tables",
                         "<section>" + _data_tables_html(data_sec) + "</section>"))
     # Sources & coverage = provenance/coverage (sources, period coverage,
     # findings manifest) + the Trade Map (moved off Briefing), one tab.
@@ -1437,26 +1506,22 @@ def render_html(report: Report) -> str:
     if structural_sec is not None and (structural_sec.sections or structural_sec.metrics):
         src_parts.append("<section>" + _structural_section_html(structural_sec) + "</section>")
     if src_parts:
-        tabdefs.append(("sources", "Sources & coverage", None, "".join(src_parts)))
+        tabdefs.append(("sources", "Sources & coverage", "".join(src_parts)))
     if ref_sec is not None:
-        tabdefs.append(("methodology", "Methodology", None,
+        tabdefs.append(("methodology", "Methodology",
                         "<section>" + _reference_html(ref_sec) + "</section>"))
     if gloss_sec is not None and (gloss_sec.metrics or {}).get("groups"):
-        n = sum(len(g.get("terms", []))
-                for g in (gloss_sec.metrics or {}).get("groups") or [])
-        tabdefs.append(("glossary", "Glossary", n,
+        tabdefs.append(("glossary", "Glossary",
                         "<section>" + _glossary_html(gloss_sec) + "</section>"))
 
     nav = '<nav class="tabs" role="tablist">' + "".join(
         f'<a class="tab{" active" if i == 0 else ""}" href="#tab-{key}">'
-        f'{html.escape(label)}'
-        + (f' <span class="badge">{badge:,}</span>' if badge else "")
-        + "</a>"
-        for i, (key, label, badge, _h) in enumerate(tabdefs)
+        f'{html.escape(label)}</a>'
+        for i, (key, label, _h) in enumerate(tabdefs)
     ) + "</nav>"
     panels = "".join(
         f'<div class="tabpanel{" hide" if i else ""}" id="tab-{key}">{panel}</div>'
-        for i, (key, _l, _b, panel) in enumerate(tabdefs)
+        for i, (key, _l, panel) in enumerate(tabdefs)
     )
 
     gen = m.generated_at

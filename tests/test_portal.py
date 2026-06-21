@@ -101,7 +101,8 @@ def _sample_report() -> rm.Report:
                  "trajectory": {"EU-27": {"import": "volatile", "export": "peak-and-fall"},
                                 "UK": {"import": "volatile"}},
                  "trajectory_findings": [5, 6],
-                 "china_export_share_value": 0.015, "china_export_share_finding": 7},
+                 "china_export_share_value": 0.015, "china_export_share_finding": 7,
+                 "predictability": {"badge": "🟡", "persistence_pct": 0.5, "n": 4}},
         findings=[rm.Finding(
             finding_id=2, subkind="hs_group_yoy_export", title="EU-27 exports of Cars",
             metrics={"scope": "EU-27", "flow": "export", "yoy_pct": -0.4,
@@ -295,7 +296,7 @@ def test_html_is_tabbed_and_routes_sections():
                 "tab-methodology", "tab-glossary"):
         assert f'id="{pid}"' in h, pid
     assert "hashchange" in h               # tab router present
-    assert 'class="badge"' in h            # count badges (terms / tables)
+    assert 'class="badge"' not in h        # no count badges in tab names
 
 
 def test_more_about_is_a_collapsed_disclosure():
@@ -345,6 +346,15 @@ def test_sector_group_deep_detail_behind_expander():
     h = render_html(_sample_report())
     assert 'class="gdetail"' in h and "Show detail" in h
     assert 'class="chart-row"' in h and "Top products" in h  # inside the expander
+
+
+def test_sector_group_predictability_badge():
+    """The 🟢/🟡/🔴 badge the explainer describes actually renders beside each
+    group heading (with a tooltip), and the label joins the filter index."""
+    h = render_html(_sample_report())
+    assert 'class="pred"' in h and "🟡" in h
+    assert 'data-name="cars' in h and "mixed" in h   # 'mixed' filterable
+    assert "### Cars 🟡" in render_markdown(_sample_report())
 
 
 def test_per_row_caveat_flags():
@@ -481,6 +491,20 @@ def test_chart_card_puts_meta_left_of_plot():
     assert 'class="cc-meta"' in out and 'class="cc-plot"' in out
     assert "Title" in out and "€5B" in out and "legend" in out
     assert _chart_card("T", "", "", "") == ""   # no svg → nothing
+
+
+def test_container_gauge_two_fills_and_highlight_band():
+    from report_render_html import _container_gauge_svg, _GUARDIAN_BLUE, _SHIP_BASE
+    svg = _container_gauge_svg(0.135, n=24)
+    assert "<svg" in svg and svg.count("<rect") >= 24      # 24 containers (+ funnel/bridge)
+    assert _GUARDIAN_BLUE in svg and _SHIP_BASE in svg     # exactly two fills
+    assert svg.count(_GUARDIAN_BLUE) == 3                  # round(0.135*24) highlighted
+
+
+def test_mirror_gap_pictograph_only_when_excess_material():
+    h = render_html(_sample_report())                      # NL excess 13.5% → shown
+    assert 'class="ship"' in h
+    assert "beyond what China" in h and "own export figures" in h  # honest caption
 
 
 def test_donut_svg_clamps_and_labels():
