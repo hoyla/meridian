@@ -384,6 +384,9 @@ def test_tables_tab_inline_and_download_only():
     h = render_html(r)
     assert "Download Excel workbook" in h and 'href="data.xlsx"' in h
     assert "Copy as TSV" in h and 'class="dtable"' in h
+    # download + copy are same-size buttons grouped per-table (no big top CTA)
+    assert 'class="dt-actions"' in h and 'class="data-toolbar"' not in h
+    assert h.count("btn-sm") >= 2          # both buttons are the small size
     assert ">Cars<" in h                   # an inline cell
     assert "hs_yoy_imports" in h and "3,509 rows" in h  # download-only, count shown
     md = render_markdown(r)

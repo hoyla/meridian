@@ -697,7 +697,7 @@ def _fmt_cell(c, header: str = "") -> str:
     return str(c)
 
 
-def _one_table_html(t: dict, *, hidden: bool) -> str:
+def _one_table_html(t: dict, *, hidden: bool, xlsx: bool = True) -> str:
     name = t["name"]
     headers = t.get("headers", [])
     th = "".join(f"<th>{html.escape(str(h))}</th>" for h in headers)
@@ -720,11 +720,20 @@ def _one_table_html(t: dict, *, hidden: bool) -> str:
                  f'{t["total_rows"]:,} rows — the full set is in the Excel '
                  "download.</p>")
     style = ' style="display:none"' if hidden else ""
+    # Download (whole workbook) + Copy (this table) are the same-size buttons,
+    # download first, tip beside Copy — so the per-table pills aren't upstaged by
+    # a big CTA. Only one table is visible at a time, so the download shows once.
+    dl = ('<a class="btn btn-sm" href="data.xlsx" download>⤓ Download Excel '
+          "workbook</a>" if xlsx else "")
     return (
         f'<div class="dt-wrap" id="dt-{html.escape(name)}"{style}>'
         f'<div class="dt-head"><span class="dt-desc">{html.escape(t.get("description", ""))}</span>'
+        '<div class="dt-actions">'
+        f"{dl}"
         f'<button class="btn btn-sm copy-tsv" data-table="dt-{html.escape(name)}">'
-        "⧉ Copy as TSV</button></div>"
+        "⧉ Copy as TSV</button>"
+        '<span class="dt-tip">pastes into Sheets / Excel</span>'
+        "</div></div>"
         f'<div class="dt-scroll"><table class="dtable"><thead><tr>{th}</tr></thead>'
         f'<tbody>{"".join(trs)}</tbody></table></div>'
         f"{trunc}</div>"
@@ -740,11 +749,8 @@ def _data_tables_html(section, *, xlsx: bool = True) -> str:
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
         out.append(f'<p class="kicker">{html.escape(section.intro)}</p>')
-    dl = ('<a class="btn" id="dl-xlsx" href="data.xlsx" download>⤓ Download Excel '
-          "workbook</a>" if xlsx else "")
-    out.append('<div class="data-toolbar">' + dl
-               + '<span class="note">Tip: “Copy as TSV” pastes straight into '
-               "Google Sheets or Excel.</span></div>")
+    # The pills lead (table selector); the workbook download + Copy-as-TSV are
+    # same-size buttons in each table's header (no big CTA upstaging the pills).
     inline = [t for t in tables if t.get("inline") and t.get("rows")]
     others = [t for t in tables if not (t.get("inline") and t.get("rows"))]
     if inline:
@@ -755,7 +761,7 @@ def _data_tables_html(section, *, xlsx: bool = True) -> str:
             for i, t in enumerate(inline))
         out.append(f'<div class="dtabs">{pills}</div>')
         for i, t in enumerate(inline):
-            out.append(_one_table_html(t, hidden=(i != 0)))
+            out.append(_one_table_html(t, hidden=(i != 0), xlsx=xlsx))
     if others:
         out.append('<div class="data-more"><h3 class="ref-h2">Also in the '
                    "workbook</h3><ul class=\"ref\">")
@@ -1220,7 +1226,8 @@ details.partner[open]>summary{border-bottom:1px solid var(--line)}
 .gdef{font-family:var(--font-body);font-size:14px;line-height:1.5;color:var(--ink)}
 .gdef p{margin:4px 0}.gdef ul{margin:4px 0;padding-left:18px}
 /* data tables */
-.data-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 14px}
+.dt-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dt-tip{font-size:12px;color:var(--muted);font-style:italic}
 .btn{display:inline-block;background:var(--masthead);color:#fff;font-family:var(--font-sans);font-weight:700;font-size:13.5px;padding:8px 14px;border-radius:4px;border:none;cursor:pointer;text-decoration:none;border-bottom:none}
 .btn:hover{background:#063a82}
 .btn-sm{font-size:12px;padding:5px 10px;background:var(--surface);color:var(--masthead);border:1px solid var(--line)}
