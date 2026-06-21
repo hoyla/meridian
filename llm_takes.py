@@ -83,7 +83,9 @@ Hard rules — violating any one gets your whole output silently rejected:
    volume-vs-price, member-state concentration, and policy/timing apply to
    almost EVERY finding, so raise one of those only when THIS finding's facts
    make it specifically pointed. One sharp question beats three generic ones; a
-   flat or featureless finding may warrant just one.
+   flat or featureless finding may warrant just one. Before returning a third
+   question, delete the weakest of the three and keep it only if all three
+   stand independently — three questions on a routine finding is itself a miss.
 6. Always name the scope and parties — "EU-27 imports from China", "UK exports
    to China" — never bare "imports" or "exports".
 7. Output VALID JSON ONLY. No markdown, no preamble, no code fences.
@@ -131,7 +133,9 @@ def _assemble(group_name: str) -> tuple[dict, str, str] | None:
         f"{_SCOPE_LEGEND}\n\n"
         f"FACTS — the only numbers you may cite:\n"
         f"{json.dumps(formatted, indent=2, default=str)}\n\n"
-        f"Propose 1–3 leading questions per the rules. Output JSON only:\n"
+        f"Propose the questions this finding genuinely warrants — usually one, "
+        f"sometimes two; a third only when it opens a distinctly different, "
+        f"non-obvious thread (rare). Do not pad to three. Output JSON only:\n"
         f'{{"questions": [{{"q": "...", "axis": "..."}}]}}'
     )
     return facts, TAKE_SYSTEM_PROMPT, user
