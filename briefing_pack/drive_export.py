@@ -51,6 +51,13 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
+# Single source of truth for the GitHub-style heading-slug rule, shared with
+# the markdown surfaces that author the `#slug` links (front_page, render_
+# groups, llm_narratives). Keeping one implementation is what guarantees a
+# link's slug and its heading's slug agree. Pure-stdlib (re); importing it
+# pulls in no DB/network dependency.
+from briefing_pack._helpers import _slugify_heading
+
 log = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
@@ -305,13 +312,30 @@ def mint_heading_anchors(docs, doc_id: str) -> int:
 
 
 def fix_internal_heading_links(docs, doc_id: str) -> int:
-    """Repoint in-document links (e.g. the Groups "Quick index") at the real
-    headings. Markdown `#slug` links convert to dangling bookmark links on
-    import; rewrite each to a native `headingId` link. The link's display
-    text is the group name, which equals the heading text — so we match on
-    text, with a prefix fallback for headings that carry a suffix (e.g. a
-    draft marker). Must run after `mint_heading_anchors`. Returns the number
-    of links repointed."""
+    """Repoint in-document links (the front-page highlights, the Groups
+    "Quick index") at the real headings. Markdown `#slug` links convert to
+    dangling links on import — usually a bookmark link that has lost the
+    slug, occasionally one that keeps it as a `#…` url — so we rewrite each
+    to a native `headingId` link. Must run after `mint_heading_anchors`.
+    Returns the number of links repointed.
+
+    Resolution, in order, per link:
+      1. the surviving `#slug` url, if present — match its slug straight to a
+         heading, independent of display text;
+      2. the display text slugifies to a heading's slug — this absorbs a
+         render-time badge suffix on the heading (`Electric vehicles 🟢`
+         slugs to `electric-vehicles`) and any punctuation the link omits;
+      3. exact display-text == heading-text (a heading that slugifies to
+         empty would only be reachable here);
+      4. heading-text starts with "<display text> (" — a parenthetical suffix
+         the link omits (e.g. a "(draft …)" marker).
+
+    Slug matching mirrors how the markdown authored the links (`#slug`
+    targets) and how GitHub resolves them: to the FIRST heading in document
+    order that produces the slug. The same group is deliberately rendered in
+    several sections (badged `Foo 🟡` in Tier 2, bare `Foo` in Tier 3) — all
+    the same target — so first-in-document-order is both correct and what the
+    author's `#foo` link meant."""
     doc = docs.documents().get(documentId=doc_id).execute()
 
     heading_id_by_text: dict[str, str] = {}
@@ -331,14 +355,36 @@ def fix_internal_heading_links(docs, doc_id: str) -> int:
             heading_id_by_text.setdefault(text, hid)
     headings = list(heading_id_by_text.items())
 
-    def _resolve(link_text: str) -> str | None:
+    # slug -> headingId, first-in-document-order wins. Derived from the
+    # text-deduped headings (above), so a group that appears badged AND bare
+    # collapses to one target rather than masking each other.
+    heading_id_by_slug: dict[str, str] = {}
+    for text, hid in headings:
+        slug = _slugify_heading(text)
+        if slug:
+            heading_id_by_slug.setdefault(slug, hid)
+
+    def _resolve_slug(slug: str) -> str | None:
+        return heading_id_by_slug.get(_slugify_heading(slug))
+
+    def _resolve_text(link_text: str) -> str | None:
+        # Slug, first-in-document-order: matches how the link was authored
+        # (`#slug`) and how GitHub resolves it, and absorbs a render-time
+        # badge the heading carries but the link omits — so a front-page
+        # highlight lands on the group's first (Tier 2) section, not a later
+        # bare repeat. Identical to exact-text matching wherever slugs are
+        # unique (the leads digest, the Groups index).
+        hid = _resolve_slug(link_text)
+        if hid:
+            return hid
+        # Fallbacks a slug can't bridge: an exact text hit (e.g. a heading
+        # that slugifies to empty), then a heading carrying a parenthetical
+        # suffix the link omits (a "(draft …)" marker) — the " (" boundary
+        # avoids matching a longer sibling that merely shares a prefix.
         if link_text in heading_id_by_text:
             return heading_id_by_text[link_text]
-        # Heading carries a parenthetical suffix the link omits (e.g. a
-        # "(draft …)" marker). The " (" boundary avoids matching a longer
-        # sibling name that merely shares a prefix.
         prefix = link_text + " ("
-        hits = [hid for text, hid in headings if text.startswith(prefix)]
+        hits = [h for text, h in headings if text.startswith(prefix)]
         return hits[0] if len(hits) == 1 else None
 
     requests: list[dict] = []
@@ -351,11 +397,17 @@ def fix_internal_heading_links(docs, doc_id: str) -> int:
             if not tr:
                 continue
             link = tr.get("textStyle", {}).get("link") or {}
+            url = link.get("url", "")
             # Only internal-intent links (dangling bookmark or "#…" url) —
             # leave external https links and existing headingId links alone.
-            if not (link.get("bookmarkId") or link.get("url", "").startswith("#")):
+            if not (link.get("bookmarkId") or url.startswith("#")):
                 continue
-            hid = _resolve(tr.get("content", "").strip())
+            # A `#slug` url that survived import already IS the target slug;
+            # prefer it over the display text. Otherwise (the common case —
+            # the slug was dropped to a bare bookmark) fall back to the text.
+            hid = _resolve_slug(url[1:]) if url.startswith("#") else None
+            if not hid:
+                hid = _resolve_text(tr.get("content", "").strip())
             if not hid:
                 continue
             requests.append({"updateTextStyle": {

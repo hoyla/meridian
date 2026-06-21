@@ -38,9 +38,17 @@ def _mover_sentence(m: dict) -> str:
     the stability badge; 🔴 never reaches here (filtered upstream)."""
     group = m["group_name"]
     is_export = m["subkind"].endswith("_export")
+    # The cross-reference link wraps just the group name — not the whole
+    # subject — so its visible text equals the target heading's group name.
+    # That is what lets the Drive uploader reconnect it after import: it
+    # matches a dangling internal link to a heading by text/slug, because
+    # Google's .docx importer drops the `#slug` itself. The leads digest
+    # links resolve for exactly this reason; the front page used to wrap the
+    # whole subject and silently failed to. See briefing_pack.drive_export.
+    linked_group = f"[{group}](#{_slugify_heading(group)})"
     subject = (
-        f"EU-27 exports of {group} to China" if is_export
-        else f"EU-27 imports of {group} from China"
+        f"EU-27 exports of {linked_group} to China" if is_export
+        else f"EU-27 imports of {linked_group} from China"
     )
     yoy = float(m["yoy_pct"])
     verb = "rose" if yoy > 0 else "fell"
@@ -67,9 +75,8 @@ def _mover_sentence(m: dict) -> str:
             "headlining"
         )
 
-    anchor = _slugify_heading(group)
     return (
-        f"**[{subject}](#{anchor})** {verb} {pct} by value in the "
+        f"**{subject}** {verb} {pct} by value in the "
         f"12 months to {_fmt_month(m['current_end'])}, to "
         f"{_fmt_eur(m['current_eur'])}{vol}{tail}. {_trace_token(m['id'])}"
     )
