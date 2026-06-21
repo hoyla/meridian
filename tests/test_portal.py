@@ -493,6 +493,20 @@ def test_chart_card_puts_meta_left_of_plot():
     assert _chart_card("T", "", "", "") == ""   # no svg → nothing
 
 
+def test_container_gauge_two_fills_and_highlight_band():
+    from report_render_html import _container_gauge_svg, _GUARDIAN_BLUE, _SHIP_BASE
+    svg = _container_gauge_svg(0.135, n=24)
+    assert "<svg" in svg and svg.count("<rect") == 24      # deck containers
+    assert _GUARDIAN_BLUE in svg and _SHIP_BASE in svg     # exactly two fills
+    assert svg.count(_GUARDIAN_BLUE) == 3                  # round(0.135*24) highlighted
+
+
+def test_mirror_gap_pictograph_only_when_excess_material():
+    h = render_html(_sample_report())                      # NL excess 13.5% → shown
+    assert 'class="ship"' in h
+    assert "beyond what China" in h and "own export figures" in h  # honest caption
+
+
 def test_donut_svg_clamps_and_labels():
     from report_render_html import _donut_svg
     assert "50%" in _donut_svg(0.5)

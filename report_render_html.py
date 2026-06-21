@@ -41,6 +41,7 @@ _DOWN = "#c70000"           # --text-error, negative delta
 _LINK = "#0077b6"           # --brand-500 / --text-link
 _MUTED = "#707070"          # --neutral-46
 _LINE = "#dcdcdc"           # --border-primary, hairline
+_SHIP_BASE = "#c3cbd4"      # muted blue-grey, the container-pictograph base
 
 def _inline_md(s: str) -> str:
     """Minimal inline markdown -> HTML for prose fields (Fork-A wrinkle).
@@ -319,6 +320,31 @@ def _donut_svg(share: float, *, size: int = 116, label: str = "") -> str:
         f'class="donut-pct">{share * 100:.0f}%</text>'
         "</svg>"
     )
+
+
+def _container_gauge_svg(frac: float, *, n: int = 24) -> str:
+    """A small, muted container-ship pictograph: n deck containers on a hull, the
+    last round(frac·n) highlighted. It illustrates ONE ratio — the mirror-gap
+    excess over the CIF/FOB freight baseline — as a proportion of a fixed,
+    illustrative stack; it is NOT a real container count. Two fills only (muted
+    base + brand highlight) so it informs without shouting."""
+    frac = max(0.0, min(1.0, float(frac)))
+    k = max(1, round(frac * n))
+    W, H = 260, 56
+    padL, padR, top, deck = 6, 6, 12, 33
+    cw = (W - padL - padR) / n
+    gap = 1.4
+    boxes = "".join(
+        f'<rect x="{padL + i * cw + gap:.1f}" y="{top}" '
+        f'width="{cw - 2 * gap:.1f}" height="{deck - top}" rx="1" '
+        f'fill="{_GUARDIAN_BLUE if i >= n - k else _SHIP_BASE}"/>'
+        for i in range(n)
+    )
+    hull = (f'<path d="M{padL},{deck} L{W - padR},{deck} L{W - padR - 16},{H - 5} '
+            f'L{padL + 16},{H - 5} Z" fill="{_SHIP_BASE}"/>')
+    return (f'<svg class="ship" viewBox="0 0 {W} {H}" width="220" role="img" '
+            f'aria-label="about {frac * 100:.0f}% beyond the freight baseline">'
+            + hull + boxes + "</svg>")
 
 
 def _more_about(section) -> str:
@@ -802,13 +828,25 @@ def _mirror_gap_html(section) -> str:
                    f'{html.escape(m["hub_notes"][:200])}</div>')
         cite = (f'<span class="token">finding/{f.provenance.finding_ids[0]}</span>'
                 if f.provenance.finding_ids else "")
+        # Container-ship pictograph — only where the excess over the freight
+        # baseline is materially positive (≈1+ container); the bloc and the
+        # net-negative partners get none, which is the honest read.
+        ship = ""
+        if ex is not None and ex >= 0.03:
+            cap = (f"Highlighted: the {ex * 100:.1f}% of "
+                   f"{m.get('partner', '')}'s reported imports from China beyond "
+                   "what China's own export figures + normal freight explain "
+                   "(each block ≈ 4%).")
+            ship = (f'<figure class="ship-wrap">{_container_gauge_svg(ex)}'
+                    f'<figcaption class="ship-cap">{html.escape(cap)}</figcaption>'
+                    "</figure>")
         out.append(
             '<div class="mg">'
             f'<div class="mg-h"><span class="mg-p">China ↔ {html.escape(m.get("partner", ""))}</span>'
             f'<span class="mg-g" style="color:{col}">gap {_fmt_eur(gap)} ({gp:+.1f}%){excess}{znote}</span></div>'
             f'<div class="mg-v">China reports {_fmt_eur(m.get("gacc_eur"))} · '
             f'partner reports {_fmt_eur(m.get("eurostat_eur"))} {cite}</div>'
-            f"{hub}"
+            f"{hub}{ship}"
             "</div>"
         )
     return "\n".join(out)
@@ -1164,6 +1202,9 @@ details.gdetail[open]>summary::before{content:"▾ "}
 .mg-g{font-size:13.5px;font-weight:700;white-space:nowrap}
 .mg-v{font-size:13.5px;color:var(--ink);margin-top:3px}
 .hub{font-size:12.5px;color:var(--muted);font-style:italic;margin-top:4px}
+.ship-wrap{margin:7px 0 2px}
+.ship{display:block;max-width:220px}
+.ship-cap{font-size:11.5px;color:var(--muted);font-style:italic;margin-top:2px}
 .ref-h{font-family:var(--font-sans);font-size:13px;font-weight:700;color:var(--muted);margin:14px 0 6px}
 ul.ref{margin:0 0 8px;padding-left:18px}
 ul.ref li{font-size:13.5px;line-height:1.5;margin:0 0 7px;color:var(--ink)}
