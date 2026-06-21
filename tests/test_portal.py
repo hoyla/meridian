@@ -401,3 +401,25 @@ def test_periodic_writes_portal_snapshot(clean_db, tmp_path):
     snap = json.loads((p / "report.json").read_text())
     assert snap["meta"]["variant"] == "eurostat"
     assert (p / "index.html").read_text().startswith("<!doctype html")
+
+
+def test_publish_snapshot_validates_before_touching_gcs(tmp_path, monkeypatch):
+    """The publish step fails cheap and clear: no bucket → ValueError, no
+    04_Portal snapshot → FileNotFoundError (both before any GCS call)."""
+    import portal_publish
+    monkeypatch.delenv("PORTAL_BUCKET", raising=False)
+    with pytest.raises(ValueError):
+        portal_publish.publish_snapshot(str(tmp_path))            # no bucket
+    with pytest.raises(FileNotFoundError):
+        portal_publish.publish_snapshot(str(tmp_path), bucket="b")  # no 04_Portal/
+
+
+def test_publish_period_read_from_snapshot(tmp_path):
+    """The per-period archive path comes from the snapshot's own meta; a missing
+    or unreadable snapshot yields None (latest/ still publishes)."""
+    import portal_publish
+    pd = tmp_path / "04_Portal"
+    pd.mkdir()
+    (pd / "report.json").write_text(json.dumps({"meta": {"data_period": "2026-04-01"}}))
+    assert portal_publish._period_from_snapshot(pd) == "2026-04-01"
+    assert portal_publish._period_from_snapshot(tmp_path) is None
