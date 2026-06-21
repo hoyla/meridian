@@ -5,6 +5,67 @@ What's still open. For history of what shipped, see
 the original Phase 1–6 plan, look at the git log around
 `8f18e68`–`5d0e23e` (2026-05-09 to 2026-05-10).
 
+## Breadth expansion — ingest more now that the report is navigable (2026-06-21)
+
+**Premise.** The portal restructuring (tabs; "More about" + per-group +
+per-partner progressive disclosure; charts; Tables / Sources & coverage /
+Methodology / Glossary) changed the cost/benefit of breadth. Extra coverage used
+to *overwhelm* the two long docs; the portal now lets a reader dig into what they
+want and ignore the rest. So the constraint that kept coverage tight has largely
+lifted — time to **ingest more broadly and surface it on demand** (global
+principle 1: ingest broadly, analyse second). Luke's call, 2026-06-21.
+
+Discipline still applies: **look at the data before building infra** (principle
+6 — hand-pull samples from each new source/code before writing adapters);
+append-only + provenance on everything new (principles 3/4/7).
+
+### Concrete pieces (roughly priority order)
+
+1. **All-goods extra-EU world totals → unlocks the donut + dependency-over-time.**
+   Ingest the world (extra-EU) all-goods import/export totals we don't hold today
+   — `eurostat_world_aggregates` covers only the *tracked* HS prefixes, so there
+   is no honest all-goods denominator (see
+   `dev_notes/2026-06-21-portal-findings-expansion.md`). Once ingested: the
+   deferred **"China's share of EU goods imports" donut** becomes a clean KPI,
+   *and* that share can be shown as a **time series** (the dependency trend, not
+   just a point). Smallest, highest-leverage item — **this supersedes the
+   standalone "donut data source" open question**: widen the data rather than
+   fake a denominator.
+
+2. **More HS groups.** The curated `hs_groups` set (~46) is an editorial
+   selection; the portal's filter + per-group disclosure now make a much larger
+   set navigable. Use the **Trade map's "dark tail"** (SITC divisions with low
+   editorial-group coverage) to prioritise — it's already a map of what we're
+   missing. Candidates: deeper pharma precursors, semiconductor
+   equipment/materials, more critical-minerals lines, agri commodities,
+   textiles/apparel, furniture/toys, etc. (Ties to *Sector breadth review
+   (round 2)* below.)
+
+3. **Richer per-source statistics.**
+   - **Eurostat:** unit-price (€/kg) trends as a first-class series (we hold
+     value + kg; price = the divergence signal); supplementary units; finer
+     partner cuts.
+   - **GACC:** more partner countries (beyond the ~24); **commodity-level** GACC
+     if obtainable — currently bloc/partner aggregates only, so a China-side HS
+     mirror is a big unlock (ties to *Eurostat-side HS-level mirror* below);
+     surface the CNY-vs-USD divergence.
+   - **HMRC:** finer UK granularity (regions, transport mode) if a UK story
+     warrants it.
+
+4. **Derived / cross-source metrics** (journalistically rich; mostly compute
+   over existing + new data):
+   - China's **share of EU imports per sector over time** (dependency by
+     product) — generalises per-group `partner_share` to a headline series.
+   - China's **global** export share by product (is the EU's dependence matched
+     worldwide?) — needs a world-trade source (UN Comtrade).
+   - **Price divergence** (China export vs EU import — the CIF/FOB wedge +
+     markup) per group.
+   - Broader **mirror-gap** coverage (more partners, more commodities).
+
+5. **New context sources (stretch).** UN Comtrade (China's global trade by
+   commodity, for "China-specific vs worldwide"); tariff-change timelines (to
+   correlate moves with policy — also feeds the LLM-takes v2 retrieval angle).
+
 ## Observability / logging follow-ups (2026-05-15 evening arc)
 
 Four new audit-log surfaces shipped tonight along with
