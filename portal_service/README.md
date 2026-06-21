@@ -36,9 +36,13 @@ gcloud storage buckets create "gs://$BUCKET" \
   --location="$REGION" --uniform-bucket-level-access
 
 # 2. Deploy the service (Cloud Build builds the Dockerfile). Private by default.
+#    --min-instances=1 keeps one warm instance through the launch window so
+#    reporters hit no cold-start delay (see "Warm at launch" below; flip to 0
+#    once they've had their look).
 gcloud run deploy meridian-portal \
   --source . --region "$REGION" \
   --set-env-vars PORTAL_BUCKET="$BUCKET" \
+  --min-instances=1 \
   --no-allow-unauthenticated
 
 # 3. Let the service's runtime service account READ the bucket
@@ -82,6 +86,30 @@ gcloud storage cp <bundle>/04_Portal/report.json  "gs://$BUCKET/latest/report.js
 
 Automating that upload is the next step (`scrape.py --upload-to-portal`).
 
+## Warm at launch, cool to save money
+A report's first hours are ~90% of its lifetime traffic — reporters reading
+fresh material — and that's exactly when a scale-to-zero cold start (a few
+seconds) hurts. So run the launch window with **one warm instance**, then scale
+to zero once the audience has had its look.
+
+- **On each new report publish** — keep `--min-instances=1` (re-set it if a
+  previous report's window left it at 0):
+  ```bash
+  gcloud run services update meridian-portal --region "$REGION" --min-instances=1
+  ```
+  (The publish step, `--upload-to-portal`, can do this automatically on each
+  publish — opt-in — so you only ever flip it back down by hand.)
+- **Once reporters have seen it** — scale to zero to drop the warm-idle cost:
+  ```bash
+  gcloud run services update meridian-portal --region "$REGION" --min-instances=0
+  ```
+
+Declarative equivalent, if you keep a service YAML: the
+`autoscaling.knative.dev/minScale` annotation (`"1"` warm / `"0"` cold).
+
 ## Cost
 Direct IAP (no load balancer) + Cloud Run scale-to-zero (free tier covers an
-internal portal) + a few MB in GCS ≈ **~$0/month**. IAP itself is free.
+internal portal) + a few MB in GCS ≈ **~$0/month** at rest. The one cost lever
+is the warm instance: `--min-instances=1` is roughly a **few dollars a month**
+(one idle instance, mostly billed for memory under the default request-time CPU
+model); dropping to `0` after the launch window removes it. IAP itself is free.
