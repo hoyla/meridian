@@ -1250,6 +1250,12 @@ _PORTAL_JS = """<script>
   var tabs=[].slice.call(document.querySelectorAll('.tab'));
   var panels=[].slice.call(document.querySelectorAll('.tabpanel'));
   function panelOf(el){while(el&&el.classList&&!el.classList.contains('tabpanel'))el=el.parentElement;return el;}
+  function expandDetail(el){ // open a drilled-to sector's collapsed charts/detail
+    if(!el)return;
+    if(el.tagName==='DETAILS')el.open=true;
+    var d=el.querySelector&&el.querySelector('details.gdetail');
+    if(d)d.open=true;
+  }
   function show(id){
     if(!document.getElementById(id))id='tab-briefing';
     panels.forEach(function(p){p.classList.toggle('hide',p.id!==id);});
@@ -1259,7 +1265,7 @@ _PORTAL_JS = """<script>
     var id=(hash||'').replace(/^#/,'');
     var el=id&&document.getElementById(id);
     if(el&&el.classList.contains('tabpanel')){show(id);window.scrollTo(0,0);return;}
-    if(el){var p=panelOf(el);if(p){show(p.id);el.scrollIntoView();return;}}
+    if(el){var p=panelOf(el);if(p){show(p.id);expandDetail(el);el.scrollIntoView();return;}}
     show('tab-briefing');
   }
   tabs.forEach(function(t){t.addEventListener('click',function(e){
@@ -1271,7 +1277,7 @@ _PORTAL_JS = """<script>
     if(!a||a.classList.contains('tab'))return;
     var id=a.getAttribute('href').slice(1);var el=document.getElementById(id);if(!el)return;
     var p=el.classList.contains('tabpanel')?el:panelOf(el);
-    if(p){show(p.id);if(el!==p){e.preventDefault();el.scrollIntoView();
+    if(p){show(p.id);if(el!==p){e.preventDefault();expandDetail(el);el.scrollIntoView();
       if(history.replaceState)history.replaceState(null,'','#'+id);}}
   });
   window.addEventListener('hashchange',function(){go(location.hash);});

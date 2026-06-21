@@ -331,6 +331,14 @@ def test_sector_group_charts_line_and_bar_side_by_side():
     assert "Cars: imports vs exports" in h
 
 
+def test_drilldown_expands_target_sector_detail():
+    """A mover's 'detail ›' drill-down auto-opens the target group's collapsed
+    charts/detail (router JS wired to expand on navigation)."""
+    h = render_html(_sample_report())
+    assert "function expandDetail" in h
+    assert "details.gdetail" in h and "expandDetail(el)" in h
+
+
 def test_sector_group_deep_detail_behind_expander():
     """Charts + top products + drivers + trajectory collapse behind a per-group
     'Show detail & charts' expander; the flow rows stay visible."""
