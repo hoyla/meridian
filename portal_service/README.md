@@ -66,6 +66,12 @@ gcloud iap web add-iam-policy-binding \
 ### The cross-org auth wrinkle (worth knowing before step 4/5)
 Your GCP project is under your **personal** Google account; `guardian.co.uk` is
 a **separate** Workspace org. So:
+- **A managed OAuth client won't work here.** IAP's default Google-managed
+  OAuth client only serves users *internal to an organization*. A no-org
+  personal project with external (`guardian.co.uk`) users **must** supply a
+  **custom OAuth client** (Troubleshooting §3) — without it IAP returns `604`
+  on every request, however perfect the service-agent and domain grants are.
+  This is the single biggest gotcha; everything else is recoverable in minutes.
 - The OAuth consent screen will be **External** (a personal project can't be
   "Internal"), and it must be **Published** — in "Testing" it caps at 100
   hand-added users, which won't cover all staff. IAP uses only basic
@@ -73,6 +79,69 @@ a **separate** Workspace org. So:
   review.
 - If the `domain:guardian.co.uk` grant has friction cross-org, fall back to a
   **Google Group** or named `user:` emails in step 5.
+
+## Troubleshooting — the gotchas we actually hit
+
+Standing this up cross-org (personal project, Guardian users) surfaced a chain
+of non-obvious failures. In the order they bite:
+
+**1. Build fails: `PERMISSION_DENIED … default service account is missing
+permissions`.** On newer projects, `--source` deploys build via Cloud Build
+running as the *Compute Engine default* service account, which no longer
+auto-gets build perms. Grant it once:
+```bash
+PNUM=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
+gcloud projects add-iam-policy-binding "$PROJECT" \
+  --member="serviceAccount:${PNUM}-compute@developer.gserviceaccount.com" \
+  --role="roles/cloudbuild.builds.builder"
+```
+
+**2. Build says "using Buildpacks" and fails — it's ignoring the Dockerfile.**
+`gcloud run deploy --source .` only finds the Dockerfile when run **from
+`portal_service/`** (or pass `--source portal_service`). From the repo root it
+buildpacks the whole repo and fails.
+
+**3. IAP returns `Error code 604` ("internal error while authorizing").** Two
+independent causes — fix both:
+- The **IAP service agent** may not exist / may lack invoker:
+  ```bash
+  gcloud beta services identity create --service=iap.googleapis.com --project="$PROJECT"
+  gcloud run services add-iam-policy-binding meridian-portal --region="$REGION" \
+    --member="serviceAccount:service-${PNUM}@gcp-sa-iap.iam.gserviceaccount.com" \
+    --role="roles/run.invoker"
+  ```
+- **The big one — the managed OAuth client is invalid for a no-org project with
+  external users.** Supply a custom one (Console → Google Auth Platform →
+  Clients → Create client → *Web application*; copy id + secret), give it the
+  redirect URI in §4, then point IAP at it:
+  ```bash
+  cat > /tmp/iap-oauth.yaml <<EOF
+  accessSettings:
+    oauthSettings:
+      clientId: <CLIENT_ID>
+      clientSecret: <CLIENT_SECRET>
+  EOF
+  gcloud iap settings set /tmp/iap-oauth.yaml --project="$PROJECT" \
+    --resource-type=cloud-run --region="$REGION" --service=meridian-portal
+  ```
+
+**4. Sign-in: `Error 400: redirect_uri_mismatch`.** The custom client's
+Authorized redirect URI must be exactly, with the **full** client id spliced in
+and the **`:handleRedirect`** suffix intact (the console can silently drop it on
+paste):
+```
+https://iap.googleapis.com/v1/oauth/clientIds/<CLIENT_ID>:handleRedirect
+```
+Allow a few minutes' propagation after saving.
+
+**5. Publish fails: `DefaultCredentialsError` or quota-project permission
+denied.** The local `--upload-to-portal` uses Application Default Credentials,
+*separate* from your `gcloud` user login. Run `gcloud auth application-default
+login` **as the project-owner account** (a `guardian.co.uk` identity has no
+rights on a personal project), and **tick every consent checkbox** — the
+`cloud-platform` scope is required and the boxes default to unchecked. Confirm
+with `gcloud auth application-default set-quota-project "$PROJECT"` (it only
+succeeds with the right account).
 
 ## Test it before the publish step exists
 Manually drop a snapshot in the bucket, then load the service URL (signed in as
