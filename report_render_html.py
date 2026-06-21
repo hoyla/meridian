@@ -941,11 +941,25 @@ def _sector_section(section) -> str:
         end_use = f.end_use if f else []
         # SITC division names + theme names + end-use join the filter index,
         # so "machinery", "xinjiang" or "capital" all find groups.
+        pb = (grp.metrics or {}).get("predictability") or {}
+        pbadge = pb.get("badge")
+        plabel = {"🟢": "reliable", "🟡": "mixed", "🔴": "volatile"}.get(pbadge, "")
+        # 'reliable'/'mixed'/'volatile' join the filter index, so you can filter
+        # to e.g. only the volatile groups.
         data_name = (grp.title + " " + " ".join(titles) + " "
-                     + " ".join(themes) + " " + " ".join(end_use)).lower()
+                     + " ".join(themes) + " " + " ".join(end_use) + " "
+                     + plabel).lower()
         out.append(f'<div class="sector" id="{html.escape(grp.id)}" '
                    f'data-name="{html.escape(data_name)}">')
-        out.append(f'<h3 class="sector-h">{html.escape(grp.title)}</h3>')
+        badge_html = ""
+        if pbadge:
+            pct = pb.get("persistence_pct")
+            tip = (f"{plabel.capitalize()} — {pct * 100:.0f}% of this group's "
+                   "year-on-year views held over the past 6 months"
+                   if pct is not None else plabel.capitalize())
+            badge_html = (f' <span class="pred" title="{html.escape(tip)}">'
+                          f"{pbadge}</span>")
+        out.append(f'<h3 class="sector-h">{html.escape(grp.title)}{badge_html}</h3>')
         if grp.intro:
             out.append(f'<p class="gdesc">{html.escape(grp.intro)}</p>')
         if themes:
@@ -1113,6 +1127,7 @@ a:hover{border-bottom-color:var(--link)}
 .sector{padding:12px 0;border-bottom:1px solid var(--line)}
 .sector:target{background:#dcebfa;scroll-margin-top:12px}
 .sector-h{font-family:var(--font-headline);font-size:18px;font-weight:700;color:var(--ink);margin:0 0 2px}
+.pred{cursor:help;font-size:15px;vertical-align:baseline}
 .sitc{font-size:12px;color:var(--muted);margin:0 0 4px;letter-spacing:.2px}
 .cshare{font-size:12.5px;color:var(--news);font-weight:700;margin:0 0 8px}
 .gdesc{font-family:var(--font-body);font-size:14px;line-height:1.45;color:var(--muted);margin:2px 0 8px}

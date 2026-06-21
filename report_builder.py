@@ -397,7 +397,7 @@ def _series_chart(monthly_series) -> ChartData | None:
     return ChartData(chart_type="line", series=pts) if len(pts) >= 2 else None
 
 
-def _sector_detail_section(cur) -> Section:
+def _sector_detail_section(cur, predictability: dict | None = None) -> Section:
     """The navigable granularity layer: one child Section per HS group,
     each carrying its import + export Finding. The group's Section id is
     `_slugify_heading(name)` — the SAME slug the headline movers point
@@ -565,6 +565,13 @@ def _sector_detail_section(cur) -> Section:
         if esv is not None:
             metrics["china_export_share_value"] = esv
             metrics["china_export_share_finding"] = efid
+        # Predictability badge (🟢/🟡/🔴) per group — the same stability signal the
+        # Findings doc shows beside each group name. Absent for groups with too
+        # little history (correctly = no badge).
+        pred = (predictability or {}).get(name)
+        if pred:
+            metrics["predictability"] = {
+                "badge": pred[0], "persistence_pct": _f(pred[1]), "n": pred[2]}
         root.sections.append(Section(
             id=_slugify_heading(name), title=name, kind="sector_detail",
             findings=fs, metrics=metrics, intro=desc_by_name.get(name),
@@ -1300,7 +1307,7 @@ def build_report(
             if source_trigger == "eurostat":
                 sections = [_state_of_play_section(cur),
                             _mirror_gap_section(cur),
-                            _sector_detail_section(cur),
+                            _sector_detail_section(cur, predictability),
                             # China's own (GACC) bilateral context — in the
                             # Findings doc's state-of-play, missing from the
                             # portal till now. Uses GACC's latest period (a month

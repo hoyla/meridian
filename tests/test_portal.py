@@ -101,7 +101,8 @@ def _sample_report() -> rm.Report:
                  "trajectory": {"EU-27": {"import": "volatile", "export": "peak-and-fall"},
                                 "UK": {"import": "volatile"}},
                  "trajectory_findings": [5, 6],
-                 "china_export_share_value": 0.015, "china_export_share_finding": 7},
+                 "china_export_share_value": 0.015, "china_export_share_finding": 7,
+                 "predictability": {"badge": "🟡", "persistence_pct": 0.5, "n": 4}},
         findings=[rm.Finding(
             finding_id=2, subkind="hs_group_yoy_export", title="EU-27 exports of Cars",
             metrics={"scope": "EU-27", "flow": "export", "yoy_pct": -0.4,
@@ -345,6 +346,15 @@ def test_sector_group_deep_detail_behind_expander():
     h = render_html(_sample_report())
     assert 'class="gdetail"' in h and "Show detail" in h
     assert 'class="chart-row"' in h and "Top products" in h  # inside the expander
+
+
+def test_sector_group_predictability_badge():
+    """The 🟢/🟡/🔴 badge the explainer describes actually renders beside each
+    group heading (with a tooltip), and the label joins the filter index."""
+    h = render_html(_sample_report())
+    assert 'class="pred"' in h and "🟡" in h
+    assert 'data-name="cars' in h and "mixed" in h   # 'mixed' filterable
+    assert "### Cars 🟡" in render_markdown(_sample_report())
 
 
 def test_per_row_caveat_flags():
