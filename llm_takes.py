@@ -25,13 +25,21 @@ verify-or-reject, and populating the `LLMSlot` in `report_builder`.
 from __future__ import annotations
 
 import json
+import logging
+import os
 
 from llm_framing import (
+    ClaudeCLIBackend,
     _build_facts,
     _conn,
     _format_facts_for_prompt,
     _load_hs_group_clusters,
+    make_backend,
+    verify_numbers,
 )
+from llm_rejection_log import log_rejection
+
+log = logging.getLogger(__name__)
 
 # Top movers are the v1 targets (the most quotable shifts); their findings are
 # the EU-27 hs_group_yoy* family.
@@ -104,13 +112,13 @@ def group_name_for_finding(finding_id: int) -> str | None:
     return row[0] if row and row[0] else None
 
 
-def build_take_prompt(group_name: str) -> tuple[str, str] | None:
-    """Assemble the (system, user) prompt for a group's leading-question take.
+def _assemble(group_name: str) -> tuple[dict, str, str] | None:
+    """Load a group's facts and assemble (raw_facts, system, user).
 
-    Returns None if the group has no loadable findings. The user prompt carries
-    only the facts the model is allowed to cite — the same typed set the old
-    leads pipeline verifies against, so the verify-or-reject guard transfers
-    unchanged."""
+    `raw_facts` is the typed fact set the verifier checks output numbers
+    against — the same set the old leads pipeline verifies against, so the
+    guard transfers unchanged; the prompt shows the %/€-formatted form. Returns
+    None if the group has no loadable findings."""
     clusters = _load_hs_group_clusters([group_name])
     if not clusters:
         return None
@@ -126,7 +134,17 @@ def build_take_prompt(group_name: str) -> tuple[str, str] | None:
         f"Propose 1–3 leading questions per the rules. Output JSON only:\n"
         f'{{"questions": [{{"q": "...", "axis": "..."}}]}}'
     )
-    return TAKE_SYSTEM_PROMPT, user
+    return facts, TAKE_SYSTEM_PROMPT, user
+
+
+def build_take_prompt(group_name: str) -> tuple[str, str] | None:
+    """The (system, user) prompt for a group's leading-question take — the
+    backend-agnostic dev artifact. Returns None if the group has no findings."""
+    assembled = _assemble(group_name)
+    if assembled is None:
+        return None
+    _facts, system, user = assembled
+    return system, user
 
 
 def build_take_prompt_for_finding(finding_id: int) -> tuple[str, str] | None:
@@ -137,29 +155,155 @@ def build_take_prompt_for_finding(finding_id: int) -> tuple[str, str] | None:
     return build_take_prompt(group)
 
 
+# ---------------------------------------------------------------------------
+# Generation + verify-or-reject guard
+# ---------------------------------------------------------------------------
+
+def _parse_questions(raw: str) -> list[dict] | None:
+    """Parse the model's JSON, tolerating a ```-fence. Returns the questions
+    list ([{q, axis}, …]) or None on any structural problem."""
+    s = raw.strip()
+    if s.startswith("```"):
+        nl = s.find("\n")
+        if nl != -1:
+            s = s[nl + 1:]
+        if s.endswith("```"):
+            s = s[:-3]
+        s = s.strip()
+    try:
+        obj = json.loads(s)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    qs = obj.get("questions")
+    if not isinstance(qs, list) or not qs:
+        return None
+    out = [
+        {"q": str(it["q"]).strip(), "axis": str(it.get("axis", "")).strip()}
+        for it in qs
+        if isinstance(it, dict) and it.get("q")
+    ]
+    return out or None
+
+
+def _default_backend():
+    """Dev default is the CLI (Max subscription, no API key). If LLM_BACKEND is
+    set (e.g. claude_api in production) honour it via make_backend()."""
+    if os.environ.get("LLM_BACKEND"):
+        return make_backend()
+    return ClaudeCLIBackend()
+
+
+def generate_take(
+    group_name: str, backend=None, *, scrape_run_id: int | None = None,
+) -> list[dict] | None:
+    """Generate and verify a take for one group. Returns the validated
+    questions, or None if the group has no findings, generation fails, or the
+    output is rejected — in which case the LLMSlot stays a placeholder and the
+    report is unaffected (the take never blocks).
+
+    verify-or-reject (reusing the leads pipeline's guard): reject any output
+    that fails to parse, isn't interrogative, or cites a number absent from the
+    facts. Rejections are logged to llm_rejection_log for later inspection."""
+    assembled = _assemble(group_name)
+    if assembled is None:
+        return None
+    facts, system, user = assembled
+    backend = backend or _default_backend()
+    model_name = getattr(backend, "model", None) or backend.__class__.__name__
+
+    try:
+        raw = backend.generate(system, user)
+    except Exception as e:  # transport/backend failure → placeholder, don't block
+        log.warning("take generation failed for %r: %s", group_name, e)
+        return None
+
+    questions = _parse_questions(raw)
+    if questions is None:
+        log.warning("take rejected (parse) for %r", group_name)
+        log_rejection(scrape_run_id=scrape_run_id, cluster_name=group_name,
+                      model=model_name, stage="parse",
+                      reason="json_parse_error", raw_output=raw[:4000])
+        return None
+
+    for item in questions:
+        q = item["q"]
+        if "?" not in q:  # interrogative form is the safety contract
+            log.warning("take rejected (not interrogative) for %r", group_name)
+            log_rejection(scrape_run_id=scrape_run_id, cluster_name=group_name,
+                          model=model_name, stage="validate",
+                          reason="not_interrogative", detail=q[:300],
+                          raw_output=raw[:4000])
+            return None
+        ok, failures = verify_numbers(q, facts)
+        if not ok:
+            f0 = failures[0]
+            log.warning("take rejected (number not in facts) for %r: %s",
+                        group_name, f0.raw_text)
+            log_rejection(scrape_run_id=scrape_run_id, cluster_name=group_name,
+                          model=model_name, stage="validate",
+                          reason="number_not_in_facts",
+                          detail=f"{f0.raw_text} ({f0.kind})",
+                          raw_output=raw[:4000],
+                          closest_fact_path=f0.closest_fact_path,
+                          closest_fact_value=f0.closest_fact_value)
+            return None
+
+    return questions
+
+
+def generate_take_for_finding(
+    finding_id: int, backend=None, *, scrape_run_id: int | None = None,
+) -> list[dict] | None:
+    """Convenience: finding id → verified take (via its group)."""
+    group = group_name_for_finding(finding_id)
+    if not group:
+        return None
+    return generate_take(group, backend, scrape_run_id=scrape_run_id)
+
+
 def _main(argv: list[str]) -> int:
-    """CLI: emit the assembled prompt for the dev loop, e.g.
-        python -m llm_takes <finding_id>            | claude -p
-        python -m llm_takes --group "EV batteries"  | claude -p
-    Prints the system prompt then the user prompt (separated), so the whole
-    thing is pipeable while the system/user split stays visible."""
-    if not argv:
-        print("usage: python -m llm_takes <finding_id> | --group <name>",
-              file=__import__("sys").stderr)
+    """CLI. Emit the assembled prompt (default, pipeable to `claude -p`):
+        python -m llm_takes <finding_id>
+        python -m llm_takes --group "<name>"
+    Or generate + verify a take end-to-end (uses the configured backend;
+    defaults to the `claude -p` CLI, i.e. the Max subscription):
+        python -m llm_takes --generate <finding_id>
+        python -m llm_takes --generate --group "<name>"
+    """
+    import sys
+    usage = ("usage: python -m llm_takes [--generate] "
+             "<finding_id> | --group <name>")
+    do_generate = bool(argv) and argv[0] == "--generate"
+    rest = argv[1:] if do_generate else argv
+    if not rest:
+        print(usage, file=sys.stderr)
         return 2
-    if argv[0] == "--group":
-        result = build_take_prompt(" ".join(argv[1:]))
-        label = " ".join(argv[1:])
+
+    if rest[0] == "--group":
+        group = " ".join(rest[1:]).strip()
     else:
-        fid = int(argv[0])
-        label = group_name_for_finding(fid)
-        result = build_take_prompt_for_finding(fid)
+        group = group_name_for_finding(int(rest[0]))
+    if not group:
+        print(f"no group for {rest!r}", file=sys.stderr)
+        return 1
+
+    if do_generate:
+        questions = generate_take(group)
+        if questions is None:
+            print(f"take rejected or unavailable for {group!r}", file=sys.stderr)
+            return 1
+        print(json.dumps({"questions": questions}, indent=2, ensure_ascii=False))
+        return 0
+
+    result = build_take_prompt(group)
     if result is None:
-        print(f"no loadable findings for {label!r}", file=__import__("sys").stderr)
+        print(f"no loadable findings for {group!r}", file=sys.stderr)
         return 1
     system, user = result
-    # Combined and pipeable to `claude -p`; the system/user split becomes a
-    # proper backend concern later (one coherent prompt is enough for the dev loop).
+    # Combined and pipeable to `claude -p` (one coherent prompt is enough for
+    # the dev loop; the system/user split is the API backend's concern).
     print(f"{system}\n\n{user}")
     return 0
 

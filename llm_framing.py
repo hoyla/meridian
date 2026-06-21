@@ -100,6 +100,10 @@ def make_backend(model: str | None = None) -> LLMBackend:
     backend_name = os.environ.get("LLM_BACKEND", "ollama").lower()
     if backend_name == "ollama":
         return OllamaBackend(model=model or DEFAULT_OLLAMA_MODEL)
+    if backend_name == "claude_cli":
+        return ClaudeCLIBackend(model=model)
+    if backend_name == "claude_api":
+        return ClaudeAPIBackend(model=model)
     raise ValueError(f"Unknown LLM_BACKEND: {backend_name}")
 
 
@@ -173,6 +177,72 @@ class OllamaBackend:
                     )
         assert last_err is not None
         raise last_err
+
+
+DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
+
+
+class ClaudeCLIBackend:
+    """Drives the Claude Code CLI (`claude -p`) — dev/laptop only, drawing on
+    the Max subscription rather than per-token API billing. System and user
+    prompts are folded into one piped prompt (the CLI takes a single prompt on
+    stdin; the proper system/user split is the API backend's concern). Not
+    usable on a scale-to-zero server — there's no interactive login there, so
+    production uses ClaudeAPIBackend."""
+
+    def __init__(self, model: str | None = None, timeout_s: int = 180):
+        self.model = model
+        self.timeout_s = timeout_s
+
+    def generate(self, system: str, prompt: str) -> str:
+        import subprocess
+        cmd = ["claude", "-p"]
+        if self.model:
+            cmd += ["--model", self.model]
+        combined = f"{system}\n\n{prompt}"
+        try:
+            result = subprocess.run(
+                cmd, input=combined, capture_output=True, text=True,
+                timeout=self.timeout_s,
+            )
+        except FileNotFoundError as e:
+            raise RuntimeError("claude CLI not found on PATH") from e
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"claude -p exited {result.returncode}: "
+                f"{result.stderr.strip()[:500]}"
+            )
+        return result.stdout.strip()
+
+
+class ClaudeAPIBackend:
+    """Calls the Anthropic API — the sanctioned path for automated/production
+    use. Reads ANTHROPIC_API_KEY from the environment. Defaults to
+    claude-opus-4-8; override via the model arg or LLM_TAKES_MODEL. Adaptive
+    thinking is on (the task is small but benefits from a little reasoning, and
+    at ~5 short calls per cycle the cost is negligible). Returns the response's
+    text blocks joined — JSON parsing/validation is the caller's job, so this
+    stays interchangeable with the CLI backend."""
+
+    def __init__(self, model: str | None = None, max_tokens: int = 8192):
+        self.model = (
+            model or os.environ.get("LLM_TAKES_MODEL") or DEFAULT_CLAUDE_MODEL
+        )
+        self.max_tokens = max_tokens
+
+    def generate(self, system: str, prompt: str) -> str:
+        import anthropic  # lazy — only needed when this backend is selected
+        client = anthropic.Anthropic()
+        resp = client.messages.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            thinking={"type": "adaptive"},
+            system=system,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return "".join(
+            b.text for b in resp.content if b.type == "text"
+        ).strip()
 
 
 # =============================================================================
