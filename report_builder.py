@@ -806,10 +806,17 @@ def build_report(
     source_trigger: str = "eurostat",
     data_period: date | None = None,
     diff_baseline_brief_run_id: int | None = None,
+    *,
+    generate_takes: bool = False,
 ) -> Report:
     """Build the content model for one cycle. `source_trigger` selects the
     variant (Q1); defaults to 'eurostat' (every periodic export today is
-    Eurostat-triggered)."""
+    Eurostat-triggered).
+
+    `generate_takes` (opt-in) runs the LLM per-finding take on the top movers
+    (eurostat/hmrc only) via the configured backend — slow and backend-
+    dependent, so it's off by default. The deterministic report is complete
+    without it; a rejected or failed take just leaves a placeholder."""
     variant_cfg = _VARIANTS.get(source_trigger, _VARIANTS["eurostat"])
     with _conn() as conn, conn.cursor(
         cursor_factory=psycopg2.extras.DictCursor
@@ -834,6 +841,19 @@ def build_report(
             if data_period is None and top_movers:
                 data_period = top_movers[0].get("current_end")
             items = [_headline_item(m) for m in top_movers]
+            if generate_takes:
+                # Per-mover LLM take (leading questions), verify-or-reject; a
+                # failed/rejected take leaves a placeholder, never blocks.
+                from llm_takes import generate_take_for_finding
+                for m, item in zip(top_movers, items):
+                    fid = m.get("id")
+                    qs = generate_take_for_finding(fid) if fid else None
+                    item.take = LLMSlot(
+                        slot_type="specific",
+                        grounded_in=[fid] if fid else [],
+                        status="generated" if qs else "placeholder",
+                        questions=qs or [],
+                    )
             if source_trigger == "eurostat":
                 sections = [_state_of_play_section(cur),
                             _mirror_gap_section(cur),
@@ -842,16 +862,12 @@ def build_report(
                             _reference_section(cur)]
 
     month = _fmt_month(data_period)
-    llm_slots: list[LLMSlot] = []
-    if items:
-        llm_slots.append(LLMSlot(
-            slot_type="specific",
-            grounded_in=items[0].provenance.finding_ids,
-        ))
-    llm_slots.append(LLMSlot(
+    # Per-finding takes live on each HeadlineItem (the 'specific' interpretation);
+    # only the across-release 'general' slot sits at the headline level.
+    llm_slots: list[LLMSlot] = [LLMSlot(
         slot_type="general",
         grounded_in=[i.provenance.finding_ids[0] for i in items if i.provenance.finding_ids],
-    ))
+    )]
 
     headline = Headline(
         variant=source_trigger,

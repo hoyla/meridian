@@ -49,6 +49,19 @@ def _llm_block(slot) -> list[str]:
     ]
 
 
+def _take_block_md(take) -> list[str]:
+    """The per-finding LLM take under a mover — a segregated blockquote of
+    leading questions. They are leads to explore, never findings; the label and
+    the blockquote carry that hedge so it survives copy-paste. A placeholder
+    (rejected/ungenerated) renders nothing — the deterministic mover stands."""
+    if take is None or take.status != "generated" or not take.questions:
+        return []
+    out = ["   > 🔶 **Machine hypotheses** — unverified leads to explore, "
+           "not findings:"]
+    out.extend(f"   > - {q['q']}" for q in take.questions)
+    return out
+
+
 def _render_headline(h: Headline) -> list[str]:
     lines = [f"## {h.lead_title}", ""]
     if h.items:
@@ -60,13 +73,11 @@ def _render_headline(h: Headline) -> list[str]:
         lines.append("")
         for i, item in enumerate(h.items, start=1):
             lines.append(f"{i}. {item.prose}")
+            lines.extend(_take_block_md(item.take))
         lines.append("")
     else:
         lines.append("_No headline items this cycle._")
         lines.append("")
-    for slot in h.llm_slots:
-        if slot.slot_type == "specific":
-            lines.extend(_llm_block(slot))
     if h.items and h.variant == "eurostat":
         lines.append(
             "*The smaller and shakier moves are in the **Sector detail** "
