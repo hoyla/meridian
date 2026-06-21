@@ -27,6 +27,7 @@ _SNAPSHOT_FILES: dict[str, str] = {
     "report.json": "application/json",
     "index.html": "text/html",
 }
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _period_from_snapshot(portal_dir: Path) -> str | None:
@@ -73,6 +74,26 @@ def publish_snapshot(bundle_dir: str, *, bucket: str | None = None) -> list[str]
             blob.upload_from_filename(src, content_type=ctype)
             written.append(dest)
             log.info("portal-publish: wrote gs://%s/%s", bucket, dest)
+
+    # The full workbook (the Tables tab's 'Download Excel') lives at the bundle
+    # root, beside 04_Portal/, when --periodic-run produced it. Publish it to
+    # latest/data.xlsx (+ the per-period archive) so /data.xlsx can serve it. An
+    # --portal-snapshot-only refresh has no bundle workbook — then it's skipped
+    # and the download 404s until the next full run.
+    xlsx = Path(bundle_dir) / "04_Data.xlsx"
+    if xlsx.is_file():
+        dests = ["latest/data.xlsx"]
+        if period:
+            dests.append(f"periods/{period}/data.xlsx")
+        for dest in dests:
+            blob = b.blob(dest)
+            blob.cache_control = "no-cache"
+            blob.upload_from_filename(str(xlsx), content_type=_XLSX_MIME)
+            written.append(dest)
+            log.info("portal-publish: wrote gs://%s/%s", bucket, dest)
+    else:
+        log.info("portal-publish: no 04_Data.xlsx in %s; workbook download "
+                 "will 404 until a full periodic run", bundle_dir)
     return written
 
 

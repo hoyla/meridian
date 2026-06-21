@@ -114,15 +114,24 @@ def _render_headline(h: Headline) -> list[str]:
 
 
 def _render_what_changed(wc: WhatChanged) -> list[str]:
-    return [
+    out = [
         "## What changed since the last pack",
         "",
         f"**Since the last pack:** {wc.summary}",
         "",
+    ]
+    if wc.new_by_subkind:
+        out.append(f"**New findings this cycle — {wc.new_count:,} by type:**")
+        out.append("")
+        for b in wc.new_by_subkind:
+            out.append(f"- {b['count']:,} new — {b['label']} (`{b['subkind']}`)")
+        out.append("")
+    out += [
         "*This tab answers \"what changed?\". Where each group and partner "
         "currently stands is in the **State of play** tab.*",
         "",
     ]
+    return out
 
 
 def _sector_flow_line(f) -> str:
@@ -139,10 +148,16 @@ def _sector_flow_line(f) -> str:
     else:
         yoy = float(yoy)
         val = f"{'+' if yoy >= 0 else '−'}{abs(yoy) * 100:.1f}% · {_fmt_eur(f.metrics.get('current_eur'))}"
+    sm = f.metrics.get("sm_yoy_pct")
+    sm_str = ""
+    if sm is not None and yoy is not None:
+        sm = float(sm)
+        sm_str = f" · latest mo {'+' if sm >= 0 else '−'}{abs(sm) * 100:.0f}%"
     lb = " _(low base)_" if f.metrics.get("low_base") else ""
+    cav = "".join(f" _({c.replace('_', ' ')})_" for c in (f.metrics.get("caveats") or []))
     cite = (f" `finding/{f.provenance.finding_ids[0]}`"
             if f.provenance.finding_ids else "")
-    return f"- {label}: **{val}**{lb}{cite}"
+    return f"- {label}: **{val}**{sm_str}{lb}{cav}{cite}"
 
 
 def _deficit_line_md(f) -> str:
@@ -178,6 +193,19 @@ def _prov_note(sec) -> str | None:
     return "*" + " · ".join(bits) + " · live aggregate, no per-code finding.*"
 
 
+def _about_md(sec) -> list[str]:
+    """The section's 'More about this section' copy, for the LLM-facing surface
+    (rendered inline, not collapsed — markdown has no panels)."""
+    about = getattr(sec, "about", None)
+    return ["_More about this section:_", "", about, ""] if about else []
+
+
+def _flatten_md(text: str) -> str:
+    """Collapse a multi-line markdown body to a single line (glossary/table
+    lists in markdown stay compact)."""
+    return " ".join(ln.strip() for ln in (text or "").splitlines() if ln.strip())
+
+
 def _render_sections(sections) -> list[str]:
     """Render the content tree — parity with the HTML portal so the
     LLM-facing surface carries it too. Each linkable heading carries an
@@ -194,6 +222,7 @@ def _render_sections(sections) -> list[str]:
             if sec.intro:
                 out.append(f"*{sec.intro}*")
                 out.append("")
+            out.extend(_about_md(sec))
             for sub in sec.sections:
                 out.append(f"### {sub.title}")
                 out.append("")
@@ -204,12 +233,20 @@ def _render_sections(sections) -> list[str]:
                     out.append(_deficit_line_md(f))
                 out.append("")
         elif sec.kind == "reference":
-            out.append("## Methodology, sources & caveats")
+            out.append("## Methodology & caveats")
             out.append("")
             if sec.intro:
                 out.append(f"*{sec.intro}*")
                 out.append("")
             m = sec.metrics or {}
+            if getattr(sec, "about", None):
+                out.append(sec.about)
+                out.append("")
+            for g in m.get("guides", []):
+                out.append(f"### {g['title']}")
+                out.append("")
+                out.append(g["body"])
+                out.append("")
             if m.get("sources"):
                 out.append("**Sources**")
                 out.append("")
@@ -241,6 +278,7 @@ def _render_sections(sections) -> list[str]:
             if sec.intro:
                 out.append(f"*{sec.intro}*")
                 out.append("")
+            out.extend(_about_md(sec))
             for f in sec.findings:
                 m = f.metrics
                 gp = (m.get("gap_pct") or 0) * 100
@@ -266,6 +304,7 @@ def _render_sections(sections) -> list[str]:
             if sec.intro:
                 out.append(f"*{sec.intro}*")
                 out.append("")
+            out.extend(_about_md(sec))
             note = _prov_note(sec)
             if note:
                 out.append(note)
@@ -280,7 +319,7 @@ def _render_sections(sections) -> list[str]:
                 else:
                     cov = "— not in any editorial group"
                 out.append(f"- **{d.title}** — {m.get('value_share', 0) * 100:.1f}% "
-                           f"of import value · {m.get('code_count', 0)} codes · {cov}")
+                           f"of import value · {m.get('code_count', 0):,} codes · {cov}")
             out.append("")
         elif sec.kind == "sector_detail":
             out.append("## Sector detail")
@@ -289,6 +328,7 @@ def _render_sections(sections) -> list[str]:
                 out.append(f"*{sec.intro} {len(sec.sections)} groups, "
                            "ordered by size.*")
                 out.append("")
+            out.extend(_about_md(sec))
             for grp in sec.sections:
                 out.append(f'<a id="{grp.id}"></a>')
                 out.append(f"### {grp.title}")
@@ -349,6 +389,78 @@ def _render_sections(sections) -> list[str]:
                           if ms.get("china_export_share_finding") else "")
                     out.append(f"- _China takes {ms['china_export_share_value'] * 100:.1f}% "
                                f"of EU-27 exports of this group_{et}")
+                out.append("")
+        elif sec.kind == "glossary":
+            m = sec.metrics or {}
+            if not m.get("groups"):
+                continue
+            out.append("## Glossary")
+            out.append("")
+            if sec.intro:
+                out.append(f"*{sec.intro}*")
+                out.append("")
+            for g in m["groups"]:
+                out.append(f"### {g['title']}")
+                out.append("")
+                for t in g["terms"]:
+                    out.append(f"- **{t['term']}** — {_flatten_md(t.get('body', ''))}")
+                out.append("")
+        elif sec.kind == "data":
+            m = sec.metrics or {}
+            if not m.get("tables"):
+                continue
+            out.append("## Tables")
+            out.append("")
+            if sec.intro:
+                out.append(f"*{sec.intro}*")
+                out.append("")
+            out.append("_The full workbook (every tab, every row) is the Excel "
+                       "download; this surface lists the tabs rather than dumping "
+                       "thousands of rows._")
+            out.append("")
+            for t in m["tables"]:
+                out.append(f"- **{t['name']}** — {t.get('description', '')} "
+                           f"({t.get('total_rows', 0):,} rows)")
+            out.append("")
+        elif sec.kind == "sources":
+            m = sec.metrics or {}
+            out.append("## Sources & coverage")
+            out.append("")
+            if sec.intro:
+                out.append(f"*{sec.intro}*")
+                out.append("")
+            if m.get("sources"):
+                out.append("**Data sources**")
+                out.append("")
+                for s in m["sources"]:
+                    out.append(f"- **{s['source']}** — {s['note']}")
+                out.append("")
+            if m.get("coverage"):
+                out.append("**Period coverage**")
+                out.append("")
+                for c in m["coverage"]:
+                    out.append(f"- **{c['source']}**: {c.get('start') or '—'} → "
+                               f"{c.get('end') or '—'} "
+                               f"({c.get('releases', 0):,} releases)")
+                out.append("")
+            if m.get("manifest"):
+                out.append(f"**Findings included** — "
+                           f"{m.get('manifest_total', 0):,} live, by type:")
+                out.append("")
+                for f in m["manifest"]:
+                    out.append(f"- {f['count']:,} — {f['family']}")
+                out.append("")
+            if m.get("appendix"):
+                out.append("**Release appendix** — recent releases per source "
+                           "(URL · fetch date):")
+                out.append("")
+                for a in m["appendix"]:
+                    out.append(f"- **{a['source']}** "
+                               f"({a.get('total', 0):,} releases)")
+                    for rel in a.get("recent", [])[:6]:
+                        out.append(f"    - {rel.get('period') or ''} "
+                                   f"{rel.get('url') or ''} "
+                                   f"(fetched {rel.get('fetched') or ''})")
                 out.append("")
     return out
 
