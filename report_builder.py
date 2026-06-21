@@ -775,6 +775,8 @@ def _mirror_gap_section(cur) -> Section:
             title=title,
             metrics={
                 "partner": pm.group(1) if pm else "?",
+                "is_aggregate": bool(d.get("is_aggregate"))
+                or str(d.get("iso2") or "").upper().startswith("BLOC"),
                 "gacc_eur": _f((d.get("gacc") or {}).get("value_eur_converted")),
                 "eurostat_eur": _f((d.get("eurostat") or {}).get("total_eur")),
                 "gap_eur": _f(d.get("gap_eur")),
@@ -791,8 +793,12 @@ def _mirror_gap_section(cur) -> Section:
                 caveat=", ".join(d.get("caveat_codes") or []) or None,
             ),
         ))
-    # biggest excess-over-baseline first (the strongest transshipment signal)
-    root.findings.sort(key=lambda f: -(f.metrics.get("excess_pct") or -9))
+    # The EU-bloc aggregate leads (it's the whole-bloc picture, not one member);
+    # then members by biggest excess-over-baseline (the strongest transshipment
+    # signal).
+    root.findings.sort(key=lambda f: (
+        not f.metrics.get("is_aggregate"),
+        -(f.metrics.get("excess_pct") or -9)))
     return root
 
 
