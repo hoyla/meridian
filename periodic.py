@@ -81,6 +81,11 @@ class PeriodicRunResult:
     (preliminary); Eurostat March 2026'. Empty string when nothing new has
     arrived (a forced rerun). None when not computed."""
 
+    portal_dir: str | None = None
+    """Path to the 04_Portal/ snapshot folder (report.json + index.html) when
+    written, else None. Additive and best-effort: a portal failure leaves this
+    None but the findings/docx bundle still ships."""
+
     def summary(self) -> str:
         """Human-readable per-run report for the scheduled Routine to
         surface. When a briefing was generated it includes which sources
@@ -102,11 +107,45 @@ class PeriodicRunResult:
             )
         if self.bundle_dir:
             lines.append(f"  Bundle written to: {self.bundle_dir}")
+            if self.portal_dir:
+                lines.append(f"  Portal snapshot: {self.portal_dir}")
             lines.append("  To publish it to Google Drive, run:")
             lines.append(
                 f"    python scrape.py --upload-to-drive {self.bundle_dir}"
             )
         return "\n".join(lines)
+
+
+def _write_portal_snapshot(
+    bundle_dir: str, data_period, *, generate_takes: bool,
+) -> str | None:
+    """Write the portal snapshot into `<bundle_dir>/04_Portal/`: report.json
+    (the canonical published snapshot the web portal serves) + index.html (a
+    rendered preview). Best-effort — returns the dir on success, None on any
+    failure, so a portal problem never disturbs the findings/docx bundle.
+    Eurostat-triggered cycle → the eurostat variant. `generate_takes` runs the
+    per-finding LLM takes (needs a backend); default off."""
+    try:
+        from pathlib import Path
+        import report_model
+        from report_builder import build_report
+        from report_render_html import render_html
+        report = build_report(
+            source_trigger="eurostat", data_period=data_period,
+            generate_takes=generate_takes,
+        )
+        pdir = Path(bundle_dir) / "04_Portal"
+        pdir.mkdir(parents=True, exist_ok=True)
+        (pdir / "report.json").write_text(report_model.to_json(report))
+        (pdir / "index.html").write_text(render_html(report))
+        log.info("periodic-run: wrote portal snapshot to %s", pdir)
+        return str(pdir)
+    except Exception:
+        log.exception(
+            "periodic-run: portal snapshot failed; continuing "
+            "(findings bundle shipped)"
+        )
+        return None
 
 
 def run_periodic(
@@ -117,6 +156,7 @@ def run_periodic(
     llm_model: str | None = None,
     skip_llm: bool = False,
     docx: bool = True,
+    generate_takes: bool = False,
 ) -> PeriodicRunResult:
     """Run the full periodic cycle end-to-end.
 
@@ -135,6 +175,10 @@ def run_periodic(
       4. Generate the bundled findings export (findings.md + leads.md +
          data.xlsx) with trigger='periodic_run' so the row in brief_runs
          is recognised as part of the global subscriber cycle.
+      5. Write the portal snapshot (04_Portal/report.json + index.html) into
+         the same bundle — additive and best-effort. `generate_takes=True`
+         also runs the per-finding LLM takes (needs an LLM backend); off by
+         default.
 
     The function is deliberately non-fetching: it works against whatever
     Eurostat/HMRC/GACC data is already in the DB. Trigger the fetch
@@ -362,6 +406,12 @@ def run_periodic(
     # The top-level export folder is what `--upload-to-drive` takes.
     bundle_dir = str(_bundle_root(findings_path))
 
+    # --- Step 5: portal snapshot into the same bundle (additive, best-effort). ---
+    log.info("periodic-run: building portal snapshot (takes=%s)", generate_takes)
+    portal_dir = _write_portal_snapshot(
+        bundle_dir, latest_data, generate_takes=generate_takes,
+    )
+
     result = PeriodicRunResult(
         action_taken=True,
         reason=f"new export written for data_period {latest_data}",
@@ -371,6 +421,7 @@ def run_periodic(
         analyser_counts=counts,
         bundle_dir=bundle_dir,
         new_data=new_data_phrase,
+        portal_dir=portal_dir,
     )
     _persist_log(result)
     return result

@@ -387,3 +387,17 @@ def test_structural_section_partitions_and_is_attributed(clean_db):
     assert abs(sum(shares) - 1.0) < 1e-6
     assert tm[0].provenance.source == "eurostat"
     assert tm[0].metrics.get("total_eur", 0) > 0
+
+
+def test_periodic_writes_portal_snapshot(clean_db, tmp_path):
+    """The periodic-run portal step writes report.json (the published snapshot)
+    + index.html into 04_Portal/. Exercised via the helper (no full cycle, no
+    LLM); build_report runs against the clean schema."""
+    import periodic
+    pdir = periodic._write_portal_snapshot(str(tmp_path), None, generate_takes=False)
+    assert pdir is not None
+    p = tmp_path / "04_Portal"
+    assert (p / "report.json").exists() and (p / "index.html").exists()
+    snap = json.loads((p / "report.json").read_text())
+    assert snap["meta"]["variant"] == "eurostat"
+    assert (p / "index.html").read_text().startswith("<!doctype html")

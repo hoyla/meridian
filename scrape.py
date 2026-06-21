@@ -646,6 +646,13 @@ def main() -> None:
              "when Ollama is unavailable or for fast iterations.",
     )
     p.add_argument(
+        "--portal-takes", action="store_true",
+        help="With --periodic-run: generate the LLM per-finding 'takes' for "
+             "the portal snapshot. Off by default — needs an LLM backend "
+             "(LLM_BACKEND=claude_api unattended, or the claude CLI in an "
+             "attended dev run).",
+    )
+    p.add_argument(
         "--no-record", action="store_true",
         help=(
             "With --briefing-pack: produce the export bundle without "
@@ -928,6 +935,7 @@ def main() -> None:
             top_n=args.briefing_top_n,
             llm_model=args.llm_model,
             skip_llm=args.skip_llm,
+            generate_takes=args.portal_takes,
         )
         log.info("periodic-run: %s", result.reason)
         # Human-readable per-run report for the scheduling layer (the
