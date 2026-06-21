@@ -95,16 +95,36 @@ class LLMBackend(Protocol):
         ...
 
 
-def make_backend(model: str | None = None) -> LLMBackend:
-    """Pick the configured backend. Default Ollama. Override via LLM_BACKEND env."""
-    backend_name = os.environ.get("LLM_BACKEND", "ollama").lower()
+def make_backend(model: str | None = None, *, role: str | None = None) -> LLMBackend:
+    """Pick the configured backend, optionally for a named role ('leads' or
+    'takes'), so the two LLM steps can run on different backends and models from
+    one .env. Resolution, most specific first:
+
+        backend:  LLM_<ROLE>_BACKEND  →  LLM_BACKEND  →  'ollama'
+        model:    explicit `model` arg  →  LLM_<ROLE>_MODEL  →  the backend default
+
+    With no role-specific vars set, every call falls through to the global
+    LLM_BACKEND — today's behaviour, unchanged. Setting e.g.
+    LLM_LEADS_BACKEND=ollama routes the heavier framing step to local Ollama
+    while takes stay on the global (Claude) backend; LLM_LEADS_MODEL /
+    LLM_TAKES_MODEL pick the model per role."""
+    role_key = role.upper() if role else None
+    backend_name = (
+        (os.environ.get(f"LLM_{role_key}_BACKEND") if role_key else None)
+        or os.environ.get("LLM_BACKEND", "ollama")
+    ).lower()
+    if model is None and role_key:
+        model = os.environ.get(f"LLM_{role_key}_MODEL")
     if backend_name == "ollama":
         return OllamaBackend(model=model or DEFAULT_OLLAMA_MODEL)
     if backend_name == "claude_cli":
         return ClaudeCLIBackend(model=model)
     if backend_name == "claude_api":
         return ClaudeAPIBackend(model=model)
-    raise ValueError(f"Unknown LLM_BACKEND: {backend_name}")
+    raise ValueError(
+        f"Unknown LLM backend '{backend_name}'"
+        + (f" for role '{role}'" if role else "")
+    )
 
 
 class OllamaBackend:
@@ -218,16 +238,15 @@ class ClaudeCLIBackend:
 class ClaudeAPIBackend:
     """Calls the Anthropic API — the sanctioned path for automated/production
     use. Reads ANTHROPIC_API_KEY from the environment. Defaults to
-    claude-opus-4-8; override via the model arg or LLM_TAKES_MODEL. Adaptive
-    thinking is on (the task is small but benefits from a little reasoning, and
-    at ~5 short calls per cycle the cost is negligible). Returns the response's
-    text blocks joined — JSON parsing/validation is the caller's job, so this
-    stays interchangeable with the CLI backend."""
+    claude-opus-4-8; the per-role model (LLM_LEADS_MODEL / LLM_TAKES_MODEL) is
+    resolved by make_backend and passed in as `model`. Adaptive thinking is on
+    (the task is small but benefits from a little reasoning, and at ~5 short
+    calls per cycle the cost is negligible). Returns the response's text blocks
+    joined — JSON parsing/validation is the caller's job, so this stays
+    interchangeable with the CLI backend."""
 
     def __init__(self, model: str | None = None, max_tokens: int = 8192):
-        self.model = (
-            model or os.environ.get("LLM_TAKES_MODEL") or DEFAULT_CLAUDE_MODEL
-        )
+        self.model = model or DEFAULT_CLAUDE_MODEL
         self.max_tokens = max_tokens
 
     def generate(self, system: str, prompt: str) -> str:
@@ -1076,7 +1095,7 @@ def detect_llm_framings(
                      skipped_llm_error}.
     """
     if backend is None:
-        backend = make_backend(model=model)
+        backend = make_backend(model=model, role="leads")
     counts = {
         "emitted": 0,
         "inserted_new": 0, "confirmed_existing": 0, "superseded": 0,

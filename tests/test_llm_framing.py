@@ -753,3 +753,32 @@ def test_end_to_end_supersedes_when_picked_hypotheses_change(empty_op, test_db_u
         active, sup = cur.fetchone()
     assert active == 1
     assert sup == 1
+
+
+def test_make_backend_role_splits_backend_and_model(monkeypatch):
+    """Per-role selection: LLM_<ROLE>_BACKEND / LLM_<ROLE>_MODEL win, else the
+    global LLM_BACKEND, else ollama. Lets the heavier 'leads' framing and the
+    portal 'takes' run on different backends/models from one .env, while an
+    all-unset config behaves exactly as before."""
+    for v in ("LLM_BACKEND", "LLM_LEADS_BACKEND", "LLM_TAKES_BACKEND",
+              "LLM_LEADS_MODEL", "LLM_TAKES_MODEL"):
+        monkeypatch.delenv(v, raising=False)
+
+    # Nothing set → both roles fall through to the ollama default.
+    assert type(llm_framing.make_backend(role="leads")).__name__ == "OllamaBackend"
+
+    # Global only → both roles use it (today's behaviour, unchanged).
+    monkeypatch.setenv("LLM_BACKEND", "claude_api")
+    assert type(llm_framing.make_backend(role="leads")).__name__ == "ClaudeAPIBackend"
+    assert type(llm_framing.make_backend(role="takes")).__name__ == "ClaudeAPIBackend"
+
+    # Role override splits them: leads → local Ollama, takes stay on the global.
+    monkeypatch.setenv("LLM_LEADS_BACKEND", "ollama")
+    assert type(llm_framing.make_backend(role="leads")).__name__ == "OllamaBackend"
+    assert type(llm_framing.make_backend(role="takes")).__name__ == "ClaudeAPIBackend"
+
+    # Per-role model selection.
+    monkeypatch.setenv("LLM_LEADS_MODEL", "qwen3.6:latest")
+    monkeypatch.setenv("LLM_TAKES_MODEL", "claude-opus-4-8")
+    assert llm_framing.make_backend(role="leads").model == "qwen3.6:latest"
+    assert llm_framing.make_backend(role="takes").model == "claude-opus-4-8"
