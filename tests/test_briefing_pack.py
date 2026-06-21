@@ -1300,9 +1300,9 @@ def test_front_page_renders_above_tier_1(empty_findings, test_db_url):
     # The sentence form: subject link, verb by direction, value + volume,
     # 12-month framing, unscored-stability hedge (no badge seeded).
     assert (
-        "**[EU-27 imports of EV batteries (Li-ion) from China]"
-        "(#ev-batteries-li-ion)** rose 35.0% by value in the 12 months "
-        "to Feb 2026, to €27.00B; volume up 52.5%" in md
+        "**EU-27 imports of [EV batteries (Li-ion)]"
+        "(#ev-batteries-li-ion) from China** rose 35.0% by value in the "
+        "12 months to Feb 2026, to €27.00B; volume up 52.5%" in md
     )
     assert "verify before headlining" in md
     # Order: front page comes before Tier 1.
