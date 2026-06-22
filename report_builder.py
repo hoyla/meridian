@@ -1157,6 +1157,58 @@ def _sources_section(cur, diff=None) -> Section:
     )
 
 
+def _bal_yoy(cur, prior):
+    """YoY change of a *balance* (a signed net), returned as (pct, low_base).
+    A ratio on a net is unstable two ways the portal's normal low-base guard
+    doesn't cover: a near-zero prior makes it explode, and a sign flip
+    (surplus→deficit) makes the % meaningless. In both cases we suppress the %
+    and let the renderer quote the € swing instead — same philosophy as the
+    low-base flag on the flow rows."""
+    if cur is None or prior is None or prior == 0:
+        return None, True
+    if (cur >= 0) != (prior >= 0):          # surplus⇄deficit flip — % is nonsense
+        return None, True
+    # On the *magnitude* shown, so +% always means the stated surplus/deficit
+    # widened (whichever side); a signed-net % would render a growing deficit as
+    # a negative — the opposite of how a reader parses it.
+    pct = (abs(cur) - abs(prior)) / abs(prior)
+    if abs(pct) >= 5:                        # >500% swing — prior was tiny
+        return None, True
+    return pct, False
+
+
+def _partner_balance(flows: dict) -> dict:
+    """China's net balance with a partner (exports − imports; positive = China
+    surplus, i.e. the partner's deficit), on the same rolling-12-month and YTD
+    windows as the per-flow rows — so the balance never drifts onto a different
+    clock from the lines it's derived from. Empty dict when either flow is
+    missing (can't net one side)."""
+    exp, imp = flows.get("export"), flows.get("import")
+    if not exp or not imp:
+        return {}
+
+    def _net(a, b):
+        return (a - b) if a is not None and b is not None else None
+
+    out: dict = {}
+    c12, p12 = _net(exp.get("cur12"), imp.get("cur12")), \
+        _net(exp.get("prior12"), imp.get("prior12"))
+    if c12 is None:
+        return {}
+    pct, low = _bal_yoy(c12, p12)
+    out.update(bal_eur=c12, bal_yoy_pct=pct, bal_low_base=low,
+               bal_delta_eur=(c12 - p12) if p12 is not None else None)
+
+    yc, yp = _net(exp.get("ytd_cur"), imp.get("ytd_cur")), \
+        _net(exp.get("ytd_prior"), imp.get("ytd_prior"))
+    if yc is not None:
+        ypct, ylow = _bal_yoy(yc, yp)
+        out.update(bal_ytd_eur=yc, bal_ytd_pct=ypct, bal_ytd_low_base=ylow,
+                   bal_ytd_delta_eur=(yc - yp) if yp is not None else None,
+                   bal_ytd_months=exp.get("ytd_months") or imp.get("ytd_months"))
+    return out
+
+
 def _gacc_bilateral_section(cur, period) -> Section:
     """The GACC variant's deeper layer: China's own reported trade with each
     of its ~24 named partner countries (both flows), under the bloc-level
@@ -1194,15 +1246,27 @@ def _gacc_bilateral_section(cur, period) -> Section:
             chart_data=_series_chart((detail or {}).get("monthly_series")),
             provenance=Provenance(finding_ids=[fid], source="gacc", as_of=period),
         )
-        p = by_partner.setdefault(partner, {"max_eur": 0.0, "findings": []})
+        p = by_partner.setdefault(partner, {"max_eur": 0.0, "findings": [],
+                                            "flows": {}})
         p["findings"].append(finding)
         p["max_eur"] = max(p["max_eur"], finding.metrics["current_eur"] or 0.0)
+        # Stash the raw totals both flows need for a netted balance — the priors
+        # the per-flow finding metrics drop. Keyed by flow so export−import nets.
+        ytd = (tot.get("ytd_cumulative") or {})
+        p["flows"]["export" if is_export else "import"] = {
+            "cur12": _f(tot.get("current_12mo_eur")),
+            "prior12": _f(tot.get("prior_12mo_eur")),
+            "ytd_cur": _f(ytd.get("current_eur")),
+            "ytd_prior": _f(ytd.get("prior_eur")),
+            "ytd_months": ytd.get("months_in_ytd"),
+        }
     for name, p in sorted(by_partner.items(), key=lambda kv: -kv[1]["max_eur"]):
         fs = sorted(p["findings"], key=lambda f: f.metrics["flow"])
         root.sections.append(Section(
             id="gacc-" + _slugify_heading(name), title=name,
             kind="gacc_bilateral", findings=fs,
             facets=Facets(partner=[name]),
+            metrics=_partner_balance(p["flows"]),
         ))
     return root
 
