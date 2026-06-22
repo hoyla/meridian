@@ -28,6 +28,7 @@ import html
 import re
 
 from briefing_pack._helpers import _fmt_eur, _fmt_month, _source_label
+from briefing_pack.sections.diff import _shift_flow_phrase, _fmt_window_end
 from report_model import Headline, Indicator, Report, WhatChanged
 from classifications import division_title  # static SITC title lookup
 
@@ -1283,25 +1284,69 @@ def _sector_section(section) -> str:
     return "\n".join(out)
 
 
-def _what_changed(wc: WhatChanged, full: bool = True) -> str:
-    # The per-type new-findings breakdown lives in Sources & coverage (it's
-    # bookkeeping); What changed keeps the substantive 'since the last pack'
-    # digest.
-    if not full:
-        # Quiet cycle (nothing material): a slim one-liner, no H2 and no nav
-        # target — it shouldn't claim a section's vertical weight when there's
-        # nothing to report. The explicit 'nothing changed' is still worth
-        # saying (the pack is fresh, not stale).
+def _yoy_arc(old, new) -> str:
+    """'+12.0% → −4.0%' with the portal's typographic minus, or '—' if either
+    side is missing."""
+    if old is None or new is None:
+        return "—"
+    def f(v):
+        return f"{'+' if v >= 0 else '−'}{abs(v) * 100:.1f}%"
+    return f"{f(old)} → {f(new)}"
+
+
+def _shift_line_html(s) -> str:
+    """One material shift: the group, its flow/window context, the old→new YoY
+    arc, the pp delta, and a flip marker — the substance of what *moved*."""
+    flip = ' <span class="flip">🔄 flipped</span>' if s.direction_flipped else ""
+    pp = ""
+    if s.old_yoy is not None and s.new_yoy is not None:
+        d = (s.new_yoy - s.old_yoy) * 100
+        pp = f' <span class="muted">({"+" if d >= 0 else "−"}{abs(d):.1f}pp)</span>'
+    return (
+        f'<li><strong>{html.escape(s.group_name)}</strong> '
+        f'<span class="muted">({html.escape(_shift_flow_phrase(s.subkind))}, '
+        f'12 months to {html.escape(_fmt_window_end(s.window_end))})</span>: '
+        f'{_yoy_arc(s.old_yoy, s.new_yoy)}{pp}{flip}</li>'
+    )
+
+
+def _what_changed(wc: WhatChanged) -> str:
+    """The 'what moved since the last pack' register — the material YoY shifts
+    (change of ≥5 percentage points, direction flips), NOT a count of new
+    findings (that's bookkeeping, in Sources & coverage). Renders the full
+    section with the shift list when something moved; a slim, honest one-liner
+    when nothing did, so an empty cycle never claims an H2's weight."""
+    shifts = wc.significant or []
+    if not shifts:
+        if wc.regime == "method_bump":
+            msg = ("a methodology update re-stamped findings without changing "
+                   "any numbers — nothing editorial moved.")
+        elif wc.regime == "first_export":
+            msg = ("this is the first pack from the database — everything below "
+                   "is a baseline, not a change.")
+        else:
+            msg = ("nothing moved materially — no finding's 12-month change "
+                   "shifted by more than 5 percentage points, and nothing "
+                   "flipped direction.")
         return (f'<p class="quiet-change"><strong>Since the last pack:</strong> '
-                f'{html.escape(wc.summary)}</p>')
+                f'{html.escape(msg)}</p>')
+    flips = sum(1 for s in shifts if s.direction_flipped)
+    lead = (f"{len(shifts)} finding{'s' if len(shifts) != 1 else ''} moved "
+            "materially (12-month change shifted by more than 5 percentage "
+            "points)")
+    if flips:
+        lead += f", {flips} of them flipping direction"
+    lead += "."
+    rows = "".join(_shift_line_html(s) for s in shifts)
     return (
         '<h2 class="lead">What changed since the last pack</h2>'
         f'<p class="since"><strong>Since the last pack:</strong> '
-        f'{html.escape(wc.summary)}</p>'
-        '<p class="note">This answers <em>what changed?</em> — where each group '
-        'and partner currently stands is in <strong>State of play</strong>; the '
-        'per-type count of new findings is in <strong>Sources &amp; coverage'
-        '</strong>.</p>'
+        f'{html.escape(lead)}</p>'
+        f'<ul class="changed">{rows}</ul>'
+        '<p class="note">The findings whose year-on-year rate moved most since '
+        'the previous pack. Where each group and partner currently <em>stands</em> '
+        'is in <strong>State of play</strong>; the count of newly-added findings '
+        'is in <strong>Sources &amp; coverage</strong>.</p>'
     )
 
 
@@ -1344,6 +1389,10 @@ a:hover{border-bottom-color:var(--link)}
 .drill{font-size:13px;font-weight:700;white-space:nowrap;border-bottom:none}
 .note{font-size:13px;color:var(--muted);font-style:italic}
 .since{font-family:var(--font-body);font-size:17px;line-height:1.4}
+.changed{margin:8px 0 10px;padding-left:18px;font-variant-numeric:tabular-nums}
+.changed li{margin:4px 0;font-size:14.5px;line-height:1.4}
+.changed .muted{color:var(--muted);font-size:12.5px}
+.flip{color:var(--news);font-weight:700;font-size:12px;white-space:nowrap}
 .quiet-change{font-size:13.5px;color:var(--muted);margin:2px 0 0;line-height:1.4}
 .quiet-change strong{color:var(--ink);font-weight:600}
 .filter-bar{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding-bottom:12px;border-bottom:1px solid var(--line)}
@@ -1739,12 +1788,12 @@ def render_html(report: Report) -> str:
                     brief.append("<section>" + block + "</section>")
     if report.what_changed:
         wc = report.what_changed
-        if wc.new_count or wc.significant:   # something material to report
+        if wc.significant:                   # something actually moved → full section
             subnav.append(("brief-changed", "What's changed"))
             brief.append('<section class="brief-sec" id="brief-changed">'
                          + _what_changed(wc) + "</section>")
-        else:                                # quiet cycle → slim one-liner, no nav
-            brief.append("<section>" + _what_changed(wc, full=False) + "</section>")
+        else:                                # nothing moved → slim one-liner, no nav
+            brief.append("<section>" + _what_changed(wc) + "</section>")
     _BRIEF_NAV = {"state_of_play": "State of play", "mirror_gap": "Mirror gaps",
                   "sector_detail": "Sector detail", "gacc_bilateral": "By partner"}
     for sec in report.sections:
