@@ -377,6 +377,10 @@ _ABOUT_SITE = (
     "**Eurostat** (EU-27) and **HMRC** (UK). Each release is triggered when our "
     "scraper finds fresh data from one of these — the source and the month it "
     "covers are shown by the badge, top right.\n\n"
+    "Unless a figure is labelled **China-only**, **“China” includes Hong "
+    "Kong and Macao**: a large share of China's exports route through Hong Kong, "
+    "so the combined envelope reflects the trade flow more completely. Where a "
+    "figure is China-only it says so, and names the comparator.\n\n"
     "The analysis covers a configurable set of **Harmonised System (HS)** "
     "product categories, not all traded goods. The list is editorially "
     "maintained and can be widened — tell the team if there's a category worth "
@@ -680,8 +684,8 @@ def _sources_html(section) -> str:
         for c in cov:
             out.append(
                 f'<tr><td>{html.escape(c["source"])}</td>'
-                f'<td>{html.escape(str(c.get("start") or "—"))}</td>'
-                f'<td>{html.escape(str(c.get("end") or "—"))}</td>'
+                f'<td>{html.escape(_fmt_month(c.get("start")))}</td>'
+                f'<td>{html.escape(_fmt_month(c.get("end")))}</td>'
                 f'<td>{c.get("releases", 0):,}</td></tr>')
         out.append("</tbody></table></div>")
     # New findings this cycle, by type (moved here from 'What changed' — it's a
@@ -730,7 +734,7 @@ def _sources_html(section) -> str:
                 fetched = rel.get("fetched") or ""
                 ft = (f' <span class="note">fetched {html.escape(fetched)}</span>'
                       if fetched else "")
-                out.append(f'<li>{html.escape(rel.get("period") or "")} — '
+                out.append(f'<li>{html.escape(_fmt_month(rel.get("period")))} — '
                            f'{html.escape(title)}{link}{ft}</li>')
             out.append("</ul></div></details>")
     return "\n".join(out)
@@ -889,7 +893,8 @@ def _mirror_gap_html(section) -> str:
             excess = (f' · <span style="color:{exc_col}">{sign}{abs(ex) * 100:.1f}% '
                       f'beyond CIF/FOB baseline</span>')
         z = m.get("zscore")
-        znote = (f' · <span class="hub">last flagged unusual {html.escape(str(m.get("zscore_period") or ""))}: '
+        zp = _fmt_month(m.get("zscore_period")) if m.get("zscore_period") else ""
+        znote = (f' · <span class="hub">last flagged unusual {html.escape(zp)}: '
                  f'{z:.1f}σ</span>' if z is not None else "")
         hub = ""
         if m.get("hub") and m.get("hub_notes"):

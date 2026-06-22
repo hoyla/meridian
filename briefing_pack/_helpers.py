@@ -106,13 +106,20 @@ def _fmt_kg(v: Any) -> str:
     return f"{n:.0f} kg"
 
 
-def _fmt_month(d: date | None) -> str:
+def _fmt_month(d: "date | str | None") -> str:
     """Render a period date as "Mar 2026" — every journalist-facing
     surface uses this instead of the raw ISO date, whose day component
-    (always -01) is an artefact of period storage, not information."""
+    (always -01) is an artefact of period storage, not information.
+    Accepts a date or an ISO string (some metrics carry the anchor as an
+    `.isoformat()` string, e.g. period-coverage bounds)."""
     if d is None:
         return "—"
-    return d.strftime("%b %Y")
+    if isinstance(d, str):
+        try:
+            d = date.fromisoformat(d[:10])
+        except ValueError:
+            return d
+    return d.strftime("%b %Y") if hasattr(d, "strftime") else str(d)
 
 
 def _flow_phrase(flow: int) -> str:
