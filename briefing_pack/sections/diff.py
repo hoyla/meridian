@@ -220,13 +220,22 @@ def _fmt_window_end(window_end) -> str:
         return str(window_end)
 
 
-def _section_diff_since_last_brief(diff: _DiffData) -> _Section:
+def _section_diff_since_last_brief(
+    diff: _DiffData, disp: dict[str, str] | None = None,
+) -> _Section:
     """Render Tier 1 from a computed `_DiffData`.
 
     Three non-baseline regimes render distinctly: method-bump churn is
     suppressed down to the affected method versions; no-change states
     that explicitly; movement lists material shifts (>5pp, flips first)
-    and new-finding counts."""
+    and new-finding counts.
+
+    `disp` (db.group_display_names) supplies reader-facing group labels for the
+    shift list — kept identical to the front-page digest, which renders the
+    same shifts. `group_name` here is COALESCE(group, aggregate, partner), so
+    non-group labels pass through disp unchanged (identity). Defaults to
+    identity so pure-render unit tests can call this without a DB."""
+    disp = disp or {}
     lines: list[str] = []
     lines.append("---")
     lines.append("")
@@ -296,7 +305,8 @@ def _section_diff_since_last_brief(diff: _DiffData) -> _Section:
             # _trace_token already formats the token (backticks, or a
             # link when GACC_PERMALINK_BASE is set).
             lines.append(
-                f"- **{s['group_name']}** — {_shift_flow_phrase(s['subkind'])} "
+                f"- **{disp.get(s['group_name'], s['group_name'])}** — "
+                f"{_shift_flow_phrase(s['subkind'])} "
                 f"(`{s['subkind']}`), 12 months to "
                 f"{_fmt_window_end(s['window_end'])}: "
                 f"{s['old_yoy']*100:+.1f}% → {s['new_yoy']*100:+.1f}% "

@@ -174,3 +174,26 @@ def test_renders_without_synthetic_rows(clean_db, db_conn):
         n_active = cur.fetchone()[0]
     if n_active > 0:
         assert "## Active groups" in text
+
+
+def test_group_display_names_resolves_coalesce(db_conn):
+    """db.group_display_names returns COALESCE(display_name, name): a group
+    with a display_name maps to it; one without maps to itself. The `name`
+    key is never mutated, so findings/tests keying off it are unaffected."""
+    import db
+    with db_conn, db_conn.cursor() as cur:
+        cur.execute("DELETE FROM hs_groups WHERE id IN (999994, 999995)")
+        cur.execute(
+            "INSERT INTO hs_groups (id, name, display_name, hs_patterns, created_by) "
+            "VALUES (999994, 'RenderTest key w/ display', 'RenderTest shown name', "
+            "        ARRAY['9996%'], 'seed'), "
+            "       (999995, 'RenderTest key no display', NULL, ARRAY['9995%'], 'seed')"
+        )
+    try:
+        with db_conn, db_conn.cursor() as cur:
+            m = db.group_display_names(cur)
+        assert m["RenderTest key w/ display"] == "RenderTest shown name"
+        assert m["RenderTest key no display"] == "RenderTest key no display"
+    finally:
+        with db_conn, db_conn.cursor() as cur:
+            cur.execute("DELETE FROM hs_groups WHERE id IN (999994, 999995)")

@@ -1298,10 +1298,12 @@ def test_front_page_renders_above_tier_1(empty_findings, test_db_url):
     md = briefing_pack.render()
     assert "## If you read only this page" in md
     # The sentence form: subject link, verb by direction, value + volume,
-    # 12-month framing, unscored-stability hedge (no badge seeded).
+    # 12-month framing, unscored-stability hedge (no badge seeded). The link
+    # text + slug both use the group's reader-facing display name
+    # (db.group_display_names); the finding still snapshots the raw key.
     assert (
-        "**EU-27 imports of [EV batteries (Li-ion)]"
-        "(#ev-batteries-li-ion) from China** rose 35.0% by value in the "
+        "**EU-27 imports of [Lithium-ion accumulators (HS 850760)]"
+        "(#lithium-ion-accumulators-hs-850760) from China** rose 35.0% by value in the "
         "12 months to Feb 2026, to €27.00B; volume up 52.5%" in md
     )
     assert "verify before headlining" in md
@@ -1349,7 +1351,8 @@ def test_state_of_play_suppresses_volatile_trajectory_inline(
     # heading. The blocks are separated by `### ` lines under
     # `## Tier 2 — Current state of play`.
     tier_2 = md.split("## Tier 2 — Current state of play")[1].split("\n## ")[0]
-    ev_block = tier_2.split("### EV batteries (Li-ion)")[1].split("\n### ")[0]
+    # State-of-play headings show the reader-facing display name.
+    ev_block = tier_2.split("### Lithium-ion accumulators (HS 850760)")[1].split("\n### ")[0]
     drones_block = tier_2.split("### Drones and unmanned aircraft")[1].split("\n### ")[0]
     # Volatile suppressed inline: no Trend annotation anywhere in
     # the EV batteries block.
@@ -1397,9 +1400,9 @@ def test_leads_has_full_detail_by_hs_group_heading(empty_findings, test_db_url):
 
     leads = briefing_pack.render_leads()
     assert "## Full lead detail by HS group" in leads
-    # The heading sits above the per-group `### {group}` block.
+    # The heading sits above the per-group `### {group}` block (display name).
     full_detail_idx = leads.find("## Full lead detail by HS group")
-    group_block_idx = leads.find("### EV batteries (Li-ion)")
+    group_block_idx = leads.find("### Lithium-ion accumulators (HS 850760)")
     assert full_detail_idx < group_block_idx
 
 
@@ -1456,9 +1459,9 @@ def test_predictability_badge_appears_when_t_minus_6_pair_exists(
     assert "🟢" in md
     assert "🔴" in md
     # Anchor the assertion to the specific group lines so we know each
-    # got the right badge.
+    # got the right badge. Headings show the display name.
     ev_line = next(line for line in md.splitlines()
-                   if line.startswith("### EV batteries (Li-ion)"))
+                   if line.startswith("### Lithium-ion accumulators (HS 850760)"))
     assert "🟢" in ev_line
     re_line = next(line for line in md.splitlines()
                    if line.startswith("### Rare-earth materials"))
@@ -1491,7 +1494,7 @@ def test_predictability_badge_suppressed_below_min_pairs(
 
     md = briefing_pack.render(top_n=20)
     ev_line = next(line for line in md.splitlines()
-                   if line.startswith("### EV batteries (Li-ion)"))
+                   if line.startswith("### Lithium-ion accumulators (HS 850760)"))
     # No badge emoji should appear on the heading line.
     assert "🟢" not in ev_line
     assert "🟡" not in ev_line
@@ -1598,7 +1601,7 @@ def test_extreme_single_month_swing_carries_not_quotable_warning(
 
     md = briefing_pack.render()
     tier_2 = md.split("## Tier 2 — Current state of play")[1].split("\n## ")[0]
-    ev_block = tier_2.split("### EV batteries (Li-ion)")[1].split("\n### ")[0]
+    ev_block = tier_2.split("### Lithium-ion accumulators (HS 850760)")[1].split("\n### ")[0]
     drones_block = tier_2.split("### Drones and unmanned aircraft")[1].split("\n### ")[0]
     assert "extreme swing" in ev_block
     assert "quote the 12-month figure" in ev_block
@@ -1719,7 +1722,7 @@ def test_tier2_red_badge_group_carries_demotion_line(empty_findings, test_db_url
         md = _section_state_of_play(
             cur, predictability={"EV batteries (Li-ion)": ("🔴", 0.0, 6)},
         ).markdown
-    ev_block = md.split("### EV batteries (Li-ion)")[1].split("\n### ")[0]
+    ev_block = md.split("### Lithium-ion accumulators (HS 850760)")[1].split("\n### ")[0]
     drones_block = md.split("### Drones and unmanned aircraft")[1].split("\n### ")[0]
     assert _VOLATILE_GROUP_NOTE in ev_block
     assert _VOLATILE_GROUP_NOTE not in drones_block

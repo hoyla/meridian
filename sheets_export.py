@@ -39,6 +39,7 @@ from typing import Any, Protocol
 import psycopg2
 import psycopg2.extras
 
+import db
 from briefing_pack import (
     _ALL_UNIVERSAL_CAVEATS,
     _SCOPE_LABEL,
@@ -251,7 +252,11 @@ def _summary_sheet(
 
         sql = (
             "WITH " + ",".join(ctes) + "\n"
-            "SELECT g.name AS group_name, " + ", ".join(select_cols) +
+            # group_name = stable key (predictability / top-movers lookups);
+            # group_display = reader-facing label for the output cell.
+            "SELECT g.name AS group_name, "
+            "COALESCE(g.display_name, g.name) AS group_display, "
+            + ", ".join(select_cols) +
             ", traj_imp.shape AS traj_imp_shape, traj_exp.shape AS traj_exp_shape\n"
             "  FROM hs_groups g\n"
             + "\n".join(joins) + "\n"
@@ -276,11 +281,11 @@ def _summary_sheet(
 
     rows: list[list[Any]] = []
     for r in raw_rows:
-        gn = r["group_name"]
+        gn = r["group_name"]  # stable key for lookups below
         pred = predictability.get(gn)
         badge = pred[0] if pred else ""
         pred_pct = round(pred[1] * 100, 0) if pred else None
-        row: list[Any] = [gn, badge, pred_pct]
+        row: list[Any] = [r["group_display"], badge, pred_pct]
         for scope in SCOPES:
             for flow_short in ("imp", "exp"):
                 alias = f"{scope}_{flow_short}"
@@ -333,7 +338,9 @@ def _hs_yoy_long_sheet(
     flow_label = "imports from China" if flow == 1 else "exports to China"
     name = f"hs_yoy_{'imports' if flow == 1 else 'exports'}"
     raw_rows: list[tuple] = []
+    disp: dict[str, str] = {}
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        disp = db.group_display_names(cur)  # reader-facing labels for output
         for scope in SCOPES:
             sk = _yoy_subkind(scope, flow)
             cur.execute(
@@ -395,7 +402,8 @@ def _hs_yoy_long_sheet(
         else:
             top_score = None
         rows.append([
-            r["id"], _link_cell(r["id"]), r["group_name"], scope, r["period"].isoformat(),
+            r["id"], _link_cell(r["id"]),
+            disp.get(r["group_name"], r["group_name"]), scope, r["period"].isoformat(),
             _to_float(r["current_eur"]), _to_float(r["prior_eur"]), _to_float(r["yoy_pct"]),
             _to_float(r["current_kg"]), _to_float(r["yoy_kg_pct"]),
             _to_float(r["unit_price"]), _to_float(r["unit_price_pct"]),
@@ -438,7 +446,9 @@ def _hs_yoy_reporter_movers_sheet() -> SheetData:
     Each row carries the originating finding_id so the spreadsheet pairs
     one-to-many with the `hs_yoy_imports` / `hs_yoy_exports` tabs."""
     raw: list[tuple[str, int, dict]] = []
+    disp: dict[str, str] = {}
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        disp = db.group_display_names(cur)  # reader-facing labels for output
         for scope in SCOPES:
             for flow in (1, 2):
                 sk = _yoy_subkind(scope, flow)
@@ -471,7 +481,8 @@ def _hs_yoy_reporter_movers_sheet() -> SheetData:
         period_str = r["period"].isoformat() if r["period"] else None
         for rank, pr in enumerate(breakdown, start=1):
             rows.append([
-                r["id"], _link_cell(r["id"]), r["group_name"], scope,
+                r["id"], _link_cell(r["id"]),
+                disp.get(r["group_name"], r["group_name"]), scope,
                 "import" if flow == 1 else "export", period_str,
                 pr.get("reporter"), rank,
                 _to_float(pr.get("current_eur")),
@@ -500,7 +511,9 @@ def _hs_yoy_reporter_movers_sheet() -> SheetData:
 def _trajectories_long_sheet() -> SheetData:
     """Long format: one row per (group, scope, flow). Shape + features."""
     raw_rows: list[tuple] = []
+    disp: dict[str, str] = {}
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        disp = db.group_display_names(cur)  # reader-facing labels for output
         for scope in SCOPES:
             for flow in (1, 2):
                 sk = _trajectory_subkind(scope, flow)
@@ -534,7 +547,8 @@ def _trajectories_long_sheet() -> SheetData:
     rows = []
     for scope, flow, r in raw_rows:
         rows.append([
-            r["id"], _link_cell(r["id"]), r["group_name"], scope,
+            r["id"], _link_cell(r["id"]),
+            disp.get(r["group_name"], r["group_name"]), scope,
             "import" if flow == 1 else "export",
             r["shape"], r["shape_label"],
             _to_float(r["last_yoy"]), _to_float(r["peak"]), _to_float(r["trough"]),
@@ -847,7 +861,9 @@ def _low_base_review_sheet() -> SheetData:
     """All hs_group_yoy* findings flagged low_base. Pre-quote audit
     queue. Now includes scope so a journalist can filter by EU-27 / UK
     / combined."""
+    disp: dict[str, str] = {}
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        disp = db.group_display_names(cur)  # reader-facing labels for output
         cur.execute(
             """
             SELECT id, score, subkind,
@@ -876,7 +892,7 @@ def _low_base_review_sheet() -> SheetData:
         scope, flow = _decode_subkind(r["subkind"])
         rows.append([
             r["id"], _link_cell(r["id"]), r["subkind"], scope, flow,
-            r["group_name"], r["period"],
+            disp.get(r["group_name"], r["group_name"]), r["period"],
             _to_float(r["current_eur"]), _to_float(r["prior_eur"]),
             _to_float(r["yoy_pct"]), _to_float(r["threshold"]),
         ])
@@ -1144,6 +1160,7 @@ def _add_charts_tab(wb, *, top_n: int = DEFAULT_TOP_N) -> None:
         movers = _compute_top_movers(
             cur, predictability=predictability, limit=top_n,
         )
+        disp = db.group_display_names(cur)  # reader-facing chart labels
 
         # Start blocks at row 3 (after the description + blank row).
         block_start = 3
@@ -1158,9 +1175,10 @@ def _add_charts_tab(wb, *, top_n: int = DEFAULT_TOP_N) -> None:
             badge = f" {pred[0]}" if pred is not None else ""
 
             # Heading row
+            group_disp = disp.get(m["group_name"], m["group_name"])
             ws.cell(
                 row=block_start, column=1,
-                value=f"{m['group_name']}{badge} — {flow_label}",
+                value=f"{group_disp}{badge} — {flow_label}",
             ).font = Font(bold=True)
 
             # Column headers
@@ -1193,7 +1211,7 @@ def _add_charts_tab(wb, *, top_n: int = DEFAULT_TOP_N) -> None:
 
             # Native LineChart anchored to the right of the data.
             chart = LineChart()
-            chart.title = f"{m['group_name']} — {flow_label}"
+            chart.title = f"{group_disp} — {flow_label}"
             chart.y_axis.title = "€"
             chart.x_axis.title = "Month"
             chart.height = 10  # default unit ≈ rows of 18pt

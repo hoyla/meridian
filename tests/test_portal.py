@@ -855,6 +855,21 @@ def test_seed_labels_well_formed():
     assert "origin_risk" in kinds         # Xinjiang-style lens exists
 
 
+def test_wind_power_theme_replaces_retired_group():
+    """The retired 'Wind turbine components' group is replaced by an
+    overlapping 'Wind power' lens: the precise turbine flow plus the NdFeB
+    magnets feeding direct-drive generators — and deliberately NOT generic
+    steel/motors (the patterns that made the old group conflate)."""
+    by_name = {l.name: l for l in labels.SEED_LABELS}
+    assert "Wind power" in by_name
+    assert set(by_name["Wind power"].member_groups) == {
+        "Wind generating sets only",
+        "Sintered NdFeB magnets (CN8 85051110)",
+    }
+    # 'Wind generating sets only' belongs to exactly this lens.
+    assert labels.themes_for_group("Wind generating sets only") == ["Wind power"]
+
+
 # ---- classifications (BEC end-use mapping is pure) ----
 
 @pytest.mark.parametrize("bec4,expected", [
@@ -921,6 +936,76 @@ def test_build_report_surfaces_a_seeded_group(clean_db, test_db_url):
     r = build_report(source_trigger="eurostat")
     sd = [s for s in r.sections if s.kind == "sector_detail"]
     assert sd and any(g.title == name for g in sd[0].sections)
+
+
+def test_display_name_substituted_and_slug_is_consistent(clean_db, test_db_url):
+    """A group with a `display_name` set must (a) surface its reader-facing
+    label on a rendered surface, and (b) keep its cross-reference slug
+    consistent — the headline mover's drill-down slug, the sector-detail
+    Section's id (anchor), and the rendered HTML link must ALL be the slug of
+    the *display* name, not the stored key. This is the invariant that breaks
+    silently if a heading is renamed without its slug/links.
+
+    The finding still snapshots the stable internal key in detail.group.name;
+    only the rendered title/slug change. EV batteries (Li-ion) gets the display
+    name 'Lithium-ion accumulators (HS 850760)' in schema.sql / the 2026-06-22c
+    migration (and in the test DB)."""
+    from briefing_pack._helpers import _slugify_heading
+    from report_builder import build_report
+
+    KEY = "EV batteries (Li-ion)"
+    DISPLAY = "Lithium-ion accumulators (HS 850760)"
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT display_name FROM hs_groups WHERE name = %s", (KEY,))
+        row = cur.fetchone()
+        if row is None or row[0] != DISPLAY:
+            pytest.skip(
+                "EV batteries display_name not set in test DB "
+                "(run the 2026-06-22c migration / schema UPDATE)"
+            )
+        cur.execute("INSERT INTO scrape_runs (status, source_url) "
+                    "VALUES ('success', 'test://seed') RETURNING id")
+        run = cur.fetchone()[0]
+        # Big, clean import mover so it clears the top-movers filters
+        # (≥10pp, ≥€100M, not low-base, no 🔴) and becomes a headline item
+        # with a drill-down link into sector detail. detail.group.name keeps
+        # the RAW key — display substitution happens only at render time.
+        detail = {"group": {"name": KEY},
+                  "totals": {"yoy_pct": 0.35, "current_12mo_eur": 27e9,
+                             "prior_12mo_eur": 20e9, "low_base": False},
+                  "windows": {"current_end": "2026-04-01"}}
+        cur.execute(
+            "INSERT INTO findings (scrape_run_id, kind, subkind, detail, "
+            "natural_key_hash) VALUES (%s,'anomaly','hs_group_yoy',%s::jsonb,'nkdisp1')",
+            (run, json.dumps(detail)),
+        )
+
+    r = build_report(source_trigger="eurostat")
+
+    # (a) Rendered surface shows the display name, not the stored key.
+    sd = [s for s in r.sections if s.kind == "sector_detail"]
+    ev_section = next(g for g in sd[0].sections if g.title == DISPLAY)
+    assert not any(g.title == KEY for g in sd[0].sections)
+
+    # The headline mover for this group carries the display name in its subject.
+    ev_item = next(i for i in r.headline.items
+                   if i.subject.get("group_name") == DISPLAY)
+
+    # (b) Slug consistency: the drill-down slug == the section anchor ==
+    # the slugified DISPLAY name (NOT the stored key's slug).
+    expected_slug = _slugify_heading(DISPLAY)
+    assert expected_slug == "lithium-ion-accumulators-hs-850760"
+    assert ev_item.drill_down == expected_slug
+    assert ev_section.id == expected_slug
+    assert _slugify_heading(KEY) != expected_slug  # the rename actually moved the slug
+
+    # And the rendered HTML wires the drill-down link (href="#slug") to the
+    # sector-detail heading anchor (id="slug") — same display-derived slug on
+    # both ends, so the in-page link actually resolves.
+    html = render_html(r)
+    assert DISPLAY in html
+    assert f'id="{expected_slug}"' in html        # the target heading anchor
+    assert f'href="#{expected_slug}"' in html     # a link pointing at it
 
 
 def test_gacc_macro_item_with_null_yoy_states_level_not_direction(clean_db, test_db_url):

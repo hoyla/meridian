@@ -53,6 +53,7 @@ import psycopg2.extras
 from docx import Document
 from docx.shared import Mm, Pt
 
+import db
 from briefing_pack._helpers import (
     DEFAULT_TOP_N,
     _compute_predictability_per_group,
@@ -451,10 +452,12 @@ def _build_top_mover_charts(
     movers = _compute_top_movers(
         cur, predictability=predictability, limit=top_n,
     )
+    disp = db.group_display_names(cur)  # reader-facing chart labels
 
     charts: dict[int, list[bytes]] = {}
     for m in movers:
         current_end = m["current_end"]
+        group_disp = disp.get(m["group_name"], m["group_name"])
         flow_label = _flow_label_for_subkind(m["subkind"])
         detail = _fetch_finding_detail(cur, m["id"])
         if not detail:
@@ -484,7 +487,7 @@ def _build_top_mover_charts(
                 per_finding.append(_build_chart_png(
                     current_end=current_end,
                     monthly_eur=series,
-                    group_name=m["group_name"],
+                    group_name=group_disp,
                     flow_label=flow_label,
                 ))
 
@@ -493,7 +496,7 @@ def _build_top_mover_charts(
         if breakdown:
             bar_png = _build_per_reporter_bar_png(
                 breakdown=breakdown,
-                group_name=m["group_name"],
+                group_name=group_disp,
                 flow_label=flow_label,
             )
             if bar_png is not None:

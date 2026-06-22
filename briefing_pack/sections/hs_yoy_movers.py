@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import db
 from briefing_pack._helpers import (
     PREDICTABILITY_SHIFT_PP,
     _Section,
@@ -43,6 +44,8 @@ def _section_hs_yoy_movers(
     YoY is robust vs noise-dominated.
     """
     predictability = predictability or {}
+    # Reader-facing group labels; group_name stays the predictability lookup key.
+    disp = db.group_display_names(cur)
     scope_suffix = _SCOPE_SUBKIND_SUFFIX[comparison_scope]
     flow_suffix = "" if flow == 1 else "_export"
     subkind = f"hs_group_yoy{scope_suffix}{flow_suffix}"
@@ -101,7 +104,7 @@ def _section_hs_yoy_movers(
         if pred is not None:
             badge, _pct, _n = pred
             badge_str = f" {badge}"
-        lines.append(f"#### {r['group_name']}{badge_str}")
+        lines.append(f"#### {disp.get(r['group_name'], r['group_name'])}{badge_str}")
         # The render-time quotability verdict leads the block — the
         # plain-English instruction that applies methodology §9/§10 at
         # the point of quotation. The bullets after it are the

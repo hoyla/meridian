@@ -33,10 +33,17 @@ from briefing_pack.sections.diff import _DiffData, _fmt_window_end, _shift_flow_
 FRONT_PAGE_HEADING = "If you read only this page"
 
 
-def _mover_sentence(m: dict) -> str:
+def _mover_sentence(m: dict, disp: dict[str, str] | None = None) -> str:
     """One publishable sentence for a top mover. The hedge is graded by
-    the stability badge; 🔴 never reaches here (filtered upstream)."""
-    group = m["group_name"]
+    the stability badge; 🔴 never reaches here (filtered upstream).
+
+    `disp` maps the stable internal group key → reader-facing display name
+    (db.group_display_names). The cross-reference link text and its slug both
+    use the display name so they match the target heading's displayed text and
+    anchor. Defaults to identity (no rename) so pure-render unit tests can call
+    this without a DB."""
+    disp = disp or {}
+    group = disp.get(m["group_name"], m["group_name"])
     is_export = m["subkind"].endswith("_export")
     # The cross-reference link wraps just the group name — not the whole
     # subject — so its visible text equals the target heading's group name.
@@ -82,8 +89,15 @@ def _mover_sentence(m: dict) -> str:
     )
 
 
-def _since_last_pack_lines(diff: _DiffData) -> list[str]:
-    """The cycle-digest paragraph — one regime, one plain statement."""
+def _since_last_pack_lines(
+    diff: _DiffData, disp: dict[str, str] | None = None,
+) -> list[str]:
+    """The cycle-digest paragraph — one regime, one plain statement.
+
+    `disp` (db.group_display_names) maps the stable internal group key →
+    reader-facing display name; the highlighted group names use it. Defaults to
+    identity so pure-render unit tests can call this without a DB."""
+    disp = disp or {}
     if diff.regime == "first_export":
         return [
             "**Since the last pack:** this is the first export from this "
@@ -116,7 +130,8 @@ def _since_last_pack_lines(diff: _DiffData) -> list[str]:
         highlights = []
         for s in diff.significant[:3]:
             highlights.append(
-                f"**{s['group_name']}** ({_shift_flow_phrase(s['subkind'])}, "
+                f"**{disp.get(s['group_name'], s['group_name'])}** "
+                f"({_shift_flow_phrase(s['subkind'])}, "
                 f"12 months to {_fmt_window_end(s['window_end'])}) went from "
                 f"{s['old_yoy']*100:+.1f}% to {s['new_yoy']*100:+.1f}%"
             )
@@ -129,13 +144,19 @@ def _since_last_pack_lines(diff: _DiffData) -> list[str]:
 
 def _section_front_page(
     top_movers: list[dict], diff: _DiffData | None,
+    disp: dict[str, str] | None = None,
 ) -> _Section:
     """Render the front page. Dropped entirely on a fresh DB with
     nothing to say (no qualifying movers AND no previous export) —
-    same convention as the other gated sections."""
+    same convention as the other gated sections.
+
+    `disp` (db.group_display_names) supplies reader-facing group labels for the
+    mover sentences and the digest; defaults to identity so pure-render unit
+    tests can call this without a DB."""
     has_digest = diff is not None and diff.regime != "first_export"
     if not top_movers and not has_digest:
         return _Section(markdown="")
+    disp = disp or {}
 
     lines: list[str] = []
     lines.append(f"## {FRONT_PAGE_HEADING}")
@@ -153,10 +174,10 @@ def _section_front_page(
         )
         lines.append("")
         for i, m in enumerate(top_movers, start=1):
-            lines.append(f"{i}. {_mover_sentence(m)}")
+            lines.append(f"{i}. {_mover_sentence(m, disp)}")
         lines.append("")
     if diff is not None:
-        lines.extend(_since_last_pack_lines(diff))
+        lines.extend(_since_last_pack_lines(diff, disp))
         lines.append("")
 
     return _Section(markdown="\n".join(lines))

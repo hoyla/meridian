@@ -71,6 +71,22 @@ SEED_LABELS: list[Label] = [
         ],
     ),
     Label(
+        "Wind power",
+        "Wind-generation supply chain — the finished-turbine flow (wind-powered "
+        "generating sets) plus the NdFeB magnets critical to direct-drive "
+        "turbine generators. A lens, not a clean category: the magnet codes "
+        "overlap with EV and electronics, and wind also draws on generic "
+        "structural steel and electrical machinery that aren't wind-specific "
+        "and so aren't claimed here. Replaces the retired 'Wind turbine "
+        "components' group, whose patterns (generator parts 850300, steel "
+        "towers 730820) weren't wind-specific.",
+        "narrative",
+        member_groups=[
+            "Wind generating sets only",
+            "Sintered NdFeB magnets (CN8 85051110)",
+        ],
+    ),
+    Label(
         "Xinjiang exposure",
         "Commodities with documented Xinjiang production concentration — an "
         "origin-risk lens, not a commodity category.",

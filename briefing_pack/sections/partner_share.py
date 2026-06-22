@@ -9,6 +9,7 @@ descending so the high-China-share lines lead.
 
 from __future__ import annotations
 
+import db
 from briefing_pack._helpers import _Section, _fmt_eur, _trace_token
 
 
@@ -20,6 +21,7 @@ def _section_partner_share(cur, flow: int = 1) -> _Section:
     block per HS group with: share by value, share by tonnes, the gap, and
     a brief framing note when the qty-vs-value gap exceeds 5 pp (the
     threshold below which the gap is editorially noise-band)."""
+    disp = db.group_display_names(cur)  # reader-facing group labels
     subkind = "partner_share" if flow == 1 else "partner_share_export"
     direction_label = (
         "China's share of EU-27 extra-EU imports" if flow == 1
@@ -79,7 +81,7 @@ def _section_partner_share(cur, flow: int = 1) -> _Section:
         share_k = float(r["share_kg"]) * 100 if r["share_kg"] is not None else None
         gap = float(r["gap_pp"]) if r["gap_pp"] is not None else None
 
-        lines.append(f"#### {r['group_name']}")
+        lines.append(f"#### {disp.get(r['group_name'], r['group_name'])}")
         lines.append(
             f"- **Period (12mo ending)**: {r['current_end'].strftime('%Y-%m')}"
         )

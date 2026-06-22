@@ -53,6 +53,7 @@ from anomalies import (
     _months_back,
 )
 import classifications
+import db
 import labels
 from report_model import (
     ChartData,
@@ -402,11 +403,12 @@ def _import_level_indicator(cur) -> Indicator | None:
     )
 
 
-def _headline_item(m: dict) -> HeadlineItem:
+def _headline_item(m: dict, disp: dict[str, str]) -> HeadlineItem:
     """One restated quotable mover → a HeadlineItem (Q2)."""
     is_export = m["subkind"].endswith("_export")
     yoy = float(m["yoy_pct"])
-    group = m["group_name"]
+    group = m["group_name"]  # stable internal key (themes lookup, slug source)
+    group_disp = disp.get(group, group)  # reader-facing label
     pred = m.get("predictability")
     badge = pred[0] if pred is not None else None
     metrics = {
@@ -420,25 +422,29 @@ def _headline_item(m: dict) -> HeadlineItem:
         subject={
             "scope": "eu_27",
             "flow": "export" if is_export else "import",
-            "group_name": group,
+            "group_name": group_disp,
         },
         metrics=metrics,
         stability={"badge": badge, "hedge_phrase": None},
-        prose=_mover_sentence(m),  # v0: carries markdown — see module note
-        drill_down=_slugify_heading(group),
+        prose=_mover_sentence(m, disp),  # v0: carries markdown — see module note
+        drill_down=_slugify_heading(group_disp),
         provenance=Provenance(
             finding_ids=[m["id"]], source="eurostat",
             as_of=m.get("current_end"),
         ),
-        facets=Facets(commodity=[group], theme=labels.themes_for_group(group)),
+        facets=Facets(commodity=[group_disp],
+                      theme=labels.themes_for_group(group)),
     )
 
 
-def _what_changed(diff) -> WhatChanged:
+def _what_changed(diff, disp: dict[str, str]) -> WhatChanged:
     from briefing_pack.sections.front_page import _since_last_pack_lines
+    # `disp` maps the stable internal group key → reader-facing display name.
+    # Shift.group_name is rendered verbatim by both renderers (no slug, no
+    # lookup), so resolve the display string here at the model-build site.
     significant = [
         Shift(
-            group_name=s["group_name"],
+            group_name=disp.get(s["group_name"], s["group_name"]),
             subkind=s["subkind"],
             window_end=s.get("window_end"),
             old_yoy=s.get("old_yoy"),
@@ -449,7 +455,7 @@ def _what_changed(diff) -> WhatChanged:
     ]
     # The digest prose is authored once (editorial substance); strip the
     # leading markdown label so the field is closer to plain content.
-    summary = " ".join(_since_last_pack_lines(diff)).replace(
+    summary = " ".join(_since_last_pack_lines(diff, disp)).replace(
         "**Since the last pack:** ", ""
     )
     return WhatChanged(
@@ -504,6 +510,11 @@ def _sector_detail_section(cur, predictability: dict | None = None) -> Section:
     _g = cur.fetchall()
     patterns_by_name = {n: (p or []) for n, p, d in _g}
     desc_by_name = {n: d for n, p, d in _g}
+    # Reader-facing group labels. `name` stays the lookup key for every dict
+    # above (patterns_by_name, desc_by_name, share_by_name, traj_by_name,
+    # by_group, predictability…); disp is used only for displayed titles and
+    # the slug/commodity-facet that anchor cross-references.
+    disp = db.group_display_names(cur)
     # Latest China-share-of-EU-imports per group (partner_share).
     cur.execute(
         """SELECT DISTINCT ON (detail->'group'->>'name')
@@ -572,13 +583,14 @@ def _sector_detail_section(cur, predictability: dict | None = None) -> Section:
         )
         for fid, subkind, detail in cur.fetchall():
             grp = ((detail or {}).get("group") or {}).get("name") or "Unknown"
+            grp_disp = disp.get(grp, grp)  # reader-facing label; grp = key
             tot = (detail or {}).get("totals", {})
             sm = tot.get("single_month") or {}
             is_export = subkind.endswith("_export")
             finding = Finding(
                 finding_id=fid, subkind=subkind,
                 title=(f"{scope_label} {'exports' if is_export else 'imports'} "
-                       f"of {grp} {'to' if is_export else 'from'} China"),
+                       f"of {grp_disp} {'to' if is_export else 'from'} China"),
                 metrics={
                     "scope": scope_label,
                     "flow": "export" if is_export else "import",
@@ -598,7 +610,7 @@ def _sector_detail_section(cur, predictability: dict | None = None) -> Section:
                     finding_ids=[fid], source=src, as_of=sa,
                     caveat="low base" if tot.get("low_base") else None,
                 ),
-                facets=Facets(commodity=[grp]),
+                facets=Facets(commodity=[grp_disp]),
             )
             g = by_group.setdefault(grp, {"max_eur": 0.0, "findings": []})
             g["findings"].append(finding)
@@ -655,10 +667,11 @@ def _sector_detail_section(cur, predictability: dict | None = None) -> Section:
         sec_code, sec_title = _primary_section(sectors)
         metrics["section"] = {"code": sec_code, "title": sec_title}
         value = g.get("import_eur", g["max_eur"]) or 0.0
+        name_disp = disp.get(name, name)  # reader-facing title/slug; name = key
         built.append((value, sec_code, Section(
-            id=_slugify_heading(name), title=name, kind="sector_detail",
+            id=_slugify_heading(name_disp), title=name_disp, kind="sector_detail",
             findings=fs, metrics=metrics, intro=desc_by_name.get(name),
-            facets=Facets(commodity=[name], sector=sectors, theme=themes,
+            facets=Facets(commodity=[name_disp], sector=sectors, theme=themes,
                           end_use=end_use),
         )))
     # Group by SITC section: sections ordered by their groups' combined 12-month
@@ -982,6 +995,10 @@ def _structural_section(cur, anchor: date | None) -> Section:
     for name, pp in cur.fetchall():
         for d in classifications.sitc_divisions_for_patterns(pp or []):
             gdiv[d].append(name)
+    # Reader-facing labels. The per-division group list below both displays the
+    # name and links it to the sector-detail heading, so name + slug use disp
+    # (keeping them consistent with that heading's title + anchor).
+    disp = db.group_display_names(cur)
 
     # Real divisions by value desc; the unclassified remainder always last.
     order = sorted((d for d in dval if d != _UNCLASSIFIED), key=lambda x: -dval[x])
@@ -1000,7 +1017,8 @@ def _structural_section(cur, anchor: date | None) -> Section:
                 "covered_share": dcov[d] / dval[d] if dval[d] else 0.0,
                 "value_eur": dval[d],
                 "code_count": dn[d],
-                "groups": [{"name": g, "slug": _slugify_heading(g)}
+                "groups": [{"name": disp.get(g, g),
+                            "slug": _slugify_heading(disp.get(g, g))}
                            for g in sorted(set(gdiv.get(d, [])))],
             },
             provenance=Provenance(source="eurostat", as_of=anchor),
@@ -1439,6 +1457,9 @@ def build_report(
         predictability = _compute_predictability_per_group(cur)
         top_movers = _compute_top_movers(cur, predictability=predictability)
         diff = _compute_diff(cur, baseline_brief_run_id=diff_baseline_brief_run_id)
+        # Reader-facing group labels (db.group_display_names) — substituted at
+        # every display/slug site; the stable internal key stays for lookups.
+        disp = db.group_display_names(cur)
         # Key indicators (vital signs) — a small fixed set, each carrying its
         # figure + citation + as-of (the glyph never travels without its number).
         # EU-27 deficit/day, the EU import level, the UK deficit/day. (China's
@@ -1472,7 +1493,7 @@ def build_report(
         else:  # eurostat / hmrc: HS-sector movers + the EU-27 sector tree
             if data_period is None and top_movers:
                 data_period = top_movers[0].get("current_end")
-            items = [_headline_item(m) for m in top_movers]
+            items = [_headline_item(m, disp) for m in top_movers]
             if generate_takes:
                 # Per-mover LLM take (leading questions), verify-or-reject; a
                 # failed/rejected take leaves a placeholder, never blocks.
@@ -1528,7 +1549,7 @@ def build_report(
         meta=meta,
         key_indicators=indicators,
         headline=headline,
-        what_changed=_what_changed(diff),
+        what_changed=_what_changed(diff, disp),
         sections=sections,  # the navigable content tree (Eurostat variant)
     )
     # Across-release 'general' take — "One other thing worth a look". It selects

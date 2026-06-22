@@ -232,7 +232,8 @@ CREATE INDEX idx_obs_hs ON observations (hs_code) WHERE hs_code IS NOT NULL;
 -- for plug-in hybrid passenger cars.
 CREATE TABLE hs_groups (
     id              BIGSERIAL PRIMARY KEY,
-    name            TEXT        NOT NULL UNIQUE,
+    name            TEXT        NOT NULL UNIQUE,  -- stable internal key: findings snapshot it into detail.group.name; analysers + tests key off it. Don't rename in place without superseding affected findings.
+    display_name    TEXT,                         -- journalist-editable reader-facing label; NULL → use name. Resolved COALESCE(display_name, name) at render time (db.group_display_names) so the display can change without touching the key.
     description     TEXT,
     hs_patterns     TEXT[]      NOT NULL,
     created_by      TEXT,
@@ -461,9 +462,12 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
   ('Solar/grid inverters (broad)',
    'Static converters HS 850440 — includes solar inverters but also non-solar grid inverters and other DC-DC converters. Broad bucket; refine to specific CN8 codes (e.g. 85044020) if a tighter solar-only signal is needed.',
    ARRAY['850440%'], 'seed'),
-  ('Wind turbine components',
-   'Wind-powered generating sets (850231), parts for generators/motors (850300), iron/steel towers and lattice masts (730820). Wind-component coverage is necessarily approximate — components spread across many HS chapters.',
-   ARRAY['850231%', '850300%', '730820%'], 'seed'),
+  -- NB "Wind turbine components" was retired 2026-06-22 (material-vs-application
+  -- audit): two of its three patterns (850300 generator parts, 730820 steel
+  -- towers) weren't wind-specific, so it conflated wind with general
+  -- electrical/steel trade. The precise "Wind generating sets only" (850231)
+  -- below survives; the "Wind power" theme in labels.py gathers wind-relevant
+  -- groups as an overlapping lens. See migrations/2026-06-22b-display-name-col-and-retire-wind.sql.
   ('Rare-earth materials',
    'Rare-earth metals (280530), cerium compounds (284610), other rare-earth compounds (284690).',
    ARRAY['280530%', '284610%', '284690%'], 'seed'),
@@ -505,7 +509,7 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
   -- so 'is China selling more turbines' can be answered without confusion
   -- with 'is China selling more wind-related metalwork'.
   ('Wind generating sets only',
-   'HS 850231 — wind-powered electric generating sets. Narrower than "Wind turbine components"; isolates the finished-turbine question from generator parts and steel towers.',
+   'HS 850231 — wind-powered electric generating sets: the finished-turbine flow, cleanly isolated from generator parts and steel towers. (Supersedes the retired broad "Wind turbine components" group, whose 850300/730820 patterns weren''t wind-specific; the "Wind power" theme in labels.py now gathers wind-relevant groups as a lens.)',
    ARRAY['850231%'], 'seed:tan_article'),
   -- Added after the Soapbox validation pass (dev_notes/2026-05-11-soapbox-validation.md).
   -- Soapbox routinely cites pork meat and pork offal separately — both as
@@ -618,6 +622,13 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
   ('Electric motors & generators (HS 8501, broad)',
    'HS 8501 — electric motors and generators (excluding generating sets). BROAD chapter: spans sub-watt motors, large industrial machines and alternators alike, so it is NOT an EV-traction-motor signal on its own. EV drive motors concentrate in the higher-power multiphase AC codes — chiefly CN8 85015350-85015399 (AC motors > 75 kW) — refine to those if a tighter EV signal is needed. Added for Lisa''s Jun 2026 question on the post-tariff pivot toward critical EV components: traction motors are the principal EV part captured by neither "Motor-vehicle parts" (HS 8708, which excludes motors and batteries) nor "EV batteries (Li-ion)" (HS 850760).',
    ARRAY['8501%'], 'seed:lisa_sector_q_2026_06');
+
+-- Reader-facing display name for the EV-battery group. `name` stays the stable
+-- internal key (findings snapshot it into detail.group.name; analysers + tests
+-- key off it); display_name is what readers see, resolved COALESCE at render
+-- time (db.group_display_names). Idempotent; safe to re-run. Companion:
+-- migrations/2026-06-22c-ev-batteries-display-name.sql.
+UPDATE hs_groups SET display_name = 'Lithium-ion accumulators (HS 850760)' WHERE name = 'EV batteries (Li-ion)';
 
 -- Caveats journalists should weigh when reading cross-source findings.
 INSERT INTO caveats (code, summary, detail, applies_to) VALUES
