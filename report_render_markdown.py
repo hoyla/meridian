@@ -248,6 +248,43 @@ def _bilateral_balance_line_md(p) -> str:
     return line
 
 
+def _partner_charts_md(charts: list[dict]) -> list[str]:
+    """Compact annual-by-region tables for the LLM corpus — the numbers behind
+    the portal's HTML-only multi-line charts (SVG doesn't travel into the `.md`
+    that the model ingests). One small table per metric (exports / imports /
+    balance), regions × the latest ~3 years (including the partial current
+    year), so the figures are in the text without reproducing the full history.
+    The partial year's header is flagged 'YTD'."""
+    if not charts:
+        return []
+    out: list[str] = ["**Annual trade by region (China, EUR)**", ""]
+    for ch in charts:
+        years = ch.get("years") or []
+        if not years:
+            continue
+        recent = years[-3:]                       # latest ~3 incl. the partial
+        partial = ch.get("partial_last_year")
+        hdr = [f"{y} YTD" if y == partial else str(y) for y in recent]
+        out.append(f"_{ch.get('title', ch.get('metric', ''))}_")
+        out.append("")
+        out.append("| Region | " + " | ".join(hdr) + " |")
+        out.append("|" + "---|" * (len(recent) + 1))
+        idx = [years.index(y) for y in recent]
+        for s in ch.get("series") or []:
+            vals = s.get("values") or []
+            cells = []
+            for i in idx:
+                v = vals[i] if i < len(vals) else None
+                cells.append(_fmt_eur(v) if v is not None else "—")
+            out.append(f"| {s.get('name', '')} | " + " | ".join(cells) + " |")
+        out.append("")
+    if any(ch.get("partial_last_year") for ch in charts):
+        out.append("_YTD = year-to-date (the current year is incomplete — not a "
+                   "full-year figure)._")
+        out.append("")
+    return out
+
+
 def _deficit_line_md(f) -> str:
     m = f.metrics
     per_day = m.get("per_day_eur")
@@ -357,6 +394,8 @@ def _render_sections(sections) -> list[str]:
             if sec.intro:
                 out.append(f"*{sec.intro} {len(sec.sections)} partners.*")
                 out.append("")
+            out.extend(_partner_charts_md(
+                (sec.metrics or {}).get("partner_charts") or []))
             for p in sec.sections:
                 out.append(f"### {p.title}")
                 out.append("")

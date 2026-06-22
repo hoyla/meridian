@@ -47,6 +47,7 @@ from briefing_pack._helpers import (
 )
 from briefing_pack.sections.diff import _compute_diff
 from briefing_pack.sections.front_page import _mover_sentence
+import anomalies
 from anomalies import (
     EU27_EXCLUDE_REPORTERS,
     EUROSTAT_PARTNERS,
@@ -1261,6 +1262,137 @@ def _partner_balance(flows: dict) -> dict:
     return out
 
 
+# The six regions plotted on the per-partner annual charts, in plot order, and
+# the Guardian-ish line palette (one colour per region, index-aligned). The US
+# is one logical line but two GACC labels over time — "United States" (2019) and
+# "United States (US)" (2020-03 on) — so its entry carries BOTH labels to union.
+_PARTNER_CHART_REGIONS: list[tuple[str, list[str]]] = [
+    ("ASEAN", ["ASEAN"]),
+    ("European Union", ["European Union"]),
+    ("United States", ["United States", "United States (US)"]),
+    ("Africa", ["Africa"]),
+    ("Latin America", ["Latin America"]),
+    ("Russian Federation", ["Russian Federation"]),
+]
+_PARTNER_CHART_COLORS = [
+    "#052962", "#c70000", "#22874d", "#0077b6", "#b08800", "#7d4cdb",
+]
+
+
+def _gacc_annual_by_region(labels: list[str], flow: str) -> dict[int, float]:
+    """{year: annual_eur} for one region (one logical line) and one flow,
+    from GACC's *year-to-date cumulative* observations.
+
+    Each GACC release carries the running total of the calendar year so far,
+    so the LATEST period within a year is that year's annual EUR — December for
+    a complete year, the latest published month for the current (partial) one.
+    `labels` is usually one GACC partner label; the US passes two (the label
+    changed in 2020) and we union them — the year ranges don't overlap, but if
+    they ever did we keep the value from the later period (a fuller cumulative).
+
+    Reuses anomalies._gacc_aggregate_per_period_totals (canonical CNY releases,
+    EUR conversion via parse_unit_scale + lookup_fx) — no currency logic here.
+    That helper opens its own connection per call; a handful of calls per
+    snapshot build is acceptable."""
+    # year -> (latest_period_seen, eur_at_that_period)
+    best: dict[int, tuple[date, float]] = {}
+    for label in labels:
+        for period, eur, _ids in anomalies._gacc_aggregate_per_period_totals(
+            label, flow=flow, period_kind="ytd",
+        ):
+            yr = period.year
+            cur_best = best.get(yr)
+            if cur_best is None or period > cur_best[0]:
+                best[yr] = (period, eur)
+    return {yr: eur for yr, (_p, eur) in best.items()}
+
+
+def _gacc_annual_latest_period_by_year(labels: list[str], flow: str) -> dict[int, date]:
+    """{year: latest_period} companion to `_gacc_annual_by_region` — the period
+    each year's annual figure was taken at, so the caller can tell which year is
+    partial (latest period not December)."""
+    out: dict[int, date] = {}
+    for label in labels:
+        for period, _eur, _ids in anomalies._gacc_aggregate_per_period_totals(
+            label, flow=flow, period_kind="ytd",
+        ):
+            cur_best = out.get(period.year)
+            if cur_best is None or period > cur_best:
+                out[period.year] = period
+    return out
+
+
+def _gacc_partner_charts() -> list[dict]:
+    """Three multi-line annual charts — China's exports, imports and balance per
+    region (one line per region) — as plain JSON-serialisable dicts attached to
+    the gacc_bilateral root Section's `metrics` (so they travel in the portal
+    snapshot). Annual EUR per region per flow comes from GACC's YTD-cumulative
+    observations (latest period in each calendar year = that year's total).
+
+    Balance = annual_exports − annual_imports per year (only where both exist;
+    it can be negative — a deficit). `partial_last_year` flags the latest year
+    whose latest period isn't December, so the renderer can mark it as not a
+    full year (and a reader can't misread a partial year as a real drop)."""
+    # Per region: {flow: {year: eur}} plus the latest period per year (to detect
+    # the partial year — same across flows in practice, but we union to be safe).
+    exports: dict[str, dict[int, float]] = {}
+    imports: dict[str, dict[int, float]] = {}
+    latest_period_by_year: dict[int, date] = {}
+    for name, lbls in _PARTNER_CHART_REGIONS:
+        exports[name] = _gacc_annual_by_region(lbls, "export")
+        imports[name] = _gacc_annual_by_region(lbls, "import")
+        for src in (
+            _gacc_annual_latest_period_by_year(lbls, "export"),
+            _gacc_annual_latest_period_by_year(lbls, "import"),
+        ):
+            for yr, p in src.items():
+                cur_best = latest_period_by_year.get(yr)
+                if cur_best is None or p > cur_best:
+                    latest_period_by_year[yr] = p
+
+    years = sorted(latest_period_by_year)
+    if not years:
+        return []
+    # The latest year whose latest period isn't December is partial. (Earlier
+    # years missing December would be data gaps, not the live partial year; the
+    # live partial is by definition the most recent.)
+    partial_last_year = None
+    for yr in reversed(years):
+        if latest_period_by_year[yr].month != 12:
+            partial_last_year = yr
+            break
+
+    def _series(per_region: dict[str, dict[int, float]]) -> list[dict]:
+        return [
+            {"name": name,
+             "values": [per_region[name].get(yr) for yr in years]}
+            for name, _lbls in _PARTNER_CHART_REGIONS
+        ]
+
+    balance: dict[str, dict[int, float]] = {}
+    for name, _lbls in _PARTNER_CHART_REGIONS:
+        exp_y, imp_y = exports[name], imports[name]
+        balance[name] = {
+            yr: exp_y[yr] - imp_y[yr]
+            for yr in years if yr in exp_y and yr in imp_y
+        }
+
+    return [
+        {"metric": "exports",
+         "title": "China’s exports by region (annual)",
+         "years": years, "partial_last_year": partial_last_year,
+         "series": _series(exports), "colors": _PARTNER_CHART_COLORS},
+        {"metric": "imports",
+         "title": "China’s imports by region (annual)",
+         "years": years, "partial_last_year": partial_last_year,
+         "series": _series(imports), "colors": _PARTNER_CHART_COLORS},
+        {"metric": "balance",
+         "title": "China’s balance by region (annual, exports − imports)",
+         "years": years, "partial_last_year": partial_last_year,
+         "series": _series(balance), "colors": _PARTNER_CHART_COLORS},
+    ]
+
+
 def _gacc_bilateral_section(cur, period) -> Section:
     """The GACC variant's deeper layer: China's own reported trade with each
     of its ~24 named partner countries (both flows), under the bloc-level
@@ -1274,6 +1406,12 @@ def _gacc_bilateral_section(cur, period) -> Section:
     )
     if period is None:
         return root
+    # Three annual per-region trend charts (exports / imports / balance), carried
+    # as plain dicts on the root section's metrics so they JSON-serialise into the
+    # portal snapshot and render at the top of this section.
+    charts = _gacc_partner_charts()
+    if charts:
+        root.metrics["partner_charts"] = charts
     cur.execute(
         """SELECT id, subkind, detail FROM findings WHERE superseded_at IS NULL
             AND subkind IN ('gacc_bilateral_aggregate_yoy',

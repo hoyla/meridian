@@ -247,6 +247,147 @@ def _line_chart_svg(chart_data, *, split_last: int = 12) -> str:
             'aria-label="monthly trajectory">' + "".join(body) + "</svg>")
 
 
+def _signed_y_axis(lo: float, hi: float) -> str:
+    """3 horizontal gridlines (top/mid/bottom) with €-labels — like `_y_axis`
+    but spanning a [lo, hi] that may straddle zero (the balance chart's
+    deficits). The visible zero *baseline* is drawn separately by the caller so
+    it reads as a reference line, not just one more gridline."""
+    x0, x1 = _GL, _CW - _PR
+    y0, y1 = _PT, _CH - _GB
+    out = []
+    for frac, val in ((0.0, hi), (0.5, (hi + lo) / 2), (1.0, lo)):
+        yy = y0 + frac * (y1 - y0)
+        out.append(f'<line x1="{x0}" y1="{yy:.1f}" x2="{x1}" y2="{yy:.1f}" '
+                   f'stroke="{_LINE}" stroke-width="1"/>')
+        out.append(f'<text x="{x0 - 4}" y="{yy + 3:.1f}" text-anchor="end" '
+                   f'class="ct">{html.escape(_fmt_eur(val))}</text>')
+    return "".join(out)
+
+
+def _multiline_chart_svg(chart: dict) -> str:
+    """Inline-SVG multi-line chart — one solid-colour polyline per region, a
+    shared y-scale across all series, x-axis of years, and an inline legend
+    (swatch + name). Mirrors `_line_chart_svg`'s geometry/axes; differs in that
+    every series is one flat colour (no current-12mo red/grey split) and the
+    scale is shared so the regions compare honestly.
+
+    `chart` is the plain dict built in report_builder: {metric, title, years,
+    partial_last_year, series:[{name, values:[float|None]}], colors:[hex]}.
+
+    - exports / imports are zero-based positive (honest magnitudes).
+    - balance carries negatives (deficits) → a SIGNED scale with a visible zero
+      baseline line, so a deficit reads as below the line, not as a small bar.
+    - The partial last year (latest period not December) is drawn with a dashed
+      final segment and a "(YYYY YTD)" x-label, so it can't be misread as a real
+      full-year fall."""
+    years = chart.get("years") or []
+    series = chart.get("series") or []
+    colors = chart.get("colors") or []
+    if len(years) < 2 or not series:
+        return ""
+    metric = chart.get("metric")
+    signed = metric == "balance"
+    partial = chart.get("partial_last_year")
+
+    flat = [v for s in series for v in (s.get("values") or []) if v is not None]
+    if not flat:
+        return ""
+    vmax = max(flat)
+    if signed:
+        vmin = min(flat)
+        lo = min(0.0, vmin)
+        hi = max(0.0, vmax)
+        if lo == hi:                       # all-zero series — give it room
+            lo, hi = -1.0, 1.0
+    else:
+        lo = 0.0
+        hi = vmax if vmax > 0 else 1.0
+    span = (hi - lo) or 1.0
+
+    n = len(years)
+    x0, x1, y0, y1 = _GL, _CW - _PR, _PT, _CH - _GB
+    def x(i): return x0 + i * (x1 - x0) / (n - 1)
+    def y(v): return y0 + (1 - (v - lo) / span) * (y1 - y0)
+
+    body = [_signed_y_axis(lo, hi) if signed else _y_axis(lo, hi, zero_based=True)]
+    # Vertical gridlines at every year (the span is short — ~7 years — so one
+    # tick per year is legible without crowding).
+    body.append("".join(
+        f'<line x1="{x(i):.1f}" y1="{y0}" x2="{x(i):.1f}" y2="{y1}" '
+        f'stroke="{_LINE}" stroke-width="1"/>' for i in range(n)))
+    # Visible zero baseline for the signed (balance) chart, drawn over the
+    # gridlines so the surplus/deficit boundary is unmistakable.
+    if signed and lo < 0 < hi:
+        yz = y(0.0)
+        body.append(f'<line x1="{x0}" y1="{yz:.1f}" x2="{x1}" y2="{yz:.1f}" '
+                    f'stroke="{_MUTED}" stroke-width="1.2"/>')
+
+    partial_idx = years.index(partial) if partial in years else None
+    for si, s in enumerate(series):
+        vals = s.get("values") or []
+        color = colors[si % len(colors)] if colors else _GUARDIAN_BLUE
+        # One polyline per region (a region missing a year just omits that point,
+        # so the line bridges the gap — acceptable on a sparse annual series).
+        pts = [(i, v) for i, v in enumerate(vals) if v is not None]
+        if not pts:
+            continue
+        # Solid polyline up to the last full-year point; the final segment into
+        # the partial year is overdrawn as a dashed line so a YTD value can't be
+        # misread as a real full-year fall.
+        solid_end = len(pts)
+        dashed_seg = None
+        if (partial_idx is not None and len(pts) >= 2
+                and pts[-1][0] == partial_idx):
+            solid_end = len(pts) - 1            # polyline stops at the prior year
+            dashed_seg = (pts[-2], pts[-1])
+        seg = " ".join(f"{x(i):.1f},{y(v):.1f}" for i, v in pts[:solid_end])
+        if seg:
+            body.append(f'<polyline fill="none" stroke="{color}" '
+                        f'stroke-width="2" points="{seg}"/>')
+        if dashed_seg is not None:
+            (i0, v0), (i1, v1) = dashed_seg
+            body.append(
+                f'<line x1="{x(i0):.1f}" y1="{y(v0):.1f}" '
+                f'x2="{x(i1):.1f}" y2="{y(v1):.1f}" fill="none" '
+                f'stroke="{color}" stroke-width="2" stroke-dasharray="4 3"/>')
+        # A single-point region (only the partial year, no prior) still needs a
+        # mark so its legend colour is anchored on the plot.
+        if len(pts) == 1:
+            i0, v0 = pts[0]
+            body.append(f'<circle cx="{x(i0):.1f}" cy="{y(v0):.1f}" r="2.2" '
+                        f'fill="{color}"/>')
+
+    for i in range(n):
+        anchor = "start" if i == 0 else ("end" if i == n - 1 else "middle")
+        lbl = str(years[i])  # uniform years; the YTD/dashed note lives in the key
+        body.append(f'<text x="{x(i):.1f}" y="{_CH - 6}" text-anchor="{anchor}" '
+                    f'class="ct">{html.escape(lbl)}</text>')
+
+    svg = (f'<svg class="chart" viewBox="0 0 {_CW} {_CH}" width="100%" '
+           'preserveAspectRatio="xMidYMid meet" role="img" '
+           f'aria-label="{html.escape(str(chart.get("title", "annual by region")))}">'
+           + "".join(body) + "</svg>")
+    return svg
+
+
+def _multiline_legend_html(chart: dict) -> str:
+    """The region key for a multi-line chart — a colour swatch + name per region
+    — for the chart card's LEFT meta column, under the headline (so the plot
+    keeps its full width and height instead of losing a row to a bottom legend).
+    A trailing note explains the dashed partial-year segment."""
+    series = chart.get("series") or []
+    colors = chart.get("colors") or []
+    chips = "".join(
+        f'<span class="ml-key"><span class="ml-sw" '
+        f'style="background:{colors[si % len(colors)] if colors else _GUARDIAN_BLUE}">'
+        f'</span>{html.escape(str(s.get("name", "")))}</span>'
+        for si, s in enumerate(series))
+    partial = chart.get("partial_last_year")
+    note = (f'<span class="ml-ytd">┄ {partial} = year-to-date</span>'
+            if partial else "")
+    return chips + note
+
+
 def _bar_chart_svg(bars: list[dict]) -> str:
     """Inline-SVG vertical bar chart for relative-scale comparisons (e.g. imports
     vs exports) — what a single line can't show. **Zero-based** y-axis so bar
@@ -953,6 +1094,15 @@ def _gacc_bilateral_html(section) -> str:
                    f'{len(section.sections)} partners, biggest first — '
                    "click a partner to expand.</p>")
     out.append(_more_about(section))
+    # Three annual per-region trend charts (exports / imports / balance) above
+    # the per-partner expanders — the macro shape before the country detail.
+    charts = (getattr(section, "metrics", None) or {}).get("partner_charts") or []
+    cards = [_chart_card(c.get("title", ""), "", _multiline_legend_html(c),
+                         _multiline_chart_svg(c))
+             for c in charts]
+    cards = [c for c in cards if c]
+    if cards:
+        out.append('<div class="chart-row chart-row-1">' + "".join(cards) + "</div>")
     for p in section.sections:
         # Collapsed summary headline: China's exports (the primary read), else
         # whatever the first finding is — so the button is useful before opening.
@@ -1541,6 +1691,22 @@ details.partner[open]>summary{border-bottom:1px solid var(--line)}
 .chart-row{display:grid;grid-template-columns:1fr;gap:10px;margin:10px 0}
 .chart-row .chartcard{margin:0}
 @media(min-width:720px){.chart-row{grid-template-columns:1fr 1fr}}
+/* The annual per-region charts stay one-up (full width): each carries a 6-item
+   legend, so two side-by-side would crowd. */
+@media(min-width:720px){.chart-row-1{grid-template-columns:1fr}}
+/* Region key for a multi-line chart — a colour swatch (a short bar matching the
+   line stroke) + name. Rendered in the card's left meta column, under the
+   headline, by _multiline_legend_html. */
+.ml-key{white-space:nowrap}
+.ml-sw{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:4px;border-radius:1px}
+/* Multi-line regional charts: the key sits in the LEFT meta column under the
+   headline (not a bottom row), and that column is narrow — the title may run to
+   2–3 decks — so the plot reclaims both width and height. */
+.chart-row-1 .chartcard{align-items:flex-start}
+.chart-row-1 .cc-meta{flex:0 1 132px;min-width:112px}
+.chart-row-1 .cc-legend{display:flex;flex-direction:column;gap:3px;margin-top:8px}
+.chart-row-1 .cc-legend .ml-key{display:flex;align-items:center;white-space:normal}
+.ml-ytd{display:block;margin-top:6px;font-style:italic;opacity:.8}
 .flow-sm{font-size:12px;color:var(--muted);white-space:nowrap;flex:0 0 auto}
 /* donut indicator */
 .kpi-donut{align-items:center;text-align:center}
@@ -1818,7 +1984,11 @@ def render_html(report: Report) -> str:
             inner = _sector_section(sec)
         elif sec.kind == "mirror_gap" and sec.findings:
             inner = _mirror_gap_html(sec)
-        elif sec.kind == "gacc_bilateral" and sec.sections:
+        elif sec.kind == "gacc_bilateral" and (
+                sec.sections or (sec.metrics or {}).get("partner_charts")):
+            # Render when there are per-partner subsections OR the annual
+            # per-region charts — the charts live on the root and shouldn't be
+            # suppressed just because the per-country findings are absent.
             inner = _gacc_bilateral_html(sec)
         # 'structural' (the Trade Map) is NOT here — it moved to the Sources &
         # coverage tab below.
