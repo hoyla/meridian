@@ -153,6 +153,23 @@ def _sector_flow_line(f) -> str:
     return f"- {label}: **{val}**{sm_str}{lb}{cav}{cite}"
 
 
+def _bilateral_ctx_line_md(f) -> str:
+    """Nested sub-bullet under a partner flow line: YTD and latest-month value —
+    the registers the 12-month headline drops. Empty when absent."""
+    m = f.metrics
+    bits: list[str] = []
+    yp, ye, ym = m.get("ytd_pct"), m.get("ytd_eur"), m.get("ytd_months")
+    if ye is not None:
+        mo = f" ({ym}-mo)" if ym else ""
+        pct = (f"{'+' if float(yp) >= 0 else '−'}{abs(float(yp)) * 100:.1f}% · "
+               if yp is not None else "")
+        bits.append(f"YTD{mo}: {pct}{_fmt_eur(ye)}")
+    se = m.get("sm_eur")
+    if se is not None:
+        bits.append(f"latest month: {_fmt_eur(se)}")
+    return f"  - _{' · '.join(bits)}_" if bits else ""
+
+
 def _deficit_line_md(f) -> str:
     m = f.metrics
     per_day = m.get("per_day_eur")
@@ -262,8 +279,23 @@ def _render_sections(sections) -> list[str]:
             for p in sec.sections:
                 out.append(f"### {p.title}")
                 out.append("")
+                win = next((f.metrics.get("window_label") for f in p.findings
+                            if f.metrics.get("window_label")), None)
+                if win:
+                    out.append(f"*{win}*")
+                    out.append("")
                 for f in p.findings:
                     out.append(_sector_flow_line(f))
+                    ctx = _bilateral_ctx_line_md(f)
+                    if ctx:
+                        out.append(ctx)
+                notes: list[str] = []
+                for f in p.findings:
+                    nt = f.metrics.get("note")
+                    if nt and nt not in notes:
+                        notes.append(nt)
+                for nt in notes:
+                    out.append(f"- _⚠ {nt}_")
                 out.append("")
         elif sec.kind == "mirror_gap":
             out.append("## Mirror-trade gaps")

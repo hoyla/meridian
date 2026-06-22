@@ -192,7 +192,12 @@ def _sample_report() -> rm.Report:
                 finding_id=10, subkind="gacc_bilateral_aggregate_yoy",
                 title="China exports to US",
                 metrics={"scope": "China", "flow": "export", "yoy_pct": -0.297,
-                         "current_eur": 4.6e11},
+                         "current_eur": 4.6e11, "sm_yoy_pct": 0.162,
+                         "sm_eur": 7.3e9, "ytd_pct": 0.125, "ytd_eur": 3.32e10,
+                         "ytd_months": 5, "window_label": "12 months to May 2026",
+                         "note": ("Incomplete window — missing January 2026 from "
+                                  "the current 12-month window"),
+                         "caveats": ["partial_window"]},
                 provenance=rm.Provenance(finding_ids=[10], source="gacc"))])])
     meta = rm.ReportMeta(data_period=date(2026, 4, 1), variant="eurostat",
                          snapshot_id="t", generated_at=datetime(2026, 6, 20, 12, 0))
@@ -456,6 +461,25 @@ def test_gacc_bilateral_per_partner_expanders():
     assert "China's exports" in h and "€460.00B" in h   # headline in the summary
     md = render_markdown(_sample_report())               # LLM surface keeps it flat
     assert "## China's trade by partner (GACC)" in md
+
+
+def test_gacc_bilateral_expanded_panel_restores_ytd_window_and_caveat_prose():
+    """The expanded partner panel carries the richer registers the 12-month
+    headline drops: window orientation (once), a YTD + latest-month-value
+    sub-line per flow, the latest-month register on the row, and one plain-prose
+    incomplete-window note (not just the cryptic chip). Parity in markdown."""
+    h = render_html(_sample_report())
+    assert "12 months to May 2026" in h            # window orientation, once
+    assert "latest mo +16%" in h                    # latest-month register on row
+    assert "YTD (5-mo): +12.5% · €33.20B" in h      # YTD sub-line
+    assert "latest month: €7.30B" in h              # latest-month value
+    assert "Incomplete window — missing January 2026" in h   # prose, not chip
+    # window + note appear once, not duplicated per flow
+    assert h.count("12 months to May 2026") == 1
+    md = render_markdown(_sample_report())
+    assert "*12 months to May 2026*" in md
+    assert "YTD (5-mo): +12.5% · €33.20B" in md
+    assert "Incomplete window — missing January 2026" in md
 
 
 def test_methodology_tab_shows_about_and_guides():

@@ -921,10 +921,45 @@ def _gacc_bilateral_html(section) -> str:
         out.append(f'<details class="partner" id="{html.escape(p.id)}">')
         out.append(f'<summary><span class="pp-name">{html.escape(p.title)}</span>'
                    f'{summ}</summary><div class="pp-body">')
+        # Window orientation, once per partner (same period for both flows).
+        win = next((f.metrics.get("window_label") for f in p.findings
+                    if f.metrics.get("window_label")), None)
+        if win:
+            out.append(f'<p class="pp-window">{html.escape(win)}</p>')
         for f in p.findings:
             out.append(_sector_flow_row(f))
+            out.append(_bilateral_ctx_row(f))
+        # The incomplete-window prose, once per partner (deduped — both flows
+        # usually carry the same note).
+        notes: list[str] = []
+        for f in p.findings:
+            nt = f.metrics.get("note")
+            if nt and nt not in notes:
+                notes.append(nt)
+        for nt in notes:
+            out.append(f'<p class="pp-caveat">⚠ {html.escape(nt)}</p>')
         out.append("</div></details>")
     return "\n".join(out)
+
+
+def _bilateral_ctx_row(f) -> str:
+    """The muted secondary register under a partner flow row: year-to-date and
+    the latest-month value — the substance the 12-month headline alone drops.
+    Restored from the finding's own totals; empty string when absent."""
+    m = f.metrics
+    bits: list[str] = []
+    yp, ye, ym = m.get("ytd_pct"), m.get("ytd_eur"), m.get("ytd_months")
+    if ye is not None:
+        mo = f" ({ym}-mo)" if ym else ""
+        pct = (f"{'+' if float(yp) >= 0 else '−'}{abs(float(yp)) * 100:.1f}% · "
+               if yp is not None else "")
+        bits.append(f"YTD{mo}: {pct}{_fmt_eur(ye)}")
+    se = m.get("sm_eur")
+    if se is not None:
+        bits.append(f"latest month: {_fmt_eur(se)}")
+    if not bits:
+        return ""
+    return f'<div class="pp-ctx">{html.escape(" · ".join(bits))}</div>'
 
 
 def _structural_section_html(section) -> str:
@@ -1299,6 +1334,9 @@ details.partner[open]>summary{border-bottom:1px solid var(--line)}
 .pp-name{font-family:var(--font-sans);font-weight:700;font-size:14.5px;color:var(--ink)}
 .pp-fig{margin-left:auto;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
 .pp-body{padding:8px 14px 10px}
+.pp-window{font-size:12px;color:var(--muted);margin:0 0 6px;font-variant-numeric:tabular-nums}
+.pp-ctx{font-size:12px;color:var(--muted);margin:-2px 0 8px;padding-left:2px;font-variant-numeric:tabular-nums}
+.pp-caveat{font-size:12px;color:var(--muted);margin:8px 0 0;line-height:1.45;border-top:1px solid var(--line);padding-top:7px}
 @media(max-width:560px){.pp-fig{margin-left:0;flex-basis:100%}}
 /* prose (methodology guides, glossary defs) */
 .prose{font-family:var(--font-body);font-size:15px;line-height:1.55;color:var(--ink)}

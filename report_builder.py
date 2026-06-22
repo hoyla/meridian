@@ -91,6 +91,58 @@ def _visible_caveats(codes) -> list[str]:
             if c not in _ALL_UNIVERSAL_CAVEATS and c not in _ROW_HIDDEN_CAVEATS]
 
 
+def _month_label(period) -> str | None:
+    """A 'YYYY-MM-01' window-end into 'Month YYYY' (e.g. 'May 2026')."""
+    if not period:
+        return None
+    try:
+        d = period if isinstance(period, date) else date.fromisoformat(str(period))
+    except (ValueError, TypeError):
+        return None
+    return d.strftime("%B %Y")
+
+
+def _bilateral_context(detail) -> dict:
+    """The richer registers behind a partner flow, restored from the finding's
+    own `totals`/`windows` — the YTD and latest-month figures plus a plain-prose
+    incomplete-window note. All already computed upstream; this only reshapes
+    them for the expanded panel (the collapsed summary stays terse)."""
+    tot = (detail or {}).get("totals") or {}
+    win = (detail or {}).get("windows") or {}
+    out: dict = {}
+
+    ytd = tot.get("ytd_cumulative") or {}
+    if ytd.get("current_eur") is not None:
+        out["ytd_pct"] = _f(ytd.get("yoy_pct"))
+        out["ytd_eur"] = _f(ytd.get("current_eur"))
+        out["ytd_months"] = ytd.get("months_in_ytd")
+
+    sm = tot.get("single_month") or {}
+    if sm.get("current_eur") is not None:
+        out["sm_yoy_pct"] = _f(sm.get("yoy_pct"))  # latest-month register (row)
+        out["sm_eur"] = _f(sm.get("current_eur"))  # latest-month value (ctx line)
+
+    out["window_label"] = (f"12 months to {_month_label(win.get('current_end'))}"
+                           if win.get("current_end") else None)
+
+    # Plain-prose incomplete-window note, built from the structured fields so it
+    # names the actual months (more honest than the cryptic "jan feb combined"
+    # chip). Two independent clauses: genuinely-missing months, and GACC's
+    # merged Jan+Feb releases counted as one combined figure.
+    clauses: list[str] = []
+    missing = [m for m in (tot.get("missing_months_current") or []) if m]
+    if missing:
+        names = ", ".join(_month_label(m) or str(m) for m in missing)
+        clauses.append(f"missing {names} from the current 12-month window")
+    jf = [y for y in (tot.get("jan_feb_combined_years") or []) if y]
+    if jf:
+        yrs = ", ".join(str(y) for y in jf)
+        clauses.append(f"Jan+Feb {yrs} counted as a single combined figure "
+                       "(GACC publishes them merged)")
+    out["note"] = "Incomplete window — " + "; ".join(clauses) if clauses else None
+    return out
+
+
 def _primary_section(divisions) -> tuple[str, str]:
     """A group's primary SITC section (1-digit) — the coarse bucket the sector
     list groups by. Mode of its divisions' sections (ties → lowest code); section
@@ -1130,13 +1182,15 @@ def _gacc_bilateral_section(cur, period) -> Section:
         partner = ((detail or {}).get("partner") or {}).get("raw_label") or "?"
         is_export = not subkind.endswith("_import")
         tot = (detail or {}).get("totals", {})
+        ctx = _bilateral_context(detail)
         finding = Finding(
             finding_id=fid, subkind=subkind,
             title=(f"China {'exports to' if is_export else 'imports from'} {partner}"),
             metrics={"scope": "China", "flow": "export" if is_export else "import",
                      "yoy_pct": _f(tot.get("yoy_pct")),
                      "current_eur": _f(tot.get("current_12mo_eur")),
-                     "caveats": _visible_caveats((detail or {}).get("caveat_codes"))},
+                     "caveats": _visible_caveats((detail or {}).get("caveat_codes")),
+                     **ctx},
             chart_data=_series_chart((detail or {}).get("monthly_series")),
             provenance=Provenance(finding_ids=[fid], source="gacc", as_of=period),
         )
