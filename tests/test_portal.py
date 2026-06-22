@@ -256,6 +256,7 @@ def test_html_renders_all_sections_and_is_self_contained():
     assert "Rotterdam" in h               # transshipment hub note
     assert "China only, excl. HK/Macao" in h   # cn-only deficit = Eurostat CN-only, NOT GACC
     assert "China reports" in h           # mirror-gap (GACC vs Eurostat) — the one place "China reports" is right
+    assert 'class="see-also"' in h and 'href="#brief-gacc_bilateral"' in h  # State-of-play → Trading-partners bridge
     assert "EV supply chain" in h         # theme pill/chip
 
 

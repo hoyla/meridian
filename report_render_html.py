@@ -1639,6 +1639,9 @@ ul.ref li{font-size:13.5px;line-height:1.5;margin:0 0 7px;color:var(--ink)}
    element instead, so only one bar ever occupies the top (see .subnav). */
 .tabs{display:flex;gap:4px;background:var(--surface);padding:0 28px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .subnav{position:sticky;top:0;z-index:6;display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;background:var(--surface);border-bottom:1px solid var(--line);padding:8px 28px;font-family:var(--font-sans);font-size:13.5px}
+/* "See also" cross-link footing a section (e.g. State of play → the GACC By-partner
+   section far below) — a quiet, top-ruled pointer, not a call to action. */
+.see-also{margin:16px 0 2px;padding-top:10px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
 .subnav a{color:var(--muted);text-decoration:none;font-weight:600;white-space:nowrap;padding:2px 0;border-bottom:2px solid transparent}
 .subnav a:hover{color:var(--ink)}
 .subnav a.active{color:var(--masthead);border-bottom-color:var(--masthead)}
@@ -1976,10 +1979,25 @@ def render_html(report: Report) -> str:
             brief.append("<section>" + _what_changed(wc) + "</section>")
     _BRIEF_NAV = {"state_of_play": "State of play", "mirror_gap": "Mirror gaps",
                   "sector_detail": "Sector detail", "gacc_bilateral": "By partner"}
+    has_gacc = any(
+        s.kind == "gacc_bilateral"
+        and (s.sections or (s.metrics or {}).get("partner_charts"))
+        for s in report.sections)
     for sec in report.sections:
         inner = None
         if sec.kind == "state_of_play" and sec.sections:
             inner = _state_of_play_section(sec)
+            if has_gacc:
+                # Bridge to the GACC "By partner" section far below: the two do
+                # different jobs (EU↔China detail here; China's own-customs view
+                # of its whole world there) and sit far apart in this tab, so a
+                # reader sees the relationship and can jump straight to it.
+                inner += (
+                    '<p class="see-also">→ See also '
+                    '<a href="#brief-gacc_bilateral">China’s trade by partner '
+                    '(GACC)</a> — China’s own customs view of its trade with the '
+                    'world, the global counterpart to the EU-focused picture '
+                    'above.</p>')
         elif sec.kind == "sector_detail" and sec.sections:
             inner = _sector_section(sec)
         elif sec.kind == "mirror_gap" and sec.findings:
