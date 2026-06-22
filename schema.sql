@@ -623,6 +623,13 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
    'HS 8501 — electric motors and generators (excluding generating sets). BROAD chapter: spans sub-watt motors, large industrial machines and alternators alike, so it is NOT an EV-traction-motor signal on its own. EV drive motors concentrate in the higher-power multiphase AC codes — chiefly CN8 85015350-85015399 (AC motors > 75 kW) — refine to those if a tighter EV signal is needed. Added for Lisa''s Jun 2026 question on the post-tariff pivot toward critical EV components: traction motors are the principal EV part captured by neither "Motor-vehicle parts" (HS 8708, which excludes motors and batteries) nor "EV batteries (Li-ion)" (HS 850760).',
    ARRAY['8501%'], 'seed:lisa_sector_q_2026_06');
 
+-- Reader-facing display name for the EV-battery group. `name` stays the stable
+-- internal key (findings snapshot it into detail.group.name; analysers + tests
+-- key off it); display_name is what readers see, resolved COALESCE at render
+-- time (db.group_display_names). Idempotent; safe to re-run. Companion:
+-- migrations/2026-06-22c-ev-batteries-display-name.sql.
+UPDATE hs_groups SET display_name = 'Lithium-ion accumulators (HS 850760)' WHERE name = 'EV batteries (Li-ion)';
+
 -- Caveats journalists should weigh when reading cross-source findings.
 INSERT INTO caveats (code, summary, detail, applies_to) VALUES
   ('cif_fob',

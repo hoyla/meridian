@@ -166,8 +166,9 @@ def test_charts_tab_data_layout(
     wb = load_workbook(str(out))
     ws = wb["Charts"]
 
-    # Row 3: heading. Row 4: column headers.
-    assert "EV batteries (Li-ion)" in (ws.cell(row=3, column=1).value or "")
+    # Row 3: heading. Row 4: column headers. The chart heading shows the
+    # reader-facing display name (db.group_display_names).
+    assert "Lithium-ion accumulators (HS 850760)" in (ws.cell(row=3, column=1).value or "")
     assert ws.cell(row=4, column=1).value == "Month"
     assert ws.cell(row=4, column=2).value == "Prior 12mo (€)"
     assert ws.cell(row=4, column=3).value == "Current 12mo (€)"

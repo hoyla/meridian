@@ -6,6 +6,7 @@ from datetime import timedelta
 
 import psycopg2.extras
 
+import db
 from briefing_pack._helpers import (
     _Section,
     _SCOPE_LABEL,
@@ -19,6 +20,7 @@ from briefing_pack._helpers import (
 def _section_trajectories(cur, comparison_scope: str = "eu_27") -> _Section:
     """Trajectory findings grouped by shape — narrative-rich pattern bucket.
     Phase 6.1e: scoped to one of EU-27 / UK / combined."""
+    disp = db.group_display_names(cur)  # reader-facing group labels
     scope_suffix = _SCOPE_SUBKIND_SUFFIX[comparison_scope]
     scope_label = _SCOPE_LABEL[comparison_scope]
     subkind_imp = f"hs_group_trajectory{scope_suffix}"
@@ -84,7 +86,7 @@ def _section_trajectories(cur, comparison_scope: str = "eu_27") -> _Section:
             flow = "imports" if r['subkind'] == 'hs_group_trajectory' else "exports"
             low_base_marker = " ⚠️ low-base" if r['low_base_majority'] else ""
             lines.append(
-                f"- **{r['group_name']}** ({flow}): "
+                f"- **{disp.get(r['group_name'], r['group_name'])}** ({flow}): "
                 f"latest YoY {_fmt_pct(r['last_yoy'])}, "
                 f"peak {_fmt_pct(r['peak'])}, trough {_fmt_pct(r['trough'])}"
                 f"{low_base_marker} — {_trace_token(r['id'])}"

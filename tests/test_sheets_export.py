@@ -220,7 +220,10 @@ def test_summary_picks_latest_per_group_per_scope(empty_findings, test_db_url, t
     # Row 1 is the description, row 3 is headers, row 4+ is data.
     headers = [c.value for c in ws[3]]
     rows = [[c.value for c in row] for row in ws.iter_rows(min_row=4, values_only=False)]
-    ev_rows = [r for r in rows if r[headers.index("group")] == "EV batteries (Li-ion)"]
+    # The summary `group` column shows the reader-facing display name
+    # (db.group_display_names); the finding still snapshots the raw key.
+    ev_rows = [r for r in rows
+               if r[headers.index("group")] == "Lithium-ion accumulators (HS 850760)"]
     assert len(ev_rows) == 1
     # eu_27 imports column carries the latest yoy_pct
     assert ev_rows[0][headers.index("eu27_imp_yoy_pct")] == 0.40
@@ -250,7 +253,8 @@ def test_hs_yoy_imports_long_format_with_scope_column(
     ws = wb["hs_yoy_imports"]
     headers = [c.value for c in ws[3]]
     rows = [[c.value for c in r] for r in ws.iter_rows(min_row=4)]
-    ev_rows = [r for r in rows if r[headers.index("group")] == "EV batteries (Li-ion)"]
+    ev_rows = [r for r in rows
+               if r[headers.index("group")] == "Lithium-ion accumulators (HS 850760)"]
     # All three scopes should appear
     scopes = {r[headers.index("scope")] for r in ev_rows}
     assert scopes == {"eu_27", "uk", "eu_27_plus_uk"}
@@ -314,7 +318,7 @@ def test_top_movers_columns_on_long_format_tab(
     assert "top_movers_score" in headers
     by_group = {r[headers.index("group")]: r for r in rows}
 
-    ev_row = by_group["EV batteries (Li-ion)"]
+    ev_row = by_group["Lithium-ion accumulators (HS 850760)"]
     assert ev_row[headers.index("top_movers_rank")] == 1
     assert ev_row[headers.index("top_movers_score")] is not None
     assert float(ev_row[headers.index("top_movers_score")]) > 0
@@ -354,7 +358,7 @@ def test_top_movers_rank_columns_on_summary_tab(
     headers = [c.value for c in ws[3]]
     rows = [[c.value for c in r] for r in ws.iter_rows(min_row=4)]
     ev_row = next(r for r in rows
-                  if r[headers.index("group")] == "EV batteries (Li-ion)")
+                  if r[headers.index("group")] == "Lithium-ion accumulators (HS 850760)")
     assert "top_movers_rank_imp" in headers
     assert "top_movers_rank_exp" in headers
     # Both flows passed the filters → both ranks populated.
@@ -470,6 +474,9 @@ def test_low_base_review_sheet_only_includes_flagged(empty_findings, test_db_url
     rows = [[c.value for c in r] for r in ws.iter_rows(min_row=4)]
     groups = [r[headers.index("group")] for r in rows]
     assert "Rare-earth materials" in groups
+    # The non-low-base finding is excluded; the `group` column renders the
+    # display name, so assert the display label is absent too.
+    assert "Lithium-ion accumulators (HS 850760)" not in groups
     assert "EV batteries (Li-ion)" not in groups
     # Scope + flow columns are populated for the flagged row
     flagged = next(r for r in rows if r[headers.index("group")] == "Rare-earth materials")

@@ -138,8 +138,11 @@ def _is_draft(group: dict) -> bool:
 
 def _section_for_group(
     group: dict, all_groups: list[dict], finding: dict | None,
+    disp: dict[str, str] | None = None,
 ) -> str:
-    name = group["name"]
+    disp = disp or {}
+    name = group["name"]  # stable key
+    name_disp = disp.get(name, name)  # reader-facing heading
     desc = (group.get("description") or "").strip()
     patterns = group["hs_patterns"] or []
     created_by = group.get("created_by") or "(unknown)"
@@ -148,7 +151,7 @@ def _section_for_group(
 
     out: list[str] = []
     suffix = " *(draft — methodology not yet validated)*" if draft else ""
-    out.append(f"### {name}{suffix}")
+    out.append(f"### {name_disp}{suffix}")
     out.append("")
     if desc:
         out.append(desc)
@@ -230,7 +233,8 @@ def _section_for_group(
         out.append("")
         for s in siblings:
             label = f" *(draft)*" if _is_draft(s) else ""
-            out.append(f"- [{s['name']}](#{_slug(s['name'])}){label}")
+            s_disp = disp.get(s["name"], s["name"])  # link text + anchor
+            out.append(f"- [{s_disp}](#{_slug(s_disp)}){label}")
         out.append("")
     return "\n".join(out)
 
@@ -273,12 +277,17 @@ def render_groups(
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
-            SELECT id, name, description, hs_patterns, created_by, created_at
+            SELECT id, name, display_name, description, hs_patterns,
+                   created_by, created_at
               FROM hs_groups
              ORDER BY lower(name)
             """
         )
         groups = [dict(r) for r in cur.fetchall()]
+        # name -> reader-facing label (identity when no display_name). Used for
+        # every heading, slug, TOC entry and sibling link so a heading, its
+        # anchor and the links pointing at it all resolve to the same string.
+        disp = {g["name"]: (g.get("display_name") or g["name"]) for g in groups}
         # Pre-fetch the latest finding per group (one query per group is
         # fine — 48 groups × cheap PK-ordered LIMIT 1).
         latest_by_group: dict[int, dict] = {}
@@ -297,7 +306,8 @@ def render_groups(
         lines.append("**Active groups:**")
         lines.append("")
         for g in active:
-            lines.append(f"- [{g['name']}](#{_slug(g['name'])})")
+            gd = disp.get(g["name"], g["name"])
+            lines.append(f"- [{gd}](#{_slug(gd)})")
         lines.append("")
     if drafts:
         lines.append(
@@ -307,7 +317,8 @@ def render_groups(
         )
         lines.append("")
         for g in drafts:
-            lines.append(f"- [{g['name']}](#{_slug(g['name'])})")
+            gd = disp.get(g["name"], g["name"])
+            lines.append(f"- [{gd}](#{_slug(gd)})")
         lines.append("")
 
     # ---- Active groups ---------------------------------------------------
@@ -316,7 +327,7 @@ def render_groups(
         lines.append("")
         for g in active:
             lines.append(
-                _section_for_group(g, groups, latest_by_group.get(g["id"]))
+                _section_for_group(g, groups, latest_by_group.get(g["id"]), disp)
             )
 
     # ---- Draft groups ----------------------------------------------------
@@ -334,7 +345,7 @@ def render_groups(
         lines.append("")
         for g in drafts:
             lines.append(
-                _section_for_group(g, groups, latest_by_group.get(g["id"]))
+                _section_for_group(g, groups, latest_by_group.get(g["id"]), disp)
             )
 
     lines.append("")

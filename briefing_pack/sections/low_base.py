@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import db
 from briefing_pack._helpers import _Section, _fmt_eur, _fmt_pct, _trace_token
 
 
 def _section_low_base(cur) -> _Section:
     """Editorial review queue: every hs_group_yoy*-flavoured finding flagged low_base."""
+    disp = db.group_display_names(cur)  # reader-facing group labels
     cur.execute(
         """
         SELECT id, subkind,
@@ -41,7 +43,7 @@ def _section_low_base(cur) -> _Section:
     for r in rows:
         flow = "imports" if r['subkind'] == 'hs_group_yoy' else "exports"
         lines.append(
-            f"- **{r['group_name']}** ({flow}, {r['period']}): "
+            f"- **{disp.get(r['group_name'], r['group_name'])}** ({flow}, {r['period']}): "
             f"{_fmt_pct(r['yoy_pct'])}, "
             f"prior {_fmt_eur(r['prior_eur'])} → current {_fmt_eur(r['current_eur'])} — "
             f"{_trace_token(r['id'])}"

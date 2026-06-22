@@ -20,6 +20,7 @@ from pathlib import Path
 
 import psycopg2.extras
 
+import db
 from briefing_pack._helpers import (
     DEFAULT_TOP_N,
     _Section,
@@ -211,7 +212,11 @@ def render(
         # Dropped entirely on a fresh DB with nothing to say.
         top_movers = _compute_top_movers(cur, predictability=predictability)
         diff_data = _compute_diff(cur, baseline_brief_run_id=diff_baseline_brief_run_id)
-        sections.append(_section_front_page(top_movers, diff_data))
+        # Reader-facing group labels (db.group_display_names), shared by the
+        # front-page movers/digest and the Tier 1 diff so every surface that
+        # cites a group shows — and links to — the same display string.
+        disp = db.group_display_names(cur)
+        sections.append(_section_front_page(top_movers, diff_data, disp))
 
         # ----- Standing picture: the EU–China goods-trade deficit. -----
         # A level, not a change, so it never surfaces in the change-driven
@@ -225,7 +230,7 @@ def render(
         # heading + the `---` separator above it. Empty case (first-ever brief
         # or nothing material changed) still emits the heading with a
         # baseline-explainer paragraph.
-        sections.append(_section_diff_since_last_brief(diff_data))
+        sections.append(_section_diff_since_last_brief(diff_data, disp))
 
         # ----- Tier 2: current state of play (compact summary) -----
         # Per-HS-group block first (the EU-CN deep-dive view), then the

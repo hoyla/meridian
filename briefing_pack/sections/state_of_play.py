@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import db
 from briefing_pack._helpers import (
     _Section,
     _VOLATILE_GROUP_NOTE,
@@ -24,6 +25,11 @@ def _section_state_of_play(
     sections below in Tier 3 are the source for the same numbers; this
     section is for orientation, not citation."""
     predictability = predictability or {}
+    # Reader-facing group labels. group_name stays the lookup key for
+    # yoy_by_group / traj_by_group / predictability; only the heading display
+    # uses disp — and because front_page's mover links slug off the display
+    # name, this heading's GitHub anchor must match it.
+    disp = db.group_display_names(cur)
 
     # Latest hs_group_yoy* finding per (group, subkind). DISTINCT ON pulls
     # the newest current_end per (group, subkind) pair — same pattern as
@@ -186,7 +192,7 @@ def _section_state_of_play(
 
         pred = predictability.get(group_name)
         badge_str = f" {pred[0]}" if pred is not None else ""
-        lines.append(f"### {group_name}{badge_str}")
+        lines.append(f"### {disp.get(group_name, group_name)}{badge_str}")
         lines.append("")
         # 🔴 demotion: volatile groups get an explicit warning line, not
         # just an emoji — red groups previously rendered identically to

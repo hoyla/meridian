@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+import db
 from briefing_pack._helpers import (
     _ALL_UNIVERSAL_CAVEATS,
     _Section,
@@ -127,6 +128,12 @@ def _section_top_leads(cur, top_movers: list[dict]) -> _Section:
     if not top_movers:
         return _Section(markdown="")
 
+    # Reader-facing labels. group_name stays the lookup key (lead_by_group,
+    # seen_groups); only the link text + its anchor use disp — and that anchor
+    # must match the `### {group}` heading in _section_llm_narratives, which
+    # uses the same disp.
+    disp = db.group_display_names(cur)
+
     # Pull anomaly summaries for every group represented in top_movers.
     group_names = sorted({m["group_name"] for m in top_movers})
     cur.execute(
@@ -172,10 +179,11 @@ def _section_top_leads(cur, top_movers: list[dict]) -> _Section:
     lines.append("")
     for i, (mover, lead) in enumerate(matched, start=1):
         gn = mover["group_name"]
-        anchor = _slugify_heading(gn)
+        gn_disp = disp.get(gn, gn)  # link text + anchor; gn = lookup key
+        anchor = _slugify_heading(gn_disp)
         summary = lead["anomaly_summary"].strip()
         lines.append(
-            f"{i}. **[{gn}](#{anchor})** — {summary} "
+            f"{i}. **[{gn_disp}](#{anchor})** — {summary} "
             f"({_trace_token(lead['id'])})"
         )
     lines.append("")
@@ -216,6 +224,10 @@ def _section_llm_narratives(cur) -> _Section:
     if not rows:
         return _Section(markdown="")
 
+    # Reader-facing group labels for the per-lead headings. The anchor these
+    # headings generate is what _section_top_leads links to, so both use disp.
+    disp = db.group_display_names(cur)
+
     # code → plain-English summary for the per-lead Provenance blocks.
     caveat_summaries = _caveat_summary_map(cur)
 
@@ -238,7 +250,7 @@ def _section_llm_narratives(cur) -> _Section:
         group_name = detail.get("group", {}).get("name", "—")
         caveats = detail.get("caveat_codes") or []
         visible_caveats = [c for c in caveats if c not in _ALL_UNIVERSAL_CAVEATS]
-        lines.append(f"### {group_name}")
+        lines.append(f"### {disp.get(group_name, group_name)}")
         lines.append("")
 
         # First-occurrence linking is per-lead: each lead starts with a
