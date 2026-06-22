@@ -934,6 +934,19 @@ def test_q2_expansion_groups_carry_expected_themes():
     assert tf("Titanium dioxide (CN8 320611)") == []
 
 
+def test_scope_labelling_present_on_mirror_and_gacc_sections():
+    """Scope-clarity (deploy-batch #1): the mirror-gap and GACC-bilateral
+    section explainers must state the partner scope — the Eurostat side's
+    CN+HK+MO envelope, and that GACC is China-as-reporter with HK/Macao as
+    partners — so "China" isn't silently two different things across sections.
+    Load-bearing copy: this guards against a refactor dropping the label."""
+    import report_builder as rb
+    mg = rb._ABOUT["mirror-gaps"]
+    assert "CN+HK+MO" in mg and "Hong Kong and Macau" in mg
+    gacc = rb._ABOUT["gacc-bilateral"]
+    assert "CN+HK+MO" in gacc and "partners" in gacc
+
+
 # ---- classifications (BEC end-use mapping is pure) ----
 
 @pytest.mark.parametrize("bec4,expected", [
