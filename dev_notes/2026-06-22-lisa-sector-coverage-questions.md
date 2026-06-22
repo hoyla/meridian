@@ -207,6 +207,38 @@ Each chosen group is still a seed row + migration (+ `eurostat_world_aggregates`
 backfill for the share metric) — mechanically identical to the EV additions —
 plus its theme membership(s) in `labels.py`.
 
+### BUILT — first tranche + engines (branch `ljh-q2-expansion-minerals-pharma-engines`, 2026-06-22)
+
+Lisa liked the list and is "very open to suggestions", so we built the first
+tranche directly (schema.sql + `migrations/2026-06-22d-q2-expansion-groups.sql`;
+theme memberships in `labels.py`). Material-named; themes in brackets.
+
+**Refined critical minerals** (`seed:lisa_q2_2026_06`)
+- Lithium chemicals (carbonate + hydroxide) — `283691`,`282520` [EV supply chain · China export-control]
+- Cobalt (oxides, hydroxides & unwrought) — `282200`,`810520` [EV supply chain · China export-control]
+- Manganese oxides — `282010` [EV supply chain]
+- Tungsten (HS 8101) — `8101` [China export-control]
+- Gallium, germanium & other minor metals (HS 8112) — `8112` [China export-control]
+- Antimony (HS 8110) — `8110` [China export-control]
+- Titanium dioxide (CN8 320611) — `320611` [no theme yet — Paint/Cosmetics arrive in round 2]
+
+**Pharma APIs** (`seed:lisa_q2_2026_06`) — all [Pharma & fine chemicals]; the first three
+realise members the theme already anticipated
+- Antibiotics (HS 2941) · Ibuprofen-class monocarboxylic acids (HS 2916) ·
+  Paracetamol-class amides (HS 2924) · Vitamins & provitamins (HS 2936)
+
+**Engine parts + engines** (`seed:lisa_engine_parts_2026_06`, Lisa's "more engine parts"
+request) — both [Automotive]; the engine side 8708 excludes
+- Engine parts (CN8 84099100 + 84099900) · Internal-combustion engines (HS 8407 + 8408)
+
+The broad-by-design groups (8112 minor metals; 2916/2924 acid/amide families;
+8407/8408 engines) carry a "refine to CN8 / subheadings" steer in their
+descriptions. YoY findings land on the next `--analyse hs-groups` run; the
+China-share metric needs the `eurostat_world_aggregates` backfill for the new
+prefixes (follows). **Round 2 (deferred):** cosmetics & paint groups + the
+**Cosmetics & personal care** / **Paint & coatings** themes (which also give
+TiO₂ its themes). Easy to add — a seed row + a theme line each.
+
 ### Done — legacy application-bound groups (branch `ljh-legacy-group-taxonomy-retrofit`, 2026-06-22)
 
 Retrofitted via a new `hs_groups.display_name` column + `db.group_display_names`
