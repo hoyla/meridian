@@ -356,7 +356,8 @@ def _render_sections(sections) -> list[str]:
                 exc = (f" · {'+' if (ex or 0) >= 0 else '−'}{abs(ex) * 100:.1f}% "
                        "beyond CIF/FOB baseline") if ex is not None else ""
                 z = m.get("zscore")
-                zn = (f" · last flagged unusual {m.get('zscore_period') or ''}: {z:.1f}σ"
+                zp = _fmt_period(m.get("zscore_period")) if m.get("zscore_period") else ""
+                zn = (f" · last flagged unusual {zp}: {z:.1f}σ"
                       if z is not None else "")
                 hub = (f" ⚓ {m['hub']}: {m['hub_notes'][:160]}"
                        if m.get("hub") and m.get("hub_notes") else "")
@@ -545,7 +546,7 @@ def _render_sections(sections) -> list[str]:
                     out.append(f"- **{a['source']}** "
                                f"({a.get('total', 0):,} releases)")
                     for rel in a.get("recent", [])[:6]:
-                        out.append(f"    - {rel.get('period') or ''} "
+                        out.append(f"    - {_fmt_period(rel.get('period'))} "
                                    f"{rel.get('url') or ''} "
                                    f"(fetched {rel.get('fetched') or ''})")
                 out.append("")

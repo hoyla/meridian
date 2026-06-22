@@ -647,7 +647,7 @@ def test_sources_tab_groups_provenance_and_trade_map():
     assert 'id="tab-sources"' in h
     assert "Data sources" in h and "Period coverage" in h
     assert "Findings included" in h and "3,509" in h     # humanised manifest
-    assert "2026-04-01" in h                              # coverage end date
+    assert "Apr 2026" in h                                # coverage end as a month, not raw ISO
     # the Trade Map renders inside the Sources tab, not Briefing
     si = h.index('id="tab-sources"')
     assert 'class="tmrow"' in h
