@@ -1375,7 +1375,7 @@ def test_multiline_chart_svg_renders_six_lines_and_balance_zero_baseline():
     """The renderer: one polyline per region (six), all region names in the
     legend, and the balance variant draws a visible zero baseline (its values
     straddle zero) — what stops a deficit reading as a small positive bar."""
-    from report_render_html import _multiline_chart_svg
+    from report_render_html import _multiline_chart_svg, _multiline_legend_html
 
     regions = ["ASEAN", "European Union", "United States", "Africa",
                "Latin America", "Russian Federation"]
@@ -1395,13 +1395,18 @@ def test_multiline_chart_svg_renders_six_lines_and_balance_zero_baseline():
 
     exp = _multiline_chart_svg(chart("exports", signed=False))
     assert exp.count("<polyline") == 6                  # one solid line per region
-    assert all(name in exp for name in regions)          # legend names present
     assert exp.count("stroke-dasharray") == 6            # partial-year final seg
+    assert "YTD" not in exp                               # YTD note lives in the key, not the axis
     # exports are zero-based positive → no zero *baseline* reference line.
     assert 'stroke-width="1.2"' not in exp
 
     bal = _multiline_chart_svg(chart("balance", signed=True))
     assert bal.count("<polyline") == 6
-    assert all(name in bal for name in regions)
     # The signed balance chart straddles zero → a visible zero baseline line.
     assert 'stroke-width="1.2"' in bal
+
+    # The key (rendered in the card's left meta column, under the headline)
+    # carries the region names + the dashed partial-year (YTD) note.
+    leg = _multiline_legend_html(chart("exports", signed=False))
+    assert all(name in leg for name in regions)
+    assert "year-to-date" in leg

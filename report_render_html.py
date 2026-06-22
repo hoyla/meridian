@@ -359,8 +359,7 @@ def _multiline_chart_svg(chart: dict) -> str:
 
     for i in range(n):
         anchor = "start" if i == 0 else ("end" if i == n - 1 else "middle")
-        lbl = (f"{years[i]} YTD" if partial_idx is not None and i == partial_idx
-               else str(years[i]))
+        lbl = str(years[i])  # uniform years; the YTD/dashed note lives in the key
         body.append(f'<text x="{x(i):.1f}" y="{_CH - 6}" text-anchor="{anchor}" '
                     f'class="ct">{html.escape(lbl)}</text>')
 
@@ -368,13 +367,25 @@ def _multiline_chart_svg(chart: dict) -> str:
            'preserveAspectRatio="xMidYMid meet" role="img" '
            f'aria-label="{html.escape(str(chart.get("title", "annual by region")))}">'
            + "".join(body) + "</svg>")
-    # Inline legend: a swatch + name per region, wrapping under the plot.
+    return svg
+
+
+def _multiline_legend_html(chart: dict) -> str:
+    """The region key for a multi-line chart — a colour swatch + name per region
+    — for the chart card's LEFT meta column, under the headline (so the plot
+    keeps its full width and height instead of losing a row to a bottom legend).
+    A trailing note explains the dashed partial-year segment."""
+    series = chart.get("series") or []
+    colors = chart.get("colors") or []
     chips = "".join(
         f'<span class="ml-key"><span class="ml-sw" '
         f'style="background:{colors[si % len(colors)] if colors else _GUARDIAN_BLUE}">'
         f'</span>{html.escape(str(s.get("name", "")))}</span>'
         for si, s in enumerate(series))
-    return f'{svg}<div class="ml-legend">{chips}</div>'
+    partial = chart.get("partial_last_year")
+    note = (f'<span class="ml-ytd">┄ {partial} = year-to-date</span>'
+            if partial else "")
+    return chips + note
 
 
 def _bar_chart_svg(bars: list[dict]) -> str:
@@ -1086,7 +1097,8 @@ def _gacc_bilateral_html(section) -> str:
     # Three annual per-region trend charts (exports / imports / balance) above
     # the per-partner expanders — the macro shape before the country detail.
     charts = (getattr(section, "metrics", None) or {}).get("partner_charts") or []
-    cards = [_chart_card(c.get("title", ""), "", "", _multiline_chart_svg(c))
+    cards = [_chart_card(c.get("title", ""), "", _multiline_legend_html(c),
+                         _multiline_chart_svg(c))
              for c in charts]
     cards = [c for c in cards if c]
     if cards:
@@ -1682,11 +1694,19 @@ details.partner[open]>summary{border-bottom:1px solid var(--line)}
 /* The annual per-region charts stay one-up (full width): each carries a 6-item
    legend, so two side-by-side would crowd. */
 @media(min-width:720px){.chart-row-1{grid-template-columns:1fr}}
-/* Inline legend under a multi-line chart: a colour swatch + region name per
-   series, wrapping. The swatch is a short bar (matches the line stroke). */
-.ml-legend{margin-top:6px;font-size:11.5px;color:var(--muted);line-height:1.9;display:flex;flex-wrap:wrap;gap:4px 12px}
+/* Region key for a multi-line chart — a colour swatch (a short bar matching the
+   line stroke) + name. Rendered in the card's left meta column, under the
+   headline, by _multiline_legend_html. */
 .ml-key{white-space:nowrap}
 .ml-sw{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:4px;border-radius:1px}
+/* Multi-line regional charts: the key sits in the LEFT meta column under the
+   headline (not a bottom row), and that column is narrow — the title may run to
+   2–3 decks — so the plot reclaims both width and height. */
+.chart-row-1 .chartcard{align-items:flex-start}
+.chart-row-1 .cc-meta{flex:0 1 132px;min-width:112px}
+.chart-row-1 .cc-legend{display:flex;flex-direction:column;gap:3px;margin-top:8px}
+.chart-row-1 .cc-legend .ml-key{display:flex;align-items:center;white-space:normal}
+.ml-ytd{display:block;margin-top:6px;font-style:italic;opacity:.8}
 .flow-sm{font-size:12px;color:var(--muted);white-space:nowrap;flex:0 0 auto}
 /* donut indicator */
 .kpi-donut{align-items:center;text-align:center}
