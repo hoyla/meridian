@@ -1162,7 +1162,7 @@ def _gacc_bilateral_section(cur, period) -> Section:
     of its ~24 named partner countries (both flows), under the bloc-level
     macro lead."""
     root = Section(
-        id="gacc-bilateral", title="China's trade by partner (GACC)",
+        id="gacc-bilateral", title="China’s trade by partner (GACC)",
         kind="gacc_bilateral",
         intro="China's own reported exports and imports by partner country, "
               "rolling 12 months — the per-country detail under the bloc lead.",

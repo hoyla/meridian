@@ -271,7 +271,7 @@ def _render_sections(sections) -> list[str]:
                     out.append(f"- **{c['summary']}** (`{c['code']}`){detail}")
                 out.append("")
         elif sec.kind == "gacc_bilateral":
-            out.append("## China's trade by partner (GACC)")
+            out.append(f"## {sec.title}")
             out.append("")
             if sec.intro:
                 out.append(f"*{sec.intro} {len(sec.sections)} partners.*")

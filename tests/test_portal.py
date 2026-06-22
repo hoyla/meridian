@@ -184,7 +184,7 @@ def _sample_report() -> rm.Report:
              "headers": ["group"], "rows": [], "total_rows": 3509,
              "shown_rows": 0, "inline": False}]})
     gacc_bi = rm.Section(
-        id="gacc-bilateral", title="China's trade by partner (GACC)",
+        id="gacc-bilateral", title="China’s trade by partner (GACC)",
         kind="gacc_bilateral", intro="By partner.",
         sections=[rm.Section(
             id="gacc-united-states", title="United States", kind="gacc_bilateral",
@@ -227,7 +227,7 @@ def test_markdown_renders_all_sections():
     for marker in ("# Headlines", "## Key indicators", "## State of play",
                    "## Mirror-trade gaps", "## Sector detail", "## Trade map",
                    "## Methodology & caveats", "## Sources & coverage",
-                   "## China's trade by partner (GACC)"):
+                   "## China’s trade by partner (GACC)"):
         assert marker in md, marker
     assert "China reports" in md          # cn-only deficit
     assert "2025-11" in md and "σ" in md  # mirror-gap z-score (period + sigma)
@@ -501,7 +501,7 @@ def test_gacc_bilateral_per_partner_expanders():
     assert "United States" in h
     assert "China's exports" in h and "€460.00B" in h   # headline in the summary
     md = render_markdown(_sample_report())               # LLM surface keeps it flat
-    assert "## China's trade by partner (GACC)" in md
+    assert "## China’s trade by partner (GACC)" in md
 
 
 def test_gacc_bilateral_expanded_panel_restores_ytd_window_and_caveat_prose():
