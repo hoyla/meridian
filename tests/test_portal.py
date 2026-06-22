@@ -434,6 +434,9 @@ def test_glossary_renders_in_both_surfaces():
     h = render_html(r)
     assert 'class="gloss-item"' in h and 'id="glossary-filter"' in h
     assert "CIF / FOB" in h and "CIF includes freight" in h
+    # groups are nested <section>s; their padding is stripped so glossary text
+    # doesn't inset twice as far as every other tab.
+    assert ".gloss-group{margin:0 0 8px;padding:0}" in h
     md = render_markdown(r)
     assert "## Glossary" in md and "**CIF / FOB**" in md
 

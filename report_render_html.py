@@ -1368,8 +1368,9 @@ details.partner[open]>summary{border-bottom:1px solid var(--line)}
 .kpi-donut{align-items:center;text-align:center}
 .kpi-donut-wrap{margin:6px auto 2px}
 .donut-pct{font-family:var(--font-headline);font-weight:700;font-size:20px;fill:var(--ink)}
-/* glossary */
-.gloss-group{margin:0 0 8px}
+/* glossary — groups are nested <section>s inside the tab's own <section>, so
+   strip the inherited section padding (it would otherwise double up). */
+.gloss-group{margin:0 0 8px;padding:0}
 .gloss-item{padding:10px 0;border-bottom:1px solid var(--line)}
 .gterm{font-family:var(--font-sans);font-weight:700;font-size:15px;color:var(--ink);margin-bottom:2px}
 .gdef{font-family:var(--font-body);font-size:14px;line-height:1.5;color:var(--ink)}
