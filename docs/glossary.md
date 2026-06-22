@@ -43,7 +43,7 @@ from CN8 even though both align on HS-2 / HS-4 / HS-6.
 
 ### CN+HK+MO
 The default partner set the tool sums on the Eurostat side,
-treating Hong Kong (HK) and Macau (MO) as part of "Chinese
+treating Hong Kong (HK) and Macao (MO) as part of "Chinese
 trade" since ~15% of China's exports to the EU route via HK.
 For a CN-only spot check against a Soapbox or Merics figure,
 query `eurostat_raw_rows` directly with `partner = 'CN'`.

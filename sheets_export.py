@@ -628,7 +628,7 @@ def _trade_balance_sheet() -> SheetData:
             "minus exports; a positive figure is an EU deficit. Eurostat "
             "values imports CIF and exports FOB. partner_scope cn_only "
             "matches Eurostat's published EU–China headline; cn_hk_mo adds "
-            "Hong Kong + Macau (this pack's standard). sm_* = single anchor "
+            "Hong Kong + Macao (this pack's standard). sm_* = single anchor "
             "month, r12_* = rolling 12 months, ytd_* = Jan–anchor vs prior "
             "year. *_per_day divides the deficit by the days in its window."
         ),
