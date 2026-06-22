@@ -117,7 +117,10 @@ A non-exhaustive list, in rough order of magnitude:
    `eurostat_raw_rows` directly with `partner = 'CN'` — the analyser no
    longer accepts a partner-set override since CN+HK+MO is the
    editorially-correct production envelope. (See §3 caveat
-   `multi_partner_sum`, which is family-universal.)
+   `multi_partner_sum`, which is family-universal.) The portal makes this
+   explicit on the surface (2026-06): the headline KPIs are labelled
+   "…with China, Hong Kong & Macao" and carry the **China-only** counterpart —
+   the figure single-partner sources cite — inline with its own YoY.
 
 3. **Transshipment via third countries.** Goods might leave China
    FOB-declared to NL, transit Rotterdam, then be declared by DE

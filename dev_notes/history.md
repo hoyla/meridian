@@ -10,6 +10,49 @@ to understand how the project got here.
 
 ---
 
+## 2026-06-22 — Eurostat data correction + Lisa-feedback portal clarity (LIVE)
+
+Two member-state months were silently missing from `eurostat_raw_rows`
+(Netherlands March 2026, Greece February 2026 — late member-state reporting,
+and the append-only re-ingest had no way to backfill without duplicating every
+other reporter). Every aggregate spanning them was understated: NL's Jan–Apr
+China balance read −€22.2bn vs the true −€30.7bn. Surfaced by comparing against
+a Soapbox Trade chart; their figures were correct (see
+`memory/reference_soapbox_eurostat_validation.md`). The diagnosis is a cautionary
+tale — the first hypothesis was Rotterdam quasi-transit; the boring explanation
+(a missing month) was right, and only checking caught it.
+
+What shipped (PRs #43–#48, all merged; published live the same day):
+- **Backfill + coverage guard (#43).** `scrape_eurostat` gains a
+  `--eurostat-reporter` surgical per-member-state backfill and an additive
+  idempotency guard — presence checked per `(period, partner)`, already-present
+  returns `noop` (→ `no_change` in the routine log), never a duplicate.
+  `eurostat_coverage_gaps()` + `--eurostat-coverage START END` CLI + a
+  trailing-12-month warning on every periodic ingest surface a missing
+  reporter-month loudly. NL March + GR Feb backfilled additively; the EU-27
+  trade-balance, mirror, and partner-share analysers re-run; the EU-27 deficit
+  moved €939M→€964M/day (CN+HK+MO; CN-only €1,018M/day).
+- **KPI scope clarity (#44, #45).** The deficit/imports KPIs disclose the
+  CN+HK+MO envelope in the label ("…with China, Hong Kong & Macao") and carry the
+  **China-only** comparator inline with its own YoY (card order: value →
+  headline YoY → "China-only €1,018M/day (+8.6% YoY)") — the headline was being
+  read as the externally-cited CN-only figure.
+- **Provenance + date clarity (#46, #47).** Provenance lines render "as of Apr
+  2026" (the data month, not the misleading raw-ISO `-01`) and name the source
+  (Eurostat / HMRC / GACC); same month fix on Period coverage, the releases
+  appendix, and "last flagged unusual". About box gained: unless labelled
+  China-only, "China" includes Hong Kong & Macao (and why).
+- **"What changed" delivers substance (#48).** Renders the actual material
+  shifts (≥5pp YoY moves, direction flips) rather than a bare new-findings count;
+  an honest slim one-liner when nothing moved; the stray docx-only "Tier 1"
+  reference removed from the web surface.
+
+Lisa's verdict: "absolutely brilliant". Remaining small items (the Methodology
+tab's "Tier 1" references, the option-3 scope pass on mirror-gap/GACC bilateral,
+the `/data.xlsx` snapshot gap) are in `roadmap.md` → "Portal polish".
+
+---
+
 ## 2026-06-11 — journalist-usability arc, iterations 0–2 + renumbering
 
 A four-PR arc out of the 2026-06-11 usability review ("what flaws does
