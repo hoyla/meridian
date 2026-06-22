@@ -950,7 +950,7 @@ def test_scope_labelling_present_on_mirror_and_gacc_sections():
     Load-bearing copy: this guards against a refactor dropping the label."""
     import report_builder as rb
     mg = rb._ABOUT["mirror-gaps"]
-    assert "CN+HK+MO" in mg and "Hong Kong and Macau" in mg
+    assert "CN+HK+MO" in mg and "Hong Kong and Macao" in mg
     gacc = rb._ABOUT["gacc-bilateral"]
     assert "CN+HK+MO" in gacc and "partners" in gacc
 

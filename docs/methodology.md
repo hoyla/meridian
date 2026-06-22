@@ -110,7 +110,7 @@ A non-exhaustive list, in rough order of magnitude:
 
 2. **Partner attribution.** Goods physically Chinese in origin can
    be reported by Eurostat under partner=HK / partner=MO if the
-   shipping documentation routes them via Hong Kong or Macau.
+   shipping documentation routes them via Hong Kong or Macao.
    ~15% of China's reported exports route via HK. We sum CN + HK + MO
    on the Eurostat side (`anomalies.EUROSTAT_PARTNERS`). For a CN-only
    spot check against a Soapbox / Merics single-partner figure, query

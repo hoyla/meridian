@@ -81,7 +81,7 @@ CAUSAL_HYPOTHESES = [
         "id": "transshipment_reroute",
         "label": "Transshipment / partner reroute",
         "description": (
-            "Goods are rerouted via Hong Kong, Macau, Singapore, UAE or "
+            "Goods are rerouted via Hong Kong, Macao, Singapore, UAE or "
             "another transshipment hub, shifting which Eurostat partner "
             "code captures the trade. May appear as a CN drop offset by "
             "an HK/MO/SG rise, or as an apparent anomaly when only "

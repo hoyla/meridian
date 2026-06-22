@@ -3767,7 +3767,7 @@ def _insert_gacc_bilateral_aggregate_yoy_finding(
 #
 # Two partner scopes are emitted side by side:
 #   - cn_hk_mo (subkind `trade_balance`): our editorial standard, treating
-#     Hong Kong + Macau as Chinese trade — consistent with every other
+#     Hong Kong + Macao as Chinese trade — consistent with every other
 #     family in the pack.
 #   - cn_only (subkind `trade_balance_cn_only`): the slice Eurostat uses in
 #     its own published EU–China headline, so a reporter can reconcile our

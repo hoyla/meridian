@@ -602,7 +602,7 @@ def _render_hs_group_yoy(finding: dict) -> str:
     parts.append(
         f"This is **{direction_human}**, summed across partners "
         f"{', '.join(partners) or '(none specified)'} (mainland China plus "
-        f"the Hong Kong and Macau SARs, which Eurostat reports separately "
+        f"the Hong Kong and Macao SARs, which Eurostat reports separately "
         f"but China editorially counts as the same trade envelope).\n"
     )
     parts.append(_supersede_status(finding) + "\n")
