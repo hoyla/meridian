@@ -5,25 +5,70 @@ What's still open. For history of what shipped, see
 the original Phase 1–6 plan, look at the git log around
 `8f18e68`–`5d0e23e` (2026-05-09 to 2026-05-10).
 
+## Next deploy batch — priority order (Lisa via Luke, 2026-06-22)
+
+Everything from this session (#52–#59) is merged but **undeployed** — the next
+redeploy ships it all (EV/Lisa coverage, the "Lithium-ion accumulators" rename +
+Wind retirement, the China-reports relabel, the glossary web-hide, docx-off, the
+coverage guard, the /data.xlsx fix, the Q2 expansion). Before deploying, bundle
+these in Lisa's priority order. **None urgent** ("not likely to get to very
+soon") — captured so they're not lost.
+
+1. **CN+HK+MO envelope-labelling consistency.** The scope-clarity pass was only
+   half-done (#54 fixed the "China reports" mislabel); the **mirror-gap** and
+   **GACC-bilateral** sections still don't consistently state that "China" =
+   CN+HK+MO. Render-layer copy; reader-facing defensibility.
+2. **Q2 round 2 — cosmetics + paint.** The deferred half of the Q2 expansion:
+   essential oils / surfactants (cosmetics) + paints / varnishes / pigments,
+   plus the new **Cosmetics & personal care** and **Paint & coatings** themes
+   (which also give TiO₂ its themes). Same build pattern as tranche 1 (#59).
+3. **Multi-line trade-by-partner time-series charts (NEW — Lisa's colleague).**
+   Three over-time charts — import value, export value, balance — one line per
+   major region (ASEAN, Europe, Africa, Latin America, …), to show how China's
+   trading-relationship priorities have shifted. **Data confirmed present:** the
+   GACC bilateral feed already holds monthly observations **2019-01 → 2026-05
+   (81 periods)** for exactly those regions/blocs (ASEAN, Africa, European Union,
+   Latin America, RCEP, Belt & Road) plus the major countries — so
+   import / export / balance per region over time is fully derivable from what we
+   already ingest. The build is the new part: a regional monthly-series
+   aggregation (the analysers only emit YoY snapshots today) + a **multi-line**
+   time-series chart (we only render single-series sparklines now) + a portal
+   home (extends the existing GACC "Trading partners" section). Mild scope-shift
+   — China-global, not China-Europe — but it belongs in the GACC section that
+   already does China-vs-world. Do a quick label-normalisation pass first (the
+   feed has "Incl: X" / dup-label noise; the canonical regions are clean).
+4. **Most-recent-update date in the "Period covered" table (NEW).** Sources &
+   coverage. Small render add — we already hold fetch / last_seen dates.
+5. **State-of-play ↔ Trading-partners linkage (NEW).** The two sit far apart and
+   the relationship reads as confusing. Cheapest fix: a "see Trading partners"
+   link at the end of State of play; worth a short UX think on whether more is
+   wanted.
+6. **`eurostat_raw_rows` UNIQUE constraint** — data-integrity hardening (detail
+   in the Portal-polish bullet below): a partial unique index → `ON CONFLICT DO
+   NOTHING`, concurrency-safe dedup.
+7. **Sticky LLM takes (graft-prior-takes)** — retain prior takes on an LLM-less
+   rebuild so cosmetic portal refreshes stop costing money (dedicated section
+   below).
+
 ## Portal polish — small items from the 2026-06-22 Lisa-feedback batch
 
 Surfaced while shipping the Eurostat data correction + portal-clarity batch
 (history.md 2026-06-22; PRs #43–#48, all live). All small; none blocking.
 
-- **Methodology tab still references the docx "Tier 1 / 2 / 3" + `02_Findings.md`
-  structure**, which a web-only reader doesn't have — the same class of issue as
-  the (now fixed) "What changed → Tier 1" bug. Give the Methodology tab
-  web-appropriate copy, or drop the docx-structure description on the web surface.
-- **Scope-clarity pass (option 3), beyond the KPIs.** Label the CN+HK+MO envelope
-  consistently on the **mirror-gap** and **GACC bilateral** sections too, and fix
-  the **"China reports" mislabel**: `report_render_html.py` (and the markdown
-  sibling) render the *Eurostat CN-only* counterpart (`trade_balance_cn_only`) as
-  "(China reports €X/day)", but "China reports" means GACC (China's own customs)
-  everywhere else — it conflates two different sources.
-- **`/data.xlsx` download is absent on a `--portal-snapshot` publish.** The
-  snapshot-only path doesn't build the workbook, so the Tables-tab *download* 404s
-  (inline tables are fine). Either build the workbook into the snapshot path, or
-  document that the xlsx needs a `--briefing-pack` run.
+- **Docx-structure terms on a web surface — DONE 2026-06-22 (#55).** The leak was
+  the **Glossary** tab (baked from the shared `docs/glossary.md`), not the
+  Methodology tab (whose copy was already web-clean). A `<!--web-hide-->` marker
+  drops the bundle-only terms (Tier 1/2/3, `02_Findings.md`, provenance files,
+  etc.) from the web glossary while keeping them for the bundle/GitHub rendering.
+- **Scope-clarity pass (option 3) — half DONE.** The **"China reports" mislabel**
+  is fixed (#54): the Eurostat CN-only deficit counterpart now reads "(China only,
+  excl. HK/Macao …)" instead of borrowing GACC's "China reports" (which stays
+  correct in the mirror-gap section). STILL OPEN → deploy-batch item 1 above:
+  labelling the CN+HK+MO envelope consistently on the **mirror-gap** and
+  **GACC-bilateral** sections.
+- **`/data.xlsx` 404 on a `--portal-snapshot` publish — DONE 2026-06-22 (#57).**
+  `write_portal_snapshot(write_workbook=True)` now builds `04_Data.xlsx` on the
+  snapshot path (isolated/best-effort), so the Tables-tab download resolves.
 - **Eurostat coverage guard checks CN only — DONE 2026-06-22.** The periodic
   completeness guard now checks the full CN+HK+MO envelope the ingest stores via
   `db.eurostat_coverage_gaps_multi` (a missing HK/MO reporter-month was
