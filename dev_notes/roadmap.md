@@ -5,6 +5,41 @@ What's still open. For history of what shipped, see
 the original Phase 1–6 plan, look at the git log around
 `8f18e68`–`5d0e23e` (2026-05-09 to 2026-05-10).
 
+## Portal polish — small items from the 2026-06-22 Lisa-feedback batch
+
+Surfaced while shipping the Eurostat data correction + portal-clarity batch
+(history.md 2026-06-22; PRs #43–#48, all live). All small; none blocking.
+
+- **Methodology tab still references the docx "Tier 1 / 2 / 3" + `02_Findings.md`
+  structure**, which a web-only reader doesn't have — the same class of issue as
+  the (now fixed) "What changed → Tier 1" bug. Give the Methodology tab
+  web-appropriate copy, or drop the docx-structure description on the web surface.
+- **Scope-clarity pass (option 3), beyond the KPIs.** Label the CN+HK+MO envelope
+  consistently on the **mirror-gap** and **GACC bilateral** sections too, and fix
+  the **"China reports" mislabel**: `report_render_html.py` (and the markdown
+  sibling) render the *Eurostat CN-only* counterpart (`trade_balance_cn_only`) as
+  "(China reports €X/day)", but "China reports" means GACC (China's own customs)
+  everywhere else — it conflates two different sources.
+- **`/data.xlsx` download is absent on a `--portal-snapshot` publish.** The
+  snapshot-only path doesn't build the workbook, so the Tables-tab *download* 404s
+  (inline tables are fine). Either build the workbook into the snapshot path, or
+  document that the xlsx needs a `--briefing-pack` run.
+- **Eurostat coverage guard checks CN only** while the periodic ingest stores
+  CN+HK+MO — a missing HK/MO reporter-month wouldn't be flagged. Loop the gap
+  check over `{CN,HK,MO}`. (From the #43 review.)
+- **No UNIQUE constraint on `eurostat_raw_rows`** — the additive guard is the sole
+  dedup defence and isn't concurrency-safe (check + insert in separate
+  transactions). A partial unique index on the natural key would let the insert
+  use `ON CONFLICT DO NOTHING`, enforcing in the DB what the guard enforces alone.
+  (From the #43 review.)
+- **Minor / optional.** Fetch dates still render raw ISO (left deliberately — they
+  are real calendar days, not the `-01` period artefact; could prettify to "15 Jun
+  2026"). The month format is the abbreviated "Apr 2026" (full "April 2026" was an
+  option). And the **graft-prior-takes** feature (see the "retain prior LLM content
+  on an LLM-less rebuild" item) would make cosmetic portal rebuilds free instead of
+  paying for a `--portal-takes` regeneration each time — the cost-per-tweak pain
+  during this batch is the case for it.
+
 ## Breadth expansion — ingest more now that the report is navigable (2026-06-21)
 
 **Premise.** The portal restructuring (tabs; "More about" + per-group +
