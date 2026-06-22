@@ -253,7 +253,10 @@ def _deficit_line_md(f) -> str:
     per_day = m.get("per_day_eur")
     pd = f" · €{per_day / 1e6:,.0f}M/day" if per_day else ""
     cn = m.get("cn_per_day_eur")
-    cn_note = f" (China reports €{cn / 1e6:,.0f}M/day)" if cn else ""
+    # CN-only (excl. HK/Macao) Eurostat counterpart — the published EU-China
+    # basis, NOT GACC. ("China reports" stays reserved for the mirror-gap
+    # section; see _deficit_row in report_render_html for the full rationale.)
+    cn_note = f" (China only, excl. HK/Macao: €{cn / 1e6:,.0f}M/day)" if cn else ""
     yoy = m.get("yoy_pct")
     delta = ""
     if yoy is not None:

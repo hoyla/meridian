@@ -758,7 +758,8 @@ _TB_SCOPES = [
 
 def _latest_deficit_per_day(cur, subkind):
     """(finding_id, deficit_per_day_eur) for the latest finding of a
-    trade-balance subkind — used for the China-reported counterpart."""
+    trade-balance subkind — used for the CN-only (excl. HK/Macao) counterpart,
+    which is still Eurostat, not GACC."""
     cur.execute(
         """SELECT id, (detail->'totals'->'rolling_12mo'->>'deficit_per_day_eur')::numeric
              FROM findings WHERE superseded_at IS NULL AND subkind=%s
@@ -816,7 +817,7 @@ def _state_of_play_section(cur) -> Section:
                 "deficit_eur": _f(roll.get("deficit_eur")),
                 "per_day_eur": _f(roll.get("deficit_per_day_eur")),
                 "yoy_pct": _f(roll.get("yoy_pct")),
-                "cn_per_day_eur": cn_per_day,  # China-reported counterpart
+                "cn_per_day_eur": cn_per_day,  # CN-only (excl. HK/Macao) Eurostat counterpart — the published EU-China basis, NOT GACC
                 "cn_finding": cn_fid,
             },
             chart_data=(ChartData(chart_type="line", series=series)

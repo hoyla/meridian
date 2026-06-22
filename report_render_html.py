@@ -584,7 +584,16 @@ def _deficit_row(f) -> str:
     per_day = m.get("per_day_eur")
     pd = f" · €{per_day / 1e6:,.0f}M/day" if per_day else ""
     cn = m.get("cn_per_day_eur")
-    cn_note = (f' <span style="color:{_MUTED}">(China reports €{cn / 1e6:,.0f}M/day)</span>'
+    # The CN-only counterpart is still Eurostat / EU-27 — partner = mainland
+    # China only (excl. the HK & Macao SARs), the slice the EU's *published*
+    # EU-China headline uses. Labelling it "China reports" wrongly implied GACC
+    # (China's own customs); "China reports" is reserved for the mirror-gap
+    # section, which genuinely compares GACC against Eurostat.
+    cn_note = (f' <span style="color:{_MUTED}" title="Same source (Eurostat, EU-27'
+               f' reporters); partner = China only, excluding the Hong Kong and Macao'
+               f' SARs. This narrower scope is the basis the EU uses for its published'
+               f' EU-China balance; the headline figure above adds HK and Macao.">'
+               f'(China only, excl. HK/Macao: €{cn / 1e6:,.0f}M/day)</span>'
                if cn else "")
     yoy = m.get("yoy_pct")
     delta = ""
