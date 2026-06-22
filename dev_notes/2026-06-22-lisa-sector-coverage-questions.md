@@ -207,14 +207,18 @@ Each chosen group is still a seed row + migration (+ `eurostat_world_aggregates`
 backfill for the share metric) — mechanically identical to the EV additions —
 plus its theme membership(s) in `labels.py`.
 
-### Deferred to a follow-up branch (Lisa keen to do soon)
+### Done — legacy application-bound groups (branch `ljh-legacy-group-taxonomy-retrofit`, 2026-06-22)
 
-Retrofit the three legacy groups that bind application into the *group itself*
-(see the audit in this note's companion discussion): rename
-`EV batteries (Li-ion)` → `Lithium-ion accumulators (HS 850760)` (keep it in the
-`EV supply chain` theme), and demote/reframe `Wind turbine components`
-(`850300`/`730820` aren't wind-specific). NOT on this branch: a rename orphans
-existing findings unless paired with a findings backfill UPDATE (the
-`tests/test_orphan_findings.py` invariant; cf. `test_portal.py:842` which pins
-the EV-batteries theme on the current name), so it needs its own migration and
-test update.
+Retrofitted via a new `hs_groups.display_name` column + `db.group_display_names`
+resolver, rather than renaming the `name` key (which is snapshotted into
+findings and hardcoded in ~100 tests — a rename would orphan findings and force
+a sweep). `EV batteries (Li-ion)` now displays as
+`Lithium-ion accumulators (HS 850760)` everywhere a reader sees it (portal,
+briefing, sheets, glossary), with heading/slug/cross-link consistency; the key
+is unchanged so it stays in the `EV supply chain` theme and no findings orphan.
+`Wind turbine components` was retired (its `850300`/`730820` patterns weren't
+wind-specific) — `Wind generating sets only` survives and a new overlapping
+`Wind power` theme (labels.py) gathers the wind-relevant groups. `Solar/grid
+inverters (broad)` left as-is by decision (already hedged; has PV-specific
+siblings). Slug consistency is locked by a regression test
+(`test_portal.test_display_name_substituted_and_slug_is_consistent`).

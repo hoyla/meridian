@@ -107,16 +107,20 @@ append-only + provenance on everything new (principles 3/4/7).
    Awaiting Lisa's prioritisation before seeding (the analyser surfaces any
    seeded group immediately, so we don't seed speculatively).
 
-   **Retrofit the 3 legacy application-bound groups** (Lisa keen, soon; own
-   branch — kept off the Jun-2026 EV-coverage branch deliberately).
-   `EV batteries (Li-ion)` → material name `Lithium-ion accumulators (HS 850760)`
-   (850760 is all Li-ion, not just EV); `Wind turbine components` (two of its
-   three patterns — `850300` generator parts, `730820` steel towers — aren't
-   wind-specific); `Solar/grid inverters (broad)` (mild, already hedged). The
-   renames are far cheaper once the **group display-name column** (below) lands:
-   changing the *display* leaves the `name` key — and every finding that
-   references it — intact, sidestepping the `test_orphan_findings` backfill. So
-   sequence display-name column → renames.
+   **Retrofit the 3 legacy application-bound groups — DONE 2026-06-22**
+   (branch `ljh-legacy-group-taxonomy-retrofit`). Added a journalist-editable
+   `hs_groups.display_name` column + `db.group_display_names` resolver, plumbed
+   through every reader-facing surface (portal, briefing sections, sheets,
+   glossary) with heading/slug/link consistency. `EV batteries (Li-ion)` now
+   displays as `Lithium-ion accumulators (HS 850760)` — the `name` key, and all
+   findings/tests keyed off it, untouched (so no orphan backfill).
+   `Wind turbine components` retired (its `850300`/`730820` patterns weren't
+   wind-specific); `Wind generating sets only` survives and a new overlapping
+   `Wind power` theme gathers the wind-relevant groups. `Solar/grid inverters
+   (broad)` left as-is by decision (already hedged; has PV-specific siblings).
+   The display-name column is now available for the **group display-names**
+   item below (China-mentioning names that read awkwardly in front-page
+   sentences).
 
 3. **Richer per-source statistics.**
    - **Eurostat:** unit-price (€/kg) trends as a first-class series (we hold
