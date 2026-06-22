@@ -449,8 +449,9 @@ def probe_source(source: str, today: date | None = None) -> str:
     month), attempt to fetch it (cheap existence probe gates the download),
     classify the publication-calendar expectation, and write one
     routine_check_log row carrying both the objective result and the
-    expectation. For gacc: walk the indexes and compare release counts
-    (no candidate-period / expectation concept).
+    expectation. For gacc: walk the indexes and compare release counts, and
+    classify the same expectation axis against GACC's formula-only calendar
+    (candidate = next month after the latest preliminary release in the DB).
 
     Replaces the old SKILL.md prose that computed candidates via psql and
     guessed a 5-week eligibility gate. Returns a one-line human-readable
@@ -463,6 +464,25 @@ def probe_source(source: str, today: date | None = None) -> str:
     started = time.monotonic()
 
     if source == "gacc":
+        # GACC is an index walk, not a single-period fetch, so the walk always
+        # runs (it's idempotent/cached and needs no candidate to discover new
+        # releases). But it now carries the same expectation axis as the other
+        # sources: candidate = the next reference month after the latest
+        # preliminary release in the DB (all gacc SEED_INDEXES are 'preliminary',
+        # so MAX(period) is that release's month). Classify it against GACC's
+        # formula-only calendar (scheduled ≈ 8th of the following month, due-by
+        # ~12th) so a slipped release reads `overdue` on --source-status instead
+        # of a blank cell. Computed before the walk — mirroring the eurostat/hmrc
+        # branch — so a release that finally lands after slipping logs the
+        # informative new_data × overdue ("arrived, but late") for that one run,
+        # then clears next run as the latest period advances. Empty DB → no
+        # anchor → expectation stays None (the walk still runs).
+        latest = _latest_release_period("gacc")
+        candidate = release_calendar.next_period(latest) if latest else None
+        expectation = (
+            release_calendar.classify_expectation("gacc", candidate, today)
+            if candidate else None
+        )
         before = _count_gacc_releases()
         try:
             run_scrape(urls=None, dry_run=False, force_refetch=False)
@@ -475,10 +495,13 @@ def probe_source(source: str, today: date | None = None) -> str:
             log.exception("GACC walk failed")
             result, notes, error = "error", None, str(e)
         duration_ms = int((time.monotonic() - started) * 1000)
-        routine_log.log_check("gacc", result, notes=notes, error=error,
-                              duration_ms=duration_ms)
-        line = f"gacc: {result}" + (f" — {notes}" if notes else "") \
-            + (f" — {error}" if error else "")
+        routine_log.log_check("gacc", result, expectation=expectation,
+                              candidate_period=candidate, notes=notes,
+                              error=error, duration_ms=duration_ms)
+        line = (f"gacc: {result} × {expectation or '—'}"
+                + (f" (candidate {candidate:%Y-%m})" if candidate else "")
+                + (f" — {notes}" if notes else "")
+                + (f" — {error}" if error else ""))
         print(line)
         return line
 
@@ -857,15 +880,17 @@ def main() -> None:
             "With --log-check: the publication-calendar expectation for the "
             "candidate period (none_expected / due / overdue). Normally set "
             "automatically by --probe-source; this is for manual / test use. "
-            "Omit for gacc and the _routine bookends."
+            "Omit for the _routine bookends and any check with no candidate "
+            "period (e.g. an empty-DB gacc walk)."
         ),
     )
     p.add_argument(
         "--log-period", type=_parse_period, metavar="YYYY-MM",
         help=(
-            "With --log-check: the period the Routine attempted to fetch "
-            "(Eurostat / HMRC). Omit for GACC index walks where the "
-            "concept doesn't apply."
+            "With --log-check: the candidate reference month the Routine "
+            "checked (for gacc, the next month after the latest preliminary "
+            "release). Omit only when there is no candidate (e.g. an empty-DB "
+            "gacc walk, or the _routine bookends)."
         ),
     )
     p.add_argument(

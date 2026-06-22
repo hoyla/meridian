@@ -99,7 +99,9 @@ def test_compute_status_picks_most_recent_per_source(clean_db, test_db_url):
     # HMRC: last attempt errored.
     routine_log.log_check("hmrc", "error", error="psycopg2.OperationalError: timeout")
 
-    # GACC: only ever no_change so far — never brought back new data through the routine.
+    # GACC: only ever no_change so far — never brought back new data through the
+    # routine. Logged here without an expectation (as on an empty-anchor walk),
+    # so last_expectation stays None even though gacc now has a calendar.
     routine_log.log_check("gacc", "no_change", notes="walked indexes, no new releases")
 
     by_src = {s.source: s for s in routine_log.compute_status()}
@@ -119,7 +121,7 @@ def test_compute_status_picks_most_recent_per_source(clean_db, test_db_url):
 
     gacc = by_src["gacc"]
     assert gacc.last_result == "no_change"
-    assert gacc.last_expectation is None  # gacc has no expectation axis
+    assert gacc.last_expectation is None  # this row was logged without one
     assert gacc.last_new_data_at is None
     assert gacc.latest_period_in_db == date(2026, 4, 1)  # from releases, not the log
 

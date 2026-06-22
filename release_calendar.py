@@ -39,10 +39,22 @@ Date sources (provenance — these are hand-entered annual constants):
   ~6-week lag; HMRC publishes a few days *before* Eurostat for the same
   reference month (e.g. April 2026 ref: HMRC 12 Jun, Eurostat 15 Jun).
 
+- **GACC**: no official forward publication calendar exists (China Customs
+  does not publish one), so GACC is formula-only — `exact` is empty. The
+  preliminary country/region release lands the 8th–10th of the month after
+  the reference month (e.g. May 2026 → 10 Jun; Apr → 8 May; Mar → 8 Apr;
+  Dec 2025 → 8 Jan), so `lag_days=8` puts the scheduled date on the 8th and a
+  4-day grace pushes the due-by cutoff to the ~12th, absorbing the normal
+  8th–10th wobble. Holiday slips do happen (Aug 2025 ref → 17 Sep, Jul → 12
+  Aug, around the China public-holiday calendar); the cutoff deliberately lets
+  a genuine slip past the 12th read `overdue` for the days it is actually
+  late, which is the signal we want. See the GACC addendum in
+  dev_notes/2026-06-02-eurostat-expectation-axis-design.md.
+
 When a period isn't in the hand-entered table (e.g. a 2027 reference month
-before next year's calendar is entered) the formula `period_close + lag_days`
-is the fallback. The grace window is set generously enough that a source
-publishing on its real schedule never reads `overdue`.
+before next year's calendar is entered, or any GACC month) the formula
+`period_close + lag_days` is the fallback. The grace window is set generously
+enough that a source publishing on its real schedule never reads `overdue`.
 """
 from __future__ import annotations
 
@@ -125,17 +137,31 @@ _HMRC = SourceCalendar(
     },
 )
 
-# Sources with a publication calendar. GACC is deliberately absent — it's an
-# index walk with no candidate-period concept, so it has no expectation axis
-# (classify_expectation returns None for it).
+# GACC preliminary country/region release. China Customs publishes no forward
+# calendar, so this is formula-only (`exact` empty): scheduled = period_close +
+# 8 days ≈ the 8th of the following month, with a 4-day grace → due-by ~12th.
+# That cutoff absorbs the routine 8th–10th wobble while letting the occasional
+# holiday slip (Aug 2025 ref → 17 Sep) read `overdue` for the days it is late.
+# See provenance note above.
+_GACC = SourceCalendar(
+    lag_days=8,
+    grace_days=4,
+    exact={},
+)
+
+# Sources with a publication calendar. GACC joined 2026-06-22: unlike eurostat/
+# hmrc it has no official forward calendar, so it is formula-only, but it now
+# carries the same expectation axis (none_expected / due / overdue) instead of a
+# blank — a slipped GACC release surfaces on the --source-status OVERDUE line.
 CALENDARS: dict[str, SourceCalendar] = {
     "eurostat": _EUROSTAT,
     "hmrc": _HMRC,
+    "gacc": _GACC,
 }
 
 
 def has_calendar(source: str) -> bool:
-    """True for sources that carry an expectation axis (eurostat, hmrc)."""
+    """True for sources that carry an expectation axis (eurostat, hmrc, gacc)."""
     return source in CALENDARS
 
 
@@ -143,7 +169,8 @@ def expected_publish_date(source: str, period: date) -> date | None:
     """The scheduled publication date for `source`'s `period` data.
 
     Exact hand-entered calendar date if known, else the formula fallback
-    (`period_close + lag_days`). None for sources without a calendar (gacc).
+    (`period_close + lag_days`). None for sources without a calendar. GACC is
+    formula-only (no `exact` entries), so it always takes the fallback branch.
     """
     cal = CALENDARS.get(source)
     if cal is None:
@@ -160,8 +187,8 @@ def classify_expectation(
     """Derive the expectation for `source`'s `period` as of `today`.
 
     Returns `none_expected` / `due` / `overdue`, or None for a source with no
-    calendar (gacc). The grace window after the scheduled date absorbs
-    weekend / holiday shifts so an on-time release never reads `overdue`.
+    calendar. The grace window after the scheduled date absorbs weekend /
+    holiday shifts so an on-time release never reads `overdue`.
     """
     cal = CALENDARS.get(source)
     if cal is None:

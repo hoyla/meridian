@@ -10,8 +10,10 @@ to `routine_check_log` so `python scrape.py --source-status` can show:
 - the most recent attempt's two orthogonal axes:
     result      — the objective outcome: new_data / no_change / error
     expectation — derived from the source's publication calendar
-                  (release_calendar.py): none_expected / due / overdue,
-                  or NULL for gacc (no candidate-period concept)
+                  (release_calendar.py): none_expected / due / overdue
+                  for every checked source (gacc joined 2026-06-22 with a
+                  formula-only calendar); NULL only when there is no candidate
+                  period to classify (empty DB, or the _routine bookends)
 
 The two axes combine: a quiet expected gap is no_change × none_expected
 (ignore); a release missing past its scheduled date is no_change × overdue
@@ -75,8 +77,9 @@ def log_check(
     """Insert one row into routine_check_log; returns the new id.
 
     `expectation` is the publication-calendar axis (none_expected / due /
-    overdue) — None for gacc and the _routine lifecycle bookends. Compute it
-    via release_calendar.classify_expectation.
+    overdue) — None for the _routine lifecycle bookends and any check with no
+    candidate period to classify (e.g. an empty DB). Compute it via
+    release_calendar.classify_expectation.
     """
     if result not in VALID_RESULTS:
         raise ValueError(
