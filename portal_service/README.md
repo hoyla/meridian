@@ -29,10 +29,19 @@ for us.
 > `gcloud` version — direct IAP on Cloud Run is recent and the surface is still
 > settling.
 
+> **Current live deployment** (use these exact values, not the convention below):
+> project `meridian-500111`, region `europe-west2`, bucket **`meridian-500111-portal`**,
+> service `meridian-portal`. Note the live bucket does **not** follow the
+> `meridian-portal-snapshots-<project>` naming the snippet below suggests. The
+> authoritative source is always the service's own env var:
+> `gcloud run services describe meridian-portal --region europe-west2 --format=json`
+> → `containers[0].env` → `PORTAL_BUCKET`.
+
 ```bash
 PROJECT=your-gcp-project
 REGION=europe-west2          # London
-BUCKET=meridian-portal-snapshots-$PROJECT
+BUCKET=meridian-portal-snapshots-$PROJECT   # suggested name for a fresh deploy;
+                                            # the live deploy uses meridian-500111-portal
 
 gcloud config set project "$PROJECT"
 
