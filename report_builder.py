@@ -161,7 +161,7 @@ def _primary_section(divisions) -> tuple[str, str]:
 # movers (Eurostat/HMRC) or macro/geographic partner-bloc totals (GACC).
 _VARIANTS: dict[str, dict] = {
     "eurostat": {
-        "lead": "What {month}'s EU figures changed",
+        "lead": "Standout moves in {month}'s EU figures",
         "note": (
             "Triggered by new Eurostat data. The China-vs-Europe "
             "mirror-trade discrepancy and the HS-sector shifts live here, "
@@ -171,7 +171,7 @@ _VARIANTS: dict[str, dict] = {
         "general_slot": "surface what connects {month}'s findings — and what's notably absent",
     },
     "gacc": {
-        "lead": "What China's own {month} figures changed",
+        "lead": "Standout moves in China's own {month} figures",
         "note": (
             "Triggered by new GACC data, a month ahead of Europe's. No "
             "mirror-gap or HS-sector detail at this altitude — GACC "
@@ -182,7 +182,7 @@ _VARIANTS: dict[str, dict] = {
         "general_slot": "read what China's {month} geography shift implies — grounded in the totals above",
     },
     "hmrc": {
-        "lead": "What the UK's {month} figures changed",
+        "lead": "Standout moves in the UK's {month} figures",
         "note": (
             "Triggered by new HMRC data, with no fresher Eurostat month — "
             "the UK cut of the China trade picture."
