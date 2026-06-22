@@ -371,6 +371,32 @@ def _more_about(section) -> str:
     )
 
 
+_ABOUT_SITE = (
+    "**Meridian** surfaces findings from China–Europe trade data, drawn from "
+    "three official sources: **GACC** (China's customs administration), "
+    "**Eurostat** (EU-27) and **HMRC** (UK). Each release is triggered when our "
+    "scraper finds fresh data from one of these — the source and the month it "
+    "covers are shown by the badge, top right.\n\n"
+    "The analysis covers a configurable set of **Harmonised System (HS)** "
+    "product categories, not all traded goods. The list is editorially "
+    "maintained and can be widened — tell the team if there's a category worth "
+    "adding.\n\n"
+    "Every figure drills back to its source release via its `finding/N` token. "
+    "The **Sources & coverage** and **Methodology** tabs carry the full "
+    "provenance, definitions and caveats."
+)
+
+
+def _about_site_html() -> str:
+    """A collapsed 'About this site' box for the whole briefing — same disclosure
+    pattern as the per-section 'More about this section', but page-level."""
+    return (
+        '<details class="more about-site"><summary>About this site</summary>'
+        f'<div class="more-body">{_md_blocks_to_html(_ABOUT_SITE)}</div>'
+        "</details>"
+    )
+
+
 def _indicator_card(ind: Indicator) -> str:
     delta = ""
     if ind.delta:
@@ -1574,6 +1600,25 @@ _PORTAL_JS = """<script>
 </script>"""
 
 
+def _source_received_date(sources_sec, variant) -> str | None:
+    """When we last received the active source's data: the latest release's
+    fetch date from the sources appendix, formatted '16 Jun 2026'. None if the
+    section, the matching source, or the date is unavailable."""
+    from datetime import date as _d
+    for entry in ((sources_sec.metrics or {}).get("appendix", []) if sources_sec else []):
+        if entry.get("source") == variant:
+            recent = entry.get("recent") or []
+            iso = recent[0].get("fetched") if recent else None
+            if not iso:
+                return None
+            try:
+                d = _d.fromisoformat(iso)
+            except (ValueError, TypeError):
+                return iso
+            return f"{d.day} {d:%b %Y}"
+    return None
+
+
 def render_html(report: Report) -> str:
     """Render the whole report as a single self-contained, tabbed HTML page.
     Sections are routed to tabs by kind: data → Tables, reference →
@@ -1589,13 +1634,19 @@ def render_html(report: Report) -> str:
     tip = note.split(". ", 1)[0].strip() if note else ""
     if tip and not tip.endswith("."):
         tip += "."
-    tip_attr = f' title="{html.escape(tip)}"' if tip else ""
 
     data_sec = next((s for s in report.sections if s.kind == "data"), None)
     ref_sec = next((s for s in report.sections if s.kind == "reference"), None)
     gloss_sec = next((s for s in report.sections if s.kind == "glossary"), None)
     sources_sec = next((s for s in report.sections if s.kind == "sources"), None)
     structural_sec = next((s for s in report.sections if s.kind == "structural"), None)
+
+    # Append when we received this source's latest data to the badge tooltip —
+    # answers "how fresh is this?" on hover.
+    recv = _source_received_date(sources_sec, m.variant)
+    if recv:
+        tip = f"{tip} Received {recv}.".strip()
+    tip_attr = f' title="{html.escape(tip)}"' if tip else ""
 
     # --- Briefing panel: indicators, headline, general take, what-changed, then
     # the main-page sections (everything that isn't a tab of its own).
@@ -1605,6 +1656,8 @@ def render_html(report: Report) -> str:
         brief.append('<section class="kpis">'
                      + "".join(_indicator_card(i) for i in report.key_indicators)
                      + "</section>")
+    # Page-level "About this site" box, just above the Standout-moves lead.
+    brief.append("<section>" + _about_site_html() + "</section>")
     if report.headline:
         brief.append("<section>" + _headline(report.headline) + "</section>")
         for slot in report.headline.llm_slots:

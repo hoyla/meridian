@@ -433,10 +433,33 @@ def test_masthead_carries_badge_period_and_first_sentence_tooltip():
     assert '<div class="subbar">' not in h and "note-line" not in h
     mast = h[h.index('class="masthead"'):h.index("</header>")]
     assert "Data to April 2026" in mast
-    assert 'class="tag" title="Triggered by new Eurostat data."' in mast
-    assert ">eurostat<" in mast
-    # the dropped second sentence appears nowhere
+    # tooltip = first sentence + when we received this source's latest data
+    # (sample appendix fetched 2026-06-01); boilerplate second sentence dropped
+    assert ('class="tag" title="Triggered by new Eurostat data. '
+            'Received 1 Jun 2026.">eurostat</span>') in mast
     assert "Boilerplate second sentence" not in h
+
+
+def test_about_this_site_box_sits_above_standout_moves():
+    """A page-level 'About this site' disclosure renders in the Briefing, between
+    the KPI band and the Standout-moves lead."""
+    h = render_html(_sample_report())
+    assert "About this site</summary>" in h and "about-site" in h
+    assert "Harmonised System (HS)" in h          # the HS-scope copy
+    i_kpi, i_about = h.find('class="kpis"'), h.find("about-site")
+    i_moves = h.find('class="lead"')              # the headline lead H2
+    assert i_kpi < i_about < i_moves
+
+
+def test_source_received_date_falls_back_gracefully():
+    """The badge tooltip omits the received-date (rather than erroring) when the
+    sources section or its fetch date is missing."""
+    from report_render_html import _source_received_date
+    assert _source_received_date(None, "eurostat") is None
+    r = _sample_report()
+    src = next(s for s in r.sections if s.kind == "sources")
+    assert _source_received_date(src, "eurostat") == "1 Jun 2026"
+    assert _source_received_date(src, "nonesuch") is None
 
 
 def test_what_changed_demotes_to_one_liner_on_quiet_cycle():
