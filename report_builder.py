@@ -307,7 +307,7 @@ def _deficit_indicator(
     *,
     subkind: str = "trade_balance",
     key: str = "eu_china_deficit_per_day",
-    label: str = "EU-27 goods-trade deficit with China",
+    label: str = "EU-27 goods-trade deficit with China, Hong Kong & Macao",
     source: str = "eurostat",
 ) -> Indicator | None:
     """A goods-trade deficit with China as a vital sign — the standing
@@ -344,15 +344,20 @@ def _deficit_indicator(
             "formatted": f"{'+' if float(yoy) >= 0 else ''}{float(yoy) * 100:.1f}% YoY",
         }
 
-    # Scope disclosure: the headline is the CN+HK+MO envelope (our editorial
-    # standard — ~15% of China's exports route via Hong Kong). Surface that, and
-    # the China-only counterpart, so the figure can't be mistaken for the
-    # CN-only number external sources cite. (Full multi-surface scope-labelling
-    # pass tracked separately.)
-    _, cn_per_day = _latest_deficit_per_day(cur, subkind + "_cn_only")
-    note = "Incl. Hong Kong & Macao"
-    if cn_per_day is not None:
-        note += f" · China-only €{cn_per_day / 1e6:,.0f}M/day"
+    # Scope: the headline is the CN+HK+MO envelope (our editorial standard —
+    # ~15% of China's exports route via Hong Kong), named in the label. The note
+    # carries the China-only counterpart external sources cite — with its OWN
+    # YoY, since the headline's delta belongs to the CN+HK+MO figure and the two
+    # must not read as one. (Full multi-surface scope pass tracked separately.)
+    note = None
+    _, cn_detail = _latest_trade_balance(cur, subkind + "_cn_only")
+    cn_roll = (cn_detail or {}).get("totals", {}).get("rolling_12mo", {})
+    cn_pd, cn_yoy = cn_roll.get("deficit_per_day_eur"), cn_roll.get("yoy_pct")
+    if cn_pd is not None:
+        cn_yoy_str = (
+            f" ({'+' if float(cn_yoy) >= 0 else ''}{float(cn_yoy) * 100:.1f}% YoY)"
+            if cn_yoy is not None else "")
+        note = f"China-only €{float(cn_pd) / 1e6:,.0f}M/day{cn_yoy_str}"
 
     return Indicator(
         key=key,
@@ -382,14 +387,17 @@ def _import_level_indicator(cur) -> Indicator | None:
         return None
     anchor = (detail or {}).get("windows", {}).get("anchor_period")
     as_of = date.fromisoformat(anchor) if isinstance(anchor, str) else None
+    _, cn_detail = _latest_trade_balance(cur, "trade_balance_cn_only")
+    cn_imp = (cn_detail or {}).get("totals", {}).get("rolling_12mo", {}).get("import_eur")
+    note = f"China-only {_fmt_eur(cn_imp)}" if cn_imp is not None else None
     return Indicator(
         key="eu_china_imports_12mo",
-        label="EU-27 goods imports from China (12-month)",
+        label="EU-27 goods imports from China, Hong Kong & Macao (12-month)",
         value=float(imp),
         unit="eur",
         formatted=_fmt_eur(imp),
         chart="bignumber",
-        note="Incl. Hong Kong & Macao",
+        note=note,
         provenance=Provenance(finding_ids=[fid], source="eurostat", as_of=as_of),
     )
 
@@ -1443,7 +1451,8 @@ def build_report(
                 _import_level_indicator(cur),
                 _deficit_indicator(
                     cur, subkind="trade_balance_uk", key="uk_china_deficit_per_day",
-                    label="UK goods-trade deficit with China", source="hmrc",
+                    label="UK goods-trade deficit with China, Hong Kong & Macao",
+                    source="hmrc",
                 ),
             ) if ind is not None
         ]

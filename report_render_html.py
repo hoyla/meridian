@@ -426,11 +426,14 @@ def _indicator_card(ind: Indicator) -> str:
         spark = f'<div class="kpi-spark">{_sparkline_svg(ind.chart_data)}</div>'
     note = (f'<div class="kpi-note">{html.escape(ind.note)}</div>'
             if ind.note else "")
+    # Order: value, the headline figure's YoY (delta), then the China-only
+    # comparator (note, with its own YoY) — so the delta can't be read as the
+    # comparator's.
     return (
         '<div class="kpi">'
         f'<div class="kpi-label">{html.escape(ind.label)}</div>'
         f'<div class="kpi-value">{html.escape(ind.formatted)}</div>'
-        f"{note}{delta}{spark}{prov}"
+        f"{delta}{note}{spark}{prov}"
         "</div>"
     )
 
