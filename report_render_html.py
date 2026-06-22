@@ -1574,6 +1574,25 @@ _PORTAL_JS = """<script>
 </script>"""
 
 
+def _source_received_date(sources_sec, variant) -> str | None:
+    """When we last received the active source's data: the latest release's
+    fetch date from the sources appendix, formatted '16 Jun 2026'. None if the
+    section, the matching source, or the date is unavailable."""
+    from datetime import date as _d
+    for entry in ((sources_sec.metrics or {}).get("appendix", []) if sources_sec else []):
+        if entry.get("source") == variant:
+            recent = entry.get("recent") or []
+            iso = recent[0].get("fetched") if recent else None
+            if not iso:
+                return None
+            try:
+                d = _d.fromisoformat(iso)
+            except (ValueError, TypeError):
+                return iso
+            return f"{d.day} {d:%b %Y}"
+    return None
+
+
 def render_html(report: Report) -> str:
     """Render the whole report as a single self-contained, tabbed HTML page.
     Sections are routed to tabs by kind: data → Tables, reference →
@@ -1589,13 +1608,19 @@ def render_html(report: Report) -> str:
     tip = note.split(". ", 1)[0].strip() if note else ""
     if tip and not tip.endswith("."):
         tip += "."
-    tip_attr = f' title="{html.escape(tip)}"' if tip else ""
 
     data_sec = next((s for s in report.sections if s.kind == "data"), None)
     ref_sec = next((s for s in report.sections if s.kind == "reference"), None)
     gloss_sec = next((s for s in report.sections if s.kind == "glossary"), None)
     sources_sec = next((s for s in report.sections if s.kind == "sources"), None)
     structural_sec = next((s for s in report.sections if s.kind == "structural"), None)
+
+    # Append when we received this source's latest data to the badge tooltip —
+    # answers "how fresh is this?" on hover.
+    recv = _source_received_date(sources_sec, m.variant)
+    if recv:
+        tip = f"{tip} Received {recv}.".strip()
+    tip_attr = f' title="{html.escape(tip)}"' if tip else ""
 
     # --- Briefing panel: indicators, headline, general take, what-changed, then
     # the main-page sections (everything that isn't a tab of its own).
