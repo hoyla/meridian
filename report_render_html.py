@@ -1188,10 +1188,17 @@ def _sector_section(section) -> str:
     return "\n".join(out)
 
 
-def _what_changed(wc: WhatChanged) -> str:
+def _what_changed(wc: WhatChanged, full: bool = True) -> str:
     # The per-type new-findings breakdown lives in Sources & coverage (it's
     # bookkeeping); What changed keeps the substantive 'since the last pack'
     # digest.
+    if not full:
+        # Quiet cycle (nothing material): a slim one-liner, no H2 and no nav
+        # target — it shouldn't claim a section's vertical weight when there's
+        # nothing to report. The explicit 'nothing changed' is still worth
+        # saying (the pack is fresh, not stale).
+        return (f'<p class="quiet-change"><strong>Since the last pack:</strong> '
+                f'{html.escape(wc.summary)}</p>')
     return (
         '<h2 class="lead">What changed since the last pack</h2>'
         f'<p class="since"><strong>Since the last pack:</strong> '
@@ -1240,6 +1247,8 @@ a:hover{border-bottom-color:var(--link)}
 .drill{font-size:13px;font-weight:700;white-space:nowrap;border-bottom:none}
 .note{font-size:13px;color:var(--muted);font-style:italic}
 .since{font-family:var(--font-body);font-size:17px;line-height:1.4}
+.quiet-change{font-size:13.5px;color:var(--muted);margin:2px 0 0;line-height:1.4}
+.quiet-change strong{color:var(--ink);font-weight:600}
 .filter-bar{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding-bottom:12px;border-bottom:1px solid var(--line)}
 .filter{font-family:var(--font-sans);font-size:14px;padding:7px 10px;border:1px solid var(--line);border-radius:4px;width:280px;max-width:60%;color:var(--ink);background:var(--surface)}
 .filter:focus{outline:none;border-color:var(--link);box-shadow:0 0 0 3px rgba(0,119,182,.15)}
@@ -1597,9 +1606,13 @@ def render_html(report: Report) -> str:
                 if block:
                     brief.append("<section>" + block + "</section>")
     if report.what_changed:
-        subnav.append(("brief-changed", "What's changed"))
-        brief.append('<section class="brief-sec" id="brief-changed">'
-                     + _what_changed(report.what_changed) + "</section>")
+        wc = report.what_changed
+        if wc.new_count or wc.significant:   # something material to report
+            subnav.append(("brief-changed", "What's changed"))
+            brief.append('<section class="brief-sec" id="brief-changed">'
+                         + _what_changed(wc) + "</section>")
+        else:                                # quiet cycle → slim one-liner, no nav
+            brief.append("<section>" + _what_changed(wc, full=False) + "</section>")
     _BRIEF_NAV = {"state_of_play": "State of play", "mirror_gap": "Mirror gaps",
                   "sector_detail": "Sector detail", "gacc_bilateral": "By partner"}
     for sec in report.sections:

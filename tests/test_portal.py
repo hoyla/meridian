@@ -420,6 +420,25 @@ def test_new_findings_breakdown_lives_in_sources_not_what_changed():
     assert "**New this cycle**" in md and "44 new — year-on-year change" in md
 
 
+def test_what_changed_demotes_to_one_liner_on_quiet_cycle():
+    """No material change (no new findings, no significant shifts) → What changed
+    renders as a slim one-liner: no H2 section, no sub-nav entry, so it doesn't
+    claim vertical weight near the top of the Briefing. The 'nothing changed'
+    note is still said."""
+    import dataclasses
+    r = dataclasses.replace(_sample_report(), what_changed=rm.WhatChanged(
+        regime="quiet", summary="nothing material — no new findings, no shifts.",
+        new_count=0))
+    h = render_html(r)
+    assert 'class="quiet-change"' in h and "nothing material" in h
+    assert "What changed since the last pack" not in h     # no H2 section
+    assert 'data-spy="brief-changed"' not in h             # no sub-nav entry
+    assert 'id="brief-changed"' not in h
+    # the material case (sample: new_count=49) still gets the full section + nav
+    full = render_html(_sample_report())
+    assert "What changed since the last pack" in full and 'data-spy="brief-changed"' in full
+
+
 def test_sources_release_appendix():
     r = _sample_report()
     h = render_html(r)
