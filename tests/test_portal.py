@@ -902,6 +902,38 @@ def test_wind_power_theme_replaces_retired_group():
     assert labels.themes_for_group("Wind generating sets only") == ["Wind power"]
 
 
+def test_q2_expansion_groups_carry_expected_themes():
+    """The Q2 expansion (refined critical minerals + pharma APIs + engine
+    parts/engines) wires each material-named group to the right cross-cutting
+    themes — locking the labels.py reconciliation, incl. realising the pharma
+    theme's previously-aspirational antibiotic/ibuprofen/paracetamol members."""
+    tf = labels.themes_for_group
+    # Battery-mineral feedstocks ride both the EV chain and the export-control lens.
+    assert tf("Lithium chemicals (carbonate + hydroxide)") == [
+        "EV supply chain", "China export-control regime"]
+    assert tf("Cobalt (oxides, hydroxides & unwrought)") == [
+        "EV supply chain", "China export-control regime"]
+    assert tf("Manganese oxides") == ["EV supply chain"]
+    # The China-export-controlled minor metals.
+    for g in ("Tungsten (HS 8101)",
+              "Gallium, germanium & other minor metals (HS 8112)",
+              "Antimony (HS 8110)"):
+        assert tf(g) == ["China export-control regime"], g
+    # Pharma APIs — antibiotics/ibuprofen/paracetamol were aspirational theme
+    # members; naming the groups to match realises them. Vitamins added.
+    for g in ("Antibiotics (HS 2941)",
+              "Ibuprofen-class monocarboxylic acids (HS 2916)",
+              "Paracetamol-class amides (HS 2924)",
+              "Vitamins & provitamins (HS 2936)"):
+        assert tf(g) == ["Pharma & fine chemicals"], g
+    # Engine parts + engines complete the Automotive powertrain.
+    for g in ("Engine parts (CN8 84099100 + 84099900)",
+              "Internal-combustion engines (HS 8407 + 8408)"):
+        assert tf(g) == ["Automotive"], g
+    # TiO2 is intentionally themeless until the round-2 Cosmetics/Paint themes.
+    assert tf("Titanium dioxide (CN8 320611)") == []
+
+
 # ---- classifications (BEC end-use mapping is pure) ----
 
 @pytest.mark.parametrize("bec4,expected", [

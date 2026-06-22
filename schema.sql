@@ -621,7 +621,54 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
    ARRAY['870340%', '870350%'], 'seed:lisa_sector_q_2026_06'),
   ('Electric motors & generators (HS 8501, broad)',
    'HS 8501 — electric motors and generators (excluding generating sets). BROAD chapter: spans sub-watt motors, large industrial machines and alternators alike, so it is NOT an EV-traction-motor signal on its own. EV drive motors concentrate in the higher-power multiphase AC codes — chiefly CN8 85015350-85015399 (AC motors > 75 kW) — refine to those if a tighter EV signal is needed. Added for Lisa''s Jun 2026 question on the post-tariff pivot toward critical EV components: traction motors are the principal EV part captured by neither "Motor-vehicle parts" (HS 8708, which excludes motors and batteries) nor "EV batteries (Li-ion)" (HS 850760).',
-   ARRAY['8501%'], 'seed:lisa_sector_q_2026_06');
+   ARRAY['8501%'], 'seed:lisa_sector_q_2026_06'),
+  -- Q2 expansion (Lisa, 2026-06-22): refined critical minerals + pharma APIs,
+  -- material-named with applications carried by themes (labels.py). First
+  -- tranche of dev_notes/2026-06-22-lisa-sector-coverage-questions.md;
+  -- cosmetics/paint deferred to a round 2.
+  ('Lithium chemicals (carbonate + hydroxide)',
+   'Refined battery-grade lithium — lithium carbonate (283691) and lithium oxide/hydroxide (282520). The cathode-precursor feedstock; refining is heavily China-concentrated.',
+   ARRAY['283691%', '282520%'], 'seed:lisa_q2_2026_06'),
+  ('Cobalt (oxides, hydroxides & unwrought)',
+   'Cobalt oxides/hydroxides (282200) and unwrought cobalt (810520). Battery-cathode input — DRC-mined, largely China-refined.',
+   ARRAY['282200%', '810520%'], 'seed:lisa_q2_2026_06'),
+  ('Manganese oxides',
+   'Manganese oxides (282010) — battery-cathode (NMC) and steel input.',
+   ARRAY['282010%'], 'seed:lisa_q2_2026_06'),
+  ('Tungsten (HS 8101)',
+   'Tungsten and articles, incl. powders and carbide (HS 8101). Under China export licensing from 2025; critical for cutting tools and defence.',
+   ARRAY['8101%'], 'seed:lisa_q2_2026_06'),
+  ('Gallium, germanium & other minor metals (HS 8112)',
+   'HS 8112 — gallium, germanium, indium and other minor base metals (BROAD: also beryllium, chromium, hafnium, etc.). Gallium and germanium are the headline China export controls (2023); refine to CN8 (e.g. 811292) for a tighter Ga/Ge-only signal.',
+   ARRAY['8112%'], 'seed:lisa_q2_2026_06'),
+  ('Antimony (HS 8110)',
+   'Antimony and articles (HS 8110). Under China export licensing from 2024; flame retardants, defence, PV glass.',
+   ARRAY['8110%'], 'seed:lisa_q2_2026_06'),
+  ('Titanium dioxide (CN8 320611)',
+   'Titanium dioxide pigment (CN8 320611) — the dominant white pigment for paint, plastics and cosmetics, and a refined-mineral product. Its Paint and Cosmetics themes arrive with the round-2 expansion; until then it sits in its SITC division only.',
+   ARRAY['320611%'], 'seed:lisa_q2_2026_06'),
+  ('Antibiotics (HS 2941)',
+   'HS 2941 — antibiotics. A core "Europe leans on Chinese active ingredients" category.',
+   ARRAY['2941%'], 'seed:lisa_q2_2026_06'),
+  ('Ibuprofen-class monocarboxylic acids (HS 2916)',
+   'HS 2916 — unsaturated acyclic and cyclic monocarboxylic acids (BROAD; ibuprofen sits here among many others). Frame findings as "the HS 2916 acid family", not ibuprofen alone; refine to CN8 for a single API.',
+   ARRAY['2916%'], 'seed:lisa_q2_2026_06'),
+  ('Paracetamol-class amides (HS 2924)',
+   'HS 2924 — carboxyamide-function compounds (BROAD; paracetamol/acetaminophen sits here). Frame findings as "the HS 2924 amide family"; refine to CN8 for a single API.',
+   ARRAY['2924%'], 'seed:lisa_q2_2026_06'),
+  ('Vitamins & provitamins (HS 2936)',
+   'HS 2936 — provitamins and vitamins, unmixed or mixed. Feed/food/pharma input with China-concentrated supply.',
+   ARRAY['2936%'], 'seed:lisa_q2_2026_06'),
+  -- Engine parts + engines (Lisa, 2026-06-22): "more engine parts" for vehicles,
+  -- domestic and industrial. 8708 (Motor-vehicle parts) excludes engines, so
+  -- this is the engine side of the powertrain — alongside electric motors
+  -- (8501), vehicle parts (8708) and batteries (850760).
+  ('Engine parts (CN8 84099100 + 84099900)',
+   'Parts of spark-ignition (84099100) and compression-ignition (84099900) piston engines. One bucket covers both passenger and industrial vehicle engines — HS does not split engine parts by vehicle class. Excludes aircraft engine parts (84091000). Complements "Motor-vehicle parts" (HS 8708), which excludes engines and motors.',
+   ARRAY['84099100%', '84099900%'], 'seed:lisa_engine_parts_2026_06'),
+  ('Internal-combustion engines (HS 8407 + 8408)',
+   'Spark-ignition petrol (8407) and compression-ignition diesel (8408) piston engines. BROAD: road-vehicle engines sit in 8407.3x/8408.20, industrial/other in 8408.90, and marine/aircraft in 8407.1-2x/8408.10 — refine to those subheadings to separate domestic-vehicle from industrial engines if a story needs it.',
+   ARRAY['8407%', '8408%'], 'seed:lisa_engine_parts_2026_06');
 
 -- Reader-facing display name for the EV-battery group. `name` stays the stable
 -- internal key (findings snapshot it into detail.group.name; analysers + tests
