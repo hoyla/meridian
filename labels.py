@@ -108,6 +108,46 @@ SEED_LABELS: list[Label] = [
             "Sintered NdFeB magnets (CN8 85051110)",
         ],
     ),
+    Label(
+        "Automotive",
+        "Finished vehicles, EV/hybrid cars and the parts that feed them — the "
+        "China–Europe car-trade story.",
+        "narrative",
+        member_groups=[
+            "Finished cars (broad)",
+            "EV + hybrid passenger cars",
+            "Motor-vehicle parts",
+        ],
+    ),
+    Label(
+        "Food & agriculture",
+        "Agri-food trade with China — meat, produce, sweeteners and animal-feed "
+        "inputs, often the subject of dumping or food-safety disputes.",
+        "narrative",
+        member_groups=[
+            "Honey",
+            "Pork (HS 0203)",
+            "Pork offal (HS 0206 swine)",
+            "Tomato paste / preserved tomatoes",
+            "Feed premixes (HS 230990)",
+        ],
+    ),
+    Label(
+        "Pharma & fine chemicals",
+        "Active-ingredient and precursor chemistry — antibiotics, analgesic "
+        "precursors and other fine/speciality organics where Europe leans on "
+        "Chinese supply.",
+        "narrative",
+        member_groups=[
+            "Antibiotics (HS 2941)",
+            "Ibuprofen-class monocarboxylic acids (HS 2916)",
+            "Paracetamol-class amides (HS 2924)",
+            "Amino acids (HS 2922)",
+            "Choline (HS 292310)",
+            "Aldehyde/ketone acids (HS 2918)",
+            "Vanillin and ethylvanillin (HS 29124100 + 29124200)",
+        ],
+    ),
 ]
 
 
