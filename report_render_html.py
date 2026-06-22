@@ -424,11 +424,13 @@ def _indicator_card(ind: Indicator) -> str:
     spark = ""
     if ind.chart_data and ind.chart_data.series:
         spark = f'<div class="kpi-spark">{_sparkline_svg(ind.chart_data)}</div>'
+    note = (f'<div class="kpi-note">{html.escape(ind.note)}</div>'
+            if ind.note else "")
     return (
         '<div class="kpi">'
         f'<div class="kpi-label">{html.escape(ind.label)}</div>'
         f'<div class="kpi-value">{html.escape(ind.formatted)}</div>'
-        f"{delta}{spark}{prov}"
+        f"{note}{delta}{spark}{prov}"
         "</div>"
     )
 
@@ -1314,6 +1316,7 @@ section{padding:18px 28px}
 .kpis{display:flex;flex-wrap:wrap;gap:16px;border-bottom:1px solid var(--line)}
 .kpi{flex:1 1 230px;background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--news);padding:14px 16px}
 .kpi-label{font-size:13px;color:var(--muted)}
+.kpi-note{font-size:11px;color:var(--muted);margin-top:3px}
 .kpi-value{font-family:var(--font-headline);font-size:28px;font-weight:700;line-height:1.15;margin-top:4px}
 .delta{font-size:13px;font-weight:700;margin-top:2px}
 .kpi-spark{margin-top:10px}.spark{width:100%;height:36px;display:block}

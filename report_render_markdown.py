@@ -26,6 +26,8 @@ def _indicator_line(ind: Indicator) -> str:
     bits = [f"**{ind.label}:** {ind.formatted}"]
     if ind.delta:
         bits.append(f"({ind.delta['formatted']})")
+    if ind.note:
+        bits.append(f"— _{ind.note}_")
     spark = ""
     if ind.chart_data and ind.chart_data.series:
         spark = f" · sparkline: {len(ind.chart_data.series)} pts"
