@@ -169,7 +169,12 @@ A non-exhaustive list, in rough order of magnitude:
    reported. Revisions also happen on different schedules. The tool
    tracks each source's publication calendar so it can tell a
    not-yet-due gap from a genuinely overdue one — see "Source
-   freshness" below.
+   freshness" below. (For GACC specifically: the preliminary release we
+   ingest is immutable once published; the revised/final figures live in
+   a separate Monthly Bulletin series we do not ingest, and at the
+   headline level revisions are ~0.001%. See
+   `dev_notes/2026-06-22-gacc-revision-coverage-investigation.md` for the
+   evidence and the decision not to ingest it.)
 
 10. **Confidentiality suppression.** Eurostat aggregates flows that
     would identify a single trader into HS-X-suffix residual codes;
