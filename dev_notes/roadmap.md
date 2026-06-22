@@ -87,6 +87,65 @@ append-only + provenance on everything new (principles 3/4/7).
    commodity, for "China-specific vs worldwide"); tariff-change timelines (to
    correlate moves with policy — also feeds the LLM-takes v2 retrieval angle).
 
+## Portal deploy — retain prior LLM content on an LLM-less rebuild (2026-06-22)
+
+**The gap.** A portal rebuild *without* `--portal-takes` doesn't leave the
+previous LLM material alone — it **overwrites it with empty placeholders**. So a
+deploy whose only purpose is a code/structure change (e.g. the per-partner
+balance row, PR #41) silently strips the takes, and the portal shows nothing
+where the leading questions / "one other thing" paragraph used to be. Luke hit
+this and flagged it as a real deploy hazard: there's currently no way to
+redeploy that *doesn't* impact the LLM material.
+
+**Why it happens (confirmed in code).** The LLM content — per-finding "takes"
+([report_builder.py](../report_builder.py) ~L1455, `llm_takes`) and the general
+take (~L1517, `llm_general_take`) — is generated **only** when
+`build_report(generate_takes=True)`, gated behind `--portal-takes`. Without the
+flag the slots are still created but as `status="placeholder"` with no content,
+and the renderer returns `""` for any non-`"generated"` slot
+([report_render_html.py](../report_render_html.py) `_take_block_html` /
+`_general_take_html`). The content is **never persisted durably** — it lives only
+inside the snapshot blob (`report.json`). `publish_snapshot`
+([portal_publish.py](../portal_publish.py)) overwrites `latest/report.json`
+wholesale, and the portal service reads only `latest/` with no prior-snapshot
+fallback ([portal_service/app.py](../portal_service/app.py)). Rebuild without
+takes → empty LLM fields in the blob → empty fields served.
+
+**Useful nuance:** the per-period archives *do* survive —
+`publish_snapshot` writes `periods/{period}/report.json` alongside `latest/`, so
+the last build that *did* generate takes still has them in GCS. The raw material
+to carry forward already exists; it's just never read back.
+
+**Fix (chosen approach): graft prior takes at build time.** Before writing the
+new snapshot, fetch the existing `gs://…/latest/report.json`, pull its
+`generated` `LLMSlot`s, and attach them to the freshly-built report by matching
+`grounded_in` finding id. New structural/data content refreshes; the LLM takes
+carry over untouched. No new infrastructure, ~one function. The finding-id match
+is a free correctness guard.
+
+**Key safety constraint — gate carry-over on an unchanged `data_period`:**
+- A **pure redeploy at the same `data_period`** (Luke's case: a code/structure
+  change, byte-identical underlying numbers) → carry-over is unambiguously safe;
+  finding N's take is still valid against finding N.
+- A **new cycle where `data_period` advanced** → want fresh takes anyway, and any
+  prior take whose finding was superseded/re-id'd simply won't match and gets
+  dropped — the right behaviour (never show a stale take grounded in a finding
+  that no longer exists). So: reuse only when same `data_period`, drop-on-no-match
+  otherwise. Keeps it aligned with the provenance / "never confidently wrong"
+  principles.
+
+**Alternatives considered (not chosen):**
+- *Persist takes in the DB* keyed by finding id, append-only, read back when not
+  regenerating. More durable and fits principle 4, but more work and unnecessary
+  to close *this* gap — the graft-from-`latest` approach already does.
+- *Portal-service fallback* to a prior period when `latest` is all-placeholder.
+  Rejected: mixes concerns and would show stale takes against fresh numbers with
+  no grounding validation — editorially worse.
+
+Trigger: any deploy that changes portal code/structure without wanting to
+re-spend the LLM budget (i.e. most of them). Small; do before the next such
+redeploy if the missing-takes gap bites again.
+
 ## Observability / logging follow-ups (2026-05-15 evening arc)
 
 Four new audit-log surfaces shipped tonight along with
