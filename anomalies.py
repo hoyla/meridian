@@ -2894,7 +2894,7 @@ def detect_gacc_aggregate_yoy(
 
 
 def _gacc_aggregate_per_period_totals(
-    aggregate_label: str, flow: str = "export",
+    aggregate_label: str, flow: str = "export", period_kind: str = "monthly",
 ) -> list[tuple[date, float, list[int]]]:
     """Returns (period, total_eur, [observation_ids]) per period for the given
     GACC aggregate label. Filters to canonical CNY releases (USD releases
@@ -2902,6 +2902,12 @@ def _gacc_aggregate_per_period_totals(
     FX conversion to EUR via lookups.lookup_fx. Periods with no FX rate are
     skipped silently — the YoY analyser sees a gap and applies its
     partial_window tolerance.
+
+    `period_kind` selects the observation grain: the default 'monthly' is the
+    discrete per-month figure the YoY/rolling analysers consume; 'ytd' is
+    GACC's year-to-date cumulative (each release carries the running total of
+    the calendar year so far), which the portal's annual-per-region charts use
+    — the December (or latest-month) cumulative IS that year's annual total.
 
     Editorial subtlety: aggregating partner='ASEAN' (etc.) sums the values as
     GACC published them; we don't decompose to per-member country totals. The
@@ -2933,7 +2939,7 @@ def _gacc_aggregate_per_period_totals(
                  WHERE r.source = 'gacc'
                    AND r.currency = 'CNY'
                    AND o.flow = %s
-                   AND o.period_kind = 'monthly'
+                   AND o.period_kind = %s
                    AND o.partner_country = %s
                    AND o.value_amount IS NOT NULL
               ORDER BY o.release_id, o.partner_country, o.period_kind,
@@ -2941,7 +2947,7 @@ def _gacc_aggregate_per_period_totals(
             ) latest
             ORDER BY period, obs_id
             """,
-            (flow, aggregate_label),
+            (flow, period_kind, aggregate_label),
         )
         rows = cur.fetchall()
 

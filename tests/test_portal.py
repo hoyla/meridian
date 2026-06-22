@@ -1250,3 +1250,158 @@ def test_general_take_shortlist_excludes_headline_and_keeps_provenance():
     assert "Cars" not in subjects
     mg = next((c for c in sl if "mirror" in c["subject"].lower()), None)
     assert mg is not None and all(isinstance(fid, int) for fid in mg["prov"].values())
+
+
+# --------------------------------------------------------------------------
+# Annual per-region trade charts (GACC "China's trade by partner" section)
+# --------------------------------------------------------------------------
+
+def test_gacc_partner_annual_charts_aggregate_ytd_union_and_balance(
+    clean_db, test_db_url,
+):
+    """The annual-per-region chart data: GACC YTD-cumulative observations are
+    read at the LATEST period per calendar year (= that year's annual EUR),
+    converted to EUR via the shared helper; the US unions its two GACC labels
+    (the name changed in 2020); balance = exports − imports; and the partial
+    current year (latest month < December) is flagged, not dropped."""
+    from datetime import date
+    import report_builder as rb
+
+    # Annual figures are taken at the latest period of each year. CNY→EUR is
+    # 0.125 flat and the unit is 'CNY 100 Million' (×1e8), so the EUR value is
+    # value_amount × 1.25e7 (e.g. 1000 → €12.5B).
+    SCALE_FX = 1e8 * 0.125
+    # (partner_label, flow, period, value_amount)
+    rows = [
+        # ASEAN exports: 2019 + 2020 full (Nov AND Dec in 2020 — Dec must win),
+        # 2021 partial (April only).
+        ("ASEAN", "export", date(2019, 12, 1), 1000),
+        ("ASEAN", "export", date(2020, 11, 1), 1500),   # earlier in-year cumulative
+        ("ASEAN", "export", date(2020, 12, 1), 1600),   # the annual (latest) figure
+        ("ASEAN", "export", date(2021, 4, 1), 900),     # partial year
+        ("ASEAN", "import", date(2019, 12, 1), 800),
+        ("ASEAN", "import", date(2020, 12, 1), 900),
+        ("ASEAN", "import", date(2021, 4, 1), 500),
+        # Africa, both flows.
+        ("Africa", "export", date(2019, 12, 1), 400),
+        ("Africa", "export", date(2020, 12, 1), 500),
+        ("Africa", "export", date(2021, 4, 1), 300),
+        ("Africa", "import", date(2019, 12, 1), 600),
+        ("Africa", "import", date(2020, 12, 1), 700),
+        ("Africa", "import", date(2021, 4, 1), 350),
+        # United States: 2019 under "United States", 2020-on under
+        # "United States (US)" — one logical line, two labels to union.
+        ("United States", "export", date(2019, 12, 1), 2000),
+        ("United States (US)", "export", date(2020, 12, 1), 2200),
+        ("United States (US)", "export", date(2021, 4, 1), 1100),
+        ("United States", "import", date(2019, 12, 1), 1000),
+        ("United States (US)", "import", date(2020, 12, 1), 1100),
+        ("United States (US)", "import", date(2021, 4, 1), 600),
+    ]
+    periods = {p for _l, _f, p, _v in rows}
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO scrape_runs (source_url, status) "
+                    "VALUES ('ytd://seed', 'success') RETURNING id")
+        run = cur.fetchone()[0]
+        # One CNY release per period (release.unit carries the scale word).
+        rel_by_period = {}
+        for p in periods:
+            cur.execute(
+                "INSERT INTO releases (source, section_number, currency, period, "
+                "    release_kind, source_url, unit) "
+                "VALUES ('gacc', 4, 'CNY', %s, 'preliminary', 'ytd://r', "
+                "        'CNY 100 Million') RETURNING id",
+                (p,),
+            )
+            rel_by_period[p] = cur.fetchone()[0]
+        for label, flow, p, val in rows:
+            cur.execute(
+                "INSERT INTO observations (release_id, scrape_run_id, period_kind, "
+                "    flow, partner_country, value_amount, value_currency, source_row) "
+                "VALUES (%s, %s, 'ytd', %s, %s, %s, 'CNY', '{}')",
+                (rel_by_period[p], run, flow, label, val),
+            )
+        for p in periods:
+            cur.execute(
+                "INSERT INTO fx_rates (currency_from, currency_to, rate_date, "
+                "    rate, rate_source) "
+                "VALUES ('CNY', 'EUR', %s, 0.125, 'test') "
+                "ON CONFLICT (currency_from, currency_to, rate_date, rate_source) "
+                "DO NOTHING",
+                (p,),
+            )
+        conn.commit()
+
+    # ASEAN exports: Dec 2020 (1600), not Nov (1500), is the 2020 annual figure.
+    asean_exp = rb._gacc_annual_by_region(["ASEAN"], "export")
+    assert asean_exp == {
+        2019: 1000 * SCALE_FX, 2020: 1600 * SCALE_FX, 2021: 900 * SCALE_FX,
+    }
+    # The US line unions both labels across the (non-overlapping) year ranges.
+    us_exp = rb._gacc_annual_by_region(
+        ["United States", "United States (US)"], "export")
+    assert us_exp == {
+        2019: 2000 * SCALE_FX, 2020: 2200 * SCALE_FX, 2021: 1100 * SCALE_FX,
+    }
+
+    charts = rb._gacc_partner_charts()
+    assert [c["metric"] for c in charts] == ["exports", "imports", "balance"]
+    assert all(c["years"] == [2019, 2020, 2021] for c in charts)
+    # 2021 is partial (latest period April, not December).
+    assert all(c["partial_last_year"] == 2021 for c in charts)
+
+    def series(chart, name):
+        return next(s["values"] for s in chart["series"] if s["name"] == name)
+
+    exp_chart, imp_chart, bal_chart = charts
+    # US series (unioned) appears as one line on every chart.
+    assert series(exp_chart, "United States") == [
+        2000 * SCALE_FX, 2200 * SCALE_FX, 1100 * SCALE_FX]
+    # Balance = exports − imports per year (ASEAN: 1000−800, 1600−900, 900−500).
+    assert series(bal_chart, "ASEAN") == [
+        (1000 - 800) * SCALE_FX, (1600 - 900) * SCALE_FX, (900 - 500) * SCALE_FX]
+    # Africa is China-deficit on imports>exports? here exports<imports in 2019
+    # (400 vs 600) → a negative balance, which the signed chart must carry.
+    assert series(bal_chart, "Africa")[0] == (400 - 600) * SCALE_FX < 0
+    # An unseeded region still gets a (None-filled) line, so all six plot.
+    assert {s["name"] for s in exp_chart["series"]} == {
+        "ASEAN", "European Union", "United States", "Africa",
+        "Latin America", "Russian Federation"}
+    assert series(exp_chart, "Latin America") == [None, None, None]
+
+
+def test_multiline_chart_svg_renders_six_lines_and_balance_zero_baseline():
+    """The renderer: one polyline per region (six), all region names in the
+    legend, and the balance variant draws a visible zero baseline (its values
+    straddle zero) — what stops a deficit reading as a small positive bar."""
+    from report_render_html import _multiline_chart_svg
+
+    regions = ["ASEAN", "European Union", "United States", "Africa",
+               "Latin America", "Russian Federation"]
+    colors = ["#052962", "#c70000", "#22874d", "#0077b6", "#b08800", "#7d4cdb"]
+    years = [2022, 2023, 2024, 2025, 2026]
+
+    def chart(metric, signed):
+        ser = []
+        for k, name in enumerate(regions):
+            base = (k + 1) * 20e9
+            vals = [base + y * 1e9 for y in range(len(years))]
+            if signed and k % 2:                      # half the lines negative
+                vals = [-v for v in vals]
+            ser.append({"name": name, "values": vals})
+        return {"metric": metric, "title": metric, "years": years,
+                "partial_last_year": 2026, "series": ser, "colors": colors}
+
+    exp = _multiline_chart_svg(chart("exports", signed=False))
+    assert exp.count("<polyline") == 6                  # one solid line per region
+    assert all(name in exp for name in regions)          # legend names present
+    assert exp.count("stroke-dasharray") == 6            # partial-year final seg
+    # exports are zero-based positive → no zero *baseline* reference line.
+    assert 'stroke-width="1.2"' not in exp
+
+    bal = _multiline_chart_svg(chart("balance", signed=True))
+    assert bal.count("<polyline") == 6
+    assert all(name in bal for name in regions)
+    # The signed balance chart straddles zero → a visible zero baseline line.
+    assert 'stroke-width="1.2"' in bal
