@@ -435,7 +435,15 @@ def _release_ids_for_observations(cur, obs_ids: list[int]) -> set[int]:
 # previous export (folder + timestamp) and either cite the new source
 # releases that triggered this cycle or call out a rerun-without-new-data
 # explicitly. Centralised here so the two docs stay phrased consistently.
-_SOURCE_LABELS = {"gacc": "GACC", "eurostat": "Eurostat", "hmrc": "HMRC"}
+_SOURCE_LABELS = {"gacc": "GACC", "eurostat": "Eurostat", "hmrc": "HMRC",
+                  "cross_source": "Eurostat + HMRC"}
+
+
+def _source_label(src: str | None) -> str:
+    """Display name for a provenance source code ('eurostat' → 'Eurostat'),
+    so a figure's origin is legible on the surface rather than only in the
+    drill-down. Unknown/empty codes pass through unchanged."""
+    return _SOURCE_LABELS.get(src or "", src or "")
 
 
 # Subfolder holding the plain markdown / spreadsheet copies of the bundle,
