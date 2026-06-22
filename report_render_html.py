@@ -1245,7 +1245,13 @@ a:hover{border-bottom-color:var(--link)}
 .filter:focus{outline:none;border-color:var(--link);box-shadow:0 0 0 3px rgba(0,119,182,.15)}
 .filter-count{font-size:13px;color:var(--muted)}
 .sector{padding:12px 0;border-bottom:1px solid var(--line)}
-.sector:target{background:#dcebfa;scroll-margin-top:12px}
+/* Jump targets clear the sticky tab bar; offset is unconditional so it applies
+   to JS scrollIntoView too (not only native :target jumps). */
+.sector,.partner,.tmrow,.filter,.sec-head{scroll-margin-top:72px}
+/* Drilled-to highlight: .jumped is set by JS (the click handler preventDefaults,
+   so the native :target never fires); :target is the no-JS fallback. */
+.sector.jumped,.partner.jumped,.tmrow.jumped,
+.sector:target,.partner:target,.tmrow:target{background:#dcebfa}
 .sec-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:20px 0 6px;padding:5px 0 4px;border-top:2px solid var(--masthead)}
 .sec-h-title{font-family:var(--font-sans);font-size:13px;font-weight:700;color:var(--masthead);text-transform:uppercase;letter-spacing:.4px}
 .sec-h-meta{font-size:12px;color:var(--muted)}
@@ -1313,7 +1319,6 @@ ul.ref li{font-size:13.5px;line-height:1.5;margin:0 0 7px;color:var(--ink)}
 .tab:hover{color:var(--ink);border-bottom-color:transparent}
 .tab.active{color:var(--masthead);border-bottom-color:var(--masthead)}
 .tabpanel.hide{display:none}
-.sector:target{scroll-margin-top:64px}
 /* "More about this section" disclosure */
 details.more{border:1px solid var(--line);border-left:4px solid var(--masthead);background:var(--surface-alt);border-radius:3px;margin:0 0 14px}
 details.more>summary{cursor:pointer;list-style:none;padding:9px 14px;font-family:var(--font-sans);font-weight:700;font-size:13.5px;color:var(--masthead)}
@@ -1407,6 +1412,10 @@ _PORTAL_JS = """<script>
     var d=el.querySelector&&el.querySelector('details.gdetail');
     if(d)d.open=true;
   }
+  function mark(el){ // the drilled-to highlight (JS stands in for native :target)
+    var prev=document.querySelector('.jumped');if(prev)prev.classList.remove('jumped');
+    if(el&&el.classList)el.classList.add('jumped');
+  }
   function show(id){
     if(!document.getElementById(id))id='tab-briefing';
     panels.forEach(function(p){p.classList.toggle('hide',p.id!==id);});
@@ -1416,7 +1425,7 @@ _PORTAL_JS = """<script>
     var id=(hash||'').replace(/^#/,'');
     var el=id&&document.getElementById(id);
     if(el&&el.classList.contains('tabpanel')){show(id);window.scrollTo(0,0);return;}
-    if(el){var p=panelOf(el);if(p){show(p.id);expandDetail(el);el.scrollIntoView();return;}}
+    if(el){var p=panelOf(el);if(p){show(p.id);expandDetail(el);el.scrollIntoView();mark(el);return;}}
     show('tab-briefing');
   }
   tabs.forEach(function(t){t.addEventListener('click',function(e){
@@ -1428,7 +1437,7 @@ _PORTAL_JS = """<script>
     if(!a||a.classList.contains('tab'))return;
     var id=a.getAttribute('href').slice(1);var el=document.getElementById(id);if(!el)return;
     var p=el.classList.contains('tabpanel')?el:panelOf(el);
-    if(p){show(p.id);if(el!==p){e.preventDefault();expandDetail(el);el.scrollIntoView();
+    if(p){show(p.id);if(el!==p){e.preventDefault();expandDetail(el);el.scrollIntoView();mark(el);
       if(history.replaceState)history.replaceState(null,'','#'+id);}}
   });
   window.addEventListener('hashchange',function(){go(location.hash);});

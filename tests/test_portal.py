@@ -482,6 +482,19 @@ def test_gacc_bilateral_expanded_panel_restores_ytd_window_and_caveat_prose():
     assert "Incomplete window — missing January 2026" in md
 
 
+def test_jump_targets_clear_sticky_bar_and_get_highlight():
+    """Drill-down/Trade-Map jumps must clear the sticky tab bar (unconditional
+    scroll-margin, not scoped to :target, since the JS preventDefaults) and the
+    landed-on block must get the highlight via a JS-applied .jumped class."""
+    h = render_html(_sample_report())
+    # offset applies to the elements themselves, not only :target
+    assert "scroll-margin-top:72px" in h
+    assert ".sector.jumped" in h and "background:#dcebfa" in h
+    # the JS stand-in for native :target is wired into both jump paths
+    assert "function mark(" in h
+    assert "mark(el)" in h
+
+
 def test_methodology_tab_shows_about_and_guides():
     r = _sample_report()
     h = render_html(r)
