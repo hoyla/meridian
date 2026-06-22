@@ -161,7 +161,7 @@ def run_periodic(
     top_n: int = briefing_pack.DEFAULT_TOP_N,
     llm_model: str | None = None,
     skip_llm: bool = False,
-    docx: bool = True,
+    docx: bool = False,  # docx→Drive is legacy (see Step 3 comment); .md + .xlsx + portal snapshot are the live surfaces
     generate_takes: bool = False,
 ) -> PeriodicRunResult:
     """Run the full periodic cycle end-to-end.
@@ -386,11 +386,14 @@ def run_periodic(
         counts["llm_framing"] = {"skipped": True}
 
     # --- Step 3: write the findings-export bundle. ---
-    # `docx=True` by default: periodic-run is the canonical Lisa-facing
-    # cycle, so the .docx chart-bearing surface should always be emitted
-    # alongside the .md (NotebookLM-facing) and .xlsx (data-facing)
-    # files. Callers in tests or one-off scripts can pass docx=False if
-    # the python-docx soft dependency isn't available.
+    # The live Lisa-facing surface is the web portal (snapshot written in
+    # Step 5), NOT the .docx → Google Drive bundle, which is legacy: the
+    # docx→Drive pipeline predates the portal and is unlikely to be used again
+    # (Luke, 2026-06). So `docx` defaults to False — the cycle emits the .md
+    # (deterministic findings/leads) and .xlsx (data) surfaces plus the portal
+    # snapshot, and skips the per-cycle .docx render. Pass docx=True (or run
+    # `--briefing-pack --docx` by hand) for a one-off .docx bundle if ever
+    # needed; the rendering code is retained, just not run every cycle.
     # Which sources brought new data this cycle, for the run summary.
     # Compute BEFORE export() records this run's brief_runs row, so the
     # latest row is still the previous cycle. None (not "") on failure, so

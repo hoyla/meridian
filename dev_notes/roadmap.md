@@ -40,6 +40,31 @@ Surfaced while shipping the Eurostat data correction + portal-clarity batch
   paying for a `--portal-takes` regeneration each time — the cost-per-tweak pain
   during this batch is the case for it.
 
+## docx → Drive pipeline — legacy; teardown deferred (2026-06-22)
+
+**Decision (Luke, 2026-06-22).** The web portal is the live Lisa-facing
+surface; the `.docx` → Google Drive delivery pipeline predates it and is
+unlikely to be used again. **The markdown bundle (`02_Findings.md` etc.) is
+still wanted**, so this is *not* a teardown of the findings export — only of the
+docx/Drive half.
+
+**Done:** `periodic.run_periodic(docx=False)` by default — the daily cycle no
+longer renders the per-cycle `.docx` (it still writes the `.md` + `.xlsx` +
+portal snapshot). Drive upload was already manual, so nothing auto-pushes to
+Google. Reversible (pass `docx=True` or `--briefing-pack --docx`).
+
+**Deferred until confirmed dead** (don't rip out reactively — dormant code is
+cheap; "deleted then needed it" is not): remove `briefing_pack/docx.py`,
+`briefing_pack/md_to_docx.py`, `drive_export`, the `python-docx` dependency,
+`test_briefing_pack_docx.py`, and — notably — the anchor-link contortions in
+`briefing_pack/sections/front_page.py` that exist *only* so Google Docs' .docx
+importer can reconnect dropped `#slug` links. The `.md` bundle stays: it is
+**solely the LLM / NotebookLM ingestion corpus** (Luke, 2026-06-22; already
+documented in `architecture.md`, `methodology.md`, `briefing_pack/__init__.py`,
+`README.md`), so the Tier 1/2/3 scaffolding earns its keep — the teardown
+removes only the docx/Drive half and leaves the markdown and its structure
+intact.
+
 ## Breadth expansion — ingest more now that the report is navigable (2026-06-21)
 
 **Premise.** The portal restructuring (tabs; "More about" + per-group +
