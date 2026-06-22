@@ -693,13 +693,15 @@ def _sources_html(section) -> str:
         out.append('<h3 class="ref-h2">Period coverage</h3>'
                    '<div class="dt-scroll"><table class="dtable"><thead><tr>'
                    "<th>Source</th><th>From</th><th>To</th><th>Releases</th>"
+                   "<th>Last updated</th>"
                    "</tr></thead><tbody>")
         for c in cov:
             out.append(
                 f'<tr><td>{html.escape(c["source"])}</td>'
                 f'<td>{html.escape(_fmt_month(c.get("start")))}</td>'
                 f'<td>{html.escape(_fmt_month(c.get("end")))}</td>'
-                f'<td>{c.get("releases", 0):,}</td></tr>')
+                f'<td>{c.get("releases", 0):,}</td>'
+                f'<td>{html.escape(c.get("last_updated") or "—")}</td></tr>')
         out.append("</tbody></table></div>")
     # New findings this cycle, by type (moved here from 'What changed' — it's a
     # coverage tally, not substance). Sits with Period coverage.

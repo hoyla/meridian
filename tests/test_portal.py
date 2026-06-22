@@ -162,7 +162,8 @@ def _sample_report() -> rm.Report:
         intro="What this rests on.",
         metrics={"sources": [{"source": "eurostat", "note": "Comext."}],
                  "coverage": [{"source": "eurostat", "start": "2017-01-01",
-                               "end": "2026-04-01", "releases": 111}],
+                               "end": "2026-04-01", "releases": 111,
+                               "last_updated": "2026-06-15"}],
                  "new_findings": [
                      {"subkind": "hs_group_yoy",
                       "label": "year-on-year change for an HS group", "count": 44},
@@ -701,6 +702,7 @@ def test_sources_tab_groups_provenance_and_trade_map():
     h = render_html(r)
     assert 'id="tab-sources"' in h
     assert "Data sources" in h and "Period coverage" in h
+    assert "Last updated" in h and "2026-06-15" in h     # coverage-table freshness column
     assert "Findings included" in h and "3,509" in h     # humanised manifest
     assert "Apr 2026" in h                                # coverage end as a month, not raw ISO
     # the Trade Map renders inside the Sources tab, not Briefing

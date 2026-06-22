@@ -1158,13 +1158,16 @@ def _sources_section(cur, diff=None) -> Section:
     cur.execute("SELECT DISTINCT source FROM releases ORDER BY source")
     sources = [{"source": s, "note": _SOURCE_NOTES.get(s, "")}
                for (s,) in cur.fetchall()]
-    cur.execute("""SELECT source, min(period), max(period), count(*)
+    # `last_updated` = the most recent fetch (max first_seen_at) per source — the
+    # freshness signal beside the period range ("covered through X, last pulled Y").
+    cur.execute("""SELECT source, min(period), max(period), count(*), max(first_seen_at)
                      FROM releases GROUP BY source ORDER BY source""")
     coverage = [{"source": s,
                  "start": a.isoformat() if a else None,
                  "end": b.isoformat() if b else None,
-                 "releases": n}
-                for s, a, b, n in cur.fetchall()]
+                 "releases": n,
+                 "last_updated": u.date().isoformat() if hasattr(u, "date") else None}
+                for s, a, b, n, u in cur.fetchall()]
     cur.execute("""SELECT subkind, count(*) FROM findings
                     WHERE superseded_at IS NULL GROUP BY subkind""")
     fam: dict[str, int] = defaultdict(int)
