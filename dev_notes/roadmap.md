@@ -58,10 +58,12 @@ cheap; "deleted then needed it" is not): remove `briefing_pack/docx.py`,
 `briefing_pack/md_to_docx.py`, `drive_export`, the `python-docx` dependency,
 `test_briefing_pack_docx.py`, and — notably — the anchor-link contortions in
 `briefing_pack/sections/front_page.py` that exist *only* so Google Docs' .docx
-importer can reconnect dropped `#slug` links. Open question that gates how much
-of the markdown scaffolding (Tier 1/2/3 etc.) still earns its keep: **what are
-the `.md` files for going forward** — LLM/NotebookLM ingestion (keep structure)
-or human/archive reading (could simplify)?
+importer can reconnect dropped `#slug` links. The `.md` bundle stays: it is
+**solely the LLM / NotebookLM ingestion corpus** (Luke, 2026-06-22; already
+documented in `architecture.md`, `methodology.md`, `briefing_pack/__init__.py`,
+`README.md`), so the Tier 1/2/3 scaffolding earns its keep — the teardown
+removes only the docx/Drive half and leaves the markdown and its structure
+intact.
 
 ## Breadth expansion — ingest more now that the report is navigable (2026-06-21)
 
