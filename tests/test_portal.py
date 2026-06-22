@@ -54,6 +54,7 @@ def _sample_report() -> rm.Report:
             prose="**EU-27 exports of [Cars](#cars) to China** fell 40% `finding/2`",
             drill_down="cars",
             provenance=rm.Provenance(finding_ids=[2], source="eurostat"),
+            facets=rm.Facets(commodity=["Cars"], theme=["EV supply chain"]),
             take=rm.LLMSlot(
                 slot_type="specific", grounded_in=[2], status="generated",
                 questions=[
@@ -332,6 +333,18 @@ def test_sector_group_charts_line_and_bar_side_by_side():
     # charts are labelled by their group, not a generic repeated headline
     assert "Cars: EU-27 imports from China" in h
     assert "Cars: imports vs exports" in h
+
+
+def test_headline_movers_carry_theme_chips():
+    """Each mover shows its group's theme chips, clickable to filter Sector
+    detail (the mover-chip marker drives the scroll-into-view)."""
+    h = render_html(_sample_report())
+    hi = h.index('class="movers"')
+    nxt = h.index("</ol>", hi)
+    movers = h[hi:nxt]
+    assert 'class="chip mover-chip"' in movers and "EV supply chain" in movers
+    assert 'data-q="ev supply chain"' in movers      # wired to the sector filter
+    assert "mover-chip" in h and "scrollIntoView" in h  # JS scroll on mover-chip
 
 
 def test_drilldown_expands_target_sector_detail():

@@ -467,7 +467,16 @@ def _headline(h: Headline) -> str:
         for item in h.items:
             dd = (f'<a class="drill" href="#{html.escape(item.drill_down)}">detail ›</a>'
                   if item.drill_down else "")
-            out.append(f'<li>{_inline_md(item.prose)} {dd}'
+            # Cross-cutting theme chips for the mover's group — clickable: they
+            # filter the Sector detail list to that theme (the `mover-chip` marker
+            # tells the JS to scroll the list into view).
+            themes = item.facets.theme if item.facets else []
+            chips = ""
+            if themes:
+                chips = '<div class="mover-chips">' + "".join(
+                    f'<button class="chip mover-chip" data-q="{html.escape(t.lower())}">'
+                    f'{html.escape(t)}</button>' for t in themes) + "</div>"
+            out.append(f'<li>{_inline_md(item.prose)} {dd}{chips}'
                        f'{_take_block_html(item.take)}</li>')
         out.append("</ol>")
         if h.variant == "eurostat":
@@ -1197,6 +1206,7 @@ details.gdetail>summary::-webkit-details-marker{display:none}
 details.gdetail>summary::before{content:"▸ "}
 details.gdetail[open]>summary::before{content:"▾ "}
 .chips{margin:0 0 14px;font-size:13px}
+.mover-chips{margin:5px 0 2px}
 .chips-l{color:var(--muted);font-weight:700;margin-right:6px}
 .chip{font-family:var(--font-sans);font-size:12.5px;color:var(--masthead);background:var(--surface);border:1px solid var(--line);border-radius:62.5rem;padding:3px 11px;margin:0 6px 6px 0;cursor:pointer}
 .chip:hover{border-color:var(--link)}
@@ -1389,6 +1399,8 @@ _PORTAL_JS = """<script>
       c.addEventListener('click',function(){
         var q=c.getAttribute('data-q');
         f.value=(f.value.trim().toLowerCase()===q)?'':q;apply();
+        // a chip up in the headline movers: bring the filtered Sector list into view
+        if(c.classList.contains('mover-chip')&&f.value)f.scrollIntoView({block:'start'});
       });
     });
   }

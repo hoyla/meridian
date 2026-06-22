@@ -345,7 +345,7 @@ def _headline_item(m: dict) -> HeadlineItem:
             finding_ids=[m["id"]], source="eurostat",
             as_of=m.get("current_end"),
         ),
-        facets=Facets(commodity=[group]),  # v0: minimal — see module note
+        facets=Facets(commodity=[group], theme=labels.themes_for_group(group)),
     )
 
 
