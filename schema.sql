@@ -495,7 +495,7 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
    'HS 8703 — motor cars and other motor vehicles principally designed for the transport of persons. Headline "China shock" category.',
    ARRAY['8703%'], 'seed:lisa_article'),
   ('EV + hybrid passenger cars',
-   'HS 870380 (electric only), 870370 (PHEV), 870360 (HEV non-plug-in) — the new-energy-vehicle (NEV) export category whose surge from $11bn to $20.6bn Q1 YoY drove the Apr 2026 Guardian story.',
+   'HS 870380 (battery-electric, BEV), 870360 (plug-in hybrid, petrol) and 870370 (plug-in hybrid, diesel) — the battery-electric + plug-in-hybrid set that makes up China''s new-energy-vehicle (NEV) export category (ex-FCEV), whose surge from $11bn to $20.6bn Q1 YoY drove the Apr 2026 Guardian story. CORRECTION (2026-06-22): the prior description mislabelled 870360 as "HEV non-plug-in" and 870370 as plain "PHEV" — per HS 2022 both 870360 (petrol) and 870370 (diesel) are PLUG-IN hybrids; the non-plug-in hybrids are 870340/870350 and live in the sibling "Conventional hybrids (HEV, non-plug-in)" group. The HS patterns were always correct (BEV + both PHEV codes); only the prose was wrong. NB the EU''s Oct 2024 countervailing duties hit BEVs (870380) only — the two plug-in-hybrid codes here are outside that tariff scope, which is what makes a BEV-vs-PHEV split editorially live.',
    ARRAY['870380%', '870370%', '870360%'], 'seed:lisa_article'),
   ('Pork (HS 0203)',
    'HS 0203 — meat of swine, fresh, chilled or frozen. EU exports to China declined notably in Feb 2026 (Soapbox/Lisa).',
@@ -603,7 +603,21 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
    ARRAY['85044086%'], 'seed:soapbox_a1_2026_05_12'),
   ('Civil aircraft (HS 8802)',
    'HS 8802 — powered aircraft (broad chapter; covers helicopters, aeroplanes, gliders and unmanned aircraft across all weights). "Civil aircraft" is the editorial shorthand for the predominantly civil flows seen in EU trade. Large civil aircraft specifically sit at CN8 880240 (unladen weight >15,000 kg) — refine to that sub-code if a story rests on the wide-body / jetliner segment. Captures EU-side imports from China and exports to China; the China-as-importer flow is not in this dataset.',
-   ARRAY['8802%'], 'seed:soapbox_a1_2026_05_12');
+   ARRAY['8802%'], 'seed:soapbox_a1_2026_05_12'),
+  -- Added after Lisa O'Carroll's Jun 2026 sector-coverage questions
+  -- (dev_notes/2026-06-22-lisa-sector-coverage-questions.md). Q1 was whether
+  -- we cover the post-EV-tariff pivot toward plug-in hybrids and critical EV
+  -- parts. Investigation found (a) the "EV + hybrid passenger cars" prose
+  -- mislabelled the plug-in codes (corrected above), (b) conventional
+  -- non-plug-in hybrids (870340/870350) were claimed but not actually in any
+  -- group, and (c) electric traction motors had no coverage at all. These two
+  -- groups close (b) and (c).
+  ('Conventional hybrids (HEV, non-plug-in)',
+   'HS 870340 (petrol + electric) and 870350 (diesel + electric) — full/mild hybrid cars that CANNOT be charged from an external source. Sibling to "EV + hybrid passenger cars" (which holds the battery-electric 870380 and the two plug-in-hybrid codes 870360/870370). Like PHEVs, conventional hybrids sit outside the EU''s Oct 2024 BEV-only countervailing duties, so this group lets the non-plug-in slice of the post-tariff import mix be tracked separately from BEVs and PHEVs.',
+   ARRAY['870340%', '870350%'], 'seed:lisa_sector_q_2026_06'),
+  ('Electric motors & generators (HS 8501, broad)',
+   'HS 8501 — electric motors and generators (excluding generating sets). BROAD chapter: spans sub-watt motors, large industrial machines and alternators alike, so it is NOT an EV-traction-motor signal on its own. EV drive motors concentrate in the higher-power multiphase AC codes — chiefly CN8 85015350-85015399 (AC motors > 75 kW) — refine to those if a tighter EV signal is needed. Added for Lisa''s Jun 2026 question on the post-tariff pivot toward critical EV components: traction motors are the principal EV part captured by neither "Motor-vehicle parts" (HS 8708, which excludes motors and batteries) nor "EV batteries (Li-ion)" (HS 850760).',
+   ARRAY['8501%'], 'seed:lisa_sector_q_2026_06');
 
 -- Caveats journalists should weigh when reading cross-source findings.
 INSERT INTO caveats (code, summary, detail, applies_to) VALUES
