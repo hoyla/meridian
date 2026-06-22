@@ -66,7 +66,15 @@ def _sample_report() -> rm.Report:
         llm_slots=[rm.LLMSlot(slot_type="general", grounded_in=[2])],
     )
     what_changed = rm.WhatChanged(
-        regime="movement", summary="3 findings shifted.", new_count=49)
+        regime="movement", summary="3 findings shifted.", new_count=49,
+        significant=[
+            rm.Shift(group_name="Steel", subkind="hs_group_yoy_export",
+                     window_end="2026-04-01", old_yoy=0.12, new_yoy=-0.04,
+                     direction_flipped=True),
+            rm.Shift(group_name="EV batteries", subkind="hs_group_yoy",
+                     window_end="2026-04-01", old_yoy=0.30, new_yoy=0.52,
+                     direction_flipped=False),
+        ])
     state = rm.Section(
         id="state-of-play", title="State of play", kind="state_of_play",
         sections=[rm.Section(
@@ -470,16 +478,31 @@ def test_what_changed_demotes_to_one_liner_on_quiet_cycle():
     note is still said."""
     import dataclasses
     r = dataclasses.replace(_sample_report(), what_changed=rm.WhatChanged(
-        regime="quiet", summary="nothing material — no new findings, no shifts.",
-        new_count=0))
+        regime="no_change", summary="(unused on the web)", new_count=0,
+        significant=[]))
     h = render_html(r)
-    assert 'class="quiet-change"' in h and "nothing material" in h
+    assert 'class="quiet-change"' in h and "nothing moved materially" in h
     assert "What changed since the last pack" not in h     # no H2 section
     assert 'data-spy="brief-changed"' not in h             # no sub-nav entry
     assert 'id="brief-changed"' not in h
-    # the material case (sample: new_count=49) still gets the full section + nav
+    # the material case (sample carries significant shifts) gets the full section + nav
     full = render_html(_sample_report())
     assert "What changed since the last pack" in full and 'data-spy="brief-changed"' in full
+
+
+def test_what_changed_renders_the_material_shifts():
+    """B: 'What changed' surfaces the actual shift list — group, old→new YoY,
+    pp delta, flip marker — not a bare count of new findings, and with no stray
+    'Tier 1' reference (a docx-only concept)."""
+    h = render_html(_sample_report())
+    assert "moved materially" in h and "1 of them flipping direction" in h
+    assert "Steel" in h and "EV batteries" in h
+    assert "+12.0% → −4.0%" in h          # old → new YoY arc (typographic minus)
+    assert "🔄 flipped" in h               # direction-flip marker
+    assert "Tier 1" not in h               # the docx leftover is gone
+    md = render_markdown(_sample_report())
+    assert "Steel" in md and "+12.0% → −4.0%" in md and "🔄 **flipped**" in md
+    assert "Tier 1" not in md
 
 
 def test_sources_release_appendix():

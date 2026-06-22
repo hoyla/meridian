@@ -12,6 +12,7 @@ this file only formats.
 from __future__ import annotations
 
 from briefing_pack._helpers import _fmt_eur, _fmt_month, _source_label
+from briefing_pack.sections.diff import _shift_flow_phrase, _fmt_window_end
 from report_model import Headline, Indicator, Report, WhatChanged
 
 _COMPANIONS = (
@@ -115,18 +116,53 @@ def _render_headline(h: Headline) -> list[str]:
     return lines
 
 
+def _yoy_arc_md(old, new) -> str:
+    if old is None or new is None:
+        return "—"
+    def f(v):
+        return f"{'+' if v >= 0 else '−'}{abs(v) * 100:.1f}%"
+    return f"{f(old)} → {f(new)}"
+
+
 def _render_what_changed(wc: WhatChanged) -> list[str]:
-    # The per-type new-findings tally lives in Sources & coverage now.
-    return [
-        "## What changed since the last pack",
-        "",
-        f"**Since the last pack:** {wc.summary}",
-        "",
-        "*This answers \"what changed?\". Where each group and partner currently "
-        "stands is in **State of play**; the per-type count of new findings is "
-        "in **Sources & coverage**.*",
-        "",
-    ]
+    """What *moved* since the last pack — the material YoY shifts, not a count of
+    new findings (that's bookkeeping, in Sources & coverage). Shift list when
+    something moved; a slim honest line otherwise."""
+    shifts = wc.significant or []
+    if not shifts:
+        if wc.regime == "method_bump":
+            msg = ("a methodology update re-stamped findings without changing "
+                   "any numbers — nothing editorial moved.")
+        elif wc.regime == "first_export":
+            msg = ("this is the first pack from the database — everything below "
+                   "is a baseline, not a change.")
+        else:
+            msg = ("nothing moved materially — no finding's 12-month change "
+                   "shifted by more than 5 percentage points, and nothing "
+                   "flipped direction.")
+        return ["## What changed since the last pack", "",
+                f"**Since the last pack:** {msg}", ""]
+    flips = sum(1 for s in shifts if s.direction_flipped)
+    lead = (f"{len(shifts)} findings moved materially (12-month change shifted "
+            "by more than 5 percentage points)")
+    if flips:
+        lead += f", {flips} of them flipping direction"
+    lead += "."
+    out = ["## What changed since the last pack", "",
+           f"**Since the last pack:** {lead}", ""]
+    for s in shifts:
+        flip = " 🔄 **flipped**" if s.direction_flipped else ""
+        pp = ""
+        if s.old_yoy is not None and s.new_yoy is not None:
+            d = (s.new_yoy - s.old_yoy) * 100
+            pp = f" ({'+' if d >= 0 else '−'}{abs(d):.1f}pp)"
+        out.append(f"- **{s.group_name}** ({_shift_flow_phrase(s.subkind)}, "
+                   f"12 months to {_fmt_window_end(s.window_end)}): "
+                   f"{_yoy_arc_md(s.old_yoy, s.new_yoy)}{pp}{flip}")
+    out += ["", "*Where each group and partner currently stands is in **State of "
+            "play**; the count of newly-added findings is in **Sources & "
+            "coverage**.*", ""]
+    return out
 
 
 def _sector_flow_line(f) -> str:
