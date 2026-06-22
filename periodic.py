@@ -118,6 +118,7 @@ class PeriodicRunResult:
 
 def write_portal_snapshot(
     bundle_dir: str, data_period, *, generate_takes: bool,
+    write_workbook: bool = False,
 ) -> str | None:
     """Write the portal snapshot into `<bundle_dir>/04_Portal/`: report.json
     (the canonical published snapshot the web portal serves) + index.html (a
@@ -130,7 +131,12 @@ def write_portal_snapshot(
     records NO brief_runs row. That's load-bearing for the standalone
     `--portal-snapshot` caller, which must refresh the portal on demand
     without advancing the subscriber cycle or moving the 'since last brief'
-    baseline."""
+    baseline.
+
+    `write_workbook=True` also builds `<bundle_dir>/04_Data.xlsx` (the workbook
+    the Tables-tab "Download Excel" button links to) so a standalone snapshot
+    publish actually has it; periodic-run leaves it False because export()
+    already wrote that file beside the bundle."""
     try:
         from pathlib import Path
         import report_model
@@ -144,6 +150,26 @@ def write_portal_snapshot(
         pdir.mkdir(parents=True, exist_ok=True)
         (pdir / "report.json").write_text(report_model.to_json(report))
         (pdir / "index.html").write_text(render_html(report))
+        if write_workbook:
+            # The Tables tab's "Download Excel workbook" button links to
+            # /data.xlsx, which publish_snapshot serves from
+            # `<bundle_dir>/04_Data.xlsx`. A standalone --portal-snapshot has no
+            # briefing-pack run to produce that workbook, so build it here —
+            # otherwise the download 404s. Isolated + best-effort: a workbook
+            # failure logs but never sinks the publish (report.json + index.html
+            # are already written; the button would just 404 as before).
+            try:
+                import sheets_export
+                xlsx_path = Path(bundle_dir) / "04_Data.xlsx"
+                sheets_export.XlsxWriter().write(
+                    sheets_export.assemble_sheets(), str(xlsx_path),
+                )
+                log.info("portal snapshot: wrote workbook to %s", xlsx_path)
+            except Exception:
+                log.exception(
+                    "portal snapshot: workbook build failed; portal published "
+                    "without the Tables-tab download"
+                )
         log.info("periodic-run: wrote portal snapshot to %s", pdir)
         return str(pdir)
     except Exception:

@@ -1094,6 +1094,25 @@ def test_periodic_writes_portal_snapshot(clean_db, tmp_path):
     assert (p / "index.html").read_text().startswith("<!doctype html")
 
 
+def test_portal_snapshot_builds_workbook_when_requested(clean_db, tmp_path):
+    """The Tables-tab "Download Excel workbook" button links to /data.xlsx,
+    which publish_snapshot serves from `<bundle_dir>/04_Data.xlsx`. A standalone
+    --portal-snapshot has no briefing-pack run, so write_portal_snapshot must
+    build that workbook when write_workbook=True — otherwise the download 404s.
+    Default stays off: periodic-run already wrote it via export()."""
+    import periodic
+    # Default (periodic-run path): no workbook built here — export() did it.
+    periodic.write_portal_snapshot(str(tmp_path), None, generate_takes=False)
+    assert not (tmp_path / "04_Data.xlsx").exists()
+    # Snapshot-only path: build the workbook so publish_snapshot can serve it.
+    snap = tmp_path / "snap"
+    pdir = periodic.write_portal_snapshot(
+        str(snap), None, generate_takes=False, write_workbook=True)
+    assert pdir is not None
+    assert (snap / "04_Data.xlsx").is_file()              # the download resolves
+    assert (snap / "04_Portal" / "report.json").exists()  # portal still written
+
+
 def test_portal_snapshot_records_no_brief_run(clean_db, test_db_url, tmp_path):
     """The standalone snapshot must NOT insert a brief_runs row — that's the
     whole reason --portal-snapshot exists apart from --periodic-run: an

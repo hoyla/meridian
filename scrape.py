@@ -1055,6 +1055,7 @@ def main() -> None:
             return
         portal_dir = periodic.write_portal_snapshot(
             out_dir, period, generate_takes=args.portal_takes,
+            write_workbook=True,  # so the Tables-tab /data.xlsx download resolves (no briefing-pack run on this path)
         )
         if portal_dir is None:
             print("Portal snapshot failed — see logs.")
