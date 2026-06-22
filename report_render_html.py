@@ -467,7 +467,16 @@ def _headline(h: Headline) -> str:
         for item in h.items:
             dd = (f'<a class="drill" href="#{html.escape(item.drill_down)}">detail ›</a>'
                   if item.drill_down else "")
-            out.append(f'<li>{_inline_md(item.prose)} {dd}'
+            # Cross-cutting theme chips for the mover's group — clickable: they
+            # filter the Sector detail list to that theme (the `mover-chip` marker
+            # tells the JS to scroll the list into view).
+            themes = item.facets.theme if item.facets else []
+            chips = ""
+            if themes:
+                chips = '<div class="mover-chips">' + "".join(
+                    f'<button class="chip mover-chip" data-q="{html.escape(t.lower())}">'
+                    f'{html.escape(t)}</button>' for t in themes) + "</div>"
+            out.append(f'<li>{_inline_md(item.prose)} {dd}{chips}'
                        f'{_take_block_html(item.take)}</li>')
         out.append("</ol>")
         if h.variant == "eurostat":
@@ -639,6 +648,19 @@ def _sources_html(section) -> str:
                 f'<td>{html.escape(str(c.get("end") or "—"))}</td>'
                 f'<td>{c.get("releases", 0):,}</td></tr>')
         out.append("</tbody></table></div>")
+    # New findings this cycle, by type (moved here from 'What changed' — it's a
+    # coverage tally, not substance). Sits with Period coverage.
+    nf = m.get("new_findings", [])
+    if nf:
+        nft = m.get("new_findings_total", 0)
+        out.append('<h3 class="ref-h2">New this cycle</h3>'
+                   f'<p class="kicker">{nft:,} findings added since the last pack, '
+                   "by type:</p><ul class=\"ref\">")
+        for f in nf:
+            out.append(f'<li><strong>{f["count"]:,}</strong> new — '
+                       f'{html.escape(f["label"])} '
+                       f'<span class="ref-code">{html.escape(f["subkind"])}</span></li>')
+        out.append("</ul>")
     man = m.get("manifest", [])
     if man:
         total = m.get("manifest_total", 0)
@@ -899,10 +921,45 @@ def _gacc_bilateral_html(section) -> str:
         out.append(f'<details class="partner" id="{html.escape(p.id)}">')
         out.append(f'<summary><span class="pp-name">{html.escape(p.title)}</span>'
                    f'{summ}</summary><div class="pp-body">')
+        # Window orientation, once per partner (same period for both flows).
+        win = next((f.metrics.get("window_label") for f in p.findings
+                    if f.metrics.get("window_label")), None)
+        if win:
+            out.append(f'<p class="pp-window">{html.escape(win)}</p>')
         for f in p.findings:
             out.append(_sector_flow_row(f))
+            out.append(_bilateral_ctx_row(f))
+        # The incomplete-window prose, once per partner (deduped — both flows
+        # usually carry the same note).
+        notes: list[str] = []
+        for f in p.findings:
+            nt = f.metrics.get("note")
+            if nt and nt not in notes:
+                notes.append(nt)
+        for nt in notes:
+            out.append(f'<p class="pp-caveat">⚠ {html.escape(nt)}</p>')
         out.append("</div></details>")
     return "\n".join(out)
+
+
+def _bilateral_ctx_row(f) -> str:
+    """The muted secondary register under a partner flow row: year-to-date and
+    the latest-month value — the substance the 12-month headline alone drops.
+    Restored from the finding's own totals; empty string when absent."""
+    m = f.metrics
+    bits: list[str] = []
+    yp, ye, ym = m.get("ytd_pct"), m.get("ytd_eur"), m.get("ytd_months")
+    if ye is not None:
+        mo = f" ({ym}-mo)" if ym else ""
+        pct = (f"{'+' if float(yp) >= 0 else '−'}{abs(float(yp)) * 100:.1f}% · "
+               if yp is not None else "")
+        bits.append(f"YTD{mo}: {pct}{_fmt_eur(ye)}")
+    se = m.get("sm_eur")
+    if se is not None:
+        bits.append(f"latest month: {_fmt_eur(se)}")
+    if not bits:
+        return ""
+    return f'<div class="pp-ctx">{html.escape(" · ".join(bits))}</div>'
 
 
 def _structural_section_html(section) -> str:
@@ -964,7 +1021,8 @@ def _sector_section(section) -> str:
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
         out.append(f'<p class="kicker">{html.escape(section.intro)} '
-                   "Ordered by size — filter to find a sector.</p>")
+                   "Grouped by SITC section, biggest category first — "
+                   "filter to find a sector.</p>")
     out.append(_more_about(section))
     n = len(section.sections)
     if n:
@@ -986,23 +1044,39 @@ def _sector_section(section) -> str:
             )
             out.append('<div class="chips"><span class="chips-l">Themes:</span> '
                        + chips + "</div>")
+    # Groups arrive grouped by SITC section (value-ordered); emit a subhead at
+    # each section boundary. Subheads carry data-section so the filter can hide
+    # them when all their groups are filtered out.
+    sec_idx = {s["code"]: s for s in (section.metrics or {}).get("section_index", [])}
+    cur_sec = object()
     for grp in section.sections:
+        gsec = ((grp.metrics or {}).get("section") or {}).get("code")
+        if gsec != cur_sec:
+            cur_sec = gsec
+            si = sec_idx.get(gsec, {})
+            cnt = si.get("count", 0)
+            out.append(
+                f'<div class="sec-head" data-section="{html.escape(str(gsec or ""))}">'
+                f'<span class="sec-h-title">{html.escape(si.get("title", ""))}</span>'
+                f'<span class="sec-h-meta">{cnt} '
+                f'{"group" if cnt == 1 else "groups"} · '
+                f'{_fmt_eur(si.get("value"))} 12-mo EU-27 imports</span></div>')
         f = grp.facets
         secs = f.sector if f else []
         titles = [division_title(c) for c in secs]
         themes = f.theme if f else []
         end_use = f.end_use if f else []
-        # SITC division names + theme names + end-use join the filter index,
-        # so "machinery", "xinjiang" or "capital" all find groups.
+        # SITC division + section names, theme names and end-use join the filter
+        # index, so "machinery", "chemicals", "xinjiang" or "capital" all find.
         pb = (grp.metrics or {}).get("predictability") or {}
         pbadge = pb.get("badge")
         plabel = {"🟢": "reliable", "🟡": "mixed", "🔴": "volatile"}.get(pbadge, "")
-        # 'reliable'/'mixed'/'volatile' join the filter index, so you can filter
-        # to e.g. only the volatile groups.
+        sec_title = ((grp.metrics or {}).get("section") or {}).get("title", "")
         data_name = (grp.title + " " + " ".join(titles) + " "
                      + " ".join(themes) + " " + " ".join(end_use) + " "
-                     + plabel).lower()
+                     + plabel + " " + sec_title).lower()
         out.append(f'<div class="sector" id="{html.escape(grp.id)}" '
+                   f'data-section="{html.escape(str(gsec or ""))}" '
                    f'data-name="{html.escape(data_name)}">')
         badge_html = ""
         if pbadge:
@@ -1114,26 +1188,26 @@ def _sector_section(section) -> str:
     return "\n".join(out)
 
 
-def _what_changed(wc: WhatChanged) -> str:
-    out = [
-        '<h2 class="lead">What changed since the last pack</h2>',
+def _what_changed(wc: WhatChanged, full: bool = True) -> str:
+    # The per-type new-findings breakdown lives in Sources & coverage (it's
+    # bookkeeping); What changed keeps the substantive 'since the last pack'
+    # digest.
+    if not full:
+        # Quiet cycle (nothing material): a slim one-liner, no H2 and no nav
+        # target — it shouldn't claim a section's vertical weight when there's
+        # nothing to report. The explicit 'nothing changed' is still worth
+        # saying (the pack is fresh, not stale).
+        return (f'<p class="quiet-change"><strong>Since the last pack:</strong> '
+                f'{html.escape(wc.summary)}</p>')
+    return (
+        '<h2 class="lead">What changed since the last pack</h2>'
         f'<p class="since"><strong>Since the last pack:</strong> '
-        f'{html.escape(wc.summary)}</p>',
-    ]
-    if wc.new_by_subkind:
-        items = "".join(
-            f'<li><strong>{int(b["count"]):,}</strong> new — '
-            f'{html.escape(b["label"])} '
-            f'<span class="ref-code">{html.escape(b["subkind"])}</span></li>'
-            for b in wc.new_by_subkind)
-        out.append(
-            '<details class="more"><summary>New findings this cycle — '
-            f'{int(wc.new_count):,} by type</summary>'
-            f'<div class="more-body"><ul class="ref">{items}</ul></div></details>')
-    out.append('<p class="note">This answers <em>what changed?</em> — where each '
-               'group and partner currently stands is in <strong>State of '
-               'play</strong>.</p>')
-    return "\n".join(out)
+        f'{html.escape(wc.summary)}</p>'
+        '<p class="note">This answers <em>what changed?</em> — where each group '
+        'and partner currently stands is in <strong>State of play</strong>; the '
+        'per-type count of new findings is in <strong>Sources &amp; coverage'
+        '</strong>.</p>'
+    )
 
 
 _CSS = """
@@ -1146,13 +1220,14 @@ _CSS = """
 *{box-sizing:border-box}
 body{margin:0;background:var(--surface-alt);color:var(--ink);font:16px/1.4 var(--font-sans)}
 .wrap{max-width:860px;margin:0 auto;background:var(--surface)}
-.masthead{background:var(--masthead);color:#fff;padding:18px 28px 16px}
+.masthead{background:var(--masthead);color:#fff;padding:18px 28px 16px;display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
 .mast{font-family:var(--font-headline);font-weight:700;font-size:34px;line-height:1.05;letter-spacing:-.4px}
 .sub{font-family:var(--font-headline);font-weight:400;font-size:19px;color:#cdddf6;margin-top:2px}
-.subbar{padding:10px 28px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;flex-wrap:wrap;gap:8px}
-.subbar .meta{font-size:13px;color:var(--muted)}
-.tag{background:var(--masthead);color:#fff;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:2px 10px;border-radius:62.5rem}
-.note-line{flex-basis:100%;font-size:13px;color:var(--muted);font-style:italic}
+.mast-meta{display:flex;flex-direction:column;align-items:flex-end;gap:6px;text-align:right;padding-top:5px}
+.mast-period{font-size:12.5px;color:#cdddf6}
+/* source badge sits on the dark masthead: a white pill, blue text; carries the
+   'triggered by' note as its tooltip. */
+.tag{background:#fff;color:var(--masthead);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:2px 10px;border-radius:62.5rem;cursor:help}
 section{padding:18px 28px}
 .kpis{display:flex;flex-wrap:wrap;gap:16px;border-bottom:1px solid var(--line)}
 .kpi{flex:1 1 230px;background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--news);padding:14px 16px}
@@ -1173,12 +1248,23 @@ a:hover{border-bottom-color:var(--link)}
 .drill{font-size:13px;font-weight:700;white-space:nowrap;border-bottom:none}
 .note{font-size:13px;color:var(--muted);font-style:italic}
 .since{font-family:var(--font-body);font-size:17px;line-height:1.4}
+.quiet-change{font-size:13.5px;color:var(--muted);margin:2px 0 0;line-height:1.4}
+.quiet-change strong{color:var(--ink);font-weight:600}
 .filter-bar{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding-bottom:12px;border-bottom:1px solid var(--line)}
 .filter{font-family:var(--font-sans);font-size:14px;padding:7px 10px;border:1px solid var(--line);border-radius:4px;width:280px;max-width:60%;color:var(--ink);background:var(--surface)}
 .filter:focus{outline:none;border-color:var(--link);box-shadow:0 0 0 3px rgba(0,119,182,.15)}
 .filter-count{font-size:13px;color:var(--muted)}
 .sector{padding:12px 0;border-bottom:1px solid var(--line)}
-.sector:target{background:#dcebfa;scroll-margin-top:12px}
+/* Jump targets clear the sticky tab bar; offset is unconditional so it applies
+   to JS scrollIntoView too (not only native :target jumps). */
+.brief-sec,.sector,.partner,.tmrow,.filter,.sec-head{scroll-margin-top:52px}
+/* Drilled-to highlight: .jumped is set by JS (the click handler preventDefaults,
+   so the native :target never fires); :target is the no-JS fallback. */
+.sector.jumped,.partner.jumped,.tmrow.jumped,
+.sector:target,.partner:target,.tmrow:target{background:#dcebfa}
+.sec-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:20px 0 6px;padding:5px 0 4px;border-top:2px solid var(--masthead)}
+.sec-h-title{font-family:var(--font-sans);font-size:13px;font-weight:700;color:var(--masthead);text-transform:uppercase;letter-spacing:.4px}
+.sec-h-meta{font-size:12px;color:var(--muted)}
 .sector-h{font-family:var(--font-headline);font-size:18px;font-weight:700;color:var(--ink);margin:0 0 2px}
 .pred{cursor:help;font-size:15px;vertical-align:baseline}
 .sitc{font-size:12px;color:var(--muted);margin:0 0 4px;letter-spacing:.2px}
@@ -1191,6 +1277,7 @@ details.gdetail>summary::-webkit-details-marker{display:none}
 details.gdetail>summary::before{content:"▸ "}
 details.gdetail[open]>summary::before{content:"▾ "}
 .chips{margin:0 0 14px;font-size:13px}
+.mover-chips{margin:5px 0 2px}
 .chips-l{color:var(--muted);font-weight:700;margin-right:6px}
 .chip{font-family:var(--font-sans);font-size:12.5px;color:var(--masthead);background:var(--surface);border:1px solid var(--line);border-radius:62.5rem;padding:3px 11px;margin:0 6px 6px 0;cursor:pointer}
 .chip:hover{border-color:var(--link)}
@@ -1237,12 +1324,18 @@ ul.ref li{font-size:13.5px;line-height:1.5;margin:0 0 7px;color:var(--ink)}
 .take-prose{font-family:var(--font-sans);font-size:14.5px;line-height:1.5;color:#7a5c00;margin:6px 0 0}
 .take-cite{font-size:12px;color:#7a5c00;margin:7px 0 0;opacity:.85}
 /* tabs (Guardian Source — thick brand-blue underline over the hairline) */
-.tabs{display:flex;gap:4px;background:var(--surface);padding:0 28px;border-bottom:1px solid var(--line);flex-wrap:wrap;position:sticky;top:0;z-index:5}
+/* Main tabs are NOT sticky — the Briefing's in-page sub-nav is the sticky
+   element instead, so only one bar ever occupies the top (see .subnav). */
+.tabs{display:flex;gap:4px;background:var(--surface);padding:0 28px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.subnav{position:sticky;top:0;z-index:6;display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;background:var(--surface);border-bottom:1px solid var(--line);padding:8px 28px;font-family:var(--font-sans);font-size:13.5px}
+.subnav a{color:var(--muted);text-decoration:none;font-weight:600;white-space:nowrap;padding:2px 0;border-bottom:2px solid transparent}
+.subnav a:hover{color:var(--ink)}
+.subnav a.active{color:var(--masthead);border-bottom-color:var(--masthead)}
+.subnav-top{color:var(--masthead) !important;margin-right:6px}
 .tab{padding:12px 16px;color:var(--muted);font-family:var(--font-sans);font-weight:600;font-size:15px;border-bottom:4px solid transparent;margin-bottom:-1px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
 .tab:hover{color:var(--ink);border-bottom-color:transparent}
 .tab.active{color:var(--masthead);border-bottom-color:var(--masthead)}
 .tabpanel.hide{display:none}
-.sector:target{scroll-margin-top:64px}
 /* "More about this section" disclosure */
 details.more{border:1px solid var(--line);border-left:4px solid var(--masthead);background:var(--surface-alt);border-radius:3px;margin:0 0 14px}
 details.more>summary{cursor:pointer;list-style:none;padding:9px 14px;font-family:var(--font-sans);font-weight:700;font-size:13.5px;color:var(--masthead)}
@@ -1263,6 +1356,9 @@ details.partner[open]>summary{border-bottom:1px solid var(--line)}
 .pp-name{font-family:var(--font-sans);font-weight:700;font-size:14.5px;color:var(--ink)}
 .pp-fig{margin-left:auto;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
 .pp-body{padding:8px 14px 10px}
+.pp-window{font-size:12px;color:var(--muted);margin:0 0 6px;font-variant-numeric:tabular-nums}
+.pp-ctx{font-size:12px;color:var(--muted);margin:-2px 0 8px;padding-left:2px;font-variant-numeric:tabular-nums}
+.pp-caveat{font-size:12px;color:var(--muted);margin:8px 0 0;line-height:1.45;border-top:1px solid var(--line);padding-top:7px}
 @media(max-width:560px){.pp-fig{margin-left:0;flex-basis:100%}}
 /* prose (methodology guides, glossary defs) */
 .prose{font-family:var(--font-body);font-size:15px;line-height:1.55;color:var(--ink)}
@@ -1289,8 +1385,9 @@ details.partner[open]>summary{border-bottom:1px solid var(--line)}
 .kpi-donut{align-items:center;text-align:center}
 .kpi-donut-wrap{margin:6px auto 2px}
 .donut-pct{font-family:var(--font-headline);font-weight:700;font-size:20px;fill:var(--ink)}
-/* glossary */
-.gloss-group{margin:0 0 8px}
+/* glossary — groups are nested <section>s inside the tab's own <section>, so
+   strip the inherited section padding (it would otherwise double up). */
+.gloss-group{margin:0 0 8px;padding:0}
 .gloss-item{padding:10px 0;border-bottom:1px solid var(--line)}
 .gterm{font-family:var(--font-sans);font-weight:700;font-size:15px;color:var(--ink);margin-bottom:2px}
 .gdef{font-family:var(--font-body);font-size:14px;line-height:1.5;color:var(--ink)}
@@ -1315,7 +1412,7 @@ table.dtable td{padding:6px 10px;border-bottom:1px solid var(--line);color:var(-
 table.dtable tbody tr:hover{background:var(--surface-alt)}
 .data-more{margin-top:18px}
 footer{padding:18px 28px 28px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);line-height:1.6}
-@media(max-width:560px){.mast{font-size:27px}.sub{font-size:16px}section{padding:14px 18px}.masthead{padding:16px 18px}.subbar{padding:10px 18px}.tabs{padding:0 10px}.tab{padding:10px 11px;font-size:14px}}
+@media(max-width:560px){.mast{font-size:27px}.sub{font-size:16px}section{padding:14px 18px}.masthead{padding:16px 18px}.tabs{padding:0 10px}.tab{padding:10px 11px;font-size:14px}.subnav{padding:8px 18px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}}
 """
 
 
@@ -1328,10 +1425,14 @@ _PORTAL_JS = """<script>
   var panels=[].slice.call(document.querySelectorAll('.tabpanel'));
   function panelOf(el){while(el&&el.classList&&!el.classList.contains('tabpanel'))el=el.parentElement;return el;}
   function expandDetail(el){ // open a drilled-to sector's collapsed charts/detail
-    if(!el)return;
+    if(!el||(el.classList&&el.classList.contains('brief-sec')))return; // not whole-section jumps
     if(el.tagName==='DETAILS')el.open=true;
     var d=el.querySelector&&el.querySelector('details.gdetail');
     if(d)d.open=true;
+  }
+  function mark(el){ // the drilled-to highlight (JS stands in for native :target)
+    var prev=document.querySelector('.jumped');if(prev)prev.classList.remove('jumped');
+    if(el&&el.classList)el.classList.add('jumped');
   }
   function show(id){
     if(!document.getElementById(id))id='tab-briefing';
@@ -1342,7 +1443,7 @@ _PORTAL_JS = """<script>
     var id=(hash||'').replace(/^#/,'');
     var el=id&&document.getElementById(id);
     if(el&&el.classList.contains('tabpanel')){show(id);window.scrollTo(0,0);return;}
-    if(el){var p=panelOf(el);if(p){show(p.id);expandDetail(el);el.scrollIntoView();return;}}
+    if(el){var p=panelOf(el);if(p){show(p.id);expandDetail(el);el.scrollIntoView();mark(el);return;}}
     show('tab-briefing');
   }
   tabs.forEach(function(t){t.addEventListener('click',function(e){
@@ -1354,16 +1455,35 @@ _PORTAL_JS = """<script>
     if(!a||a.classList.contains('tab'))return;
     var id=a.getAttribute('href').slice(1);var el=document.getElementById(id);if(!el)return;
     var p=el.classList.contains('tabpanel')?el:panelOf(el);
-    if(p){show(p.id);if(el!==p){e.preventDefault();expandDetail(el);el.scrollIntoView();
+    if(p){show(p.id);if(el!==p){e.preventDefault();expandDetail(el);el.scrollIntoView();mark(el);
       if(history.replaceState)history.replaceState(null,'','#'+id);}}
   });
   window.addEventListener('hashchange',function(){go(location.hash);});
   if(tabs.length)go(location.hash);
 
+  // ---- briefing sub-nav: immediate active-state on click (works everywhere),
+  // plus scroll-spy that highlights the link for the section in view (picks the
+  // topmost intersecting section). The IO half no-ops where unsupported; links
+  // still jump and the clicked one still highlights.
+  var spy=[].slice.call(document.querySelectorAll('.subnav a[data-spy]'));
+  spy.forEach(function(a){a.addEventListener('click',function(){
+    spy.forEach(function(x){x.classList.remove('active');});a.classList.add('active');});});
+  if(spy.length&&'IntersectionObserver' in window){
+    var vis={};
+    var io=new IntersectionObserver(function(entries){
+      entries.forEach(function(en){vis[en.target.id]=en.isIntersecting;});
+      var pick=null;
+      spy.forEach(function(a){var id=a.getAttribute('data-spy');if(!pick&&vis[id])pick=id;});
+      spy.forEach(function(a){a.classList.toggle('active',a.getAttribute('data-spy')===pick);});
+    },{rootMargin:'-52px 0px -55% 0px',threshold:0});
+    spy.forEach(function(a){var el=document.getElementById(a.getAttribute('data-spy'));if(el)io.observe(el);});
+  }
+
   // ---- sector filter (name / SITC / theme / end-use) + theme chips
   var f=document.getElementById('sector-filter');
   if(f){
     var blocks=[].slice.call(document.querySelectorAll('.sector[data-name]'));
+    var heads=[].slice.call(document.querySelectorAll('.sec-head'));
     var count=document.getElementById('sector-count');
     var empty=document.getElementById('sector-empty');
     var apply=function(){
@@ -1371,6 +1491,13 @@ _PORTAL_JS = """<script>
       blocks.forEach(function(b){
         var m=!q||b.getAttribute('data-name').indexOf(q)!==-1;
         b.style.display=m?'':'none';if(m)shown++;
+      });
+      // hide a section subhead when none of its groups are showing
+      heads.forEach(function(hd){
+        var sc=hd.getAttribute('data-section');
+        var any=blocks.some(function(b){
+          return b.getAttribute('data-section')===sc && b.style.display!=='none';});
+        hd.style.display=any?'':'none';
       });
       if(count)count.textContent=q?('showing '+shown+' of '+blocks.length):(blocks.length+' groups');
       if(empty)empty.style.display=shown?'none':'block';
@@ -1383,6 +1510,8 @@ _PORTAL_JS = """<script>
       c.addEventListener('click',function(){
         var q=c.getAttribute('data-q');
         f.value=(f.value.trim().toLowerCase()===q)?'':q;apply();
+        // a chip up in the headline movers: bring the filtered Sector list into view
+        if(c.classList.contains('mover-chip')&&f.value)f.scrollIntoView({block:'start'});
       });
     });
   }
@@ -1455,6 +1584,12 @@ def render_html(report: Report) -> str:
     period = m.data_period
     period_str = period.strftime("%B %Y") if hasattr(period, "strftime") else str(period)
     note = report.headline.note if report.headline else ""
+    # The note's first sentence ("Triggered by new Eurostat data.") becomes the
+    # source badge's tooltip; the rest was boilerplate and is dropped.
+    tip = note.split(". ", 1)[0].strip() if note else ""
+    if tip and not tip.endswith("."):
+        tip += "."
+    tip_attr = f' title="{html.escape(tip)}"' if tip else ""
 
     data_sec = next((s for s in report.sections if s.kind == "data"), None)
     ref_sec = next((s for s in report.sections if s.kind == "reference"), None)
@@ -1465,6 +1600,7 @@ def render_html(report: Report) -> str:
     # --- Briefing panel: indicators, headline, general take, what-changed, then
     # the main-page sections (everything that isn't a tab of its own).
     brief: list[str] = []
+    subnav: list[tuple[str, str]] = []   # (anchor id, short label) for the sub-nav
     if report.key_indicators:
         brief.append('<section class="kpis">'
                      + "".join(_indicator_card(i) for i in report.key_indicators)
@@ -1477,18 +1613,40 @@ def render_html(report: Report) -> str:
                 if block:
                     brief.append("<section>" + block + "</section>")
     if report.what_changed:
-        brief.append("<section>" + _what_changed(report.what_changed) + "</section>")
+        wc = report.what_changed
+        if wc.new_count or wc.significant:   # something material to report
+            subnav.append(("brief-changed", "What's changed"))
+            brief.append('<section class="brief-sec" id="brief-changed">'
+                         + _what_changed(wc) + "</section>")
+        else:                                # quiet cycle → slim one-liner, no nav
+            brief.append("<section>" + _what_changed(wc, full=False) + "</section>")
+    _BRIEF_NAV = {"state_of_play": "State of play", "mirror_gap": "Mirror gaps",
+                  "sector_detail": "Sector detail", "gacc_bilateral": "By partner"}
     for sec in report.sections:
+        inner = None
         if sec.kind == "state_of_play" and sec.sections:
-            brief.append("<section>" + _state_of_play_section(sec) + "</section>")
+            inner = _state_of_play_section(sec)
         elif sec.kind == "sector_detail" and sec.sections:
-            brief.append("<section>" + _sector_section(sec) + "</section>")
+            inner = _sector_section(sec)
         elif sec.kind == "mirror_gap" and sec.findings:
-            brief.append("<section>" + _mirror_gap_html(sec) + "</section>")
+            inner = _mirror_gap_html(sec)
         elif sec.kind == "gacc_bilateral" and sec.sections:
-            brief.append("<section>" + _gacc_bilateral_html(sec) + "</section>")
+            inner = _gacc_bilateral_html(sec)
         # 'structural' (the Trade Map) is NOT here — it moved to the Sources &
         # coverage tab below.
+        if inner is not None:
+            anchor = "brief-" + sec.kind
+            subnav.append((anchor, _BRIEF_NAV[sec.kind]))
+            brief.append(f'<section class="brief-sec" id="{anchor}">{inner}</section>')
+
+    # Sticky in-page nav for the Briefing (its only long, multi-section tab) —
+    # so a landing reader sees what's below and can jump. "Top" returns to the
+    # masthead + main tabs (which are not sticky, to keep one bar at a time).
+    if subnav:
+        links = '<a class="subnav-top" href="#top">↑&nbsp;Top</a>' + "".join(
+            f'<a href="#{a}" data-spy="{a}">{html.escape(lbl)}</a>'
+            for a, lbl in subnav)
+        brief.insert(0, f'<nav class="subnav" aria-label="On this page">{links}</nav>')
 
     # --- tabs: (key, label, panel-html). Only built when they have content, so a
     # GACC variant with no data tab simply shows fewer tabs.
@@ -1546,15 +1704,16 @@ def render_html(report: Report) -> str:
         'family=Noto+Serif:wght@400;700&family=Source+Sans+3:wght@400;600;700&'
         'family=Source+Serif+4:wght@600;700&display=swap">',
         f"<style>{_CSS}</style></head><body><div class=wrap>",
-        '<header class="masthead">',
+        '<header class="masthead" id="top">',
+        '<div class="mast-brand">',
         '<div class="mast">Meridian</div>',
         '<div class="sub">China–Europe trade</div>',
-        "</header>",
-        '<div class="subbar">',
-        f'<span class="meta">Data to {html.escape(period_str)}</span>'
-        f'<span class="tag">{html.escape(m.variant)}</span>',
-        f'<div class="note-line">{html.escape(note)}</div>',
         "</div>",
+        '<div class="mast-meta">',
+        f'<span class="tag"{tip_attr}>{html.escape(m.variant)}</span>',
+        f'<span class="mast-period">Data to {html.escape(period_str)}</span>',
+        "</div>",
+        "</header>",
         nav,
         panels,
         footer,

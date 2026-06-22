@@ -54,6 +54,7 @@ def _sample_report() -> rm.Report:
             prose="**EU-27 exports of [Cars](#cars) to China** fell 40% `finding/2`",
             drill_down="cars",
             provenance=rm.Provenance(finding_ids=[2], source="eurostat"),
+            facets=rm.Facets(commodity=["Cars"], theme=["EV supply chain"]),
             take=rm.LLMSlot(
                 slot_type="specific", grounded_in=[2], status="generated",
                 questions=[
@@ -65,11 +66,7 @@ def _sample_report() -> rm.Report:
         llm_slots=[rm.LLMSlot(slot_type="general", grounded_in=[2])],
     )
     what_changed = rm.WhatChanged(
-        regime="movement", summary="3 findings shifted.", new_count=49,
-        new_by_subkind=[
-            {"subkind": "hs_group_yoy", "label": "year-on-year change for an HS group",
-             "count": 44},
-            {"subkind": "mirror_gap", "label": "mirror-trade gap", "count": 5}])
+        regime="movement", summary="3 findings shifted.", new_count=49)
     state = rm.Section(
         id="state-of-play", title="State of play", kind="state_of_play",
         sections=[rm.Section(
@@ -102,7 +99,8 @@ def _sample_report() -> rm.Report:
                                 "UK": {"import": "volatile"}},
                  "trajectory_findings": [5, 6],
                  "china_export_share_value": 0.015, "china_export_share_finding": 7,
-                 "predictability": {"badge": "🟡", "persistence_pct": 0.5, "n": 4}},
+                 "predictability": {"badge": "🟡", "persistence_pct": 0.5, "n": 4},
+                 "section": {"code": "7", "title": "Machinery & transport"}},
         findings=[rm.Finding(
             finding_id=2, subkind="hs_group_yoy_export", title="EU-27 exports of Cars",
             metrics={"scope": "EU-27", "flow": "export", "yoy_pct": -0.4,
@@ -123,6 +121,9 @@ def _sample_report() -> rm.Report:
                         intro="Every group.",
                         about="Reading the numbers: value vs volume; **low base** "
                               "means quote the € amount.\n\n- 12-month vs latest month",
+                        metrics={"section_index": [
+                            {"code": "7", "title": "Machinery & transport",
+                             "value": 1.6e10, "count": 1}]},
                         sections=[group])
     structural = rm.Section(
         id="trade-map", title="Trade map", kind="structural", intro="By division.",
@@ -154,6 +155,12 @@ def _sample_report() -> rm.Report:
         metrics={"sources": [{"source": "eurostat", "note": "Comext."}],
                  "coverage": [{"source": "eurostat", "start": "2017-01-01",
                                "end": "2026-04-01", "releases": 111}],
+                 "new_findings": [
+                     {"subkind": "hs_group_yoy",
+                      "label": "year-on-year change for an HS group", "count": 44},
+                     {"subkind": "mirror_gap", "label": "mirror-trade gap",
+                      "count": 5}],
+                 "new_findings_total": 49,
                  "manifest": [{"family": "HS-group year-on-year (price & volume)",
                                "count": 3509}],
                  "manifest_total": 3509,
@@ -177,7 +184,7 @@ def _sample_report() -> rm.Report:
              "headers": ["group"], "rows": [], "total_rows": 3509,
              "shown_rows": 0, "inline": False}]})
     gacc_bi = rm.Section(
-        id="gacc-bilateral", title="China's trade by partner (GACC)",
+        id="gacc-bilateral", title="China’s trade by partner (GACC)",
         kind="gacc_bilateral", intro="By partner.",
         sections=[rm.Section(
             id="gacc-united-states", title="United States", kind="gacc_bilateral",
@@ -185,7 +192,12 @@ def _sample_report() -> rm.Report:
                 finding_id=10, subkind="gacc_bilateral_aggregate_yoy",
                 title="China exports to US",
                 metrics={"scope": "China", "flow": "export", "yoy_pct": -0.297,
-                         "current_eur": 4.6e11},
+                         "current_eur": 4.6e11, "sm_yoy_pct": 0.162,
+                         "sm_eur": 7.3e9, "ytd_pct": 0.125, "ytd_eur": 3.32e10,
+                         "ytd_months": 5, "window_label": "12 months to May 2026",
+                         "note": ("Incomplete window — missing January 2026 from "
+                                  "the current 12-month window"),
+                         "caveats": ["partial_window"]},
                 provenance=rm.Provenance(finding_ids=[10], source="gacc"))])])
     meta = rm.ReportMeta(data_period=date(2026, 4, 1), variant="eurostat",
                          snapshot_id="t", generated_at=datetime(2026, 6, 20, 12, 0))
@@ -215,10 +227,10 @@ def test_markdown_renders_all_sections():
     for marker in ("# Headlines", "## Key indicators", "## State of play",
                    "## Mirror-trade gaps", "## Sector detail", "## Trade map",
                    "## Methodology & caveats", "## Sources & coverage",
-                   "## China's trade by partner (GACC)"):
+                   "## China’s trade by partner (GACC)"):
         assert marker in md, marker
     assert "China reports" in md          # cn-only deficit
-    assert "z" in md and "2025-11" in md  # mirror-gap z-score
+    assert "2025-11" in md and "σ" in md  # mirror-gap z-score (period + sigma)
     assert "China takes 1.5%" in md       # export share
     assert "Trajectory —" in md           # multi-scope trajectory
     assert "finding/" in md               # citations
@@ -332,6 +344,18 @@ def test_sector_group_charts_line_and_bar_side_by_side():
     assert "Cars: imports vs exports" in h
 
 
+def test_headline_movers_carry_theme_chips():
+    """Each mover shows its group's theme chips, clickable to filter Sector
+    detail (the mover-chip marker drives the scroll-into-view)."""
+    h = render_html(_sample_report())
+    hi = h.index('class="movers"')
+    nxt = h.index("</ol>", hi)
+    movers = h[hi:nxt]
+    assert 'class="chip mover-chip"' in movers and "EV supply chain" in movers
+    assert 'data-q="ev supply chain"' in movers      # wired to the sector filter
+    assert "mover-chip" in h and "scrollIntoView" in h  # JS scroll on mover-chip
+
+
 def test_drilldown_expands_target_sector_detail():
     """A mover's 'detail ›' drill-down auto-opens the target group's collapsed
     charts/detail (router JS wired to expand on navigation)."""
@@ -354,7 +378,25 @@ def test_sector_group_predictability_badge():
     h = render_html(_sample_report())
     assert 'class="pred"' in h and "🟡" in h
     assert 'data-name="cars' in h and "mixed" in h   # 'mixed' filterable
-    assert "### Cars 🟡" in render_markdown(_sample_report())
+    assert "#### Cars 🟡" in render_markdown(_sample_report())
+
+
+def test_sector_detail_grouped_by_sitc_section_with_subheads():
+    """Groups carry a section subhead (data-section for filter auto-hide); the
+    subhead names the SITC section and its combined value."""
+    h = render_html(_sample_report())
+    assert 'class="sec-head"' in h and 'data-section="7"' in h
+    assert "Machinery &amp; transport" in h          # section title in the subhead
+    assert 'class="sector"' in h and 'data-section="7"' in h  # group tagged too
+    md = render_markdown(_sample_report())
+    assert "### Machinery & transport" in md
+
+
+def test_primary_section_heuristic():
+    from report_builder import _primary_section
+    assert _primary_section(["78"])[0] == "7"          # single division → its section
+    assert _primary_section(["73", "77", "51"])[0] == "7"  # mode of sections
+    assert _primary_section([])[0] == "9"              # none → Other/unclassified
 
 
 def test_per_row_caveat_flags():
@@ -363,12 +405,57 @@ def test_per_row_caveat_flags():
     assert "(partial window)" in render_markdown(_sample_report())
 
 
-def test_what_changed_new_findings_breakdown():
+def test_new_findings_breakdown_lives_in_sources_not_what_changed():
+    """The per-type new-findings tally is bookkeeping, so it sits in Sources &
+    coverage (by Period coverage), not in What changed."""
     h = render_html(_sample_report())
-    assert "New findings this cycle" in h
-    assert "44" in h and "year-on-year change for an HS group" in h
+    # in the Sources tab
+    si = h.index('id="tab-sources"')
+    assert "New this cycle" in h and h.index("New this cycle") > si
+    assert "year-on-year change for an HS group" in h and ">44</strong> new" in h
+    # NOT in the What-changed block (which keeps only the digest)
+    wi = h.index("What changed since the last pack")
+    assert "New this cycle" not in h[wi:si]
     md = render_markdown(_sample_report())
-    assert "44 new — year-on-year change for an HS group" in md
+    assert "**New this cycle**" in md and "44 new — year-on-year change" in md
+
+
+def test_masthead_carries_badge_period_and_first_sentence_tooltip():
+    """Period + source badge live in the masthead (no separate subbar); the
+    badge's tooltip is the note's first sentence and the boilerplate second
+    sentence is dropped."""
+    import dataclasses
+    r = _sample_report()
+    r = dataclasses.replace(r, headline=dataclasses.replace(
+        r.headline,
+        note="Triggered by new Eurostat data. Boilerplate second sentence here."))
+    h = render_html(r)
+    assert '<div class="subbar">' not in h and "note-line" not in h
+    mast = h[h.index('class="masthead"'):h.index("</header>")]
+    assert "Data to April 2026" in mast
+    assert 'class="tag" title="Triggered by new Eurostat data."' in mast
+    assert ">eurostat<" in mast
+    # the dropped second sentence appears nowhere
+    assert "Boilerplate second sentence" not in h
+
+
+def test_what_changed_demotes_to_one_liner_on_quiet_cycle():
+    """No material change (no new findings, no significant shifts) → What changed
+    renders as a slim one-liner: no H2 section, no sub-nav entry, so it doesn't
+    claim vertical weight near the top of the Briefing. The 'nothing changed'
+    note is still said."""
+    import dataclasses
+    r = dataclasses.replace(_sample_report(), what_changed=rm.WhatChanged(
+        regime="quiet", summary="nothing material — no new findings, no shifts.",
+        new_count=0))
+    h = render_html(r)
+    assert 'class="quiet-change"' in h and "nothing material" in h
+    assert "What changed since the last pack" not in h     # no H2 section
+    assert 'data-spy="brief-changed"' not in h             # no sub-nav entry
+    assert 'id="brief-changed"' not in h
+    # the material case (sample: new_count=49) still gets the full section + nav
+    full = render_html(_sample_report())
+    assert "What changed since the last pack" in full and 'data-spy="brief-changed"' in full
 
 
 def test_sources_release_appendix():
@@ -385,6 +472,9 @@ def test_glossary_renders_in_both_surfaces():
     h = render_html(r)
     assert 'class="gloss-item"' in h and 'id="glossary-filter"' in h
     assert "CIF / FOB" in h and "CIF includes freight" in h
+    # groups are nested <section>s; their padding is stripped so glossary text
+    # doesn't inset twice as far as every other tab.
+    assert ".gloss-group{margin:0 0 8px;padding:0}" in h
     md = render_markdown(r)
     assert "## Glossary" in md and "**CIF / FOB**" in md
 
@@ -411,7 +501,61 @@ def test_gacc_bilateral_per_partner_expanders():
     assert "United States" in h
     assert "China's exports" in h and "€460.00B" in h   # headline in the summary
     md = render_markdown(_sample_report())               # LLM surface keeps it flat
-    assert "## China's trade by partner (GACC)" in md
+    assert "## China’s trade by partner (GACC)" in md
+
+
+def test_gacc_bilateral_expanded_panel_restores_ytd_window_and_caveat_prose():
+    """The expanded partner panel carries the richer registers the 12-month
+    headline drops: window orientation (once), a YTD + latest-month-value
+    sub-line per flow, the latest-month register on the row, and one plain-prose
+    incomplete-window note (not just the cryptic chip). Parity in markdown."""
+    h = render_html(_sample_report())
+    assert "12 months to May 2026" in h            # window orientation, once
+    assert "latest mo +16%" in h                    # latest-month register on row
+    assert "YTD (5-mo): +12.5% · €33.20B" in h      # YTD sub-line
+    assert "latest month: €7.30B" in h              # latest-month value
+    assert "Incomplete window — missing January 2026" in h   # prose, not chip
+    # window + note appear once, not duplicated per flow
+    assert h.count("12 months to May 2026") == 1
+    md = render_markdown(_sample_report())
+    assert "*12 months to May 2026*" in md
+    assert "YTD (5-mo): +12.5% · €33.20B" in md
+    assert "Incomplete window — missing January 2026" in md
+
+
+def test_jump_targets_clear_sticky_bar_and_get_highlight():
+    """Drill-down/Trade-Map jumps must clear the sticky tab bar (unconditional
+    scroll-margin, not scoped to :target, since the JS preventDefaults) and the
+    landed-on block must get the highlight via a JS-applied .jumped class."""
+    h = render_html(_sample_report())
+    # offset applies to the elements themselves, not only :target (clears the
+    # sticky sub-nav now that the main tabs are no longer sticky)
+    assert "scroll-margin-top:52px" in h
+    assert ".sector.jumped" in h and "background:#dcebfa" in h
+    # the JS stand-in for native :target is wired into both jump paths
+    assert "function mark(" in h
+    assert "mark(el)" in h
+
+
+def test_briefing_subnav_is_the_sticky_element_not_the_tabs():
+    """The Briefing gets a sticky in-page sub-nav (Top + its sections); the main
+    tabs are NOT sticky, so only one bar occupies the top at a time."""
+    h = render_html(_sample_report())
+    assert '<nav class="subnav"' in h
+    assert 'class="subnav-top" href="#top"' in h          # Top → masthead
+    assert 'id="top"' in h                                  # the masthead anchor
+    # the section anchors + their sub-nav links
+    for anchor, label in (("brief-state_of_play", "State of play"),
+                          ("brief-mirror_gap", "Mirror gaps"),
+                          ("brief-sector_detail", "Sector detail")):
+        assert f'id="{anchor}"' in h
+        assert f'data-spy="{anchor}"' in h
+    # the sub-nav is the sticky one; the tab bar is not
+    assert ".subnav{position:sticky;top:0" in h
+    assert "position:sticky;top:0;z-index:5" not in h      # old sticky .tabs gone
+    # immediate active-on-click + scroll-spy wiring
+    assert "new IntersectionObserver" in h
+    assert "a.classList.add('active')" in h
 
 
 def test_methodology_tab_shows_about_and_guides():

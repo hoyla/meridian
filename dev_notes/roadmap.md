@@ -41,6 +41,27 @@ append-only + provenance on everything new (principles 3/4/7).
    textiles/apparel, furniture/toys, etc. (Ties to *Sector breadth review
    (round 2)* below.)
 
+   **Let the editorial themes pull group selection, not just the dark tail**
+   (Luke, 2026-06-22). Themes (`labels.py`) are cheap to declare but only worth
+   showing once they have enough member groups; several are **thin or absent**
+   for want of coverage, so when adding groups, deliberately pick ones that make
+   a theme viable:
+   - **Plastics & petrochemicals** — only Plastic waste + Adipic acid today
+     (left undeclared as too thin). Add primary plastics (PET/PE/PVC, ch39) and
+     petrochemical feedstocks (ethylene/propylene/styrene, ch29) to earn it.
+   - **Textiles & apparel** — only Cotton today (and only as a Xinjiang lens).
+     Add apparel, man-made fibres/fabrics, footwear.
+   - **Semiconductors & electronics** — beyond the broad ch84-85 group and the
+     SME/telecoms ones: chips, components, displays.
+   - **Aerospace** — only Civil aircraft + Drones; add parts/engines if a story
+     warrants.
+   - **Base metals / trade-defence** — beyond Steel + Aluminium + fasteners
+     (copper, other base-metal products) — the AD/CVD-case cluster.
+   - **Consumer goods** — furniture, toys, appliances (none yet).
+
+   When such groups land, declaring the matching theme in `labels.py` is a
+   one-liner and lights up chips on the movers + sector filter automatically.
+
 3. **Richer per-source statistics.**
    - **Eurostat:** unit-price (€/kg) trends as a first-class series (we hold
      value + kg; price = the divergence signal); supplementary units; finer

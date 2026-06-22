@@ -149,9 +149,9 @@ class WhatChanged:
     summary: str  # the 'since the last pack' digest prose
     significant: list[Shift] = field(default_factory=list)
     new_count: int = 0
-    # Per-subkind breakdown of new findings (the Findings-doc Tier-1 "N new —
-    # <type>" list), surfaced behind an expander. [{subkind, label, count}].
-    new_by_subkind: list = field(default_factory=list)
+    # The per-type breakdown of new findings (the Findings-doc Tier-1 "N new —
+    # <type>" list) is bookkeeping, not substance, so it lives in the Sources &
+    # coverage section's metrics, not here. `new_count` (the headline total) stays.
 
 
 @dataclass

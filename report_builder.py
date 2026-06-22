@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import pathlib
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -90,13 +90,78 @@ def _visible_caveats(codes) -> list[str]:
     return [c for c in (codes or [])
             if c not in _ALL_UNIVERSAL_CAVEATS and c not in _ROW_HIDDEN_CAVEATS]
 
+
+def _month_label(period) -> str | None:
+    """A 'YYYY-MM-01' window-end into 'Month YYYY' (e.g. 'May 2026')."""
+    if not period:
+        return None
+    try:
+        d = period if isinstance(period, date) else date.fromisoformat(str(period))
+    except (ValueError, TypeError):
+        return None
+    return d.strftime("%B %Y")
+
+
+def _bilateral_context(detail) -> dict:
+    """The richer registers behind a partner flow, restored from the finding's
+    own `totals`/`windows` — the YTD and latest-month figures plus a plain-prose
+    incomplete-window note. All already computed upstream; this only reshapes
+    them for the expanded panel (the collapsed summary stays terse)."""
+    tot = (detail or {}).get("totals") or {}
+    win = (detail or {}).get("windows") or {}
+    out: dict = {}
+
+    ytd = tot.get("ytd_cumulative") or {}
+    if ytd.get("current_eur") is not None:
+        out["ytd_pct"] = _f(ytd.get("yoy_pct"))
+        out["ytd_eur"] = _f(ytd.get("current_eur"))
+        out["ytd_months"] = ytd.get("months_in_ytd")
+
+    sm = tot.get("single_month") or {}
+    if sm.get("current_eur") is not None:
+        out["sm_yoy_pct"] = _f(sm.get("yoy_pct"))  # latest-month register (row)
+        out["sm_eur"] = _f(sm.get("current_eur"))  # latest-month value (ctx line)
+
+    out["window_label"] = (f"12 months to {_month_label(win.get('current_end'))}"
+                           if win.get("current_end") else None)
+
+    # Plain-prose incomplete-window note, built from the structured fields so it
+    # names the actual months (more honest than the cryptic "jan feb combined"
+    # chip). Two independent clauses: genuinely-missing months, and GACC's
+    # merged Jan+Feb releases counted as one combined figure.
+    clauses: list[str] = []
+    missing = [m for m in (tot.get("missing_months_current") or []) if m]
+    if missing:
+        names = ", ".join(_month_label(m) or str(m) for m in missing)
+        clauses.append(f"missing {names} from the current 12-month window")
+    jf = [y for y in (tot.get("jan_feb_combined_years") or []) if y]
+    if jf:
+        yrs = ", ".join(str(y) for y in jf)
+        clauses.append(f"Jan+Feb {yrs} counted as a single combined figure "
+                       "(GACC publishes them merged)")
+    out["note"] = "Incomplete window — " + "; ".join(clauses) if clauses else None
+    return out
+
+
+def _primary_section(divisions) -> tuple[str, str]:
+    """A group's primary SITC section (1-digit) — the coarse bucket the sector
+    list groups by. Mode of its divisions' sections (ties → lowest code); section
+    '9' (Other / unclassified) when it maps to no division. A heuristic: single-
+    division groups (most) are exact; the few multi-division groups land in their
+    most-common section."""
+    secs = [d[0] for d in (divisions or []) if d]
+    if not secs:
+        return ("9", classifications.section_title("9"))
+    code = sorted(Counter(secs).items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+    return (code, classifications.section_title(code))
+
 # Variant content (Q1). The lead title and note are *content* (they live
 # in the Headline node), so they belong here in the builder, not in a
 # renderer. `has_sector_movers` decides whether the lead is HS-sector
 # movers (Eurostat/HMRC) or macro/geographic partner-bloc totals (GACC).
 _VARIANTS: dict[str, dict] = {
     "eurostat": {
-        "lead": "What {month}'s EU figures changed",
+        "lead": "Standout moves in {month}’s EU figures",
         "note": (
             "Triggered by new Eurostat data. The China-vs-Europe "
             "mirror-trade discrepancy and the HS-sector shifts live here, "
@@ -106,7 +171,7 @@ _VARIANTS: dict[str, dict] = {
         "general_slot": "surface what connects {month}'s findings — and what's notably absent",
     },
     "gacc": {
-        "lead": "What China's own {month} figures changed",
+        "lead": "Standout moves in China’s own {month} figures",
         "note": (
             "Triggered by new GACC data, a month ahead of Europe's. No "
             "mirror-gap or HS-sector detail at this altitude — GACC "
@@ -117,7 +182,7 @@ _VARIANTS: dict[str, dict] = {
         "general_slot": "read what China's {month} geography shift implies — grounded in the totals above",
     },
     "hmrc": {
-        "lead": "What the UK's {month} figures changed",
+        "lead": "Standout moves in the UK’s {month} figures",
         "note": (
             "Triggered by new HMRC data, with no fresher Eurostat month — "
             "the UK cut of the China trade picture."
@@ -345,7 +410,7 @@ def _headline_item(m: dict) -> HeadlineItem:
             finding_ids=[m["id"]], source="eurostat",
             as_of=m.get("current_end"),
         ),
-        facets=Facets(commodity=[group]),  # v0: minimal — see module note
+        facets=Facets(commodity=[group], theme=labels.themes_for_group(group)),
     )
 
 
@@ -367,18 +432,11 @@ def _what_changed(diff) -> WhatChanged:
     summary = " ".join(_since_last_pack_lines(diff)).replace(
         "**Since the last pack:** ", ""
     )
-    # Per-subkind new-findings breakdown (Tier-1 "N new — <type>"), behind an
-    # expander in the renderers.
-    new_by_subkind = [
-        {"subkind": sk, "label": _subkind_plain_label(sk), "count": n}
-        for sk, n in (diff.new_by_subkind or [])
-    ]
     return WhatChanged(
         regime=diff.regime,
         summary=summary,
         significant=significant,
         new_count=diff.total_new,
-        new_by_subkind=new_by_subkind,
     )
 
 
@@ -528,12 +586,14 @@ def _sector_detail_section(cur, predictability: dict | None = None) -> Section:
                 g["max_eur"] = max(g["max_eur"],
                                    finding.metrics["current_eur"] or 0.0)
                 if not is_export:  # rich detail lives on the EU-27 import row
+                    g["import_eur"] = finding.metrics["current_eur"] or 0.0
                     g["top_cn8"] = (detail or {}).get(
                         "top_cn8_codes_in_current_12mo") or []
                     g["reporters"] = (detail or {}).get(
                         "per_reporter_breakdown") or []
 
-    for name, g in sorted(by_group.items(), key=lambda kv: -kv[1]["max_eur"]):
+    built: list[tuple] = []  # (import_value, section_code, Section)
+    for name, g in by_group.items():
         # ordered scope (EU-27, UK, combined), then export-then-import
         fs = sorted(g["findings"], key=lambda f: (
             scope_order.get(f.metrics.get("scope"), 9), f.metrics["flow"]))
@@ -572,12 +632,33 @@ def _sector_detail_section(cur, predictability: dict | None = None) -> Section:
         if pred:
             metrics["predictability"] = {
                 "badge": pred[0], "persistence_pct": _f(pred[1]), "n": pred[2]}
-        root.sections.append(Section(
+        sec_code, sec_title = _primary_section(sectors)
+        metrics["section"] = {"code": sec_code, "title": sec_title}
+        value = g.get("import_eur", g["max_eur"]) or 0.0
+        built.append((value, sec_code, Section(
             id=_slugify_heading(name), title=name, kind="sector_detail",
             findings=fs, metrics=metrics, intro=desc_by_name.get(name),
             facets=Facets(commodity=[name], sector=sectors, theme=themes,
                           end_use=end_use),
-        ))
+        )))
+    # Group by SITC section: sections ordered by their groups' combined 12-month
+    # EU-27 import value (biggest category leads — keeps "meaty first"), section
+    # '9' (Other) last; groups within a section by value. The renderer inserts a
+    # subhead at each section boundary; `section_index` carries the subhead data.
+    sec_val: dict[str, float] = defaultdict(float)
+    sec_cnt: dict[str, int] = defaultdict(int)
+    sec_title_by: dict[str, str] = {}
+    for value, sc, secobj in built:
+        sec_val[sc] += value
+        sec_cnt[sc] += 1
+        sec_title_by[sc] = secobj.metrics["section"]["title"]
+    section_order = sorted(sec_val, key=lambda sc: (sc == "9", -sec_val[sc], sc))
+    rank = {sc: i for i, sc in enumerate(section_order)}
+    built.sort(key=lambda t: (rank[t[1]], -t[0], t[2].title))
+    root.sections = [secobj for _v, _sc, secobj in built]
+    root.metrics = {"section_index": [
+        {"code": sc, "title": sec_title_by[sc], "value": sec_val[sc],
+         "count": sec_cnt[sc]} for sc in section_order]}
     return root
 
 
@@ -1016,12 +1097,12 @@ def _finding_family(subkind: str) -> str:
     return "Other"
 
 
-def _sources_section(cur) -> Section:
+def _sources_section(cur, diff=None) -> Section:
     """The Sources & coverage tab: the data sources, how much of each we hold
-    (period coverage), and a readable manifest of what the pack contains. The
-    Trade Map (structural) renders in the same tab — together they answer 'what
-    the briefing rests on and how completely it covers the ground' (principle 7,
-    given its own home)."""
+    (period coverage), the per-type count of what's new this cycle, and a
+    readable manifest of what the pack contains. The Trade Map (structural)
+    renders in the same tab — together they answer 'what the briefing rests on
+    and how completely it covers the ground' (principle 7, given its own home)."""
     cur.execute("SELECT DISTINCT source FROM releases ORDER BY source")
     sources = [{"source": s, "note": _SOURCE_NOTES.get(s, "")}
                for (s,) in cur.fetchall()]
@@ -1058,11 +1139,19 @@ def _sources_section(cur) -> Section:
     cov_total = {c["source"]: c["releases"] for c in coverage}
     appendix = [{"source": s, "total": cov_total.get(s, len(rs)), "recent": rs}
                 for s, rs in recent.items()]
+    # New findings this cycle, by type (the Findings-doc "N new — <type>" list) —
+    # a coverage fact, so it lives here rather than in 'What changed'.
+    new_findings = [
+        {"subkind": sk, "label": _subkind_plain_label(sk), "count": n}
+        for sk, n in ((diff.new_by_subkind or []) if diff is not None else [])
+    ]
     return Section(
         id="sources", title="Sources & coverage", kind="sources",
         intro="What this briefing rests on — the data sources, how much of each "
               "we hold, and what the pack contains.",
         metrics={"sources": sources, "coverage": coverage,
+                 "new_findings": new_findings,
+                 "new_findings_total": sum(f["count"] for f in new_findings),
                  "manifest": manifest, "manifest_total": total,
                  "appendix": appendix},
     )
@@ -1073,7 +1162,7 @@ def _gacc_bilateral_section(cur, period) -> Section:
     of its ~24 named partner countries (both flows), under the bloc-level
     macro lead."""
     root = Section(
-        id="gacc-bilateral", title="China's trade by partner (GACC)",
+        id="gacc-bilateral", title="China’s trade by partner (GACC)",
         kind="gacc_bilateral",
         intro="China's own reported exports and imports by partner country, "
               "rolling 12 months — the per-country detail under the bloc lead.",
@@ -1093,13 +1182,15 @@ def _gacc_bilateral_section(cur, period) -> Section:
         partner = ((detail or {}).get("partner") or {}).get("raw_label") or "?"
         is_export = not subkind.endswith("_import")
         tot = (detail or {}).get("totals", {})
+        ctx = _bilateral_context(detail)
         finding = Finding(
             finding_id=fid, subkind=subkind,
             title=(f"China {'exports to' if is_export else 'imports from'} {partner}"),
             metrics={"scope": "China", "flow": "export" if is_export else "import",
                      "yoy_pct": _f(tot.get("yoy_pct")),
                      "current_eur": _f(tot.get("current_12mo_eur")),
-                     "caveats": _visible_caveats((detail or {}).get("caveat_codes"))},
+                     "caveats": _visible_caveats((detail or {}).get("caveat_codes")),
+                     **ctx},
             chart_data=_series_chart((detail or {}).get("monthly_series")),
             provenance=Provenance(finding_ids=[fid], source="gacc", as_of=period),
         )
@@ -1289,7 +1380,7 @@ def build_report(
                 data_period = _gacc_latest_period(cur)
             items = _gacc_macro_items(cur, data_period)
             sections = [_gacc_bilateral_section(cur, data_period),
-                        _sources_section(cur),
+                        _sources_section(cur, diff),
                         _data_section(),
                         _reference_section(cur),
                         _glossary_section()]
@@ -1320,7 +1411,7 @@ def build_report(
                             # ahead); empty-safe if no GACC data.
                             _gacc_bilateral_section(cur, _gacc_latest_period(cur)),
                             _structural_section(cur, data_period),
-                            _sources_section(cur),
+                            _sources_section(cur, diff),
                             _data_section(),
                             _reference_section(cur),
                             _glossary_section()]
