@@ -65,11 +65,7 @@ def _sample_report() -> rm.Report:
         llm_slots=[rm.LLMSlot(slot_type="general", grounded_in=[2])],
     )
     what_changed = rm.WhatChanged(
-        regime="movement", summary="3 findings shifted.", new_count=49,
-        new_by_subkind=[
-            {"subkind": "hs_group_yoy", "label": "year-on-year change for an HS group",
-             "count": 44},
-            {"subkind": "mirror_gap", "label": "mirror-trade gap", "count": 5}])
+        regime="movement", summary="3 findings shifted.", new_count=49)
     state = rm.Section(
         id="state-of-play", title="State of play", kind="state_of_play",
         sections=[rm.Section(
@@ -154,6 +150,12 @@ def _sample_report() -> rm.Report:
         metrics={"sources": [{"source": "eurostat", "note": "Comext."}],
                  "coverage": [{"source": "eurostat", "start": "2017-01-01",
                                "end": "2026-04-01", "releases": 111}],
+                 "new_findings": [
+                     {"subkind": "hs_group_yoy",
+                      "label": "year-on-year change for an HS group", "count": 44},
+                     {"subkind": "mirror_gap", "label": "mirror-trade gap",
+                      "count": 5}],
+                 "new_findings_total": 49,
                  "manifest": [{"family": "HS-group year-on-year (price & volume)",
                                "count": 3509}],
                  "manifest_total": 3509,
@@ -363,12 +365,19 @@ def test_per_row_caveat_flags():
     assert "(partial window)" in render_markdown(_sample_report())
 
 
-def test_what_changed_new_findings_breakdown():
+def test_new_findings_breakdown_lives_in_sources_not_what_changed():
+    """The per-type new-findings tally is bookkeeping, so it sits in Sources &
+    coverage (by Period coverage), not in What changed."""
     h = render_html(_sample_report())
-    assert "New findings this cycle" in h
-    assert "44" in h and "year-on-year change for an HS group" in h
+    # in the Sources tab
+    si = h.index('id="tab-sources"')
+    assert "New this cycle" in h and h.index("New this cycle") > si
+    assert "year-on-year change for an HS group" in h and ">44</strong> new" in h
+    # NOT in the What-changed block (which keeps only the digest)
+    wi = h.index("What changed since the last pack")
+    assert "New this cycle" not in h[wi:si]
     md = render_markdown(_sample_report())
-    assert "44 new — year-on-year change for an HS group" in md
+    assert "**New this cycle**" in md and "44 new — year-on-year change" in md
 
 
 def test_sources_release_appendix():

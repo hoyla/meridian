@@ -367,18 +367,11 @@ def _what_changed(diff) -> WhatChanged:
     summary = " ".join(_since_last_pack_lines(diff)).replace(
         "**Since the last pack:** ", ""
     )
-    # Per-subkind new-findings breakdown (Tier-1 "N new — <type>"), behind an
-    # expander in the renderers.
-    new_by_subkind = [
-        {"subkind": sk, "label": _subkind_plain_label(sk), "count": n}
-        for sk, n in (diff.new_by_subkind or [])
-    ]
     return WhatChanged(
         regime=diff.regime,
         summary=summary,
         significant=significant,
         new_count=diff.total_new,
-        new_by_subkind=new_by_subkind,
     )
 
 
@@ -1016,12 +1009,12 @@ def _finding_family(subkind: str) -> str:
     return "Other"
 
 
-def _sources_section(cur) -> Section:
+def _sources_section(cur, diff=None) -> Section:
     """The Sources & coverage tab: the data sources, how much of each we hold
-    (period coverage), and a readable manifest of what the pack contains. The
-    Trade Map (structural) renders in the same tab — together they answer 'what
-    the briefing rests on and how completely it covers the ground' (principle 7,
-    given its own home)."""
+    (period coverage), the per-type count of what's new this cycle, and a
+    readable manifest of what the pack contains. The Trade Map (structural)
+    renders in the same tab — together they answer 'what the briefing rests on
+    and how completely it covers the ground' (principle 7, given its own home)."""
     cur.execute("SELECT DISTINCT source FROM releases ORDER BY source")
     sources = [{"source": s, "note": _SOURCE_NOTES.get(s, "")}
                for (s,) in cur.fetchall()]
@@ -1058,11 +1051,19 @@ def _sources_section(cur) -> Section:
     cov_total = {c["source"]: c["releases"] for c in coverage}
     appendix = [{"source": s, "total": cov_total.get(s, len(rs)), "recent": rs}
                 for s, rs in recent.items()]
+    # New findings this cycle, by type (the Findings-doc "N new — <type>" list) —
+    # a coverage fact, so it lives here rather than in 'What changed'.
+    new_findings = [
+        {"subkind": sk, "label": _subkind_plain_label(sk), "count": n}
+        for sk, n in ((diff.new_by_subkind or []) if diff is not None else [])
+    ]
     return Section(
         id="sources", title="Sources & coverage", kind="sources",
         intro="What this briefing rests on — the data sources, how much of each "
               "we hold, and what the pack contains.",
         metrics={"sources": sources, "coverage": coverage,
+                 "new_findings": new_findings,
+                 "new_findings_total": sum(f["count"] for f in new_findings),
                  "manifest": manifest, "manifest_total": total,
                  "appendix": appendix},
     )
@@ -1289,7 +1290,7 @@ def build_report(
                 data_period = _gacc_latest_period(cur)
             items = _gacc_macro_items(cur, data_period)
             sections = [_gacc_bilateral_section(cur, data_period),
-                        _sources_section(cur),
+                        _sources_section(cur, diff),
                         _data_section(),
                         _reference_section(cur),
                         _glossary_section()]
@@ -1320,7 +1321,7 @@ def build_report(
                             # ahead); empty-safe if no GACC data.
                             _gacc_bilateral_section(cur, _gacc_latest_period(cur)),
                             _structural_section(cur, data_period),
-                            _sources_section(cur),
+                            _sources_section(cur, diff),
                             _data_section(),
                             _reference_section(cur),
                             _glossary_section()]

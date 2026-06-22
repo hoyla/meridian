@@ -639,6 +639,19 @@ def _sources_html(section) -> str:
                 f'<td>{html.escape(str(c.get("end") or "—"))}</td>'
                 f'<td>{c.get("releases", 0):,}</td></tr>')
         out.append("</tbody></table></div>")
+    # New findings this cycle, by type (moved here from 'What changed' — it's a
+    # coverage tally, not substance). Sits with Period coverage.
+    nf = m.get("new_findings", [])
+    if nf:
+        nft = m.get("new_findings_total", 0)
+        out.append('<h3 class="ref-h2">New this cycle</h3>'
+                   f'<p class="kicker">{nft:,} findings added since the last pack, '
+                   "by type:</p><ul class=\"ref\">")
+        for f in nf:
+            out.append(f'<li><strong>{f["count"]:,}</strong> new — '
+                       f'{html.escape(f["label"])} '
+                       f'<span class="ref-code">{html.escape(f["subkind"])}</span></li>')
+        out.append("</ul>")
     man = m.get("manifest", [])
     if man:
         total = m.get("manifest_total", 0)
@@ -1115,25 +1128,18 @@ def _sector_section(section) -> str:
 
 
 def _what_changed(wc: WhatChanged) -> str:
-    out = [
-        '<h2 class="lead">What changed since the last pack</h2>',
+    # The per-type new-findings breakdown lives in Sources & coverage (it's
+    # bookkeeping); What changed keeps the substantive 'since the last pack'
+    # digest.
+    return (
+        '<h2 class="lead">What changed since the last pack</h2>'
         f'<p class="since"><strong>Since the last pack:</strong> '
-        f'{html.escape(wc.summary)}</p>',
-    ]
-    if wc.new_by_subkind:
-        items = "".join(
-            f'<li><strong>{int(b["count"]):,}</strong> new — '
-            f'{html.escape(b["label"])} '
-            f'<span class="ref-code">{html.escape(b["subkind"])}</span></li>'
-            for b in wc.new_by_subkind)
-        out.append(
-            '<details class="more"><summary>New findings this cycle — '
-            f'{int(wc.new_count):,} by type</summary>'
-            f'<div class="more-body"><ul class="ref">{items}</ul></div></details>')
-    out.append('<p class="note">This answers <em>what changed?</em> — where each '
-               'group and partner currently stands is in <strong>State of '
-               'play</strong>.</p>')
-    return "\n".join(out)
+        f'{html.escape(wc.summary)}</p>'
+        '<p class="note">This answers <em>what changed?</em> — where each group '
+        'and partner currently stands is in <strong>State of play</strong>; the '
+        'per-type count of new findings is in <strong>Sources &amp; coverage'
+        '</strong>.</p>'
+    )
 
 
 _CSS = """

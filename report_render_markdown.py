@@ -114,24 +114,17 @@ def _render_headline(h: Headline) -> list[str]:
 
 
 def _render_what_changed(wc: WhatChanged) -> list[str]:
-    out = [
+    # The per-type new-findings tally lives in Sources & coverage now.
+    return [
         "## What changed since the last pack",
         "",
         f"**Since the last pack:** {wc.summary}",
         "",
-    ]
-    if wc.new_by_subkind:
-        out.append(f"**New findings this cycle — {wc.new_count:,} by type:**")
-        out.append("")
-        for b in wc.new_by_subkind:
-            out.append(f"- {b['count']:,} new — {b['label']} (`{b['subkind']}`)")
-        out.append("")
-    out += [
-        "*This tab answers \"what changed?\". Where each group and partner "
-        "currently stands is in the **State of play** tab.*",
+        "*This answers \"what changed?\". Where each group and partner currently "
+        "stands is in **State of play**; the per-type count of new findings is "
+        "in **Sources & coverage**.*",
         "",
     ]
-    return out
 
 
 def _sector_flow_line(f) -> str:
@@ -443,6 +436,15 @@ def _render_sections(sections) -> list[str]:
                     out.append(f"- **{c['source']}**: {c.get('start') or '—'} → "
                                f"{c.get('end') or '—'} "
                                f"({c.get('releases', 0):,} releases)")
+                out.append("")
+            if m.get("new_findings"):
+                out.append(f"**New this cycle** — "
+                           f"{m.get('new_findings_total', 0):,} findings added "
+                           "since the last pack, by type:")
+                out.append("")
+                for nf in m["new_findings"]:
+                    out.append(f"- {nf['count']:,} new — {nf['label']} "
+                               f"(`{nf['subkind']}`)")
                 out.append("")
             if m.get("manifest"):
                 out.append(f"**Findings included** — "
