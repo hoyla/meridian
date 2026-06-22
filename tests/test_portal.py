@@ -237,7 +237,8 @@ def test_markdown_renders_all_sections():
                    "## Methodology & caveats", "## Sources & coverage",
                    "## China’s trade by partner (GACC)"):
         assert marker in md, marker
-    assert "China reports" in md          # cn-only deficit
+    assert "China only, excl. HK/Macao" in md  # cn-only deficit = Eurostat CN-only, NOT GACC
+    assert "China reports" in md          # mirror-gap (GACC vs Eurostat) — the one place "China reports" is right
     assert "2025-11" in md and "σ" in md  # mirror-gap z-score (period + sigma)
     assert "China takes 1.5%" in md       # export share
     assert "Trajectory —" in md           # multi-scope trajectory
@@ -253,7 +254,8 @@ def test_html_renders_all_sections_and_is_self_contained():
     assert 'id="sector-filter"' in h     # filter input
     assert "addEventListener('input'" in h  # filter JS embedded
     assert "Rotterdam" in h               # transshipment hub note
-    assert "China reports" in h           # cn-only deficit
+    assert "China only, excl. HK/Macao" in h   # cn-only deficit = Eurostat CN-only, NOT GACC
+    assert "China reports" in h           # mirror-gap (GACC vs Eurostat) — the one place "China reports" is right
     assert "EV supply chain" in h         # theme pill/chip
 
 
