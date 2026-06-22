@@ -598,7 +598,8 @@ def _render_sections(sections) -> list[str]:
                 for c in m["coverage"]:
                     out.append(f"- **{c['source']}**: {c.get('start') or '—'} → "
                                f"{c.get('end') or '—'} "
-                               f"({c.get('releases', 0):,} releases)")
+                               f"({c.get('releases', 0):,} releases, "
+                               f"updated {c.get('last_updated') or '—'})")
                 out.append("")
             if m.get("new_findings"):
                 out.append(f"**New this cycle** — "
