@@ -955,6 +955,7 @@ def _gacc_bilateral_html(section) -> str:
         for f in p.findings:
             out.append(_sector_flow_row(f))
             out.append(_bilateral_ctx_row(f))
+        out.append(_bilateral_balance_row(p))
         # The incomplete-window prose, once per partner (deduped — both flows
         # usually carry the same note).
         notes: list[str] = []
@@ -986,6 +987,61 @@ def _bilateral_ctx_row(f) -> str:
     if not bits:
         return ""
     return f'<div class="pp-ctx">{html.escape(" · ".join(bits))}</div>'
+
+
+def _bilateral_balance_row(p) -> str:
+    """The partner-level net balance: China's exports − imports on the same
+    rolling-12-month window as the two flow rows above, with a muted YTD-net
+    line beneath. Sign-aware label — GACC reports China-as-reporter, so a
+    positive net is China's surplus (the partner's deficit) and a negative net
+    China's deficit (the partner's surplus). Empty when either flow is absent
+    (nothing to net). Drillable via both flows' finding tokens."""
+    m = getattr(p, "metrics", None) or {}
+    be = m.get("bal_eur")
+    if be is None:
+        return ""
+    surplus = be >= 0
+    label = "China's surplus" if surplus else "China's deficit"
+    gloss = f"{p.title}'s {'deficit' if surplus else 'surplus'}"
+    val = _fmt_eur(abs(be))
+    pct = m.get("bal_yoy_pct")
+    if m.get("bal_low_base") or pct is None:
+        d = m.get("bal_delta_eur")
+        valstr = (f'{val} <span class="flow-sm">{"+" if d >= 0 else "−"}'
+                  f'{_fmt_eur(abs(d))} YoY</span>') if d is not None else val
+        col = _MUTED
+    else:
+        pct = float(pct)
+        col = _UP if pct > 0 else _DOWN
+        valstr = f"{'+' if pct >= 0 else '−'}{abs(pct) * 100:.1f}% · {val}"
+    toks = "".join(
+        f'<span class="token">finding/{f.provenance.finding_ids[0]}</span>'
+        for f in p.findings if f.provenance.finding_ids)
+    row = (
+        '<div class="flow flow-balance">'
+        f'<span class="flow-label">{html.escape(label)} '
+        f'<span class="flow-gloss">{html.escape(gloss)}</span></span>'
+        f'<span class="flow-val" style="color:{col}">{valstr}</span>'
+        f'<span class="flow-cite">{toks}</span>'
+        "</div>"
+    )
+    # YTD net register beneath, mirroring the per-flow ctx line.
+    ye = m.get("bal_ytd_eur")
+    if ye is not None:
+        ylabel = "surplus" if ye >= 0 else "deficit"
+        ym = m.get("bal_ytd_months")
+        mo = f" ({ym}-mo)" if ym else ""
+        ypct = m.get("bal_ytd_pct")
+        if m.get("bal_ytd_low_base") or ypct is None:
+            yd = m.get("bal_ytd_delta_eur")
+            ypart = (f"{'+' if yd >= 0 else '−'}{_fmt_eur(abs(yd))} YoY · "
+                     if yd is not None else "")
+        else:
+            ypart = (f"{'+' if float(ypct) >= 0 else '−'}"
+                     f"{abs(float(ypct)) * 100:.1f}% · ")
+        ctx = f"YTD{mo} {ylabel}: {ypart}{_fmt_eur(abs(ye))}"
+        row += f'<div class="pp-ctx">{html.escape(ctx)}</div>'
+    return row
 
 
 def _structural_section_html(section) -> str:
@@ -1317,6 +1373,8 @@ details.gdetail[open]>summary::before{content:"▾ "}
 .flow-val{font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}
 .flow .spark{width:90px;height:24px;flex:0 0 auto}
 .flow-cite{flex:0 0 auto}
+.flow-balance{border-top:1px solid var(--line);margin-top:8px;padding-top:8px}
+.flow-gloss{color:var(--muted);font-weight:400;font-size:12px}
 .tmrow{padding:10px 0;border-bottom:1px solid var(--line)}
 .tmhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
 .tmname{font-family:var(--font-headline);font-size:16px;font-weight:700;color:var(--ink)}

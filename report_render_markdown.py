@@ -170,6 +170,46 @@ def _bilateral_ctx_line_md(f) -> str:
     return f"  - _{' · '.join(bits)}_" if bits else ""
 
 
+def _bilateral_balance_line_md(p) -> str:
+    """The partner-level net balance (China's exports − imports) for the LLM
+    surface, mirroring the portal's balance row: sign-aware label, magnitude-
+    based YoY (a € swing when it flips sign / near-zero prior), plus a nested
+    YTD-net sub-bullet. Both flows' tokens keep it drillable. Empty when the
+    section carries no balance metrics (a single-flow partner)."""
+    m = getattr(p, "metrics", None) or {}
+    be = m.get("bal_eur")
+    if be is None:
+        return ""
+    label = "China's surplus" if be >= 0 else "China's deficit"
+    gloss = f"{p.title}'s {'deficit' if be >= 0 else 'surplus'}"
+    pct = m.get("bal_yoy_pct")
+    if m.get("bal_low_base") or pct is None:
+        d = m.get("bal_delta_eur")
+        val = (f"{_fmt_eur(abs(be))} ({'+' if d >= 0 else '−'}{_fmt_eur(abs(d))} YoY)"
+               if d is not None else _fmt_eur(abs(be)))
+    else:
+        pct = float(pct)
+        val = f"{'+' if pct >= 0 else '−'}{abs(pct) * 100:.1f}% · {_fmt_eur(abs(be))}"
+    cite = "".join(f" `finding/{f.provenance.finding_ids[0]}`"
+                   for f in p.findings if f.provenance.finding_ids)
+    line = f"- {label} ({gloss}): **{val}**{cite}"
+    ye = m.get("bal_ytd_eur")
+    if ye is not None:
+        ym = m.get("bal_ytd_months")
+        mo = f" ({ym}-mo)" if ym else ""
+        ylabel = "surplus" if ye >= 0 else "deficit"
+        ypct = m.get("bal_ytd_pct")
+        if m.get("bal_ytd_low_base") or ypct is None:
+            yd = m.get("bal_ytd_delta_eur")
+            ypart = (f"{'+' if yd >= 0 else '−'}{_fmt_eur(abs(yd))} YoY · "
+                     if yd is not None else "")
+        else:
+            ypart = (f"{'+' if float(ypct) >= 0 else '−'}"
+                     f"{abs(float(ypct)) * 100:.1f}% · ")
+        line += f"\n  - _YTD{mo} {ylabel}: {ypart}{_fmt_eur(abs(ye))}_"
+    return line
+
+
 def _deficit_line_md(f) -> str:
     m = f.metrics
     per_day = m.get("per_day_eur")
@@ -289,6 +329,9 @@ def _render_sections(sections) -> list[str]:
                     ctx = _bilateral_ctx_line_md(f)
                     if ctx:
                         out.append(ctx)
+                bal = _bilateral_balance_line_md(p)
+                if bal:
+                    out.append(bal)
                 notes: list[str] = []
                 for f in p.findings:
                     nt = f.metrics.get("note")

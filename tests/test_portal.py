@@ -546,6 +546,55 @@ def test_gacc_bilateral_expanded_panel_restores_ytd_window_and_caveat_prose():
     assert "Incomplete window — missing January 2026" in md
 
 
+def test_gacc_bilateral_partner_balance_row():
+    """Per-partner net balance (China's exports − imports) on the same
+    12-month/YTD windows as the flow rows: sign-aware label, magnitude-based
+    YoY (so a widening deficit reads as +%, not a misleading −%), and a € swing
+    in place of % when the prior balance flips sign or is near zero."""
+    import report_builder as rb
+    from report_render_html import _bilateral_balance_row
+
+    def _partner(name, exp, imp):
+        flows, fs = {}, []
+        for flow, (c, p, yc, yp, ym) in (("export", exp), ("import", imp)):
+            flows[flow] = {"cur12": c, "prior12": p, "ytd_cur": yc,
+                           "ytd_prior": yp, "ytd_months": ym}
+            fs.append(rm.Finding(
+                finding_id=len(fs) + 1, subkind="gacc_bilateral_aggregate_yoy",
+                title="t", metrics={"scope": "China", "flow": flow},
+                provenance=rm.Provenance(finding_ids=[len(fs) + 10], source="gacc")))
+        return rm.Section(id="s" + name, title=name, kind="gacc_bilateral",
+                          findings=fs, metrics=rb._partner_balance(flows))
+
+    # China surplus, both sides same sign — straightforward magnitude %.
+    de = _bilateral_balance_row(
+        _partner("Germany", (110e9, 100e9, 40e9, 38e9, 4),
+                 (90e9, 88e9, 33e9, 32e9, 4)))
+    assert "s surplus" in de and "Germany" in de and "s deficit" in de
+    assert "+66.7% · €20.00B" in de                       # (110−90) vs (100−88)
+    assert de.count('class="token">finding/') == 2        # drillable to both flows
+
+    # China deficit (commodity exporter): a widening deficit must read +%, green.
+    br = _bilateral_balance_row(
+        _partner("Brazil", (60e9, 58e9, 22e9, 21e9, 4),
+                 (95e9, 90e9, 35e9, 33e9, 4)))
+    assert "s deficit" in br and "Brazil" in br and "s surplus" in br
+    assert "+9.4% · €35.00B" in br                         # |−35| vs |−32|, widened
+    assert "#22874d" in br                                 # green: the figure rose
+
+    # Sign flip across a near-zero prior — % suppressed, € swing shown instead.
+    nl = _bilateral_balance_row(
+        _partner("Netherlands", (120e9, 80e9, 45e9, 30e9, 4),
+                 (118e9, 82e9, 44e9, 31e9, 4)))
+    assert "+€4.00B YoY" in nl and "€2.00B" in nl          # +2 net, swung from −2
+    assert "%" not in nl.split("flow-val")[1].split("</span>")[0]
+
+    # No balance when a partner has only one flow (nothing to net).
+    solo = rm.Section(id="x", title="X", kind="gacc_bilateral",
+                      findings=[], metrics={})
+    assert _bilateral_balance_row(solo) == ""
+
+
 def test_jump_targets_clear_sticky_bar_and_get_highlight():
     """Drill-down/Trade-Map jumps must clear the sticky tab bar (unconditional
     scroll-margin, not scoped to :target, since the JS preventDefaults) and the
