@@ -76,10 +76,12 @@ def publish_snapshot(bundle_dir: str, *, bucket: str | None = None) -> list[str]
             log.info("portal-publish: wrote gs://%s/%s", bucket, dest)
 
     # The full workbook (the Tables tab's 'Download Excel') lives at the bundle
-    # root, beside 04_Portal/, when --periodic-run produced it. Publish it to
-    # latest/data.xlsx (+ the per-period archive) so /data.xlsx can serve it. An
-    # --portal-snapshot-only refresh has no bundle workbook — then it's skipped
-    # and the download 404s until the next full run.
+    # root, beside 04_Portal/. Both publish paths now produce it — --periodic-run
+    # via export(), and --portal-snapshot via write_portal_snapshot(
+    # write_workbook=True). Publish it to latest/data.xlsx (+ the per-period
+    # archive) so /data.xlsx can serve it. If it's still missing the workbook
+    # build must have failed upstream (logged there); skip rather than fail the
+    # whole publish — the download 404s until the next successful build.
     xlsx = Path(bundle_dir) / "04_Data.xlsx"
     if xlsx.is_file():
         dests = ["latest/data.xlsx"]
@@ -92,8 +94,9 @@ def publish_snapshot(bundle_dir: str, *, bucket: str | None = None) -> list[str]
             written.append(dest)
             log.info("portal-publish: wrote gs://%s/%s", bucket, dest)
     else:
-        log.info("portal-publish: no 04_Data.xlsx in %s; workbook download "
-                 "will 404 until a full periodic run", bundle_dir)
+        log.warning("portal-publish: no 04_Data.xlsx in %s (workbook build "
+                    "likely failed upstream); /data.xlsx download will 404 "
+                    "until the next successful build", bundle_dir)
     return written
 
 
