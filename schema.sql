@@ -668,7 +668,22 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
    ARRAY['84099100%', '84099900%'], 'seed:lisa_engine_parts_2026_06'),
   ('Internal-combustion engines (HS 8407 + 8408)',
    'Spark-ignition petrol (8407) and compression-ignition diesel (8408) piston engines. BROAD: road-vehicle engines sit in 8407.3x/8408.20, industrial/other in 8408.90, and marine/aircraft in 8407.1-2x/8408.10 — refine to those subheadings to separate domestic-vehicle from industrial engines if a story needs it.',
-   ARRAY['8407%', '8408%'], 'seed:lisa_engine_parts_2026_06');
+   ARRAY['8407%', '8408%'], 'seed:lisa_engine_parts_2026_06'),
+  -- Q2 round 2 (Lisa, 2026-06-22): cosmetics + paint. Completes the Q2
+  -- expansion. Material-named; the two new themes (Cosmetics & personal care,
+  -- Paint & coatings) live in labels.py and also pick up the existing
+  -- Titanium dioxide (320611) group as the pigment bridge between them.
+  -- Deferred: surfactants (3402 — more cleaning than cosmetics) and broad
+  -- pigments (3206 — overlaps the TiO2 group).
+  ('Essential oils & fragrance mixtures (HS 3301 + 3302)',
+   'Essential oils (3301) and the odoriferous fragrance mixtures (3302) blended from them — the scent base for perfumery and cosmetics (3302 also serves food/drink flavouring).',
+   ARRAY['3301%', '3302%'], 'seed:lisa_q2_round2_2026_06'),
+  ('Beauty, make-up & skin-care preparations (HS 3304)',
+   'HS 3304 — finished beauty, make-up and skin-care preparations (incl. sunscreen, manicure/pedicure). The consumer cosmetics end-product.',
+   ARRAY['3304%'], 'seed:lisa_q2_round2_2026_06'),
+  ('Paints & varnishes (HS 3208-3210)',
+   'Paints and varnishes — synthetic-polymer-based (3208), other (3209), and other paints/varnishes incl. prepared water pigments (3210). Finished coatings; the titanium-dioxide pigment that whitens most of them is its own group (CN8 320611).',
+   ARRAY['3208%', '3209%', '3210%'], 'seed:lisa_q2_round2_2026_06');
 
 -- Reader-facing display name for the EV-battery group. `name` stays the stable
 -- internal key (findings snapshot it into detail.group.name; analysers + tests
