@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import pathlib
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -89,6 +89,19 @@ def _visible_caveats(codes) -> list[str]:
     only what's unusual *about it* (partial window, low kg coverage…)."""
     return [c for c in (codes or [])
             if c not in _ALL_UNIVERSAL_CAVEATS and c not in _ROW_HIDDEN_CAVEATS]
+
+
+def _primary_section(divisions) -> tuple[str, str]:
+    """A group's primary SITC section (1-digit) — the coarse bucket the sector
+    list groups by. Mode of its divisions' sections (ties → lowest code); section
+    '9' (Other / unclassified) when it maps to no division. A heuristic: single-
+    division groups (most) are exact; the few multi-division groups land in their
+    most-common section."""
+    secs = [d[0] for d in (divisions or []) if d]
+    if not secs:
+        return ("9", classifications.section_title("9"))
+    code = sorted(Counter(secs).items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+    return (code, classifications.section_title(code))
 
 # Variant content (Q1). The lead title and note are *content* (they live
 # in the Headline node), so they belong here in the builder, not in a
@@ -521,12 +534,14 @@ def _sector_detail_section(cur, predictability: dict | None = None) -> Section:
                 g["max_eur"] = max(g["max_eur"],
                                    finding.metrics["current_eur"] or 0.0)
                 if not is_export:  # rich detail lives on the EU-27 import row
+                    g["import_eur"] = finding.metrics["current_eur"] or 0.0
                     g["top_cn8"] = (detail or {}).get(
                         "top_cn8_codes_in_current_12mo") or []
                     g["reporters"] = (detail or {}).get(
                         "per_reporter_breakdown") or []
 
-    for name, g in sorted(by_group.items(), key=lambda kv: -kv[1]["max_eur"]):
+    built: list[tuple] = []  # (import_value, section_code, Section)
+    for name, g in by_group.items():
         # ordered scope (EU-27, UK, combined), then export-then-import
         fs = sorted(g["findings"], key=lambda f: (
             scope_order.get(f.metrics.get("scope"), 9), f.metrics["flow"]))
@@ -565,12 +580,33 @@ def _sector_detail_section(cur, predictability: dict | None = None) -> Section:
         if pred:
             metrics["predictability"] = {
                 "badge": pred[0], "persistence_pct": _f(pred[1]), "n": pred[2]}
-        root.sections.append(Section(
+        sec_code, sec_title = _primary_section(sectors)
+        metrics["section"] = {"code": sec_code, "title": sec_title}
+        value = g.get("import_eur", g["max_eur"]) or 0.0
+        built.append((value, sec_code, Section(
             id=_slugify_heading(name), title=name, kind="sector_detail",
             findings=fs, metrics=metrics, intro=desc_by_name.get(name),
             facets=Facets(commodity=[name], sector=sectors, theme=themes,
                           end_use=end_use),
-        ))
+        )))
+    # Group by SITC section: sections ordered by their groups' combined 12-month
+    # EU-27 import value (biggest category leads — keeps "meaty first"), section
+    # '9' (Other) last; groups within a section by value. The renderer inserts a
+    # subhead at each section boundary; `section_index` carries the subhead data.
+    sec_val: dict[str, float] = defaultdict(float)
+    sec_cnt: dict[str, int] = defaultdict(int)
+    sec_title_by: dict[str, str] = {}
+    for value, sc, secobj in built:
+        sec_val[sc] += value
+        sec_cnt[sc] += 1
+        sec_title_by[sc] = secobj.metrics["section"]["title"]
+    section_order = sorted(sec_val, key=lambda sc: (sc == "9", -sec_val[sc], sc))
+    rank = {sc: i for i, sc in enumerate(section_order)}
+    built.sort(key=lambda t: (rank[t[1]], -t[0], t[2].title))
+    root.sections = [secobj for _v, _sc, secobj in built]
+    root.metrics = {"section_index": [
+        {"code": sc, "title": sec_title_by[sc], "value": sec_val[sc],
+         "count": sec_cnt[sc]} for sc in section_order]}
     return root
 
 

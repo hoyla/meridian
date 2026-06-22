@@ -319,13 +319,20 @@ def _render_sections(sections) -> list[str]:
             out.append("")
             if sec.intro:
                 out.append(f"*{sec.intro} {len(sec.sections)} groups, "
-                           "ordered by size.*")
+                           "grouped by SITC section (largest category first).*")
                 out.append("")
             out.extend(_about_md(sec))
+            cur_sec = object()
             for grp in sec.sections:
+                gsec = ((grp.metrics or {}).get("section") or {}).get("code")
+                if gsec != cur_sec:
+                    cur_sec = gsec
+                    st = ((grp.metrics or {}).get("section") or {}).get("title", "")
+                    out.append(f"### {st}")
+                    out.append("")
                 out.append(f'<a id="{grp.id}"></a>')
                 badge = ((grp.metrics or {}).get("predictability") or {}).get("badge")
-                out.append(f"### {grp.title}" + (f" {badge}" if badge else ""))
+                out.append(f"#### {grp.title}" + (f" {badge}" if badge else ""))
                 out.append("")
                 if grp.intro:
                     out.append(grp.intro)

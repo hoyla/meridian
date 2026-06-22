@@ -99,7 +99,8 @@ def _sample_report() -> rm.Report:
                                 "UK": {"import": "volatile"}},
                  "trajectory_findings": [5, 6],
                  "china_export_share_value": 0.015, "china_export_share_finding": 7,
-                 "predictability": {"badge": "🟡", "persistence_pct": 0.5, "n": 4}},
+                 "predictability": {"badge": "🟡", "persistence_pct": 0.5, "n": 4},
+                 "section": {"code": "7", "title": "Machinery & transport"}},
         findings=[rm.Finding(
             finding_id=2, subkind="hs_group_yoy_export", title="EU-27 exports of Cars",
             metrics={"scope": "EU-27", "flow": "export", "yoy_pct": -0.4,
@@ -120,6 +121,9 @@ def _sample_report() -> rm.Report:
                         intro="Every group.",
                         about="Reading the numbers: value vs volume; **low base** "
                               "means quote the € amount.\n\n- 12-month vs latest month",
+                        metrics={"section_index": [
+                            {"code": "7", "title": "Machinery & transport",
+                             "value": 1.6e10, "count": 1}]},
                         sections=[group])
     structural = rm.Section(
         id="trade-map", title="Trade map", kind="structural", intro="By division.",
@@ -221,7 +225,7 @@ def test_markdown_renders_all_sections():
                    "## China's trade by partner (GACC)"):
         assert marker in md, marker
     assert "China reports" in md          # cn-only deficit
-    assert "z" in md and "2025-11" in md  # mirror-gap z-score
+    assert "2025-11" in md and "σ" in md  # mirror-gap z-score (period + sigma)
     assert "China takes 1.5%" in md       # export share
     assert "Trajectory —" in md           # multi-scope trajectory
     assert "finding/" in md               # citations
@@ -369,7 +373,25 @@ def test_sector_group_predictability_badge():
     h = render_html(_sample_report())
     assert 'class="pred"' in h and "🟡" in h
     assert 'data-name="cars' in h and "mixed" in h   # 'mixed' filterable
-    assert "### Cars 🟡" in render_markdown(_sample_report())
+    assert "#### Cars 🟡" in render_markdown(_sample_report())
+
+
+def test_sector_detail_grouped_by_sitc_section_with_subheads():
+    """Groups carry a section subhead (data-section for filter auto-hide); the
+    subhead names the SITC section and its combined value."""
+    h = render_html(_sample_report())
+    assert 'class="sec-head"' in h and 'data-section="7"' in h
+    assert "Machinery &amp; transport" in h          # section title in the subhead
+    assert 'class="sector"' in h and 'data-section="7"' in h  # group tagged too
+    md = render_markdown(_sample_report())
+    assert "### Machinery & transport" in md
+
+
+def test_primary_section_heuristic():
+    from report_builder import _primary_section
+    assert _primary_section(["78"])[0] == "7"          # single division → its section
+    assert _primary_section(["73", "77", "51"])[0] == "7"  # mode of sections
+    assert _primary_section([])[0] == "9"              # none → Other/unclassified
 
 
 def test_per_row_caveat_flags():

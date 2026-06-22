@@ -158,6 +158,11 @@ def division_title(code: str) -> str:
     return SITC_DIVISION.get(code, f"div {code}")
 
 
+def section_title(code: str) -> str:
+    """SITC 1-digit section title (the coarse grouping for the sector list)."""
+    return SITC_SECTION.get(code, "Other / unclassified")
+
+
 _HS_BEC4: dict[str, str] | None = None
 
 

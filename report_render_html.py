@@ -986,7 +986,8 @@ def _sector_section(section) -> str:
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
         out.append(f'<p class="kicker">{html.escape(section.intro)} '
-                   "Ordered by size — filter to find a sector.</p>")
+                   "Grouped by SITC section, biggest category first — "
+                   "filter to find a sector.</p>")
     out.append(_more_about(section))
     n = len(section.sections)
     if n:
@@ -1008,23 +1009,39 @@ def _sector_section(section) -> str:
             )
             out.append('<div class="chips"><span class="chips-l">Themes:</span> '
                        + chips + "</div>")
+    # Groups arrive grouped by SITC section (value-ordered); emit a subhead at
+    # each section boundary. Subheads carry data-section so the filter can hide
+    # them when all their groups are filtered out.
+    sec_idx = {s["code"]: s for s in (section.metrics or {}).get("section_index", [])}
+    cur_sec = object()
     for grp in section.sections:
+        gsec = ((grp.metrics or {}).get("section") or {}).get("code")
+        if gsec != cur_sec:
+            cur_sec = gsec
+            si = sec_idx.get(gsec, {})
+            cnt = si.get("count", 0)
+            out.append(
+                f'<div class="sec-head" data-section="{html.escape(str(gsec or ""))}">'
+                f'<span class="sec-h-title">{html.escape(si.get("title", ""))}</span>'
+                f'<span class="sec-h-meta">{cnt} '
+                f'{"group" if cnt == 1 else "groups"} · '
+                f'{_fmt_eur(si.get("value"))} 12-mo EU-27 imports</span></div>')
         f = grp.facets
         secs = f.sector if f else []
         titles = [division_title(c) for c in secs]
         themes = f.theme if f else []
         end_use = f.end_use if f else []
-        # SITC division names + theme names + end-use join the filter index,
-        # so "machinery", "xinjiang" or "capital" all find groups.
+        # SITC division + section names, theme names and end-use join the filter
+        # index, so "machinery", "chemicals", "xinjiang" or "capital" all find.
         pb = (grp.metrics or {}).get("predictability") or {}
         pbadge = pb.get("badge")
         plabel = {"🟢": "reliable", "🟡": "mixed", "🔴": "volatile"}.get(pbadge, "")
-        # 'reliable'/'mixed'/'volatile' join the filter index, so you can filter
-        # to e.g. only the volatile groups.
+        sec_title = ((grp.metrics or {}).get("section") or {}).get("title", "")
         data_name = (grp.title + " " + " ".join(titles) + " "
                      + " ".join(themes) + " " + " ".join(end_use) + " "
-                     + plabel).lower()
+                     + plabel + " " + sec_title).lower()
         out.append(f'<div class="sector" id="{html.escape(grp.id)}" '
+                   f'data-section="{html.escape(str(gsec or ""))}" '
                    f'data-name="{html.escape(data_name)}">')
         badge_html = ""
         if pbadge:
@@ -1194,6 +1211,9 @@ a:hover{border-bottom-color:var(--link)}
 .filter-count{font-size:13px;color:var(--muted)}
 .sector{padding:12px 0;border-bottom:1px solid var(--line)}
 .sector:target{background:#dcebfa;scroll-margin-top:12px}
+.sec-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:20px 0 6px;padding:5px 0 4px;border-top:2px solid var(--masthead)}
+.sec-h-title{font-family:var(--font-sans);font-size:13px;font-weight:700;color:var(--masthead);text-transform:uppercase;letter-spacing:.4px}
+.sec-h-meta{font-size:12px;color:var(--muted)}
 .sector-h{font-family:var(--font-headline);font-size:18px;font-weight:700;color:var(--ink);margin:0 0 2px}
 .pred{cursor:help;font-size:15px;vertical-align:baseline}
 .sitc{font-size:12px;color:var(--muted);margin:0 0 4px;letter-spacing:.2px}
@@ -1380,6 +1400,7 @@ _PORTAL_JS = """<script>
   var f=document.getElementById('sector-filter');
   if(f){
     var blocks=[].slice.call(document.querySelectorAll('.sector[data-name]'));
+    var heads=[].slice.call(document.querySelectorAll('.sec-head'));
     var count=document.getElementById('sector-count');
     var empty=document.getElementById('sector-empty');
     var apply=function(){
@@ -1387,6 +1408,13 @@ _PORTAL_JS = """<script>
       blocks.forEach(function(b){
         var m=!q||b.getAttribute('data-name').indexOf(q)!==-1;
         b.style.display=m?'':'none';if(m)shown++;
+      });
+      // hide a section subhead when none of its groups are showing
+      heads.forEach(function(hd){
+        var sc=hd.getAttribute('data-section');
+        var any=blocks.some(function(b){
+          return b.getAttribute('data-section')===sc && b.style.display!=='none';});
+        hd.style.display=any?'':'none';
       });
       if(count)count.textContent=q?('showing '+shown+' of '+blocks.length):(blocks.length+' groups');
       if(empty)empty.style.display=shown?'none':'block';
