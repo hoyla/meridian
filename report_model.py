@@ -93,6 +93,9 @@ class Indicator:
     formatted: str
     chart: ChartType = "bignumber"
     delta: Optional[dict] = None  # {value, direction, formatted}
+    # A muted sub-line under the figure: scope disclosure / comparator (e.g. the
+    # CN+HK+MO envelope note + the China-only counterpart). Optional.
+    note: Optional[str] = None
     chart_data: Optional[ChartData] = None
     provenance: Provenance = field(default_factory=Provenance)
 

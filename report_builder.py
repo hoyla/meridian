@@ -344,6 +344,16 @@ def _deficit_indicator(
             "formatted": f"{'+' if float(yoy) >= 0 else ''}{float(yoy) * 100:.1f}% YoY",
         }
 
+    # Scope disclosure: the headline is the CN+HK+MO envelope (our editorial
+    # standard — ~15% of China's exports route via Hong Kong). Surface that, and
+    # the China-only counterpart, so the figure can't be mistaken for the
+    # CN-only number external sources cite. (Full multi-surface scope-labelling
+    # pass tracked separately.)
+    _, cn_per_day = _latest_deficit_per_day(cur, subkind + "_cn_only")
+    note = "Incl. Hong Kong & Macao"
+    if cn_per_day is not None:
+        note += f" · China-only €{cn_per_day / 1e6:,.0f}M/day"
+
     return Indicator(
         key=key,
         label=label,
@@ -352,6 +362,7 @@ def _deficit_indicator(
         formatted=f"€{float(per_day) / 1e6:,.0f}M/day",
         chart="sparkline",
         delta=delta,
+        note=note,
         chart_data=ChartData(chart_type="sparkline", series=series),
         provenance=Provenance(finding_ids=[fid], source=source, as_of=as_of),
     )
@@ -378,6 +389,7 @@ def _import_level_indicator(cur) -> Indicator | None:
         unit="eur",
         formatted=_fmt_eur(imp),
         chart="bignumber",
+        note="Incl. Hong Kong & Macao",
         provenance=Provenance(finding_ids=[fid], source="eurostat", as_of=as_of),
     )
 
