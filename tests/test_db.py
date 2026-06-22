@@ -1,5 +1,6 @@
 """Integration tests for db.py against a live Postgres test database."""
 
+from datetime import date
 from pathlib import Path
 
 import psycopg2
@@ -10,6 +11,24 @@ from parse import parse_html
 FIXTURES = Path(__file__).parent / "fixtures"
 SECTION4 = FIXTURES / "release_section4_by_country_mar2026_cny.html"
 URL = "http://english.customs.gov.cn/Statics/test-fixture-uuid.html"
+
+
+def _seed_eurostat_total(test_db_url, rows):
+    """Seed eurostat_raw_rows 000TOTAL cells. Each row: (period, reporter,
+    partner). Flow/value are immaterial to coverage/presence — those key on
+    (period, reporter, partner, product_nc)."""
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) "
+            "VALUES ('test://eurostat-coverage', 'success') RETURNING id")
+        run_id = cur.fetchone()[0]
+        for period, reporter, partner in rows:
+            cur.execute(
+                "INSERT INTO eurostat_raw_rows (scrape_run_id, period, reporter, "
+                "partner, product_nc, flow, value_eur) "
+                "VALUES (%s, %s, %s, %s, '000TOTAL', 1, 100)",
+                (run_id, period, reporter, partner))
+        conn.commit()
 
 
 def _parse_fixture():
@@ -168,3 +187,45 @@ def test_partner_additive_takes_fast_path(clean_db, test_db_url):
             (release_id,),
         )
         assert cur.fetchall() == [("CN", 2), ("HK", 2)]
+
+
+JAN, FEB = date(2026, 1, 1), date(2026, 2, 1)
+
+
+def test_eurostat_reporters_present_is_partner_scoped(clean_db, test_db_url):
+    # DE filed CN totals in Jan; nobody filed US.
+    _seed_eurostat_total(test_db_url, [(JAN, "DE", "CN"), (JAN, "FR", "CN")])
+
+    assert db.eurostat_reporters_present_for_period(JAN) == {"DE", "FR"}
+    assert db.eurostat_reporters_present_for_period(JAN, partners={"CN"}) == {"DE", "FR"}
+    # Partner-scoped: a brand-new partner is NOT 'already present', so a later
+    # --partner US ingest into the same period must not be skipped as a dup.
+    assert db.eurostat_reporters_present_for_period(JAN, partners={"US"}) == set()
+
+
+def test_eurostat_coverage_gaps_flags_missing_reporter_month(clean_db, test_db_url):
+    # DE present both months; NL only in Jan (missing Feb — the NL-March bug shape).
+    _seed_eurostat_total(test_db_url, [
+        (JAN, "DE", "CN"), (FEB, "DE", "CN"), (JAN, "NL", "CN"),
+    ])
+    assert db.eurostat_coverage_gaps(JAN, FEB) == [(FEB, "NL")]
+
+
+def test_eurostat_coverage_gaps_excludes_gb(clean_db, test_db_url):
+    # GB filed only in Jan (Brexit-style come-and-go). Without exclusion it would
+    # be flagged as a Feb gap; the default exclude_reporters=("GB",) suppresses it.
+    _seed_eurostat_total(test_db_url, [
+        (JAN, "DE", "CN"), (FEB, "DE", "CN"), (JAN, "GB", "CN"),
+    ])
+    assert db.eurostat_coverage_gaps(JAN, FEB) == []
+    # Opting out of the exclusion surfaces the GB gap again.
+    assert db.eurostat_coverage_gaps(JAN, FEB, exclude_reporters=()) == [(FEB, "GB")]
+
+
+def test_eurostat_coverage_gaps_partner_scoped(clean_db, test_db_url):
+    # Coverage keys on the requested partner's 000TOTAL rows only.
+    _seed_eurostat_total(test_db_url, [
+        (JAN, "DE", "CN"), (FEB, "DE", "CN"), (JAN, "NL", "CN"),
+        (FEB, "NL", "US"),  # NL filed US (not CN) in Feb — still a CN gap
+    ])
+    assert db.eurostat_coverage_gaps(JAN, FEB, partner="CN") == [(FEB, "NL")]

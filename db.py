@@ -196,6 +196,76 @@ def find_or_create_eurostat_release(period: "date", source_url: str) -> int:
         return cur.fetchone()[0]
 
 
+def eurostat_reporters_present_for_period(
+    period: "date", partners: set[str] | None = None,
+) -> set[str]:
+    """Member-state reporters that already have at least one raw row for the
+    given Eurostat period, optionally scoped to a partner set. The raw-row
+    insert is append-only (no ON CONFLICT), so callers use this to keep
+    re-ingest *additive* — surgical backfills skip reporters already stored and
+    a whole-period re-run is refused, both of which prevent silent duplication.
+    The `partners` scope matters: presence is partner-specific, so ingesting a
+    *new* partner (e.g. --partner US) into a period that already holds CN rows
+    must not be mistaken for 'already done'. (A genuine *revision* of stored
+    values is deeper work: delete + observation FK re-derivation, not a blind
+    re-insert.)"""
+    with transaction() as conn, conn.cursor() as cur:
+        if partners:
+            cur.execute(
+                "SELECT DISTINCT reporter FROM eurostat_raw_rows "
+                " WHERE period = %s AND partner = ANY(%s)",
+                (period, sorted(partners)),
+            )
+        else:
+            cur.execute(
+                "SELECT DISTINCT reporter FROM eurostat_raw_rows WHERE period = %s",
+                (period,),
+            )
+        return {r[0] for r in cur.fetchall()}
+
+
+def eurostat_coverage_gaps(
+    start: "date", end: "date", partner: str = "CN",
+    exclude_reporters: tuple[str, ...] = ("GB",),
+) -> list[tuple["date", str]]:
+    """Member-state months missing from the Eurostat `000TOTAL` set across
+    [start, end]. The expected reporter set is data-driven: the union of every
+    reporter that filed a `partner` 000TOTAL row anywhere in the window. A
+    reporter present in some months but absent in another is a coverage gap — a
+    late/unreported member state silently dragging any spanning aggregate down
+    (the failure mode that hid NL's missing March 2026). Returns (period,
+    reporter) pairs, sorted.
+
+    `exclude_reporters` drops reporters that legitimately come and go so they
+    aren't flagged as gaps — defaults to GB (mirrors
+    `anomalies.EU27_EXCLUDE_REPORTERS`; UK has pre-2020 EU-28 rows but no
+    current ones, so a Brexit-spanning window would otherwise show spurious GB
+    gaps). Note: a reporter absent across the *whole* window can't be detected
+    this way — widen the window if a member state goes dark entirely."""
+    with transaction() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH present AS (
+                SELECT DISTINCT period, reporter
+                  FROM eurostat_raw_rows
+                 WHERE partner = %s AND product_nc = '000TOTAL'
+                   AND period BETWEEN %s AND %s
+                   AND reporter <> ALL(%s)
+            ),
+            periods   AS (SELECT DISTINCT period   FROM present),
+            reporters AS (SELECT DISTINCT reporter FROM present)
+            SELECT p.period, r.reporter
+              FROM periods p CROSS JOIN reporters r
+              LEFT JOIN present pr
+                     ON pr.period = p.period AND pr.reporter = r.reporter
+             WHERE pr.reporter IS NULL
+             ORDER BY p.period, r.reporter
+            """,
+            (partner, start, end, list(exclude_reporters)),
+        )
+        return [(row[0], row[1]) for row in cur.fetchall()]
+
+
 _HMRC_RAW_COLS = (
     "scrape_run_id", "period", "reporter", "partner",
     "product_nc", "product_hs6", "product_hs4", "product_hs2",

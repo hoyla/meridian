@@ -143,6 +143,8 @@ class IngestOutcome:
       absent  — the source hasn't published this period yet (no write)
       empty   — the file/response is present but held no rows for our filters
                 (no release row created)
+      noop    — already ingested; an idempotent no-op, not an error (the guard
+                refused a duplicate re-ingest)
       skipped — a precondition was missing (e.g. HMRC FX rate absent)
       failed  — an exception during fetch/parse/persist
     """
@@ -156,6 +158,7 @@ def scrape_eurostat(
     period: date,
     partners: set[str] | None = None,
     hs_prefixes: tuple[str, ...] | None = None,
+    reporters: set[str] | None = None,
     dry_run: bool = False,
 ) -> IngestOutcome:
     """Fetch one Eurostat monthly bulk file, persist raw rows, aggregate, persist observations.
@@ -178,13 +181,47 @@ def scrape_eurostat(
         log.info("Eurostat bulk file for %s not published yet — skipping",
                  period.strftime("%Y-%m"))
         return IngestOutcome(status="absent")
-    log.info("Fetching Eurostat bulk file for %s", period.strftime("%Y-%m"))
+    # Idempotency guard. The raw-row insert is append-only (no ON CONFLICT), so
+    # re-ingesting a period/reporter already stored would duplicate it. Keep
+    # re-ingest additive: in surgical mode (reporters given) drop those already
+    # present; in whole-period mode refuse outright if anything is stored. A
+    # genuine *revision* of stored values is separate, deeper work (delete +
+    # observation FK re-derivation) — this guard only protects against dupes.
+    if not dry_run:
+        # Presence is scoped to the partner set being ingested — a new partner
+        # (e.g. --partner US) into a period that already holds CN rows is NOT a
+        # duplicate and must proceed.
+        existing = db.eurostat_reporters_present_for_period(period, partners=partners)
+        if reporters is None:
+            if existing:
+                log.info(
+                    "Eurostat %s (partners=%s) already ingested (%d reporters "
+                    "present) — skipping whole-period re-ingest to avoid "
+                    "duplicate raw rows. Backfill a missing reporter with "
+                    "--eurostat-reporter.",
+                    period.strftime("%Y-%m"),
+                    ",".join(sorted(partners)) if partners else "ANY",
+                    len(existing))
+                return IngestOutcome(status="noop")
+        else:
+            already = reporters & existing
+            reporters = reporters - existing
+            if already:
+                log.info("Eurostat %s: skipping reporters already present: %s",
+                         period.strftime("%Y-%m"), ",".join(sorted(already)))
+            if not reporters:
+                log.info("Eurostat %s: all requested reporters already present "
+                         "— nothing to backfill", period.strftime("%Y-%m"))
+                return IngestOutcome(status="noop")
+    log.info("Fetching Eurostat bulk file for %s%s", period.strftime("%Y-%m"),
+             f" (reporters={','.join(sorted(reporters))})" if reporters else "")
     run_id = db.start_run(url) if not dry_run else None
     try:
         response = eurostat.fetch_bulk_file(period)
         raw_rows = list(
             eurostat.iter_raw_rows(
-                response.content, period, partners=partners, hs_prefixes=hs_prefixes
+                response.content, period, partners=partners,
+                reporters=reporters, hs_prefixes=hs_prefixes
             )
         )
         log.info(
@@ -398,6 +435,8 @@ def _outcome_to_result(
         return "no_change", "not published yet", None
     if outcome.status == "empty":
         return "no_change", "response present but no rows for our filters", None
+    if outcome.status == "noop":
+        return "no_change", "already ingested", None
     # skipped (missing precondition) or failed (exception) — both are errors
     # worth surfacing rather than silently swallowing.
     return "error", None, outcome.error
@@ -474,6 +513,18 @@ def probe_source(source: str, today: date | None = None) -> str:
         else:  # hmrc
             outcome = scrape_hmrc(candidate)
         result, notes, error = _outcome_to_result(candidate, outcome)
+        # Completeness guard: a late/unreported member state would silently
+        # understate any aggregate spanning the gap (the NL-March-2026 case).
+        # Surface it loudly rather than letting it slip into the briefing.
+        if source == "eurostat" and outcome.status == "success":
+            gaps = db.eurostat_coverage_gaps(
+                anomalies._months_back(candidate, 12), candidate,
+                exclude_reporters=anomalies.EU27_EXCLUDE_REPORTERS)
+            if gaps:
+                glist = ", ".join(f"{p:%Y-%m}/{r}" for p, r in gaps)
+                log.warning("Eurostat coverage gaps in trailing 12mo (%d): %s "
+                            "— backfill with --eurostat-period P "
+                            "--eurostat-reporter R", len(gaps), glist)
 
     duration_ms = int((time.monotonic() - started) * 1000)
     routine_log.log_check(
@@ -537,6 +588,18 @@ def main() -> None:
     p.add_argument("--partner", action="append", metavar="CC",
                    help="ISO-2 partner country code(s) to filter Eurostat to. "
                         "Default: CN. Repeat for multiple, e.g. --partner CN --partner US")
+    p.add_argument("--eurostat-reporter", action="append", metavar="CC",
+                   help="Restrict an Eurostat ingest to these member-state "
+                        "reporters (ISO-2). Use to surgically backfill a missing "
+                        "(period, reporter); reporters already stored are skipped "
+                        "so the additive re-ingest can't duplicate. Repeat for "
+                        "multiple.")
+    p.add_argument("--eurostat-coverage", nargs=2, metavar=("START", "END"),
+                   type=_parse_period,
+                   help="Report member-state months missing from the Eurostat "
+                        "000TOTAL set across [START, END] (YYYY-MM each) and exit. "
+                        "A coverage gap = a member state present in some months "
+                        "but absent in another (silently understating aggregates).")
     p.add_argument("--hs-prefix", action="append", metavar="HS",
                    help="HS-CN8 prefix(es) to filter Eurostat to (e.g. 87038). "
                         "Default: no HS filter. Repeat for multiple.")
@@ -1170,11 +1233,28 @@ def main() -> None:
             log.info("FX %s/EUR: %s", ccy.upper(), counts)
         return
 
+    if args.eurostat_coverage:
+        start, end = args.eurostat_coverage
+        partner = (args.partner[0] if args.partner else "CN")
+        gaps = db.eurostat_coverage_gaps(
+            start, end, partner=partner,
+            exclude_reporters=anomalies.EU27_EXCLUDE_REPORTERS)
+        if not gaps:
+            print(f"No Eurostat 000TOTAL coverage gaps in "
+                  f"{start:%Y-%m}..{end:%Y-%m}")
+        else:
+            print(f"Eurostat 000TOTAL coverage gaps ({len(gaps)}):")
+            for period, rep in gaps:
+                print(f"  {period:%Y-%m}  {rep}")
+        return
+
     if args.eurostat_period:
         partners = set(args.partner) if args.partner else {"CN"}
+        reporters = set(args.eurostat_reporter) if args.eurostat_reporter else None
         hs_prefixes = tuple(args.hs_prefix) if args.hs_prefix else None
         scrape_eurostat(args.eurostat_period, partners=partners,
-                        hs_prefixes=hs_prefixes, dry_run=args.dry_run)
+                        hs_prefixes=hs_prefixes, reporters=reporters,
+                        dry_run=args.dry_run)
         return
 
     if args.eurostat_world_aggregates_period:

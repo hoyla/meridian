@@ -113,10 +113,13 @@ python scrape.py --url <url>              # one-shot (index OR release URL)
 python scrape.py --dry-run                # fetch + parse without DB writes
 
 # Eurostat bulk ingest (one month at a time; bulk file is ~44MB and hosts all partners)
-python scrape.py --eurostat-period 2026-03                                       # one month, default partners (CN, HK, MO)
-python scrape.py --eurostat-period 2026-03 --partner CN --partner HK --partner MO   # explicit equivalent
-python scrape.py --eurostat-period 2026-03 --partner US                          # different partner entirely
+python scrape.py --eurostat-period 2026-03                                       # one month, default partner CN (the scheduled run uses CN+HK+MO)
+python scrape.py --eurostat-period 2026-03 --partner CN --partner HK --partner MO   # what the periodic run ingests
+python scrape.py --eurostat-period 2026-03 --partner US                          # a different partner into the same month (additive)
 python scrape.py --eurostat-period 2026-03 --hs-prefix 87038                     # filter by HS prefix
+# Re-ingest is additive-only: a period/partner already stored is skipped (status=noop), never duplicated.
+python scrape.py --eurostat-period 2026-03 --eurostat-reporter NL                # surgically backfill ONE missing member state
+python scrape.py --eurostat-coverage 2026-01 2026-04                             # report member-state months missing from the 000TOTAL set
 
 # HMRC OTS ingest (UK side, post-Brexit canonical source for UK-China trade)
 # Pre-requires GBP/EUR FX loaded (see below). Default partners CN+HK+MO.

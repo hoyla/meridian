@@ -147,6 +147,24 @@ def test_hmrc_missing_fx_logs_error(clean_db, test_db_url, monkeypatch):
     assert "FX" in (row["error"] or "")
 
 
+def test_eurostat_noop_logs_no_change_not_error(clean_db, test_db_url, monkeypatch):
+    # The idempotency guard returns status='noop' when a period is already
+    # ingested. That's a no-op, not a failure — it must log no_change, NOT an
+    # error (which would be a message-less false alarm in the routine log).
+    # Contrast test_hmrc_missing_fx_logs_error: 'skipped' still maps to error.
+    _seed_release(test_db_url, "eurostat", date(2026, 3, 1))  # candidate → 2026-04
+    monkeypatch.setattr(
+        scrape, "scrape_eurostat",
+        lambda *a, **k: scrape.IngestOutcome(status="noop"),
+    )
+    scrape.probe_source("eurostat", today=date(2026, 6, 15))
+
+    row = _last_row(test_db_url, "eurostat")
+    assert row["result"] == "no_change"
+    assert row["error"] is None
+    assert "already ingested" in (row["notes"] or "")
+
+
 def test_gacc_logs_no_change_with_null_expectation(clean_db, test_db_url, monkeypatch):
     monkeypatch.setattr(scrape, "run_scrape", lambda *a, **k: None)  # no new releases
     scrape.probe_source("gacc", today=date(2026, 6, 2))
