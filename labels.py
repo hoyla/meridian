@@ -122,7 +122,12 @@ SEED_LABELS: list[Label] = [
     Label(
         "Food & agriculture",
         "Agri-food trade with China — meat, produce, sweeteners and animal-feed "
-        "inputs, often the subject of dumping or food-safety disputes.",
+        "inputs, often the subject of dumping or food-safety disputes. Includes "
+        "feed-grade fine chemicals (the lysine/methionine/threonine amino acids, "
+        "choline) that ALSO appear under 'Pharma & fine chemicals' — a worked "
+        "example of the many-to-many design: the group stays material-named and "
+        "carries every application it genuinely serves, rather than being bound "
+        "to one.",
         "narrative",
         member_groups=[
             "Honey",
@@ -130,6 +135,8 @@ SEED_LABELS: list[Label] = [
             "Pork offal (HS 0206 swine)",
             "Tomato paste / preserved tomatoes",
             "Feed premixes (HS 230990)",
+            "Amino acids (HS 2922)",
+            "Choline (HS 292310)",
         ],
     ),
     Label(

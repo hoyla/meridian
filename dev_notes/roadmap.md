@@ -97,6 +97,27 @@ append-only + provenance on everything new (principles 3/4/7).
    When such groups land, declaring the matching theme in `labels.py` is a
    one-liner and lights up chips on the movers + sector filter automatically.
 
+   **Lisa's Jun-2026 sector questions → material groups + new themes**
+   (see [`2026-06-22-lisa-sector-coverage-questions.md`](2026-06-22-lisa-sector-coverage-questions.md)).
+   The chemicals / refined-critical-minerals expansion is scoped there as
+   material-named groups, each tagged to themes — including two *new* themes
+   (**Cosmetics & personal care**, **Paint & coatings**) and rows that fill the
+   already-declared **Pharma & fine chemicals** theme. Titanium dioxide
+   (`320611`) is the worked multi-theme case (paint + cosmetics + pigment).
+   Awaiting Lisa's prioritisation before seeding (the analyser surfaces any
+   seeded group immediately, so we don't seed speculatively).
+
+   **Retrofit the 3 legacy application-bound groups** (Lisa keen, soon; own
+   branch — kept off the Jun-2026 EV-coverage branch deliberately).
+   `EV batteries (Li-ion)` → material name `Lithium-ion accumulators (HS 850760)`
+   (850760 is all Li-ion, not just EV); `Wind turbine components` (two of its
+   three patterns — `850300` generator parts, `730820` steel towers — aren't
+   wind-specific); `Solar/grid inverters (broad)` (mild, already hedged). The
+   renames are far cheaper once the **group display-name column** (below) lands:
+   changing the *display* leaves the `name` key — and every finding that
+   references it — intact, sidestepping the `test_orphan_findings` backfill. So
+   sequence display-name column → renames.
+
 3. **Richer per-source statistics.**
    - **Eurostat:** unit-price (€/kg) trends as a first-class series (we hold
      value + kg; price = the divergence signal); supplementary units; finer

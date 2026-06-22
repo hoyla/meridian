@@ -150,33 +150,71 @@ into extraction), and because the analyser surfaces any seeded group
 immediately, seeding a speculative set would start emitting findings she hasn't
 asked for. So this stays a proposal until she prioritises.
 
-### Proposed group shortlist for Lisa to prioritise
+### Proposed groups for Lisa to prioritise — material-typed, application via themes
 
-Tiered roughly by likely story value; HS codes are starting points, refinable.
+**Correction to an earlier draft of this note.** The first cut tiered the
+proposal by *application* (A: critical minerals, B: pharma, C: cosmetics,
+D: paint) — and titanium dioxide landed in both the minerals and paint tiers,
+which is precisely the application-binding smell. Per the 2026-06-20 taxonomy
+design (`dev_notes/2026-06-20-taxonomy-sitc-spine-and-labels.md`) and Lisa's
+Jun-2026 point: **groups are named by material; application is carried by the
+many-to-many theme layer (`labels.py`), never by partitioning the group.** A
+multi-industry chemical gets one material group and as many themes as it
+genuinely serves.
 
-**A — Refined critical minerals (the battery/magnet input story; closest to
-work we already do):**
-- Lithium carbonate `283691` + lithium oxide/hydroxide `282520` — refined
-  lithium feeding cathodes.
-- Cobalt: cobalt oxides/hydroxides `282200` + unwrought/articles `8105`.
-- Manganese oxides `282010`; tungsten ores/oxides/carbide `2841`/`8101`.
-- Gallium/germanium/indium `8112`; antimony `8110` — small flows, high
-  strategic salience, frequent export-control news.
-- Titanium dioxide `320611` (also a paint + cosmetics pigment — one group,
-  three story angles).
+So the proposal is a flat list of **material groups**, each tagged with the
+**themes** it would join. Themes marked *(new)* don't exist yet and would be
+added as `labels.py` entries; the rest already exist.
 
-**B — Pharma (API-led, narrow codes beat the broad chapter):**
-- Antibiotics `2941`; provitamins/vitamins `2936`; hormones `2937`; alkaloids
-  `2939`. Optionally formulated medicaments `3003`/`3004` (HS 30) for the
-  finished-drug dependency story.
+| Material group (HS) | Themes |
+|---|---|
+| Lithium carbonate `283691` + lithium oxide/hydroxide `282520` | EV supply chain · China export-control regime |
+| Cobalt oxides/hydroxides `282200` + cobalt `8105` | EV supply chain · China export-control regime |
+| Manganese oxides `282010` | EV supply chain |
+| Tungsten ores/oxides/carbide `2841` / `8101` | China export-control regime |
+| Gallium/germanium/indium `8112`; antimony `8110` | China export-control regime |
+| **Titanium dioxide `320611`** | Paint & coatings *(new)* · Cosmetics & personal care *(new)* |
+| Antibiotics `2941` | Pharma & fine chemicals |
+| Vitamins/provitamins `2936`; hormones `2937`; alkaloids `2939` | Pharma & fine chemicals |
+| Formulated medicaments `3003`/`3004` (HS 30) | Pharma & fine chemicals |
+| Essential oils `3301` + odoriferous mixtures `3302` | Cosmetics & personal care *(new)* |
+| Surfactants `3402`; beauty/make-up preparations `3304` | Cosmetics & personal care *(new)* |
+| Paints/varnishes `3208`/`3209`/`3210`; pigments `3206` | Paint & coatings *(new)* |
 
-**C — Cosmetics & personal care:**
-- Essential oils `3301` + odoriferous mixtures `3302` (fragrance base);
-  surfactants `3402`; beauty/make-up preparations `3304` (finished).
+**Titanium dioxide is the worked argument for the model**: one material group
+(`320611`), three story angles (paint pigment, cosmetics filler/whitener,
+refined-mineral product) expressed as three theme memberships — not three
+groups, and not one group arbitrarily filed under "paint".
 
-**D — Paint & coatings:**
-- Paints/varnishes `3208`/`3209`/`3210`; pigments `3206` (incl. TiO₂ 320611
-  above); prepared driers/mastics `3210`/`3214`.
+Notes:
+- `labels.py` already seeds a **Pharma & fine chemicals** theme whose
+  member_groups list anticipates `Antibiotics (HS 2941)`, an ibuprofen-class
+  and a paracetamol-class group — i.e. the theme is waiting for the groups. The
+  pharma rows above would slot straight in.
+- **Cosmetics & personal care** and **Paint & coatings** would be two new
+  labels (a name + definition + member groups).
+- The refined-mineral rows lean on the existing **China export-control regime**
+  and **EV supply chain** themes — close to work we already do.
 
-Each, once chosen, is a seed row + migration (+ aggregates backfill for the
-share metric). Mechanically identical to the EV additions above.
+**Worked example already shipped on this branch (Task 1).** Choline (`292310`)
+and the feed amino-acids group (`2922`) were Pharma-themed only, despite being
+core animal-nutrition inputs. They now also carry **Food & agriculture** — the
+same group surfacing under both its applications via overlapping themes, with
+the overlap spelled out in the label's definition for auditability. This is the
+template every dual-use row above follows.
+
+Each chosen group is still a seed row + migration (+ `eurostat_world_aggregates`
+backfill for the share metric) — mechanically identical to the EV additions —
+plus its theme membership(s) in `labels.py`.
+
+### Deferred to a follow-up branch (Lisa keen to do soon)
+
+Retrofit the three legacy groups that bind application into the *group itself*
+(see the audit in this note's companion discussion): rename
+`EV batteries (Li-ion)` → `Lithium-ion accumulators (HS 850760)` (keep it in the
+`EV supply chain` theme), and demote/reframe `Wind turbine components`
+(`850300`/`730820` aren't wind-specific). NOT on this branch: a rename orphans
+existing findings unless paired with a findings backfill UPDATE (the
+`tests/test_orphan_findings.py` invariant; cf. `test_portal.py:842` which pins
+the EV-batteries theme on the current name), so it needs its own migration and
+test update.
