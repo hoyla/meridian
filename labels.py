@@ -181,6 +181,28 @@ SEED_LABELS: list[Label] = [
             "Vanillin and ethylvanillin (HS 29124100 + 29124200)",
         ],
     ),
+    Label(
+        "Cosmetics & personal care",
+        "Cosmetics, perfumery and personal-care inputs and finished goods — "
+        "fragrance bases and the beauty/skin-care products built from them, "
+        "plus the titanium-dioxide pigment used as a filler/whitener.",
+        "narrative",
+        member_groups=[
+            "Essential oils & fragrance mixtures (HS 3301 + 3302)",
+            "Beauty, make-up & skin-care preparations (HS 3304)",
+            "Titanium dioxide (CN8 320611)",
+        ],
+    ),
+    Label(
+        "Paint & coatings",
+        "Paints, varnishes and the pigments that go into them — finished "
+        "coatings plus titanium dioxide, the dominant white pigment.",
+        "narrative",
+        member_groups=[
+            "Paints & varnishes (HS 3208-3210)",
+            "Titanium dioxide (CN8 320611)",
+        ],
+    ),
 ]
 
 

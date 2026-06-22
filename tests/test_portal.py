@@ -930,8 +930,13 @@ def test_q2_expansion_groups_carry_expected_themes():
     for g in ("Engine parts (CN8 84099100 + 84099900)",
               "Internal-combustion engines (HS 8407 + 8408)"):
         assert tf(g) == ["Automotive"], g
-    # TiO2 is intentionally themeless until the round-2 Cosmetics/Paint themes.
-    assert tf("Titanium dioxide (CN8 320611)") == []
+    # Round 2 — cosmetics + paint groups; TiO2 now bridges both new themes.
+    for g in ("Essential oils & fragrance mixtures (HS 3301 + 3302)",
+              "Beauty, make-up & skin-care preparations (HS 3304)"):
+        assert tf(g) == ["Cosmetics & personal care"], g
+    assert tf("Paints & varnishes (HS 3208-3210)") == ["Paint & coatings"]
+    assert tf("Titanium dioxide (CN8 320611)") == [
+        "Cosmetics & personal care", "Paint & coatings"]
 
 
 def test_scope_labelling_present_on_mirror_and_gacc_sections():

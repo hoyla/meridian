@@ -235,9 +235,19 @@ The broad-by-design groups (8112 minor metals; 2916/2924 acid/amide families;
 8407/8408 engines) carry a "refine to CN8 / subheadings" steer in their
 descriptions. YoY findings land on the next `--analyse hs-groups` run; the
 China-share metric needs the `eurostat_world_aggregates` backfill for the new
-prefixes (follows). **Round 2 (deferred):** cosmetics & paint groups + the
-**Cosmetics & personal care** / **Paint & coatings** themes (which also give
-TiO₂ its themes). Easy to add — a seed row + a theme line each.
+prefixes (follows).
+
+**Round 2 — BUILT 2026-06-22** (branch `ljh-q2-round2-cosmetics-paint`;
+`migrations/2026-06-22e`). Cosmetics + paint, all `seed:lisa_q2_round2_2026_06`:
+- Essential oils & fragrance mixtures (HS 3301 + 3302) [Cosmetics & personal care]
+- Beauty, make-up & skin-care preparations (HS 3304) [Cosmetics & personal care]
+- Paints & varnishes (HS 3208-3210) [Paint & coatings]
+
+Two new themes added to `labels.py` — **Cosmetics & personal care** and
+**Paint & coatings** — and the existing **Titanium dioxide (320611)** group now
+joins both (the pigment bridge, so it's no longer themeless). Deferred again:
+surfactants (HS 3402 — dominantly cleaning, would want a "cleaning products"
+theme) and a broad pigments group (HS 3206 — overlaps the TiO₂ group).
 
 ### Done — legacy application-bound groups (branch `ljh-legacy-group-taxonomy-retrofit`, 2026-06-22)
 
