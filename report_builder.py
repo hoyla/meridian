@@ -1313,12 +1313,22 @@ def _gacc_bilateral_section(cur, period) -> Section:
 _GLOSSARY_PATH = pathlib.Path(__file__).resolve().parent / "docs" / "glossary.md"
 
 
+_GLOSSARY_WEB_HIDE = "<!--web-hide-->"
+
+
 def _parse_glossary_md(text: str) -> list[dict]:
     """Parse the regular `## category` / `### term` / body structure of
     docs/glossary.md into [{title, terms: [{term, body}]}]. The H1 and any
     preamble before the first category are ignored (the section supplies its
     own intro). A bespoke parser for one well-structured file — far simpler,
-    and safer, than a general markdown dependency."""
+    and safer, than a general markdown dependency.
+
+    A `### Term <!--web-hide-->` marker drops that term from the PORTAL
+    glossary: the entry documents a docx-bundle artifact a web-only reader has
+    no access to (Tier 1/2/3, `02_Findings.md`, the provenance files, etc.).
+    The term stays in the source file, so the bundle / GitHub glossary — where
+    those references are meaningful — is unchanged. The comment is invisible in
+    rendered Markdown, so it costs nothing on those surfaces."""
     groups: list[dict] = []
     cur_group: dict | None = None
     cur_term: str | None = None
@@ -1338,7 +1348,10 @@ def _parse_glossary_md(text: str) -> list[dict]:
             groups.append(cur_group)
         elif line.startswith("### "):
             flush()
-            cur_term = line[4:].strip()
+            term = line[4:].strip()
+            # Web-hidden terms set cur_term=None, so the body lines that follow
+            # are skipped and the next flush() is a no-op until the next term.
+            cur_term = None if _GLOSSARY_WEB_HIDE in term else term
         elif line.startswith("# "):
             continue
         elif cur_term is not None:

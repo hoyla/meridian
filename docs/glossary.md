@@ -234,9 +234,11 @@ The specific classification of a finding. Currently emitted:
 - `gacc_aggregate_yoy{,_import}` — non-EU bloc partner aggregates
 - `gacc_bilateral_aggregate_yoy{,_import}` — EU bloc + single-country GACC partners
 - `partner_share{,_export}` — China's share of EU-27 extra-EU imports/exports per HS group
-- `narrative_hs_group` — LLM lead scaffold (in `03_Leads.md` only)
+- `narrative_hs_group` — LLM lead scaffold (leads only, not in the headline findings)
 
-### Brief / findings document
+### Brief / findings document <!--web-hide-->
+<!-- web-hide: documents the docx-bundle file 02_Findings.md; meaningless on the web portal. Kept here for the bundle/GitHub glossary. -->
+
 The deterministic Markdown rendering at `02_Findings.md`. Three
 tiers ([Tier 1 / 2 / 3](#tier-1--2--3)). Pure SQL → text; no LLM
 in the loop. Pairs with `04_Data.xlsx` and `03_Leads.md` per export
@@ -282,7 +284,7 @@ a `natural_key_hash` + `value_signature` for idempotency, a
 integer `id` that `finding/{id}` citation tokens point at.
 
 ### Finding ID / trace token
-Every quotable number in `02_Findings.md` or `04_Data.xlsx` carries a
+Every quotable number carries a
 `finding/{id}` citation token (e.g. `finding/41349`). The integer
 is the row's primary key. Stable across re-runs of the analyser —
 when a finding revises, the new value gets a fresh id and the
@@ -295,7 +297,9 @@ analyser treats as a single editorial group. Defined in the
 input prompted each addition (e.g. `seed:lisa_article`,
 `seed:soapbox_a1_2026_05_12`).
 
-### Lead scaffold
+### Lead scaffold <!--web-hide-->
+<!-- web-hide: the 03_Leads.md docx-bundle construct; not a web-portal surface. -->
+
 The LLM-produced output for each HS group: anomaly summary +
 2–3 hypotheses picked from a curated catalog of standard causes
 + deterministic corroboration steps. Rendered in `03_Leads.md`,
@@ -367,7 +371,9 @@ pointing at the new row. Active findings are those with
 `superseded_at IS NULL`.
 See [architecture.md §Append-plus-supersede chain](architecture.md#append-plus-supersede-chain).
 
-### Tier 1 / 2 / 3
+### Tier 1 / 2 / 3 <!--web-hide-->
+<!-- web-hide: the three sections of the docx-bundle 02_Findings.md; the web portal has its own tabs, so this is confusing on the web surface. -->
+
 The three sections of `02_Findings.md`:
 - **Tier 1 — What's new this cycle.** Diff against previous brief.
   Auto-suppressed on method-bump cycles where ≥95% of supersede
@@ -385,7 +391,9 @@ The brief opens with [**"If you read only this page"**](#front-page)
 above Tier 1. A regular subscriber reads the front page → Tier 1; a
 new joiner reads the front page → Tier 2 → Tier 3.
 
-### Front page
+### Front page <!--web-hide-->
+<!-- web-hide: the one-page top of the docx-bundle 02_Findings.md; the portal's Briefing tab is the web equivalent. -->
+
 "If you read only this page" — the one-page brief at the top of
 `02_Findings.md` (since 2026-06-11; previously "Top 5 movers this
 cycle"). The composite-ranked top movers rendered as publishable
@@ -424,7 +432,9 @@ re-runs produce the same signature, the existing finding is just
 re-confirmed; when they produce a different signature, the old
 row is superseded and a new one is inserted.
 
-### Provenance file
+### Provenance file <!--web-hide-->
+<!-- web-hide: the provenance/finding-N.md repo files generated via CLI; a web reader can't produce or open them. -->
+
 A per-finding audit-trail Markdown file at `provenance/finding-N.md`
 (at repo root) listing the source URLs, FX rates, plain-English
 caveats, cross-source check, headline arithmetic, and replay SQL
@@ -438,7 +448,9 @@ passed. Detailed templates currently cover
 scope/flow variants), and `hs_group_trajectory*` (six scope/flow
 variants); other subkinds emit a stub.
 
-### Groups glossary
+### Groups glossary <!--web-hide-->
+<!-- web-hide: the 05_Groups.md docx-bundle sister document. -->
+
 The `05_Groups.md` sister document in every export bundle, plus
 its standalone form at `exports/groups-glossary-YYYY-MM-DD.md`
 (via `--groups-glossary`). One section per HS group: editorial
