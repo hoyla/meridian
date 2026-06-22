@@ -855,6 +855,21 @@ def test_seed_labels_well_formed():
     assert "origin_risk" in kinds         # Xinjiang-style lens exists
 
 
+def test_wind_power_theme_replaces_retired_group():
+    """The retired 'Wind turbine components' group is replaced by an
+    overlapping 'Wind power' lens: the precise turbine flow plus the NdFeB
+    magnets feeding direct-drive generators — and deliberately NOT generic
+    steel/motors (the patterns that made the old group conflate)."""
+    by_name = {l.name: l for l in labels.SEED_LABELS}
+    assert "Wind power" in by_name
+    assert set(by_name["Wind power"].member_groups) == {
+        "Wind generating sets only",
+        "Sintered NdFeB magnets (CN8 85051110)",
+    }
+    # 'Wind generating sets only' belongs to exactly this lens.
+    assert labels.themes_for_group("Wind generating sets only") == ["Wind power"]
+
+
 # ---- classifications (BEC end-use mapping is pure) ----
 
 @pytest.mark.parametrize("bec4,expected", [

@@ -39,6 +39,24 @@ def transaction():
         conn.close()
 
 
+def group_display_names(cur) -> dict[str, str]:
+    """name -> reader-facing display name for every hs_group.
+
+    `name` is the stable internal key — analysers and ~all tests key off it,
+    and every finding snapshots it into detail.group.name. `display_name` is
+    the journalist-editable label readers should see. This resolver returns
+    COALESCE(display_name, name) so render code can substitute the display
+    string at output time without touching the stored key; groups with no
+    display_name map to themselves (identity), so callers apply it
+    unconditionally. Uses an independent cursor on the caller's connection, so
+    it neither disturbs the caller's cursor state nor cares whether that cursor
+    is a RealDictCursor.
+    """
+    with cur.connection.cursor() as c:
+        c.execute("SELECT name, COALESCE(display_name, name) FROM hs_groups")
+        return {r[0]: r[1] for r in c.fetchall()}
+
+
 def start_run(source_url: str) -> int:
     with transaction() as conn, conn.cursor() as cur:
         cur.execute(

@@ -396,9 +396,9 @@ def test_trajectory_u_recovery_integration(empty_op, test_db_url):
         p = date(p.year + 1, 1, 1) if p.month == 12 else date(p.year, p.month + 1, 1)
 
     with psycopg2.connect(test_db_url) as conn:
-        _seed_yoy_findings(conn, group_id=4, periods_and_yoys=series)  # Wind turbine components
+        _seed_yoy_findings(conn, group_id=1, periods_and_yoys=series)  # EV batteries (id 1) — "Wind turbine components" retired 2026-06-22; any seeded group exercises the classifier
 
-    counts = anomalies.detect_hs_group_trajectories(group_names=["Wind turbine components"])
+    counts = anomalies.detect_hs_group_trajectories(group_names=["EV batteries (Li-ion)"])
     assert counts.get("skipped_incomplete_series", 0) == 0
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
         cur.execute(
@@ -439,9 +439,9 @@ def test_trajectory_truncates_to_longest_contiguous_run(empty_op, test_db_url):
         (date(2025, 5, 1), 0.26),
     ]
     with psycopg2.connect(test_db_url) as conn:
-        _seed_yoy_findings(conn, group_id=4, periods_and_yoys=series)
+        _seed_yoy_findings(conn, group_id=1, periods_and_yoys=series)
 
-    counts = anomalies.detect_hs_group_trajectories(group_names=["Wind turbine components"])
+    counts = anomalies.detect_hs_group_trajectories(group_names=["EV batteries (Li-ion)"])
     assert counts["emitted"] == 1, f"counts={counts}"
     assert counts["skipped_incomplete_series"] == 0  # legacy counter never increments now
 
@@ -504,9 +504,9 @@ def test_trajectory_skips_when_longest_run_too_short(empty_op, test_db_url):
         (date(2024, 6, 1), 0.20), (date(2024, 7, 1), 0.22), (date(2024, 8, 1), 0.24),
     ]
     with psycopg2.connect(test_db_url) as conn:
-        _seed_yoy_findings(conn, group_id=4, periods_and_yoys=series)
+        _seed_yoy_findings(conn, group_id=1, periods_and_yoys=series)
 
-    counts = anomalies.detect_hs_group_trajectories(group_names=["Wind turbine components"])
+    counts = anomalies.detect_hs_group_trajectories(group_names=["EV batteries (Li-ion)"])
     assert counts["emitted"] == 0
     assert counts["skipped_insufficient_data"] == 1
 
