@@ -284,6 +284,32 @@ def eurostat_coverage_gaps(
         return [(row[0], row[1]) for row in cur.fetchall()]
 
 
+def eurostat_coverage_gaps_multi(
+    start: "date", end: "date",
+    partners: tuple[str, ...] = ("CN", "HK", "MO"),
+    exclude_reporters: tuple[str, ...] = ("GB",),
+) -> list[tuple["date", str, str]]:
+    """Coverage gaps across the full stored partner envelope (CN+HK+MO by
+    default), each tagged with its partner. A thin loop over
+    `eurostat_coverage_gaps` — used by the periodic completeness guard, which
+    must not be blind to HK/MO: a missing HK/MO reporter-month understates the
+    CN+HK+MO aggregate the briefing sums, just as a missing CN one does.
+
+    Interpreting the result: a **CN** gap is near-certainly missing data (every
+    member state trades mainland China every month). An **HK/MO** gap can be a
+    genuine no-trade month for a smaller reporter (those flows are far thinner),
+    so treat HK/MO as advisory — worth a glance, not automatically a backfill.
+    Returns (period, reporter, partner), sorted."""
+    out: list[tuple["date", str, str]] = []
+    for partner in partners:
+        out += [
+            (period, reporter, partner)
+            for (period, reporter) in eurostat_coverage_gaps(
+                start, end, partner=partner, exclude_reporters=exclude_reporters)
+        ]
+    return sorted(out)
+
+
 _HMRC_RAW_COLS = (
     "scrape_run_id", "period", "reporter", "partner",
     "product_nc", "product_hs6", "product_hs4", "product_hs2",

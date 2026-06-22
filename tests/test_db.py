@@ -229,3 +229,25 @@ def test_eurostat_coverage_gaps_partner_scoped(clean_db, test_db_url):
         (FEB, "NL", "US"),  # NL filed US (not CN) in Feb — still a CN gap
     ])
     assert db.eurostat_coverage_gaps(JAN, FEB, partner="CN") == [(FEB, "NL")]
+
+
+def test_eurostat_coverage_gaps_multi_covers_hk_mo_envelope(clean_db, test_db_url):
+    """The periodic guard checks the full CN+HK+MO envelope the ingest stores,
+    not just CN — a missing HK (or MO) reporter-month would otherwise slip past.
+    Results are partner-tagged so a near-certain CN data gap reads differently
+    from an advisory HK/MO one."""
+    _seed_eurostat_total(test_db_url, [
+        # CN: DE both months, NL only Jan → CN gap NL/Feb (the classic case).
+        (JAN, "DE", "CN"), (FEB, "DE", "CN"), (JAN, "NL", "CN"),
+        # HK: NL both months, DE only Jan → HK gap DE/Feb — exactly the blind
+        # spot the old CN-only guard missed.
+        (JAN, "DE", "HK"), (JAN, "NL", "HK"), (FEB, "NL", "HK"),
+    ])
+    # Single-partner default still sees only the CN gap.
+    assert db.eurostat_coverage_gaps(JAN, FEB) == [(FEB, "NL")]
+    # The envelope check catches both, each tagged with its partner; MO has no
+    # rows, so it contributes nothing (no false "everyone's missing MO").
+    assert db.eurostat_coverage_gaps_multi(JAN, FEB) == [
+        (FEB, "DE", "HK"),
+        (FEB, "NL", "CN"),
+    ]

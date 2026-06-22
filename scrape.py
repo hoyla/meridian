@@ -540,14 +540,20 @@ def probe_source(source: str, today: date | None = None) -> str:
         # understate any aggregate spanning the gap (the NL-March-2026 case).
         # Surface it loudly rather than letting it slip into the briefing.
         if source == "eurostat" and outcome.status == "success":
-            gaps = db.eurostat_coverage_gaps(
+            # Check the full CN+HK+MO envelope the ingest stores, not just CN —
+            # a missing HK/MO reporter-month understates a spanning aggregate
+            # too. CN gaps are near-certainly missing data; HK/MO can be genuine
+            # no-trade (thin flows), so they're advisory — hence partner-tagged.
+            gaps = db.eurostat_coverage_gaps_multi(
                 anomalies._months_back(candidate, 12), candidate,
                 exclude_reporters=anomalies.EU27_EXCLUDE_REPORTERS)
             if gaps:
-                glist = ", ".join(f"{p:%Y-%m}/{r}" for p, r in gaps)
+                glist = ", ".join(f"{p:%Y-%m}/{r}/{ptnr}" for p, r, ptnr in gaps)
                 log.warning("Eurostat coverage gaps in trailing 12mo (%d): %s "
-                            "— backfill with --eurostat-period P "
-                            "--eurostat-reporter R", len(gaps), glist)
+                            "— CN = near-certainly missing data; HK/MO may be "
+                            "genuine no-trade. Backfill real gaps with "
+                            "--eurostat-period P --eurostat-reporter R",
+                            len(gaps), glist)
 
     duration_ms = int((time.monotonic() - started) * 1000)
     routine_log.log_check(
