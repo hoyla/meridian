@@ -24,9 +24,12 @@ Surfaced while shipping the Eurostat data correction + portal-clarity batch
   snapshot-only path doesn't build the workbook, so the Tables-tab *download* 404s
   (inline tables are fine). Either build the workbook into the snapshot path, or
   document that the xlsx needs a `--briefing-pack` run.
-- **Eurostat coverage guard checks CN only** while the periodic ingest stores
-  CN+HK+MO — a missing HK/MO reporter-month wouldn't be flagged. Loop the gap
-  check over `{CN,HK,MO}`. (From the #43 review.)
+- **Eurostat coverage guard checks CN only — DONE 2026-06-22.** The periodic
+  completeness guard now checks the full CN+HK+MO envelope the ingest stores via
+  `db.eurostat_coverage_gaps_multi` (a missing HK/MO reporter-month was
+  previously invisible). Gaps are partner-tagged: CN = near-certainly missing
+  data; HK/MO = advisory (thin flows, can be a genuine no-trade month). (From
+  the #43 review.)
 - **No UNIQUE constraint on `eurostat_raw_rows`** — the additive guard is the sole
   dedup defence and isn't concurrency-safe (check + insert in separate
   transactions). A partial unique index on the natural key would let the insert
@@ -341,11 +344,16 @@ design the alert granularity when the vector is picked.
 
 ### Smaller follow-ons surfaced by the arc
 
-- **Group display names.** Front-page sentences read awkwardly for
-  groups whose names mention China ("EU-27 imports of Critical
-  minerals (export-controlled by China) from China"). Fix: a
-  journalist-editable display-name column on `hs_groups`, consumed by
-  the sentence renderer only. ~1 hour.
+- **Group display names — infra shipped (#53); no live target, parked against
+  the Q2 chemicals expansion.** The `hs_groups.display_name` column + resolver
+  exist (EV batteries → "Lithium-ion accumulators"). The original driver —
+  names that mention China reading awkwardly in front-page sentences ("EU-27
+  imports of Critical minerals (export-controlled by China) from China") — has
+  **no current group to fix**: no live `hs_groups.name` mentions China (that
+  example is an aspirational `labels.py` member, not a real group). It folds
+  into the **Q2 chemicals expansion**, which would actually create such a group
+  — at which point setting its `display_name` is a one-line add where the group
+  is defined, not a standalone task.
 - **Repo restructure for public readability.** ~21 root-level modules
   → a `meridian/` package with a root `scrape.py` shim preserving the
   Routine's pre-approved commands. Proposal + compatibility notes in
