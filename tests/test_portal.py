@@ -528,6 +528,36 @@ def test_glossary_renders_in_both_surfaces():
     assert "## Glossary" in md and "**CIF / FOB**" in md
 
 
+def test_glossary_web_hides_docx_bundle_terms():
+    """The portal Glossary is parsed from the shared docs/glossary.md, which
+    also serves the docx bundle. Terms marked `<!--web-hide-->` (the bundle's
+    Tier 1/2/3, 02_Findings.md, provenance files, etc.) must NOT reach the web
+    surface — a web reader can't open those artifacts — while web-relevant
+    terms stay and no surviving body references a bundle filename."""
+    import report_builder as rb
+    groups = rb._parse_glossary_md(rb._GLOSSARY_PATH.read_text(encoding="utf-8"))
+    terms = {t["term"] for g in groups for t in g["terms"]}
+    for hidden in ("Brief / findings document", "Tier 1 / 2 / 3", "Front page",
+                   "Lead scaffold", "Provenance file", "Groups glossary"):
+        assert hidden not in terms, f"web glossary leaks docx-bundle term: {hidden}"
+    assert {"CIF / FOB", "Mirror trade / mirror gap",
+            "Finding ID / trace token"} <= terms          # web-relevant terms survive
+    for g in groups:
+        for t in g["terms"]:
+            assert "web-hide" not in t["body"]             # marker never leaks into copy
+            for fname in ("02_Findings.md", "03_Leads.md", "04_Data.xlsx",
+                          "05_Groups.md", ".docx"):
+                assert fname not in t["body"], f"{t['term']} still cites {fname}"
+
+    # The marker is purely a parser directive — verify it drops only the marked
+    # term and nothing around it.
+    parsed = rb._parse_glossary_md(
+        "## Cat\n### Shown\nbody A\n### Hidden <!--web-hide-->\nbody B\n"
+        "### Also shown\nbody C\n"
+    )
+    assert {t["term"] for t in parsed[0]["terms"]} == {"Shown", "Also shown"}
+
+
 def test_tables_tab_inline_and_download_only():
     r = _sample_report()
     h = render_html(r)
