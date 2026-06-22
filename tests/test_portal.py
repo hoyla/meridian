@@ -420,6 +420,25 @@ def test_new_findings_breakdown_lives_in_sources_not_what_changed():
     assert "**New this cycle**" in md and "44 new — year-on-year change" in md
 
 
+def test_masthead_carries_badge_period_and_first_sentence_tooltip():
+    """Period + source badge live in the masthead (no separate subbar); the
+    badge's tooltip is the note's first sentence and the boilerplate second
+    sentence is dropped."""
+    import dataclasses
+    r = _sample_report()
+    r = dataclasses.replace(r, headline=dataclasses.replace(
+        r.headline,
+        note="Triggered by new Eurostat data. Boilerplate second sentence here."))
+    h = render_html(r)
+    assert '<div class="subbar">' not in h and "note-line" not in h
+    mast = h[h.index('class="masthead"'):h.index("</header>")]
+    assert "Data to April 2026" in mast
+    assert 'class="tag" title="Triggered by new Eurostat data."' in mast
+    assert ">eurostat<" in mast
+    # the dropped second sentence appears nowhere
+    assert "Boilerplate second sentence" not in h
+
+
 def test_what_changed_demotes_to_one_liner_on_quiet_cycle():
     """No material change (no new findings, no significant shifts) → What changed
     renders as a slim one-liner: no H2 section, no sub-nav entry, so it doesn't

@@ -1220,13 +1220,14 @@ _CSS = """
 *{box-sizing:border-box}
 body{margin:0;background:var(--surface-alt);color:var(--ink);font:16px/1.4 var(--font-sans)}
 .wrap{max-width:860px;margin:0 auto;background:var(--surface)}
-.masthead{background:var(--masthead);color:#fff;padding:18px 28px 16px}
+.masthead{background:var(--masthead);color:#fff;padding:18px 28px 16px;display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
 .mast{font-family:var(--font-headline);font-weight:700;font-size:34px;line-height:1.05;letter-spacing:-.4px}
 .sub{font-family:var(--font-headline);font-weight:400;font-size:19px;color:#cdddf6;margin-top:2px}
-.subbar{padding:10px 28px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;flex-wrap:wrap;gap:8px}
-.subbar .meta{font-size:13px;color:var(--muted)}
-.tag{background:var(--masthead);color:#fff;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:2px 10px;border-radius:62.5rem}
-.note-line{flex-basis:100%;font-size:13px;color:var(--muted);font-style:italic}
+.mast-meta{display:flex;flex-direction:column;align-items:flex-end;gap:6px;text-align:right;padding-top:5px}
+.mast-period{font-size:12.5px;color:#cdddf6}
+/* source badge sits on the dark masthead: a white pill, blue text; carries the
+   'triggered by' note as its tooltip. */
+.tag{background:#fff;color:var(--masthead);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:2px 10px;border-radius:62.5rem;cursor:help}
 section{padding:18px 28px}
 .kpis{display:flex;flex-wrap:wrap;gap:16px;border-bottom:1px solid var(--line)}
 .kpi{flex:1 1 230px;background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--news);padding:14px 16px}
@@ -1411,7 +1412,7 @@ table.dtable td{padding:6px 10px;border-bottom:1px solid var(--line);color:var(-
 table.dtable tbody tr:hover{background:var(--surface-alt)}
 .data-more{margin-top:18px}
 footer{padding:18px 28px 28px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);line-height:1.6}
-@media(max-width:560px){.mast{font-size:27px}.sub{font-size:16px}section{padding:14px 18px}.masthead{padding:16px 18px}.subbar{padding:10px 18px}.tabs{padding:0 10px}.tab{padding:10px 11px;font-size:14px}.subnav{padding:8px 18px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}}
+@media(max-width:560px){.mast{font-size:27px}.sub{font-size:16px}section{padding:14px 18px}.masthead{padding:16px 18px}.tabs{padding:0 10px}.tab{padding:10px 11px;font-size:14px}.subnav{padding:8px 18px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}}
 """
 
 
@@ -1583,6 +1584,12 @@ def render_html(report: Report) -> str:
     period = m.data_period
     period_str = period.strftime("%B %Y") if hasattr(period, "strftime") else str(period)
     note = report.headline.note if report.headline else ""
+    # The note's first sentence ("Triggered by new Eurostat data.") becomes the
+    # source badge's tooltip; the rest was boilerplate and is dropped.
+    tip = note.split(". ", 1)[0].strip() if note else ""
+    if tip and not tip.endswith("."):
+        tip += "."
+    tip_attr = f' title="{html.escape(tip)}"' if tip else ""
 
     data_sec = next((s for s in report.sections if s.kind == "data"), None)
     ref_sec = next((s for s in report.sections if s.kind == "reference"), None)
@@ -1698,14 +1705,15 @@ def render_html(report: Report) -> str:
         'family=Source+Serif+4:wght@600;700&display=swap">',
         f"<style>{_CSS}</style></head><body><div class=wrap>",
         '<header class="masthead" id="top">',
+        '<div class="mast-brand">',
         '<div class="mast">Meridian</div>',
         '<div class="sub">China–Europe trade</div>',
-        "</header>",
-        '<div class="subbar">',
-        f'<span class="meta">Data to {html.escape(period_str)}</span>'
-        f'<span class="tag">{html.escape(m.variant)}</span>',
-        f'<div class="note-line">{html.escape(note)}</div>',
         "</div>",
+        '<div class="mast-meta">',
+        f'<span class="tag"{tip_attr}>{html.escape(m.variant)}</span>',
+        f'<span class="mast-period">Data to {html.escape(period_str)}</span>',
+        "</div>",
+        "</header>",
         nav,
         panels,
         footer,
