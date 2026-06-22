@@ -265,7 +265,8 @@ def test_structural_section_is_attributed_in_both_renderers():
     r = _sample_report()
     md = render_markdown(r)
     html = render_html(r)
-    assert "Source: eurostat" in md
+    assert "Source: Eurostat" in md           # display name, not the raw code
+    assert "as of Apr 2026" in md              # data month, not a raw ISO day
     assert "live aggregate, no per-code finding" in md
     assert "Unclassified (no SITC division)" in md   # partition remainder
     assert 'class="source"' in html

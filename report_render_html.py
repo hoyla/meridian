@@ -27,7 +27,7 @@ from __future__ import annotations
 import html
 import re
 
-from briefing_pack._helpers import _fmt_eur
+from briefing_pack._helpers import _fmt_eur, _fmt_month, _source_label
 from report_model import Headline, Indicator, Report, WhatChanged
 from classifications import division_title  # static SITC title lookup
 
@@ -402,11 +402,19 @@ def _indicator_card(ind: Indicator) -> str:
     if ind.delta:
         col = _DOWN if ind.delta.get("direction") in ("wider", "down") else _UP
         delta = f'<div class="delta" style="color:{col}">{html.escape(ind.delta["formatted"])}</div>'
-    cite = ""
+    # Provenance line: finding token · source · month. The source names the
+    # origin (Eurostat / HMRC / GACC) so single-source figures are legible on
+    # the card; the as-of is the data month, not a raw ISO day (which misreads
+    # as the 1st — Lisa, 2026-06-22).
+    parts = []
     if ind.provenance.finding_ids:
-        cite = f'<span class="token">finding/{ind.provenance.finding_ids[0]}</span>'
-    asof = f" · as of {ind.provenance.as_of}" if ind.provenance.as_of else ""
-    prov = f'<div class="kpi-prov">{cite}{html.escape(asof)}</div>'
+        parts.append(f'<span class="token">finding/{ind.provenance.finding_ids[0]}</span>')
+    src = _source_label(ind.provenance.source)
+    if src:
+        parts.append(html.escape(src))
+    if ind.provenance.as_of:
+        parts.append(f"as of {html.escape(_fmt_month(ind.provenance.as_of))}")
+    prov = f'<div class="kpi-prov">{" · ".join(parts)}</div>'
 
     if ind.chart == "donut":
         share = ind.value if 0 <= ind.value <= 1 else 0.0
@@ -1064,9 +1072,9 @@ def _structural_section_html(section) -> str:
     if p and (p.source or p.as_of):
         bits = []
         if p.source:
-            bits.append(f"Source: {html.escape(p.source)}")
+            bits.append(f"Source: {html.escape(_source_label(p.source))}")
         if p.as_of:
-            bits.append(f"as of {html.escape(str(p.as_of))}")
+            bits.append(f"as of {html.escape(_fmt_month(p.as_of))}")
         tot = (section.metrics or {}).get("total_eur")
         if tot:
             bits.append(f"total {html.escape(_fmt_eur(tot))}")

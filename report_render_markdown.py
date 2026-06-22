@@ -11,7 +11,7 @@ this file only formats.
 
 from __future__ import annotations
 
-from briefing_pack._helpers import _fmt_eur
+from briefing_pack._helpers import _fmt_eur, _fmt_month, _source_label
 from report_model import Headline, Indicator, Report, WhatChanged
 
 _COMPANIONS = (
@@ -236,9 +236,9 @@ def _prov_note(sec) -> str | None:
         return None
     bits = []
     if p.source:
-        bits.append(f"Source: {p.source}")
+        bits.append(f"Source: {_source_label(p.source)}")
     if p.as_of:
-        bits.append(f"as of {p.as_of}")
+        bits.append(f"as of {_fmt_month(p.as_of)}")
     tot = (sec.metrics or {}).get("total_eur")
     if tot:
         bits.append(f"total {_fmt_eur(tot)}")
