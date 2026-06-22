@@ -371,6 +371,32 @@ def _more_about(section) -> str:
     )
 
 
+_ABOUT_SITE = (
+    "**Meridian** surfaces findings from China–Europe trade data, drawn from "
+    "three official sources: **GACC** (China's customs administration), "
+    "**Eurostat** (EU-27) and **HMRC** (UK). Each release is triggered when our "
+    "scraper finds fresh data from one of these — the source and the month it "
+    "covers are shown by the badge, top right.\n\n"
+    "The analysis covers a configurable set of **Harmonised System (HS)** "
+    "product categories, not all traded goods. The list is editorially "
+    "maintained and can be widened — tell the team if there's a category worth "
+    "adding.\n\n"
+    "Every figure drills back to its source release via its `finding/N` token. "
+    "The **Sources & coverage** and **Methodology** tabs carry the full "
+    "provenance, definitions and caveats."
+)
+
+
+def _about_site_html() -> str:
+    """A collapsed 'About this site' box for the whole briefing — same disclosure
+    pattern as the per-section 'More about this section', but page-level."""
+    return (
+        '<details class="more about-site"><summary>About this site</summary>'
+        f'<div class="more-body">{_md_blocks_to_html(_ABOUT_SITE)}</div>'
+        "</details>"
+    )
+
+
 def _indicator_card(ind: Indicator) -> str:
     delta = ""
     if ind.delta:
@@ -1630,6 +1656,8 @@ def render_html(report: Report) -> str:
         brief.append('<section class="kpis">'
                      + "".join(_indicator_card(i) for i in report.key_indicators)
                      + "</section>")
+    # Page-level "About this site" box, just above the Standout-moves lead.
+    brief.append("<section>" + _about_site_html() + "</section>")
     if report.headline:
         brief.append("<section>" + _headline(report.headline) + "</section>")
         for slot in report.headline.llm_slots:

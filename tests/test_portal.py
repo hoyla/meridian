@@ -440,6 +440,17 @@ def test_masthead_carries_badge_period_and_first_sentence_tooltip():
     assert "Boilerplate second sentence" not in h
 
 
+def test_about_this_site_box_sits_above_standout_moves():
+    """A page-level 'About this site' disclosure renders in the Briefing, between
+    the KPI band and the Standout-moves lead."""
+    h = render_html(_sample_report())
+    assert "About this site</summary>" in h and "about-site" in h
+    assert "Harmonised System (HS)" in h          # the HS-scope copy
+    i_kpi, i_about = h.find('class="kpis"'), h.find("about-site")
+    i_moves = h.find('class="lead"')              # the headline lead H2
+    assert i_kpi < i_about < i_moves
+
+
 def test_source_received_date_falls_back_gracefully():
     """The badge tooltip omits the received-date (rather than erroring) when the
     sources section or its fetch date is missing."""
