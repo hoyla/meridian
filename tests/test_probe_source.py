@@ -165,7 +165,10 @@ def test_eurostat_noop_logs_no_change_not_error(clean_db, test_db_url, monkeypat
     assert "already ingested" in (row["notes"] or "")
 
 
-def test_gacc_logs_no_change_with_null_expectation(clean_db, test_db_url, monkeypatch):
+def test_gacc_empty_db_logs_null_expectation(clean_db, test_db_url, monkeypatch):
+    # No prior gacc releases → no anchor for a candidate period. The index walk
+    # still runs (it needs no anchor), but there is nothing to classify, so the
+    # expectation stays NULL.
     monkeypatch.setattr(scrape, "run_scrape", lambda *a, **k: None)  # no new releases
     scrape.probe_source("gacc", today=date(2026, 6, 2))
 
@@ -173,6 +176,34 @@ def test_gacc_logs_no_change_with_null_expectation(clean_db, test_db_url, monkey
     assert row["result"] == "no_change"
     assert row["expectation"] is None
     assert row["candidate_period"] is None
+
+
+def test_gacc_missing_past_due_logs_overdue(clean_db, test_db_url, monkeypatch):
+    # Latest preliminary release is Apr 2026, so the candidate is May 2026,
+    # scheduled ~8 Jun. By 22 Jun the walk still brings nothing back → the May
+    # release has slipped past its due-by cutoff and must read overdue (the
+    # alert that --source-status surfaces on its OVERDUE line).
+    _seed_release(test_db_url, "gacc", date(2026, 4, 1))
+    monkeypatch.setattr(scrape, "run_scrape", lambda *a, **k: None)  # no new releases
+    scrape.probe_source("gacc", today=date(2026, 6, 22))
+
+    row = _last_row(test_db_url, "gacc")
+    assert row["result"] == "no_change"
+    assert row["expectation"] == "overdue"
+    assert row["candidate_period"] == date(2026, 5, 1)
+
+
+def test_gacc_before_due_date_logs_none_expected(clean_db, test_db_url, monkeypatch):
+    # Latest is Apr 2026 → candidate May 2026 (scheduled ~8 Jun). On 2 Jun the
+    # release isn't due yet, so a quiet walk is normal → none_expected.
+    _seed_release(test_db_url, "gacc", date(2026, 4, 1))
+    monkeypatch.setattr(scrape, "run_scrape", lambda *a, **k: None)
+    scrape.probe_source("gacc", today=date(2026, 6, 2))
+
+    row = _last_row(test_db_url, "gacc")
+    assert row["result"] == "no_change"
+    assert row["expectation"] == "none_expected"
+    assert row["candidate_period"] == date(2026, 5, 1)
 
 
 def test_no_prior_releases_logs_no_change(clean_db, test_db_url, monkeypatch):

@@ -30,10 +30,35 @@ def test_formula_fallback_for_uncalendared_period():
     assert rc.expected_publish_date("eurostat", date(2026, 11, 1)) == date(2027, 1, 15)
 
 
-def test_gacc_has_no_calendar():
-    assert rc.has_calendar("gacc") is False
-    assert rc.expected_publish_date("gacc", date(2026, 4, 1)) is None
-    assert rc.classify_expectation("gacc", date(2026, 4, 1), date(2026, 6, 2)) is None
+def test_gacc_has_a_formula_only_calendar():
+    # GACC joined the expectation axis 2026-06-22. No official forward calendar
+    # exists, so it's formula-only (empty `exact`): scheduled = the 8th of the
+    # following month, matching the observed cadence (Apr 2026 → 8 May, Dec
+    # 2025 → 8 Jan).
+    assert rc.has_calendar("gacc") is True
+    assert rc.expected_publish_date("gacc", date(2026, 4, 1)) == date(2026, 5, 8)
+    assert rc.expected_publish_date("gacc", date(2025, 12, 1)) == date(2026, 1, 8)
+
+
+@pytest.mark.parametrize("today,want", [
+    (date(2026, 6, 7), rc.NONE_EXPECTED),   # before the 8 Jun scheduled date
+    (date(2026, 6, 8), rc.DUE),             # on the scheduled date
+    (date(2026, 6, 12), rc.DUE),            # last day of the due-by window (~12th)
+    (date(2026, 6, 13), rc.OVERDUE),        # past the cutoff → overdue
+])
+def test_gacc_grace_boundaries(today, want):
+    # May 2026 ref → scheduled 8 Jun (close 31 May + 8d), 4-day grace → 12 Jun.
+    assert rc.classify_expectation("gacc", date(2026, 5, 1), today) == want
+
+
+def test_gacc_holiday_slip_reads_overdue_while_late():
+    # Aug 2025 ref published 17 Sep (a China-holiday slip) vs the normal ~8 Sep.
+    # The cutoff (close 31 Aug + 8 + 4 grace = 12 Sep) is deliberately tight
+    # enough that the genuinely-late release reads `overdue` for the days it is
+    # actually late — the signal --source-status should surface.
+    assert rc.classify_expectation("gacc", date(2025, 8, 1), date(2025, 9, 12)) == rc.DUE
+    assert rc.classify_expectation("gacc", date(2025, 8, 1), date(2025, 9, 13)) == rc.OVERDUE
+    assert rc.classify_expectation("gacc", date(2025, 8, 1), date(2025, 9, 17)) == rc.OVERDUE
 
 
 @pytest.mark.parametrize("today,want", [

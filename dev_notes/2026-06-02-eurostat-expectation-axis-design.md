@@ -224,3 +224,48 @@ built going forward (or read from the calendar).
 - `--source-status` shows the new axis and flags overdue independently.
 - Existing tests: `tests/test_routine_log.py` covers the enum — update for the
   new column.
+
+---
+
+## Addendum 2026-06-22 — GACC joins the expectation axis
+
+The "GACC: unchanged" scope note above is **superseded**. GACC was left off the
+expectation axis at design time because it's an index walk with no
+candidate-period concept, but that left a real gap: a *slipped* GACC release
+never surfaced on the `--source-status` OVERDUE line (its `expectation` cell
+stayed blank), so the one source most prone to schedule slips — China's customs
+release shifts around the national-holiday calendar — was the only one with no
+overdue alarm.
+
+**What changed.** GACC now carries the same expectation axis as Eurostat/HMRC:
+
+- **Candidate period** = `next_period(MAX(releases.period) for source='gacc')`,
+  i.e. the next reference month after the latest preliminary release in the DB.
+  All GACC `SEED_INDEXES` are `preliminary`, so `MAX(period)` is unambiguously
+  that release's month. Mirrors the Eurostat/HMRC anchor, so it's self-clearing:
+  when the slipped release finally lands, `MAX(period)` advances, the candidate
+  moves on, and the expectation resets to `none_expected` on the next run.
+- **Calendar** (`release_calendar._GACC`) is **formula-only** — `exact={}`.
+  China Customs publishes no forward release calendar, so unlike Eurostat's
+  purple PDF / HMRC's uktradeinfo page there are no authoritative dates to
+  hand-enter. The preliminary country/region release lands the 8th–10th of the
+  following month (May 2026 → 10 Jun; Apr → 8 May; Mar → 8 Apr; Dec 2025 →
+  8 Jan), so `lag_days=8` (scheduled = `period_close + 8` = the 8th) and
+  `grace_days=4` (due-by cutoff ≈ the 12th). The cutoff absorbs the normal
+  8th–10th wobble but is deliberately tight enough that a genuine holiday slip
+  (Aug 2025 ref → 17 Sep; Jul → 12 Aug) reads `overdue` for the days it is
+  actually late — which is exactly the signal worth a human glance.
+- **Probe** (`scrape.probe_source` gacc branch): the index walk still always
+  runs (it needs no anchor and is idempotent/cached); the candidate/expectation
+  are computed *before* the walk — as on the Eurostat/HMRC branch — and written
+  to `routine_check_log`. A release that finally lands after slipping therefore
+  logs `new_data × overdue` ("arrived, but late") for that one run, then clears.
+  Empty DB → no anchor → `expectation` stays NULL (the walk still runs).
+- **Surfacing**: no change to `routine_log.render_status_table` — the OVERDUE
+  line already keys on `expectation == "overdue"` for any source, so GACC drops
+  in for free.
+
+**Tests**: `tests/test_release_calendar.py` (GACC grace boundaries + the Aug
+2025 holiday-slip case) and `tests/test_probe_source.py` (overdue / none_expected
+/ empty-DB-NULL paths). DB-backed ones skip unless `GACC_TEST_DATABASE_URL` is
+set.
