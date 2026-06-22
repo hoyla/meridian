@@ -490,12 +490,34 @@ def test_jump_targets_clear_sticky_bar_and_get_highlight():
     scroll-margin, not scoped to :target, since the JS preventDefaults) and the
     landed-on block must get the highlight via a JS-applied .jumped class."""
     h = render_html(_sample_report())
-    # offset applies to the elements themselves, not only :target
-    assert "scroll-margin-top:72px" in h
+    # offset applies to the elements themselves, not only :target (clears the
+    # sticky sub-nav now that the main tabs are no longer sticky)
+    assert "scroll-margin-top:52px" in h
     assert ".sector.jumped" in h and "background:#dcebfa" in h
     # the JS stand-in for native :target is wired into both jump paths
     assert "function mark(" in h
     assert "mark(el)" in h
+
+
+def test_briefing_subnav_is_the_sticky_element_not_the_tabs():
+    """The Briefing gets a sticky in-page sub-nav (Top + its sections); the main
+    tabs are NOT sticky, so only one bar occupies the top at a time."""
+    h = render_html(_sample_report())
+    assert '<nav class="subnav"' in h
+    assert 'class="subnav-top" href="#top"' in h          # Top → masthead
+    assert 'id="top"' in h                                  # the masthead anchor
+    # the section anchors + their sub-nav links
+    for anchor, label in (("brief-state_of_play", "State of play"),
+                          ("brief-mirror_gap", "Mirror gaps"),
+                          ("brief-sector_detail", "Sector detail")):
+        assert f'id="{anchor}"' in h
+        assert f'data-spy="{anchor}"' in h
+    # the sub-nav is the sticky one; the tab bar is not
+    assert ".subnav{position:sticky;top:0" in h
+    assert "position:sticky;top:0;z-index:5" not in h      # old sticky .tabs gone
+    # immediate active-on-click + scroll-spy wiring
+    assert "new IntersectionObserver" in h
+    assert "a.classList.add('active')" in h
 
 
 def test_methodology_tab_shows_about_and_guides():

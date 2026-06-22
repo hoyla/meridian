@@ -1247,7 +1247,7 @@ a:hover{border-bottom-color:var(--link)}
 .sector{padding:12px 0;border-bottom:1px solid var(--line)}
 /* Jump targets clear the sticky tab bar; offset is unconditional so it applies
    to JS scrollIntoView too (not only native :target jumps). */
-.sector,.partner,.tmrow,.filter,.sec-head{scroll-margin-top:72px}
+.brief-sec,.sector,.partner,.tmrow,.filter,.sec-head{scroll-margin-top:52px}
 /* Drilled-to highlight: .jumped is set by JS (the click handler preventDefaults,
    so the native :target never fires); :target is the no-JS fallback. */
 .sector.jumped,.partner.jumped,.tmrow.jumped,
@@ -1314,7 +1314,14 @@ ul.ref li{font-size:13.5px;line-height:1.5;margin:0 0 7px;color:var(--ink)}
 .take-prose{font-family:var(--font-sans);font-size:14.5px;line-height:1.5;color:#7a5c00;margin:6px 0 0}
 .take-cite{font-size:12px;color:#7a5c00;margin:7px 0 0;opacity:.85}
 /* tabs (Guardian Source — thick brand-blue underline over the hairline) */
-.tabs{display:flex;gap:4px;background:var(--surface);padding:0 28px;border-bottom:1px solid var(--line);flex-wrap:wrap;position:sticky;top:0;z-index:5}
+/* Main tabs are NOT sticky — the Briefing's in-page sub-nav is the sticky
+   element instead, so only one bar ever occupies the top (see .subnav). */
+.tabs{display:flex;gap:4px;background:var(--surface);padding:0 28px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.subnav{position:sticky;top:0;z-index:6;display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;background:var(--surface);border-bottom:1px solid var(--line);padding:8px 28px;font-family:var(--font-sans);font-size:13.5px}
+.subnav a{color:var(--muted);text-decoration:none;font-weight:600;white-space:nowrap;padding:2px 0;border-bottom:2px solid transparent}
+.subnav a:hover{color:var(--ink)}
+.subnav a.active{color:var(--masthead);border-bottom-color:var(--masthead)}
+.subnav-top{color:var(--masthead) !important;margin-right:6px}
 .tab{padding:12px 16px;color:var(--muted);font-family:var(--font-sans);font-weight:600;font-size:15px;border-bottom:4px solid transparent;margin-bottom:-1px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
 .tab:hover{color:var(--ink);border-bottom-color:transparent}
 .tab.active{color:var(--masthead);border-bottom-color:var(--masthead)}
@@ -1395,7 +1402,7 @@ table.dtable td{padding:6px 10px;border-bottom:1px solid var(--line);color:var(-
 table.dtable tbody tr:hover{background:var(--surface-alt)}
 .data-more{margin-top:18px}
 footer{padding:18px 28px 28px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);line-height:1.6}
-@media(max-width:560px){.mast{font-size:27px}.sub{font-size:16px}section{padding:14px 18px}.masthead{padding:16px 18px}.subbar{padding:10px 18px}.tabs{padding:0 10px}.tab{padding:10px 11px;font-size:14px}}
+@media(max-width:560px){.mast{font-size:27px}.sub{font-size:16px}section{padding:14px 18px}.masthead{padding:16px 18px}.subbar{padding:10px 18px}.tabs{padding:0 10px}.tab{padding:10px 11px;font-size:14px}.subnav{padding:8px 18px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}}
 """
 
 
@@ -1408,7 +1415,7 @@ _PORTAL_JS = """<script>
   var panels=[].slice.call(document.querySelectorAll('.tabpanel'));
   function panelOf(el){while(el&&el.classList&&!el.classList.contains('tabpanel'))el=el.parentElement;return el;}
   function expandDetail(el){ // open a drilled-to sector's collapsed charts/detail
-    if(!el)return;
+    if(!el||(el.classList&&el.classList.contains('brief-sec')))return; // not whole-section jumps
     if(el.tagName==='DETAILS')el.open=true;
     var d=el.querySelector&&el.querySelector('details.gdetail');
     if(d)d.open=true;
@@ -1443,6 +1450,24 @@ _PORTAL_JS = """<script>
   });
   window.addEventListener('hashchange',function(){go(location.hash);});
   if(tabs.length)go(location.hash);
+
+  // ---- briefing sub-nav: immediate active-state on click (works everywhere),
+  // plus scroll-spy that highlights the link for the section in view (picks the
+  // topmost intersecting section). The IO half no-ops where unsupported; links
+  // still jump and the clicked one still highlights.
+  var spy=[].slice.call(document.querySelectorAll('.subnav a[data-spy]'));
+  spy.forEach(function(a){a.addEventListener('click',function(){
+    spy.forEach(function(x){x.classList.remove('active');});a.classList.add('active');});});
+  if(spy.length&&'IntersectionObserver' in window){
+    var vis={};
+    var io=new IntersectionObserver(function(entries){
+      entries.forEach(function(en){vis[en.target.id]=en.isIntersecting;});
+      var pick=null;
+      spy.forEach(function(a){var id=a.getAttribute('data-spy');if(!pick&&vis[id])pick=id;});
+      spy.forEach(function(a){a.classList.toggle('active',a.getAttribute('data-spy')===pick);});
+    },{rootMargin:'-52px 0px -55% 0px',threshold:0});
+    spy.forEach(function(a){var el=document.getElementById(a.getAttribute('data-spy'));if(el)io.observe(el);});
+  }
 
   // ---- sector filter (name / SITC / theme / end-use) + theme chips
   var f=document.getElementById('sector-filter');
@@ -1559,6 +1584,7 @@ def render_html(report: Report) -> str:
     # --- Briefing panel: indicators, headline, general take, what-changed, then
     # the main-page sections (everything that isn't a tab of its own).
     brief: list[str] = []
+    subnav: list[tuple[str, str]] = []   # (anchor id, short label) for the sub-nav
     if report.key_indicators:
         brief.append('<section class="kpis">'
                      + "".join(_indicator_card(i) for i in report.key_indicators)
@@ -1571,18 +1597,36 @@ def render_html(report: Report) -> str:
                 if block:
                     brief.append("<section>" + block + "</section>")
     if report.what_changed:
-        brief.append("<section>" + _what_changed(report.what_changed) + "</section>")
+        subnav.append(("brief-changed", "What's changed"))
+        brief.append('<section class="brief-sec" id="brief-changed">'
+                     + _what_changed(report.what_changed) + "</section>")
+    _BRIEF_NAV = {"state_of_play": "State of play", "mirror_gap": "Mirror gaps",
+                  "sector_detail": "Sector detail", "gacc_bilateral": "By partner"}
     for sec in report.sections:
+        inner = None
         if sec.kind == "state_of_play" and sec.sections:
-            brief.append("<section>" + _state_of_play_section(sec) + "</section>")
+            inner = _state_of_play_section(sec)
         elif sec.kind == "sector_detail" and sec.sections:
-            brief.append("<section>" + _sector_section(sec) + "</section>")
+            inner = _sector_section(sec)
         elif sec.kind == "mirror_gap" and sec.findings:
-            brief.append("<section>" + _mirror_gap_html(sec) + "</section>")
+            inner = _mirror_gap_html(sec)
         elif sec.kind == "gacc_bilateral" and sec.sections:
-            brief.append("<section>" + _gacc_bilateral_html(sec) + "</section>")
+            inner = _gacc_bilateral_html(sec)
         # 'structural' (the Trade Map) is NOT here — it moved to the Sources &
         # coverage tab below.
+        if inner is not None:
+            anchor = "brief-" + sec.kind
+            subnav.append((anchor, _BRIEF_NAV[sec.kind]))
+            brief.append(f'<section class="brief-sec" id="{anchor}">{inner}</section>')
+
+    # Sticky in-page nav for the Briefing (its only long, multi-section tab) —
+    # so a landing reader sees what's below and can jump. "Top" returns to the
+    # masthead + main tabs (which are not sticky, to keep one bar at a time).
+    if subnav:
+        links = '<a class="subnav-top" href="#top">↑&nbsp;Top</a>' + "".join(
+            f'<a href="#{a}" data-spy="{a}">{html.escape(lbl)}</a>'
+            for a, lbl in subnav)
+        brief.insert(0, f'<nav class="subnav" aria-label="On this page">{links}</nav>')
 
     # --- tabs: (key, label, panel-html). Only built when they have content, so a
     # GACC variant with no data tab simply shows fewer tabs.
@@ -1640,7 +1684,7 @@ def render_html(report: Report) -> str:
         'family=Noto+Serif:wght@400;700&family=Source+Sans+3:wght@400;600;700&'
         'family=Source+Serif+4:wght@600;700&display=swap">',
         f"<style>{_CSS}</style></head><body><div class=wrap>",
-        '<header class="masthead">',
+        '<header class="masthead" id="top">',
         '<div class="mast">Meridian</div>',
         '<div class="sub">China–Europe trade</div>',
         "</header>",
