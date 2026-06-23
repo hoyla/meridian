@@ -253,7 +253,23 @@ def extract_metadata(
 
     section_str = m.group("section")
     description = m.group("description").strip()
-    section = int(section_str) if section_str else _infer_section_from_description(description)
+    inferred_section = _infer_section_from_description(description)
+    if section_str is None:
+        section = inferred_section
+    else:
+        section = int(section_str)
+        # GACC occasionally mis-numbers the leading "(N)" prefix — the 2020
+        # combined Jan-Feb "by Country/Region" release was tagged (3), not (4).
+        # When the description unambiguously identifies a section (anything but
+        # the section-1 catch-all), trust it over the glitchy prefix; otherwise
+        # the by-country data is dropped (section 4 is the only one we ingest).
+        if inferred_section != 1 and inferred_section != section:
+            log.warning(
+                "GACC title section prefix (%d) disagrees with description "
+                "%r; trusting the description -> section %d",
+                section, description, inferred_section,
+            )
+            section = inferred_section
     # GACC uses RMB and CNY interchangeably in titles (RMB appears in some 2018
     # releases). They're the same currency — normalise to CNY so the dimensional
     # key in releases matches across years. Early-2018 section-4 release pages
