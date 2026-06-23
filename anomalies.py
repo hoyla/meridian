@@ -1204,6 +1204,70 @@ def _hs_group_per_period_totals(
         ]
 
 
+def _source_published_periods(
+    flow: int, partners: tuple[str, ...] | list[str], source: str,
+) -> set[date]:
+    """Reference periods `source` has *any* matching rows for (flow + partners),
+    independent of HS group — the publication-coverage oracle for the combined
+    (eu_27_plus_uk) scope. Mirrors the per-source WHERE clauses of
+    `_hs_group_per_period_totals` minus the HS-pattern filter, so "did this
+    source publish month M" is judged exactly the way the per-group totals are
+    summed.
+
+    Deliberately group-independent: a narrow group with a legitimate zero in a
+    month the source DID publish must stay in the combined series (summed as
+    + 0), not be dropped as if the month were one-sided. That is why this can't
+    just intersect the per-group result periods (see `_coverage_aligned_periods`).
+    """
+    if source == "eurostat":
+        sql = """
+            SELECT DISTINCT period
+              FROM eurostat_raw_rows
+             WHERE flow = %s
+               AND partner = ANY(%s)
+               AND reporter <> ALL(%s)
+        """
+        params: tuple = (flow, list(partners), list(EU27_EXCLUDE_REPORTERS))
+    elif source == "hmrc":
+        sql = """
+            SELECT DISTINCT period
+              FROM hmrc_raw_rows
+             WHERE flow = %s
+               AND partner = ANY(%s)
+               AND suppression_index = 0
+        """
+        params = (flow, list(partners))
+    else:
+        raise ValueError(f"unknown source {source!r}; expected 'eurostat' or 'hmrc'")
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        return {row[0] for row in cur.fetchall()}
+
+
+def _coverage_aligned_periods(coverage: dict[str, set[date]]) -> set[date]:
+    """Periods present in EVERY source's publication coverage — the set the
+    combined (eu_27_plus_uk) scope may safely sum.
+
+    A combined total is only honest for a month both sources have published.
+    HMRC normally lands ~2 days before Eurostat, but it can slip — HMRC March
+    2026 was not ingested until 13 June, while the 19 May briefing already had
+    Eurostat March — and the unguarded sum then shipped a full Eurostat month
+    against a missing UK side, labelled "12mo to March". Intersecting coverage
+    drops that one-sided month (and any leading month only one source has
+    backfilled) instead. Empty `coverage` -> empty set; a single-source dict
+    returns that source's coverage unchanged, so single-scope callers are a
+    no-op.
+
+    Distinct from the trade-balance guard (`_reporter_allgoods_totals`), which
+    intersects all-goods totals directly: safe there because every published
+    month has an all-goods row, but false for a narrow HS group, so coverage is
+    judged group-independently here (see `_source_published_periods`).
+    """
+    if not coverage:
+        return set()
+    return set.intersection(*coverage.values())
+
+
 def _hs_group_top_cn8s(
     patterns: list[str], start: date, end: date, flow: int = 1, limit: int = 10,
     partners: tuple[str, ...] | list[str] = EUROSTAT_PARTNERS,
@@ -1407,6 +1471,17 @@ def detect_hs_group_yoy(
         )
     partners: tuple[str, ...] = EUROSTAT_PARTNERS
     sources = COMPARISON_SCOPE_SOURCES[comparison_scope]
+
+    # Combined-scope guard: only sum a period the combined (eu_27_plus_uk) scope
+    # if EVERY source has published it. Without this, a month one source lags on
+    # (HMRC trailing Eurostat — the 2026-03 case) is summed half-sourced and
+    # labelled complete. Coverage is group-independent, so this is computed once
+    # here rather than per group; single-source scopes skip it (no-op filter).
+    aligned_periods: set[date] | None = None
+    if len(sources) > 1:
+        coverage = {src: _source_published_periods(flow, partners, src) for src in sources}
+        aligned_periods = _coverage_aligned_periods(coverage)
+
     counts = {
         "emitted": 0,
         "inserted_new": 0, "confirmed_existing": 0, "superseded": 0,
@@ -1442,7 +1517,14 @@ def detect_hs_group_yoy(
                     per_period[p][1] += kg
                     per_period[p][2] += n
                     per_period[p][3] += ek
-            series = [(p, *per_period[p]) for p in sorted(per_period)]
+            # Drop any period not present in every source's coverage so the
+            # combined scope never ships a half-sourced month (see
+            # `_coverage_aligned_periods`). None => single-source scope, keep all.
+            series = [
+                (p, *per_period[p])
+                for p in sorted(per_period)
+                if aligned_periods is None or p in aligned_periods
+            ]
             eur_by_period: dict[date, float] = {p: e for p, e, _, _, _ in series}
             kg_by_period:  dict[date, float] = {p: k for p, _, k, _, _ in series}
             n_by_period:   dict[date, int]   = {p: n for p, _, _, n, _ in series}
