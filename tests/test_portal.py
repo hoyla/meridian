@@ -76,7 +76,7 @@ def _sample_report() -> rm.Report:
                      direction_flipped=False),
         ])
     state = rm.Section(
-        id="state-of-play", title="State of play", kind="state_of_play",
+        id="state-of-play", title="Europe's deficit with China", kind="state_of_play",
         sections=[rm.Section(
             id="the-deficit", title="The deficit", kind="state_of_play",
             findings=[rm.Finding(
@@ -193,7 +193,7 @@ def _sample_report() -> rm.Report:
              "headers": ["group"], "rows": [], "total_rows": 3509,
              "shown_rows": 0, "inline": False}]})
     gacc_bi = rm.Section(
-        id="gacc-bilateral", title="China’s trade by partner (GACC)",
+        id="gacc-bilateral", title="China’s trade by country (GACC)",
         kind="gacc_bilateral", intro="By partner.",
         sections=[rm.Section(
             id="gacc-united-states", title="United States", kind="gacc_bilateral",
@@ -236,7 +236,7 @@ def test_markdown_renders_all_sections():
     for marker in ("# Headlines", "## Key indicators", "## State of play",
                    "## Mirror-trade gaps", "## Sector detail", "## Trade map",
                    "## Methodology & caveats", "## Sources & coverage",
-                   "## China’s trade by partner (GACC)"):
+                   "## China’s trade by country (GACC)"):
         assert marker in md, marker
     assert "China only, excl. HK/Macao" in md  # cn-only deficit = Eurostat CN-only, NOT GACC
     assert "China reports" in md          # mirror-gap (GACC vs Eurostat) — the one place "China reports" is right
@@ -427,7 +427,7 @@ def test_new_findings_breakdown_lives_in_sources_not_what_changed():
     assert "New this cycle" in h and h.index("New this cycle") > si
     assert "year-on-year change for an HS group" in h and ">44</strong> new" in h
     # NOT in the What-changed block (which keeps only the digest)
-    wi = h.index("What changed since the last pack")
+    wi = h.index("What's changed since the last briefing")
     assert "New this cycle" not in h[wi:si]
     md = render_markdown(_sample_report())
     assert "**New this cycle**" in md and "44 new — year-on-year change" in md
@@ -486,12 +486,12 @@ def test_what_changed_demotes_to_one_liner_on_quiet_cycle():
         significant=[]))
     h = render_html(r)
     assert 'class="quiet-change"' in h and "nothing moved materially" in h
-    assert "What changed since the last pack" not in h     # no H2 section
+    assert "What's changed since the last briefing" not in h     # no H2 section
     assert 'data-spy="brief-changed"' not in h             # no sub-nav entry
     assert 'id="brief-changed"' not in h
     # the material case (sample carries significant shifts) gets the full section + nav
     full = render_html(_sample_report())
-    assert "What changed since the last pack" in full and 'data-spy="brief-changed"' in full
+    assert "What's changed since the last briefing" in full and 'data-spy="brief-changed"' in full
 
 
 def test_what_changed_renders_the_material_shifts():
@@ -582,7 +582,7 @@ def test_gacc_bilateral_per_partner_expanders():
     assert "United States" in h
     assert "China's exports" in h and "€460.00B" in h   # headline in the summary
     md = render_markdown(_sample_report())               # LLM surface keeps it flat
-    assert "## China’s trade by partner (GACC)" in md
+    assert "## China’s trade by country (GACC)" in md
 
 
 def test_gacc_bilateral_expanded_panel_restores_ytd_window_and_caveat_prose():
@@ -675,7 +675,7 @@ def test_briefing_subnav_is_the_sticky_element_not_the_tabs():
     assert 'class="subnav-top" href="#top"' in h          # Top → masthead
     assert 'id="top"' in h                                  # the masthead anchor
     # the section anchors + their sub-nav links
-    for anchor, label in (("brief-state_of_play", "State of play"),
+    for anchor, label in (("brief-state_of_play", "The deficit"),
                           ("brief-mirror_gap", "Mirror gaps"),
                           ("brief-sector_detail", "Sector detail")):
         assert f'id="{anchor}"' in h
@@ -1384,7 +1384,7 @@ def test_general_take_shortlist_excludes_headline_and_keeps_provenance():
 
 
 # --------------------------------------------------------------------------
-# Annual per-region trade charts (GACC "China's trade by partner" section)
+# Annual per-region trade charts (GACC "China's trade by country" section)
 # --------------------------------------------------------------------------
 
 def test_gacc_partner_annual_charts_aggregate_ytd_union_and_balance(

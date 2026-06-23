@@ -88,6 +88,36 @@ Surfaced while shipping the Eurostat data correction + portal-clarity batch
   paying for a `--portal-takes` regeneration each time — the cost-per-tweak pain
   during this batch is the case for it.
 
+## HMRC-triggered release — headline-only today; design parked (2026-06-23)
+
+An HMRC-triggered briefing currently renders **the standout-movers headline and
+nothing beneath it**: only the Eurostat branch in `report_builder`
+(`source_trigger == "eurostat"`) builds a section tree, and GACC builds its own;
+an HMRC trigger falls through with `sections = []`. Rarely hit in practice — HMRC
+only triggers when there is *no fresher Eurostat month* (`_VARIANTS["hmrc"]`) —
+and HMRC is **added value, not the tool's critical focus** (China↔Europe is). So
+acceptable as-is and **not scheduled**. Captured here so the gap isn't mistaken
+for an oversight.
+
+If we ever want a real HMRC release, the open question is what its body holds —
+the Eurostat sections don't all transfer:
+
+- **The standing deficit** (the State-of-play / "Europe's deficit" section) —
+  transfers directly: the UK-scoped standing deficit (HMRC) is already computed
+  and shown as one scope under the Eurostat variant; an HMRC release would just
+  foreground the UK line.
+- **Sector detail** — transfers: HMRC carries the same HS-group YoY breakdown
+  (the UK column already exists in the combined view).
+- **Mirror-trade gaps** — does **not** transfer as-is: the gap is specifically
+  China↔EU (GACC exports vs Eurostat imports). A UK analogue means China↔UK
+  (GACC vs HMRC) — a new analyser, not a reuse.
+- **China's trade by partner (GACC)** — transfers unchanged (source-independent
+  context).
+
+Smallest viable version: reuse the Eurostat section-builder with the UK scope
+foregrounded and the mirror-gap section dropped (or swapped for a China↔UK
+variant once that analyser exists).
+
 ## docx → Drive pipeline — legacy; teardown deferred (2026-06-22)
 
 **Decision (Luke, 2026-06-22).** The web portal is the live Lisa-facing
