@@ -143,6 +143,20 @@ Four operators the tool emits per hs_group_yoy finding:
 Soapbox / Lisa usually quote single-month or YTD; 12mo rolling
 is the "where does this trend stand" anchor.
 
+### SITC bucket
+The UN **Standard International Trade Classification** (Rev 4)
+— the authoritative product taxonomy this tool uses as a
+structural spine, separate from the journalist-curated **HS
+groups**. Two levels, both loosely called "buckets": a 1-digit
+**section** (10 coarse buckets — Machinery & transport,
+Chemicals, Food & live animals, … plus "Other / unclassified"
+for codes that map to none) and a 2-digit **division** (~60
+finer buckets). The **Sector detail** list groups the curated
+HS groups by their primary SITC section; the **Trade map**
+places every CN8 code by its SITC division. Derived from the
+UNSD HS→SITC correspondence tables (committed in-repo at
+`reference/un_classifications/`).
+
 ### Stat procedure (Eurostat)
 A reporter's tariff-regime breakdown per (period, partner, flow,
 product): preferential tariff, MFN, special-regime, inward

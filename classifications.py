@@ -11,9 +11,17 @@ derived lookup records exactly which UNSD source editions produced each
 mapping, and a sidecar PROVENANCE.md records the source files, vintages,
 and methodology.
 
-Source files live OUTSIDE the repo (cross-project reference, not duplicated
-per repo) at SOURCE_DIR. The small derived CSV is the only thing the repo
-carries.
+Two layers, two roles:
+  * The derived CSVs (`reference/cn8_sitc.csv`, `reference/cn8_bec.csv`) are
+    the PUBLICATION source of truth — `report_builder` reads only these, so a
+    briefing can always be built from a clean checkout. `assert_classifications_available()`
+    guards them at build time (a missing/empty lookup is a hard error, never a
+    silent collapse of every group into SITC section 9, "Other / unclassified").
+  * The raw UNSD workbooks (`reference/un_classifications/`) are BUILD-ONLY
+    inputs that regenerate those CSVs. They are committed for reproducible
+    rebuilds but are never touched on the publication path. (They previously
+    lived outside the repo at `~/Code/un-classifications/`; a folder move
+    silently emptied the classifications — hence the move in-repo.)
 
 Two correctness rules learned the hard way (2026-06-20):
 1. **Real codes only.** Eurostat Comext mixes aggregate pseudo-codes into
@@ -29,18 +37,22 @@ Two correctness rules learned the hard way (2026-06-20):
 from __future__ import annotations
 
 import csv
-import os
 from pathlib import Path
 
 import openpyxl
 
 import db
 
-SOURCE_DIR = Path(os.path.expanduser("~/Code/un-classifications"))
+# Derived lookups (the publication source of truth) and their raw inputs.
+OUT_DIR = Path(__file__).resolve().parent / "reference"
+# Raw UNSD workbooks — BUILD-ONLY inputs that regenerate the CSVs in OUT_DIR.
+# Committed in-repo so rebuilds are self-contained; NOT read on the publication
+# path. (Were kept outside the repo, which let a folder move silently empty the
+# classifications and bucket every group into "Other / unclassified".)
+SOURCE_DIR = OUT_DIR / "un_classifications"
 HS2022_SITC4 = SOURCE_DIR / "hs2022_sitc4.xlsx"
 HS2017_SITC4 = SOURCE_DIR / "hs2017_sitc4.xlsx"
 BEC_SOURCE = SOURCE_DIR / "HS-SITC-BEC_Correlations_2022.xlsx"  # has HS22→BEC4
-OUT_DIR = Path(__file__).resolve().parent / "reference"
 
 # BEC Rev 4 basic category → SNA broad end-use (the documented standard).
 # (Rev 4, not Rev 5: Rev 4 is purpose-built for the capital/intermediate/
@@ -115,42 +127,48 @@ def _real_cn8(code: str) -> bool:
     return code.isdigit() and len(code) == 8
 
 
-_CONVERSION: dict[str, str] | None = None
+_HS6_DIV: dict[str, str] | None = None
 
 
-def _conversion() -> dict[str, str]:
-    """HS6 -> SITC4, HS2022 over HS2017 (cached). Used to assign the SITC
-    `sector` facet to an editorial group from its HS patterns."""
-    global _CONVERSION
-    if _CONVERSION is None:
+def _hs6_division() -> dict[str, str]:
+    """HS6 -> SITC 2-digit division, from the committed derived lookup
+    (`reference/cn8_sitc.csv`). This is the PUBLICATION source for the SITC
+    `sector` facet — the raw UNSD workbooks are only needed to (re)build that
+    CSV. Cached. Empty dict if the CSV is absent; `assert_classifications_available`
+    turns that into a hard error at briefing-build time."""
+    global _HS6_DIV
+    if _HS6_DIV is None:
+        m: dict[str, str] = {}
         try:
-            m = _load_conversion(HS2017_SITC4)
-            m.update(_load_conversion(HS2022_SITC4))  # HS2022 wins
+            with open(OUT_DIR / "cn8_sitc.csv") as f:
+                for row in csv.DictReader(f):
+                    hs6, div = row.get("hs6"), row.get("sitc_division")
+                    if hs6 and div:
+                        m[hs6] = div
         except FileNotFoundError:
-            # Shared classification files absent (e.g. a clean checkout
-            # without ~/Code/un-classifications/). The SITC sector facet is
-            # optional enrichment — degrade to empty, never break a render.
-            m = {}
-        _CONVERSION = m
-    return _CONVERSION
+            pass
+        _HS6_DIV = m
+    return _HS6_DIV
 
 
 def sitc_divisions_for_patterns(patterns) -> list[str]:
     """The SITC division code(s) an editorial group spans, from its HS
     wildcard patterns (2/4/6/8-digit). A group may span several — it's a
-    label, not a partition (e.g. 'Electrical equipment, broad' → 10)."""
-    conv = _conversion()
+    label, not a partition (e.g. 'Electrical equipment, broad' → 10).
+    Resolved against the committed CN8→division lookup, i.e. the codes
+    actually present in the data."""
+    conv = _hs6_division()  # hs6 -> 2-digit SITC division
     divs: set[str] = set()
     for p in patterns or []:
         d = p.replace("%", "")
         if len(d) >= 6:
-            s = conv.get(d[:6])
-            if s:
-                divs.add(s[:2])
+            div = conv.get(d[:6])
+            if div:
+                divs.add(div)
         else:
-            for k, s in conv.items():
-                if k.startswith(d):
-                    divs.add(s[:2])
+            for hs6, div in conv.items():
+                if hs6.startswith(d):
+                    divs.add(div)
     return sorted(divs)
 
 
@@ -193,21 +211,45 @@ def bec4_enduse(bec4: str) -> str:
     return _BEC4_ENDUSE.get(str(bec4).strip(), "Other")
 
 
+_HS6_ENDUSE: dict[str, str] | None = None
+
+
+def _hs6_enduse() -> dict[str, str]:
+    """HS6 -> SNA end-use (Capital/Intermediate/Consumption/Fuel/Other), from
+    the committed derived lookup (`reference/cn8_bec.csv`). PUBLICATION source
+    for the end-use facet; the raw BEC workbook is build-only. Cached. Empty if
+    absent (see `assert_classifications_available`)."""
+    global _HS6_ENDUSE
+    if _HS6_ENDUSE is None:
+        m: dict[str, str] = {}
+        try:
+            with open(OUT_DIR / "cn8_bec.csv") as f:
+                for row in csv.DictReader(f):
+                    hs6, eu = row.get("hs6"), row.get("end_use")
+                    if hs6 and eu:
+                        m[hs6] = eu
+        except FileNotFoundError:
+            pass
+        _HS6_ENDUSE = m
+    return _HS6_ENDUSE
+
+
 def enduse_for_patterns(patterns) -> list[str]:
     """The SNA end-use category/categories an editorial group spans
-    (Capital / Intermediate / Consumption / Fuel), from its HS patterns."""
-    hsbec = _hs6_bec4()
+    (Capital / Intermediate / Consumption / Fuel), from its HS patterns.
+    Resolved against the committed CN8→end-use lookup."""
+    hse = _hs6_enduse()  # hs6 -> end-use (already resolved)
     cats: set[str] = set()
     for p in patterns or []:
         d = p.replace("%", "")
         if len(d) >= 6:
-            b = hsbec.get(d[:6])
-            if b:
-                cats.add(bec4_enduse(b))
+            eu = hse.get(d[:6])
+            if eu:
+                cats.add(eu)
         else:
-            for k, b in hsbec.items():
-                if k.startswith(d):
-                    cats.add(bec4_enduse(b))
+            for hs6, eu in hse.items():
+                if hs6.startswith(d):
+                    cats.add(eu)
     return sorted(cats, key=lambda c: _ENDUSE_ORDER.get(c, 9))
 
 
@@ -229,6 +271,31 @@ def cn8_division_map() -> dict[str, str]:
             pass
         _CN8_DIV = m
     return _CN8_DIV
+
+
+def assert_classifications_available() -> None:
+    """Fail loud if the publication-critical classification lookups are missing
+    or empty. Called at briefing-build time so a moved, renamed or empty
+    reference file surfaces as a hard error — never the silent collapse of
+    every group into SITC section 9 ("Other / unclassified") that a missing
+    lookup otherwise produces.
+
+    Publication reads only the committed derived CSVs, so this checks those
+    (not the raw UNSD workbooks, which are build-only)."""
+    problems: list[str] = []
+    if not _hs6_division():
+        problems.append(f"SITC division lookup empty or missing: {OUT_DIR / 'cn8_sitc.csv'}")
+    if not _hs6_enduse():
+        problems.append(f"BEC end-use lookup empty or missing: {OUT_DIR / 'cn8_bec.csv'}")
+    if problems:
+        raise RuntimeError(
+            "Classification lookups unavailable — the briefing would bucket "
+            "every group into 'Other / unclassified'. Refusing to build:\n  - "
+            + "\n  - ".join(problems)
+            + "\nThese committed CSVs are the publication source of truth. "
+            f"Regenerate with `python classifications.py` (reads the UNSD "
+            f"workbooks in {SOURCE_DIR})."
+        )
 
 
 def build(write: bool = True) -> dict:
@@ -293,7 +360,7 @@ navigation spine for the portal (see the taxonomy design note).
 - HS 2022 → SITC Rev 4: `hs2022_sitc4.xlsx`
 - HS 2017 → SITC Rev 4 (fallback): `hs2017_sitc4.xlsx`
 - Source: <https://unstats.un.org/unsd/classifications/Econ/tables/>, downloaded 2026-06-20.
-- Files live at `~/Code/un-classifications/` (shared local ref, not in-repo).
+- Files committed in-repo at `reference/un_classifications/` (build-only inputs).
 
 ## Method
 - CN8 mapped via its 6-digit HS stem.
@@ -351,7 +418,7 @@ CN8 → BEC Rev 4 → SNA broad end-use (Capital / Intermediate / Consumption /
 Fuel) for every real 8-digit code in the Eurostat data.
 
 - Source: `HS-SITC-BEC_Correlations_2022.xlsx` (UNSD, HS2022→BEC4 column),
-  at `~/Code/un-classifications/`.
+  committed in-repo at `reference/un_classifications/` (build-only).
 - **BEC Rev 4, not Rev 5** — Rev 4 is the documented standard for the
   capital/intermediate/consumption end-use split; Rev 5 restructured in ways
   that need its own legend to read end-use.

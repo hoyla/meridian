@@ -117,6 +117,14 @@ def _md_blocks_to_html(text: str) -> str:
     return "".join(out)
 
 
+def _gloss_anchor(term: str) -> str:
+    """Stable in-page anchor id for a glossary term, so standing copy can
+    deep-link straight to its definition — the tab router resolves the id,
+    switches to the Glossary tab, scrolls to it and highlights it."""
+    slug = re.sub(r"[^a-z0-9]+", "-", term.lower()).strip("-")
+    return f"gloss-{slug}"
+
+
 def _sparkline_svg(chart_data, w: int = 150, h: int = 36) -> str:
     """Inline-SVG sparkline from any ChartData series. No axes — a
     glanceable vital sign. Last point marked."""
@@ -500,10 +508,10 @@ def _container_gauge_svg(frac: float, *, n: int = 24) -> str:
             + hull + bridge + funnel + boxes + "</svg>")
 
 
-def _more_about(section) -> str:
-    """The collapsed 'More about this section' disclosure carrying the section's
-    longer explanatory `about` copy (ported from the Findings preamble)."""
-    about = getattr(section, "about", None)
+def _more_about_html(about: str) -> str:
+    """The collapsed 'More about this section' disclosure markup for a block of
+    explanatory copy. Shared by `_more_about` (Section-driven) and the sections
+    whose copy is built inline in the renderer (e.g. What's changed)."""
     if not about:
         return ""
     return (
@@ -511,6 +519,12 @@ def _more_about(section) -> str:
         f'<div class="more-body">{_md_blocks_to_html(about)}</div>'
         "</details>"
     )
+
+
+def _more_about(section) -> str:
+    """The collapsed 'More about this section' disclosure carrying the section's
+    longer explanatory `about` copy (ported from the Findings preamble)."""
+    return _more_about_html(getattr(section, "about", None) or "")
 
 
 _ABOUT_SITE = (
@@ -774,7 +788,7 @@ def _deficit_row(f) -> str:
 def _state_of_play_section(section) -> str:
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
-        out.append(f'<p class="kicker">{html.escape(section.intro)}</p>')
+        out.append(f'<p class="kicker">{_inline_md(section.intro)}</p>')
     out.append(_more_about(section))
     # The section carries a single "deficit" child holding the per-scope rows;
     # a sub-heading would just restate the section title, so the rows render
@@ -802,7 +816,7 @@ def _reference_html(section) -> str:
     m = section.metrics or {}
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
-        out.append(f'<p class="kicker">{html.escape(section.intro)}</p>')
+        out.append(f'<p class="kicker">{_inline_md(section.intro)}</p>')
     # In the Methodology tab the explanatory copy is the main content, so it's
     # shown expanded here (not behind a 'More about' disclosure as on the main
     # page).
@@ -837,7 +851,7 @@ def _sources_html(section) -> str:
     m = section.metrics or {}
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
-        out.append(f'<p class="kicker">{html.escape(section.intro)}</p>')
+        out.append(f'<p class="kicker">{_inline_md(section.intro)}</p>')
     sources = m.get("sources", [])
     if sources:
         out.append('<h3 class="ref-h2">Data sources</h3><ul class="ref">')
@@ -920,7 +934,7 @@ def _glossary_html(section) -> str:
     groups = m.get("groups", [])
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
-        out.append(f'<p class="kicker">{html.escape(section.intro)}</p>')
+        out.append(f'<p class="kicker">{_inline_md(section.intro)}</p>')
     if groups:
         out.append(
             '<div class="filter-bar">'
@@ -935,7 +949,8 @@ def _glossary_html(section) -> str:
         for t in g["terms"]:
             term = t.get("term", "")
             out.append(
-                f'<div class="gloss-item" data-name="{html.escape(term.lower())}">'
+                f'<div class="gloss-item" id="{_gloss_anchor(term)}" '
+                f'data-name="{html.escape(term.lower())}">'
                 f'<div class="gterm">{html.escape(term)}</div>'
                 f'<div class="gdef">{_md_blocks_to_html(t.get("body", ""))}</div>'
                 "</div>"
@@ -1019,7 +1034,7 @@ def _data_tables_html(section, *, xlsx: bool = True) -> str:
     tables = m.get("tables", [])
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
-        out.append(f'<p class="kicker">{html.escape(section.intro)}</p>')
+        out.append(f'<p class="kicker">{_inline_md(section.intro)}</p>')
     # The pills lead (table selector); the workbook download + Copy-as-TSV are
     # same-size buttons in each table's header (no big CTA upstaging the pills).
     inline = [t for t in tables if t.get("inline") and t.get("rows")]
@@ -1050,7 +1065,7 @@ def _data_tables_html(section, *, xlsx: bool = True) -> str:
 def _mirror_gap_html(section) -> str:
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
-        out.append(f'<p class="kicker">{html.escape(section.intro)}</p>')
+        out.append(f'<p class="kicker">{_inline_md(section.intro)}</p>')
     out.append(_more_about(section))
     for f in section.findings:
         m = f.metrics
@@ -1108,7 +1123,7 @@ def _gacc_bilateral_html(section) -> str:
     partners compact while offering full per-country granularity on demand."""
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
-        out.append(f'<p class="kicker">{html.escape(section.intro)} '
+        out.append(f'<p class="kicker">{_inline_md(section.intro)} '
                    f'{len(section.sections)} partners, biggest first — '
                    "click a partner to expand.</p>")
     out.append(_more_about(section))
@@ -1246,7 +1261,7 @@ def _structural_section_html(section) -> str:
     so the ~43% of value in no group is visible (a 'no editorial group' tail)."""
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
-        out.append(f'<p class="kicker">{html.escape(section.intro)}</p>')
+        out.append(f'<p class="kicker">{_inline_md(section.intro)}</p>')
     out.append(_more_about(section))
     # These are live aggregates with no per-code finding, so they carry the
     # section's own provenance (source + as-of + total) rather than a finding
@@ -1298,7 +1313,7 @@ def _sector_section(section) -> str:
     block's id is the group slug, so headline drill-down links land here."""
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
-        out.append(f'<p class="kicker">{html.escape(section.intro)} '
+        out.append(f'<p class="kicker">{_inline_md(section.intro)} '
                    "Grouped by SITC section, biggest category first — "
                    "filter to find a sector.</p>")
     out.append(_more_about(section))
@@ -1310,6 +1325,7 @@ def _sector_section(section) -> str:
             'placeholder="Filter by sector, SITC bucket or theme…" '
             'aria-label="Filter sectors" autocomplete="off">'
             f'<span id="sector-count" class="filter-count">{n} groups</span>'
+            '<span class="filter-note">Contact Luke if you want more added</span>'
             "</div>"
         )
         # Theme chips — clickable cross-cutting labels that drive the filter.
@@ -1492,6 +1508,18 @@ def _shift_line_html(s) -> str:
     )
 
 
+_WHAT_CHANGED_ABOUT = (
+    "Each figure here was already reported in an earlier briefing and has "
+    "since been revised — most often because a recent month's data has filled "
+    "in as Eurostat's figures mature, which shifts the rolling 12-month rate. "
+    "These are corrections to previously-published numbers, not new findings.\n"
+    "\n"
+    "Where each group currently stands is in **Sector detail** (partners in "
+    "**Mirror-trade gaps**); the count of newly-added findings is in "
+    "**Sources & coverage**."
+)
+
+
 def _what_changed(wc: WhatChanged) -> str:
     """The 'what moved since the last briefing' register — the material YoY shifts
     (change of ≥5 percentage points, direction flips), NOT a count of new
@@ -1524,15 +1552,8 @@ def _what_changed(wc: WhatChanged) -> str:
         '<h2 class="lead">What\'s changed since the last briefing</h2>'
         f'<p class="since"><strong>Since the last briefing:</strong> '
         f'{html.escape(lead)}</p>'
-        f'<ul class="changed">{rows}</ul>'
-        '<p class="note">Each figure here was already reported in an earlier '
-        'briefing and has since been <em>revised</em> — most often because a recent '
-        'month&rsquo;s data has filled in as Eurostat&rsquo;s figures mature, '
-        'which shifts the rolling 12-month rate. These are corrections to '
-        'previously-published numbers, not new findings. Where each group and '
-        'partner currently <em>stands</em> is in <strong>Europe&rsquo;s deficit with China</strong>; '
-        'the count of newly-added findings is in <strong>Sources &amp; '
-        'coverage</strong>.</p>'
+        + _more_about_html(_WHAT_CHANGED_ABOUT)
+        + f'<ul class="changed">{rows}</ul>'
     )
 
 
@@ -1585,14 +1606,15 @@ a:hover{border-bottom-color:var(--link)}
 .filter{font-family:var(--font-sans);font-size:14px;padding:7px 10px;border:1px solid var(--line);border-radius:4px;width:280px;max-width:60%;color:var(--ink);background:var(--surface)}
 .filter:focus{outline:none;border-color:var(--link);box-shadow:0 0 0 3px rgba(0,119,182,.15)}
 .filter-count{font-size:13px;color:var(--muted)}
+.filter-note{font-size:12px;color:var(--muted);font-style:italic}
 .sector{padding:12px 0;border-bottom:1px solid var(--line)}
 /* Jump targets clear the sticky tab bar; offset is unconditional so it applies
    to JS scrollIntoView too (not only native :target jumps). */
 .brief-sec,.sector,.partner,.tmrow,.filter,.sec-head{scroll-margin-top:52px}
 /* Drilled-to highlight: .jumped is set by JS (the click handler preventDefaults,
    so the native :target never fires); :target is the no-JS fallback. */
-.sector.jumped,.partner.jumped,.tmrow.jumped,
-.sector:target,.partner:target,.tmrow:target{background:#dcebfa}
+.sector.jumped,.partner.jumped,.tmrow.jumped,.gloss-item.jumped,
+.sector:target,.partner:target,.tmrow:target,.gloss-item:target{background:#dcebfa}
 .sec-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:20px 0 6px;padding:5px 0 4px;border-top:2px solid var(--masthead)}
 .sec-h-title{font-family:var(--font-sans);font-size:13px;font-weight:700;color:var(--masthead);text-transform:uppercase;letter-spacing:.4px}
 .sec-h-meta{font-size:12px;color:var(--muted)}
