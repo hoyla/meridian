@@ -200,3 +200,37 @@ def classify_expectation(
     if today <= expected + timedelta(days=cal.grace_days):
         return DUE
     return OVERDUE
+
+
+def next_release_forecast(
+    latest_by_source: dict[str, date | None],
+    *,
+    limit: int | None = 2,
+) -> list[tuple[str, date]]:
+    """Forecast each source's *next* upcoming release, soonest first.
+
+    For every source that has a calendar and a known latest published period,
+    the next candidate is `next_period(latest)` and its scheduled publication
+    date is `expected_publish_date(...)`. Returns up to `limit` (source, due)
+    pairs sorted ascending by due date — the data behind the
+    "Next changes expected:" report line. Ties are broken by source name so the
+    order is deterministic. `limit=None` returns every source.
+
+    A source with no prior release (`latest` is None) or no calendar is
+    skipped: with no period in the DB there is nothing to anchor the next
+    candidate on.
+
+    Pure — no DB, no network, no `today`: the next candidate is the month after
+    the latest period already in hand, so its due date is fixed regardless of
+    when we ask. The caller supplies `latest_by_source` (MAX(period) per source
+    from the releases table).
+    """
+    forecasts: list[tuple[str, date]] = []
+    for source, latest in latest_by_source.items():
+        if latest is None or not has_calendar(source):
+            continue
+        due = expected_publish_date(source, next_period(latest))
+        assert due is not None  # has_calendar(source) guarantees a date
+        forecasts.append((source, due))
+    forecasts.sort(key=lambda sd: (sd[1], sd[0]))
+    return forecasts if limit is None else forecasts[:limit]

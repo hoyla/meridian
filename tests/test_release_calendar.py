@@ -87,3 +87,38 @@ def test_hmrc_uses_its_own_earlier_schedule():
 
 def test_valid_expectations_constant():
     assert rc.VALID_EXPECTATIONS == {"none_expected", "due", "overdue"}
+
+
+def test_next_release_forecast_orders_by_due_date_and_caps():
+    # Latest published period per source. Each source's next candidate is the
+    # following month, due on its calendar date:
+    #   gacc 2026-05 → candidate 2026-06 → close 30 Jun + 8d = 8 Jul
+    #   eurostat 2026-04 → candidate 2026-05 → exact 16 Jul
+    #   hmrc 2026-04 → candidate 2026-05 → exact 16 Jul
+    latest = {
+        "eurostat": date(2026, 4, 1),
+        "hmrc": date(2026, 4, 1),
+        "gacc": date(2026, 5, 1),
+    }
+    # Default limit=2: soonest first, the Jul-16 tie broken by source name.
+    assert rc.next_release_forecast(latest) == [
+        ("gacc", date(2026, 7, 8)),
+        ("eurostat", date(2026, 7, 16)),
+    ]
+    # limit=None returns every source, still date-sorted.
+    assert rc.next_release_forecast(latest, limit=None) == [
+        ("gacc", date(2026, 7, 8)),
+        ("eurostat", date(2026, 7, 16)),
+        ("hmrc", date(2026, 7, 16)),
+    ]
+
+
+def test_next_release_forecast_skips_unknown_and_empty_sources():
+    latest = {
+        "gacc": date(2026, 5, 1),
+        "hmrc": None,            # no prior release → nothing to anchor on
+        "mystery": date(2026, 5, 1),  # no calendar → skipped
+    }
+    assert rc.next_release_forecast(latest, limit=None) == [
+        ("gacc", date(2026, 7, 8)),
+    ]
