@@ -169,6 +169,51 @@ def test_render_status_table_flags_overdue(clean_db, test_db_url):
     assert "OVERDUE: hmrc" not in out2
 
 
+def test_missing_months_finds_holes_and_respects_january():
+    # Contiguous → no gaps.
+    assert routine_log._missing_months(
+        [date(2026, 1, 1), date(2026, 2, 1), date(2026, 3, 1)],
+        allow_january_gap=False) == []
+    # A hole behind the frontier is reported.
+    assert routine_log._missing_months(
+        [date(2026, 1, 1), date(2026, 3, 1), date(2026, 4, 1)],
+        allow_january_gap=False) == [date(2026, 2, 1)]
+    # GACC: a missing January is structural (skipped) ...
+    assert routine_log._missing_months(
+        [date(2025, 12, 1), date(2026, 2, 1), date(2026, 3, 1)],
+        allow_january_gap=True) == []
+    # ... but the same hole IS a gap without the carve-out.
+    assert routine_log._missing_months(
+        [date(2025, 12, 1), date(2026, 2, 1), date(2026, 3, 1)],
+        allow_january_gap=False) == [date(2026, 1, 1)]
+    # Fewer than two periods → nothing to interpolate.
+    assert routine_log._missing_months([date(2026, 4, 1)], allow_january_gap=False) == []
+
+
+def test_render_status_table_flags_period_gaps(clean_db, test_db_url):
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        # HMRC published Jan, Mar, Apr 2026 — Feb is a hole behind the frontier.
+        for m in (1, 3, 4):
+            cur.execute(
+                "INSERT INTO releases (source, source_url, period) "
+                "VALUES ('hmrc', %s, %s)",
+                (f"http://example/hmrc-{m}", date(2026, m, 1)),
+            )
+        # GACC published Dec 2025, Feb, Mar 2026 — the absent Jan 2026 is
+        # structural (Chinese New Year) and must NOT be flagged.
+        for yr, m in ((2025, 12), (2026, 2), (2026, 3)):
+            cur.execute(
+                "INSERT INTO releases (source, source_url, period, section_number, "
+                "currency, release_kind) VALUES ('gacc', %s, %s, 4, 'CNY', 'preliminary')",
+                (f"http://example/gacc-{yr}{m:02d}", date(yr, m, 1)),
+            )
+        conn.commit()
+
+    out = routine_log.render_status_table(routine_log.compute_status())
+    assert "GAPS: hmrc — missing from the published series: 2026-02" in out
+    assert "GAPS: gacc" not in out  # structural January, not a gap
+
+
 # --- Run-level lifecycle (started / completed / error on source='_routine') ---
 
 
