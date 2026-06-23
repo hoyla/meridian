@@ -128,6 +128,31 @@ def test_metadata_handles_2018_historical_formats():
         assert meta.period == expected_period, f"{title!r}: period"
 
 
+def test_metadata_trusts_description_over_glitchy_section_prefix():
+    """GACC mis-numbered the 2020 combined Jan-Feb 'by Country/Region' release as
+    (3) instead of (4). The description is unambiguous, so it must win over the
+    glitchy prefix — otherwise the by-country data is skipped (section 4 is the
+    only section the parser ingests)."""
+    from bs4 import BeautifulSoup
+    from parse import extract_metadata
+
+    title = ("(3) China's Total Export & Import Values by Country/Region, "
+             "January-February 2020 (in CNY)")
+    html = (f'<html><body><div class="atcl-ttl">{title}</div>'
+            f'<div class="atcl-date">2020/03/07</div></body></html>')
+    meta = extract_metadata(BeautifulSoup(html, "lxml"), "http://example/x.html")
+    assert meta.section_number == 4            # description wins over the (3) prefix
+    assert meta.is_jan_feb_combined is True
+    assert meta.period == date(2020, 2, 1)
+
+    # A non-section-4 prefix that AGREES with its description is left untouched.
+    t2 = "(2) China's Total Export & Import Values by Trade Mode, March 2020 (in CNY)"
+    h2 = (f'<html><body><div class="atcl-ttl">{t2}</div>'
+          f'<div class="atcl-date">2020/04/07</div></body></html>')
+    m2 = extract_metadata(BeautifulSoup(h2, "lxml"), "http://example/y.html")
+    assert m2.section_number == 2
+
+
 def test_metadata_handles_2018_section4_alternate_wording():
     """Phase 6.7: a deeper class of 2018 historical format. Section-4 release
     pages from early 2018 use:
