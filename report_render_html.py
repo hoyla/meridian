@@ -1509,10 +1509,14 @@ def _what_changed(wc: WhatChanged) -> str:
         f'<p class="since"><strong>Since the last pack:</strong> '
         f'{html.escape(lead)}</p>'
         f'<ul class="changed">{rows}</ul>'
-        '<p class="note">The findings whose year-on-year rate moved most since '
-        'the previous pack. Where each group and partner currently <em>stands</em> '
-        'is in <strong>State of play</strong>; the count of newly-added findings '
-        'is in <strong>Sources &amp; coverage</strong>.</p>'
+        '<p class="note">Each figure here was already reported in an earlier '
+        'pack and has since been <em>revised</em> — most often because a recent '
+        'month&rsquo;s data has filled in as Eurostat&rsquo;s figures mature, '
+        'which shifts the rolling 12-month rate. These are corrections to '
+        'previously-published numbers, not new findings. Where each group and '
+        'partner currently <em>stands</em> is in <strong>State of play</strong>; '
+        'the count of newly-added findings is in <strong>Sources &amp; '
+        'coverage</strong>.</p>'
     )
 
 
