@@ -41,6 +41,33 @@ def _period_from_snapshot(portal_dir: Path) -> str | None:
         return None
 
 
+def read_latest_report(bucket: str | None = None) -> dict | None:
+    """Fetch and parse `gs://<bucket>/latest/report.json` — the currently-live
+    snapshot — as a plain dict, or None if absent/unreadable.
+
+    The source for the reuse-takes graft (carry prior LLM takes onto an
+    LLM-less rebuild; see `portal_takes_reuse`). Bucket from the arg or
+    PORTAL_BUCKET. Best-effort: a missing bucket, a missing object, or any
+    GCS/parse error returns None (the caller falls back to empty takes) — it
+    never raises, so a redeploy is never blocked by the reuse lookup."""
+    bucket = bucket or os.environ.get("PORTAL_BUCKET")
+    if not bucket:
+        return None
+    try:
+        from google.cloud import storage  # lazy — keep GCS off the import path
+        blob = storage.Client().bucket(bucket).blob("latest/report.json")
+        if not blob.exists():
+            log.info("reuse-takes: no latest/report.json in gs://%s yet", bucket)
+            return None
+        return json.loads(blob.download_as_bytes())
+    except Exception as e:
+        log.warning(
+            "reuse-takes: could not read latest/report.json from gs://%s "
+            "(%s); takes will be empty", bucket, e,
+        )
+        return None
+
+
 def publish_snapshot(bundle_dir: str, *, bucket: str | None = None) -> list[str]:
     """Upload the bundle's 04_Portal snapshot to `gs://<bucket>/latest/` plus a
     per-period archive. Returns the object paths written.

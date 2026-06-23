@@ -167,7 +167,77 @@ gcloud storage cp <bundle>/04_Portal/index.html   "gs://$BUCKET/latest/index.htm
 gcloud storage cp <bundle>/04_Portal/report.json  "gs://$BUCKET/latest/report.json"
 ```
 
-Automating that upload is the next step (`scrape.py --upload-to-portal`).
+That manual `gcloud storage cp` is the fallback; the normal path is the
+`scrape.py` snapshot/publish commands in the next section.
+
+## Refreshing the live portal — which command when
+
+All snapshot commands run from the **repo root** (not this `portal_service/`
+dir), build from the live `gacc` DB, and publish to the live bucket. None record
+a `brief_runs` row, so they never advance the subscriber cycle — they only
+re-render and republish the *current* release. Prerequisites for a publish:
+`GOOGLE_CLOUD_PROJECT=meridian-500111` and Application Default Credentials with
+write on the bucket (`gcloud auth application-default login`).
+
+The one decision is **what happens to the LLM takes** (the per-finding leading
+questions + the "one other thing worth a look" box). Regenerating them costs API
+spend; reusing the prior ones is free but only valid when the content they
+interpret hasn't moved.
+
+| Circumstance | Takes flag | LLM $ | What you get |
+|---|---|---|---|
+| **New data period** — a fresh release | *(use `--periodic-run`)* | — | the normal daily cycle; add `--portal-takes` to generate takes in-cycle |
+| **Amend this release — presentation only** (layout, labels, a bug fix; numbers unchanged) | `--portal-reuse-takes` | **free** | deterministic report rebuilt; prior takes carried forward |
+| **Amend this release — content changed** (new groups/findings, a data correction) | `--portal-takes` | **pays** | takes regenerated against the new numbers |
+| **Republish as-is**, no takes (e.g. takes backend down) | *(neither flag)* | free | deterministic report only; take boxes blank |
+
+`--portal-reuse-takes` and `--portal-takes` are mutually exclusive. Reuse only
+carries a take over when the **data_period is unchanged** *and* the take's
+**finding still matches** — a finding that shifted (so was superseded to a new
+id) drops its take to blank rather than show a stale one. So if you reach for
+reuse but the content genuinely moved, you'll see blank takes where the changed
+findings are: that's the cue to rerun with `--portal-takes`.
+
+```bash
+cd ~/Code/Other_GitHub/meridian          # repo root, NOT portal_service/
+
+# Presentation-only amendment — free, keeps the existing takes:
+GOOGLE_CLOUD_PROJECT=meridian-500111 PORTAL_REGION=europe-west2 \
+  .venv/bin/python scrape.py --portal-snapshot exports/portal-snapshot \
+  --portal-bucket meridian-500111-portal --portal-reuse-takes --portal-warm
+
+# Content changed — pay for fresh takes (re-run the analysers first if you
+# added or changed findings):
+GOOGLE_CLOUD_PROJECT=meridian-500111 PORTAL_REGION=europe-west2 \
+  .venv/bin/python scrape.py --portal-snapshot exports/portal-snapshot \
+  --portal-bucket meridian-500111-portal --portal-takes --portal-warm
+```
+
+**Preview before going live.** Add `--portal-no-publish` to build locally
+*without* publishing — the bucket is still read (so reuse can graft the prior
+takes) and the result is baked into the local `index.html`. Open it, check it,
+then publish the **same bytes** with `--upload-to-portal` (no rebuild, no extra
+LLM spend). Composes with either takes mode:
+
+```bash
+# 1. Build + graft prior takes, but hold the publish:
+GOOGLE_CLOUD_PROJECT=meridian-500111 \
+  .venv/bin/python scrape.py --portal-snapshot exports/portal-snapshot \
+  --portal-bucket meridian-500111-portal --portal-reuse-takes --portal-no-publish
+
+# 2. Eyeball it:
+open exports/portal-snapshot/04_Portal/index.html
+
+# 3. Happy? Publish the previewed bundle as-is:
+GOOGLE_CLOUD_PROJECT=meridian-500111 PORTAL_REGION=europe-west2 \
+  .venv/bin/python scrape.py --upload-to-portal exports/portal-snapshot \
+  --portal-bucket meridian-500111-portal --portal-warm
+```
+
+Why reuse needs the bucket: the page reporters see is the **pre-rendered
+`index.html`**, built on the laptop *before* publish — so prior takes are grafted
+onto the report at build time (read from the live `latest/report.json`), not
+merged into the JSON at upload time.
 
 ## Warm at launch, cool to save money
 A report's first hours are ~90% of its lifetime traffic — reporters reading

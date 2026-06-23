@@ -168,6 +168,8 @@ def _next_releases_forecast(limit: int | None = 2) -> list[tuple[str, date]]:
 def write_portal_snapshot(
     bundle_dir: str, data_period, *, generate_takes: bool,
     write_workbook: bool = False,
+    reuse_takes: bool = False, portal_bucket: str | None = None,
+    prior_report: dict | None = None,
 ) -> str | None:
     """Write the portal snapshot into `<bundle_dir>/04_Portal/`: report.json
     (the canonical published snapshot the web portal serves) + index.html (a
@@ -185,7 +187,15 @@ def write_portal_snapshot(
     `write_workbook=True` also builds `<bundle_dir>/04_Data.xlsx` (the workbook
     the Tables-tab "Download Excel" button links to) so a standalone snapshot
     publish actually has it; periodic-run leaves it False because export()
-    already wrote that file beside the bundle."""
+    already wrote that file beside the bundle.
+
+    `reuse_takes=True` (opt-in, and only when NOT generating fresh takes) carries
+    the PREVIOUS LLM takes forward instead of leaving them empty — for amending
+    an existing release without re-paying the API. It reads the live snapshot
+    (`prior_report` if injected, else `portal_bucket`'s latest/report.json) and
+    grafts takes whose data_period + finding id still match (see
+    `portal_takes_reuse`). Best-effort: any reuse failure leaves empty takes and
+    never sinks the snapshot."""
     try:
         from pathlib import Path
         import report_model
@@ -195,6 +205,28 @@ def write_portal_snapshot(
             source_trigger="eurostat", data_period=data_period,
             generate_takes=generate_takes,
         )
+        # Sticky takes: carry prior LLM takes onto this LLM-less rebuild. Only
+        # when reuse is asked for AND we didn't just generate fresh ones.
+        if reuse_takes and not generate_takes:
+            try:
+                import portal_takes_reuse
+                prior = prior_report
+                if prior is None:
+                    import portal_publish
+                    prior = portal_publish.read_latest_report(portal_bucket)
+                if prior is None:
+                    log.warning(
+                        "portal snapshot: --portal-reuse-takes set but no prior "
+                        "snapshot available (need --portal-bucket / PORTAL_BUCKET "
+                        "with a readable latest/report.json); takes will be empty"
+                    )
+                else:
+                    n = portal_takes_reuse.graft_prior_takes(report, prior)
+                    log.info("portal snapshot: grafted %d prior take(s) "
+                             "(reuse — no LLM spend)", n)
+            except Exception:
+                log.exception("portal snapshot: take reuse failed; continuing "
+                              "with empty takes")
         pdir = Path(bundle_dir) / "04_Portal"
         pdir.mkdir(parents=True, exist_ok=True)
         (pdir / "report.json").write_text(report_model.to_json(report))

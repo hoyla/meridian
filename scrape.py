@@ -739,10 +739,22 @@ def main() -> None:
     )
     p.add_argument(
         "--portal-takes", action="store_true",
-        help="With --periodic-run: generate the LLM per-finding 'takes' for "
-             "the portal snapshot. Off by default — needs an LLM backend "
-             "(LLM_BACKEND=claude_api unattended, or the claude CLI in an "
-             "attended dev run).",
+        help="With --periodic-run / --portal-snapshot: generate the LLM "
+             "per-finding 'takes' for the portal snapshot. Off by default — "
+             "needs an LLM backend (LLM_BACKEND=claude_api unattended, or the "
+             "claude CLI in an attended dev run) and costs API spend. This is "
+             "the right choice whenever the underlying content has changed.",
+    )
+    p.add_argument(
+        "--portal-reuse-takes", action="store_true",
+        help="With --portal-snapshot: carry the PREVIOUS LLM takes forward "
+             "instead of regenerating them — no LLM spend. For amending an "
+             "existing release (cosmetic/layout fixes, low-impact data "
+             "corrections) where the prior takes still hold. Reads the live "
+             "snapshot from the portal bucket (needs --portal-bucket / "
+             "PORTAL_BUCKET) and only carries a take over when the data_period "
+             "is unchanged AND its finding still matches; anything else is left "
+             "blank. Mutually exclusive with --portal-takes.",
     )
     p.add_argument(
         "--no-record", action="store_true",
@@ -790,6 +802,16 @@ def main() -> None:
              "(default meridian-portal) / PORTAL_REGION. Flip back to 0 by hand.",
     )
     p.add_argument(
+        "--portal-no-publish", action="store_true",
+        help="With --portal-snapshot: build the snapshot locally but DON'T "
+             "publish it, even when a bucket is configured — a preview. The "
+             "bucket is still read (so --portal-reuse-takes can graft the prior "
+             "takes) and the grafted/generated takes are baked into the local "
+             "index.html, so you can open it to check the result before going "
+             "live. Publish the previewed bundle as-is with `--upload-to-portal "
+             "<DIR>` (same bytes — no rebuild, no extra LLM spend).",
+    )
+    p.add_argument(
         "--portal-snapshot", nargs="?", const="exports/portal-snapshot",
         default=None, metavar="DIR",
         help=(
@@ -798,9 +820,11 @@ def main() -> None:
             "on-demand render that does NOT advance the subscriber cycle or "
             "move the 'since last brief' baseline (unlike --periodic-run, "
             "which always records). DIR defaults to exports/portal-snapshot. "
-            "Honours --portal-takes. If --portal-bucket (or PORTAL_BUCKET) is "
-            "set it also publishes to GCS (and --portal-warm warms the "
-            "service); otherwise it writes locally and prints the path for a "
+            "Honours --portal-takes (pay for fresh takes) or "
+            "--portal-reuse-takes (carry the prior takes forward, free). If "
+            "--portal-bucket (or PORTAL_BUCKET) is set it also publishes to GCS "
+            "(and --portal-warm warms the service); otherwise — or with "
+            "--portal-no-publish — it writes locally and prints the path for a "
             "later --upload-to-portal."
         ),
     )
@@ -1053,23 +1077,38 @@ def main() -> None:
         # NB: briefing_pack and periodic are module-level imports — do NOT
         # re-import locally here, or Python makes them function-local and the
         # earlier briefing_pack.DEFAULT_TOP_N at parser-build time breaks.
+        if args.portal_takes and args.portal_reuse_takes:
+            print("--portal-takes and --portal-reuse-takes are mutually "
+                  "exclusive: the first regenerates the takes (pays for fresh "
+                  "LLM output — use it when the content changed); the second "
+                  "carries the prior takes forward (free — for amending a "
+                  "release). Pick one.")
+            return
         out_dir = args.portal_snapshot
         period = briefing_pack.latest_eurostat_period()
         if period is None:
             print("No Eurostat data ingested yet — nothing to snapshot "
                   "(ingest a period first).")
             return
+        # Resolve the bucket up front: --portal-reuse-takes reads the live
+        # snapshot from it at BUILD time (the served index.html is pre-rendered,
+        # so prior takes must be grafted before render — not at publish).
+        bucket = args.portal_bucket or os.environ.get("PORTAL_BUCKET")
+        if args.portal_reuse_takes and not bucket:
+            print("--portal-reuse-takes needs a portal bucket to read the prior "
+                  "takes from — pass --portal-bucket or set PORTAL_BUCKET.")
+            return
         portal_dir = periodic.write_portal_snapshot(
             out_dir, period, generate_takes=args.portal_takes,
             write_workbook=True,  # so the Tables-tab /data.xlsx download resolves (no briefing-pack run on this path)
+            reuse_takes=args.portal_reuse_takes, portal_bucket=bucket,
         )
         if portal_dir is None:
             print("Portal snapshot failed — see logs.")
             return
         print(f"Portal snapshot written to {portal_dir} "
               f"(data_period {period}; no brief_runs row — cycle unaffected).")
-        bucket = args.portal_bucket or os.environ.get("PORTAL_BUCKET")
-        if bucket:
+        if bucket and not args.portal_no_publish:
             import portal_publish
             written = portal_publish.publish_snapshot(out_dir, bucket=bucket)
             print("Published:")
@@ -1085,8 +1124,15 @@ def main() -> None:
                 else:
                     print("  --portal-warm skipped: set PORTAL_REGION")
         else:
+            if args.portal_no_publish and bucket:
+                # Preview: built (with prior takes grafted in, if --portal-reuse-
+                # takes) but deliberately not published. The local index.html is
+                # the exact artefact --upload-to-portal would publish.
+                print(f"  --portal-no-publish: built locally, NOT published.")
+                print(f"  Preview:  open {out_dir}/04_Portal/index.html")
+            pub_bucket = bucket or "<NAME>"
             print(f"  To publish: python scrape.py --upload-to-portal "
-                  f"{out_dir} --portal-bucket <NAME>")
+                  f"{out_dir} --portal-bucket {pub_bucket}")
         return
 
     if args.upload_to_portal:
