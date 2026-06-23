@@ -118,6 +118,43 @@ Smallest viable version: reuse the Eurostat section-builder with the UK scope
 foregrounded and the mirror-gap section dropped (or swapped for a China↔UK
 variant once that analyser exists).
 
+## Slim GACC-period update — its own self-expiring tab; design parked (2026-06-23)
+
+GACC leads Eurostat by ~5 weeks (China Customs publishes ~8–10 days after the
+reference month; Eurostat ~46 days), so a fresh GACC release is an early read on
+the China↔EU numbers. Reporters asked whether we should auto-build a briefing for
+each new GACC release as well as each Eurostat one. We costed the repetition: a
+*full* briefing on a GACC release would be ~60–80% stale — the Eurostat-derived
+sections (HS-group movers, trajectories, the standing deficit, partner-share)
+don't change when only GACC arrives, so they'd repeat the prior Eurostat cycle
+verbatim. Only the GACC-fed sections move.
+
+Decision — a **slim, GACC-only update**, not a briefing clone:
+
+- **Content**: render only the fresh GACC-fed sections — `gacc_bilateral_aggregate_yoy`
+  (China↔EU + per-country) and `gacc_aggregate_yoy` (ASEAN / RCEP / Belt & Road /
+  Africa / LatAm / world). Drop the Eurostat HS-group / trajectory / trade-balance
+  sections — they'd be stale.
+- **Trigger on a new GACC *period*, not a new release.** GACC publishes dual-currency
+  (CNY + USD) for the same period, so release-triggering fires twice a month;
+  period-triggering is ~once.
+- **Exclude the mirror gap.** A GACC period lands ~5 weeks before the matching
+  Eurostat month, so the Eurostat side of the gap for that month doesn't exist yet —
+  it can't be computed. (It refreshes normally on the next Eurostat cycle.)
+- **Surface as its own distinct tab**, non-destructive to the main Briefing tab, that
+  **self-expires on the next Eurostat release** (the Eurostat cycle supersedes it).
+  Keeps the leading-indicator read visibly separate from the confirmed EU read, and
+  self-cleans.
+
+Cost note: each brief's LLM takes are paid calls, so the slim shape (few sections)
+plus `--portal-reuse-takes` for anything carried is the cost-sensible build, not a
+second full pack.
+
+Not scheduled — a thinking-question outcome from the same 2026-06-23 thread as the
+HMRC release-timing work (which is what got built: the combined-scope guard, the
+HMRC-lag disclosure, the overdue alert, the gap-scan). Pick up when reporters want
+the earlier cadence.
+
 ## Source-freshness alerting — push on overdue / missing source (2026-06-23)
 
 Surfaced by the 2026-06-23 HMRC↔Eurostat release-timing investigation (the same
