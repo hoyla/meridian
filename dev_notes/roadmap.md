@@ -118,6 +118,50 @@ Smallest viable version: reuse the Eurostat section-builder with the UK scope
 foregrounded and the mirror-gap section dropped (or swapped for a China↔UK
 variant once that analyser exists).
 
+## Source-freshness alerting — push on overdue / missing source (2026-06-23)
+
+Surfaced by the 2026-06-23 HMRC↔Eurostat release-timing investigation (the same
+pass that produced the `eu_27_plus_uk` half-sourcing guard on branch
+`ljh-combined-period-guard`). The `overdue` classification already exists —
+`release_calendar.classify_expectation` → `none_expected`/`due`/`overdue`, from
+[`2026-06-02-eurostat-expectation-axis-design.md`](2026-06-02-eurostat-expectation-axis-design.md)
+— but **nothing pushes it**. That note deliberately left surfacing at the manual
+`--source-status` table, so a source going silently late is invisible unless a
+human runs the command.
+
+**The gap.** `notify.py` (`--notify-chat`, PR #74) fires only on
+`result = 'new_data'` rows (`_new_data_since`); it never reads the `expectation`
+column. The Chat notifier reports what *did* land, never what *didn't*. Live
+evidence: HMRC March 2026 was ~4 weeks late (ingested 13 Jun; the 19 May
+Eurostat-March briefing shipped without it) and **no alert fired** — it took a
+manual catch-up. This is the missing half of the "Per-run outcome notification"
+item (Near-term → Docx + Drive upload), where a late-source alert is noted as
+"just one possible outcome line."
+
+**The work**, smallest first:
+
+- Add an overdue line to the Chat notifier: read `expectation = 'overdue'` from
+  `routine_check_log` alongside the existing new-data path and post "source X
+  late — scheduled DATE, still nothing." Make it idempotent (one alert per
+  overdue spell, not a daily re-fire).
+- **GACC-January carve-out — required before enabling, or it false-fires every
+  February.** China Customs has no standalone January (Chinese New Year). After
+  December the candidate steps to `YYYY-01`, which never publishes as a monthly,
+  so `classify_expectation('gacc', Jan, …)` reads `overdue` from ~12 Feb until
+  the February release lands and `MAX(releases)` jumps Dec→Feb. The GACC calendar
+  must treat January as `none_expected` (never its own period). Background: the
+  Jan-Feb `period_kind` partition in `parse.py` and the *Derive January from Feb
+  release's (ytd − monthly)* item below. (2026 published a genuine standalone
+  February, but January is still never its own release, so the carve-out stands.)
+
+**Related — gap-scan behind the frontier (optional, same home).** The candidate
+is forward-only: `candidate = next_period(MAX(releases.period))` (`scrape.py:522`),
+so it only ever probes MAX+1. A hole *behind* the frontier — a skipped month, a
+revision, a partial release landing before its data — is never re-probed and
+nothing scans for it (the March-2026 HMRC gap needed a manual catch-up). A
+periodic "any missing months behind MAX, per source?" scan would close it and
+belongs with the overdue alert.
+
 ## docx → Drive pipeline — legacy; teardown deferred (2026-06-22)
 
 **Decision (Luke, 2026-06-22).** The web portal is the live Lisa-facing
