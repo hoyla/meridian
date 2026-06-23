@@ -37,6 +37,7 @@ from datetime import date, datetime, timedelta, timezone
 import httpx
 
 import db
+import release_calendar
 import routine_log
 
 log = logging.getLogger(__name__)
@@ -63,6 +64,14 @@ class NewDataRow:
     source: str
     notes: str | None
     candidate_period: date | None
+    checked_at: datetime
+
+
+@dataclasses.dataclass(frozen=True)
+class OverdueRow:
+    source: str
+    candidate_period: date | None
+    scheduled: date | None  # the scheduled publication date that has passed
     checked_at: datetime
 
 
@@ -169,6 +178,55 @@ def _new_data_since(mark: datetime) -> list[NewDataRow]:
     )
 
 
+def _is_overdue_waiting(result: str | None, expectation: str | None) -> bool:
+    """A source is 'overdue-waiting' when its probe is past the scheduled date
+    with no data yet — `expectation == overdue` and the result is not
+    `new_data`. A late arrival logs `new_data × overdue` ('arrived, but late'),
+    which is the new-data path's job to report, not an overdue alert."""
+    return expectation == release_calendar.OVERDUE and result != "new_data"
+
+
+def _newly_overdue(mark: datetime) -> list[OverdueRow]:
+    """Trigger sources that have *just* entered an overdue-waiting spell: the
+    most recent probe is overdue-waiting, the probe before it was not, and the
+    transition is newer than the last notification. One alert per spell — a
+    source that stays overdue does not re-fire each day."""
+    out: list[OverdueRow] = []
+    with db.transaction() as conn, conn.cursor() as cur:
+        for source in TRIGGER_SOURCES:
+            cur.execute(
+                """
+                SELECT result, expectation, candidate_period, checked_at
+                FROM routine_check_log
+                WHERE source = %s
+                ORDER BY checked_at DESC
+                LIMIT 2
+                """,
+                (source,),
+            )
+            rows = cur.fetchall()
+            if not rows:
+                continue
+            result, expectation, candidate, checked_at = rows[0]
+            if not _is_overdue_waiting(result, expectation):
+                continue
+            if checked_at <= mark:
+                continue
+            if len(rows) > 1 and _is_overdue_waiting(rows[1][0], rows[1][1]):
+                continue  # already alerted at the start of this overdue spell
+            scheduled = (
+                release_calendar.expected_publish_date(source, candidate)
+                if candidate else None
+            )
+            out.append(OverdueRow(
+                source=source, candidate_period=candidate,
+                scheduled=scheduled, checked_at=checked_at,
+            ))
+    order = {s: i for i, s in enumerate(TRIGGER_SOURCES)}
+    out.sort(key=lambda r: order.get(r.source, 99))
+    return out
+
+
 def _latest_export_since(mark: datetime) -> tuple[date | None, str | None] | None:
     """If a `--periodic-run` cycle wrote a fresh export after `mark`, return
     (data_period, findings_path); else None. Best-effort — a missing/empty
@@ -202,30 +260,50 @@ def _source_label(source: str) -> str:
 
 def build_message(
     new_rows: list[NewDataRow],
+    overdue_rows: list[OverdueRow],
     export: tuple[date | None, str | None] | None,
 ) -> str:
-    """Render the Google Chat text payload. One bullet per source that brought
-    new data (notes verbatim — they're already one-line human summaries), plus
-    an export line when a briefing was written this cycle."""
-    lines = ["*Meridian — new trade data ingested*"]
-    for row in new_rows:
-        label = _source_label(row.source)
-        period = (
-            f" ({row.candidate_period:%Y-%m})" if row.candidate_period else ""
-        )
-        detail = f" — {row.notes}" if row.notes else ""
-        lines.append(f"• {label}{period}{detail}")
+    """Render the Google Chat text payload: a 'new data ingested' block (one
+    bullet per source, notes verbatim, plus an export line when a briefing was
+    written this cycle) and/or a 'source overdue' block (a source past its
+    scheduled date with nothing seen). The caller only builds a message when at
+    least one block has content."""
+    lines: list[str] = []
 
-    if export is not None:
-        data_period, findings_path = export
-        period_str = data_period.strftime("%Y-%m") if data_period else "?"
-        lines.append("")
-        lines.append(
-            f"A fresh briefing was written for *{period_str}* — review & "
-            "publish (the portal is not auto-published)."
-        )
-        if findings_path:
-            lines.append(f"Bundle: {findings_path}")
+    if new_rows:
+        lines.append("*Meridian — new trade data ingested*")
+        for row in new_rows:
+            label = _source_label(row.source)
+            period = (
+                f" ({row.candidate_period:%Y-%m})" if row.candidate_period else ""
+            )
+            detail = f" — {row.notes}" if row.notes else ""
+            lines.append(f"• {label}{period}{detail}")
+
+        if export is not None:
+            data_period, findings_path = export
+            period_str = data_period.strftime("%Y-%m") if data_period else "?"
+            lines.append("")
+            lines.append(
+                f"A fresh briefing was written for *{period_str}* — review & "
+                "publish (the portal is not auto-published)."
+            )
+            if findings_path:
+                lines.append(f"Bundle: {findings_path}")
+
+    if overdue_rows:
+        if lines:
+            lines.append("")
+        lines.append("*Meridian — source release overdue*")
+        for row in overdue_rows:
+            label = _source_label(row.source)
+            period = (
+                f" ({row.candidate_period:%Y-%m})" if row.candidate_period else ""
+            )
+            scheduled = (
+                f" — scheduled {row.scheduled:%Y-%m-%d}" if row.scheduled else ""
+            )
+            lines.append(f"• {label}{period}{scheduled}; still nothing.")
 
     return "\n".join(lines)
 
@@ -242,20 +320,32 @@ def notify_new_data(
     watermark — for previewing what a run would say."""
     mark = _resolve_mark()
     new_rows = _new_data_since(mark)
-    if not new_rows:
+    overdue_rows = _newly_overdue(mark)
+    if not new_rows and not overdue_rows:
         return NotifyResult(
             posted=False,
-            reason=f"no new data from any source since {mark:%Y-%m-%d %H:%M}",
+            reason=f"no new data or new overdue from any source since {mark:%Y-%m-%d %H:%M}",
         )
 
-    export = _latest_export_since(mark)
-    text = build_message(new_rows, export)
-    posted_sources = ", ".join(_source_label(r.source) for r in new_rows)
+    export = _latest_export_since(mark) if new_rows else None
+    text = build_message(new_rows, overdue_rows, export)
+
+    # Audit-note summary. New-data sources stay first and bare so the
+    # new-data-only note is unchanged ("posted: Eurostat"); overdue is appended
+    # only when present.
+    note_parts: list[str] = []
+    if new_rows:
+        note_parts.append(", ".join(_source_label(r.source) for r in new_rows))
+    if overdue_rows:
+        note_parts.append(
+            "overdue: " + ", ".join(_source_label(r.source) for r in overdue_rows)
+        )
+    summary = "; ".join(note_parts)
 
     if dry_run:
         return NotifyResult(
             posted=False,
-            reason=f"dry-run — would post (sources: {posted_sources})",
+            reason=f"dry-run — would post ({summary})",
             message=text,
         )
 
@@ -267,14 +357,14 @@ def notify_new_data(
         routine_log.log_check(
             NOTIFY_SOURCE,
             "completed" if ok else "error",
-            notes=(f"posted: {posted_sources}" if ok else None),
+            notes=(f"posted: {summary}" if ok else None),
             error=(None if ok else "Google Chat POST failed (see logs)"),
         )
     except Exception:
         log.exception("notify: failed to write _notify audit row")
 
     reason = (
-        f"posted (sources: {posted_sources})" if ok
+        f"posted ({summary})" if ok
         else "post failed — watermark not advanced, will retry next run"
     )
     return NotifyResult(posted=ok, reason=reason, message=text)

@@ -61,6 +61,41 @@ def test_gacc_holiday_slip_reads_overdue_while_late():
     assert rc.classify_expectation("gacc", date(2025, 8, 1), date(2025, 9, 17)) == rc.OVERDUE
 
 
+def test_gacc_january_shares_februarys_schedule():
+    # China Customs publishes no standalone January (Chinese New Year): January
+    # data arrives folded into the Jan–Feb cumulative, on February's schedule.
+    # So a GACC January candidate is due on February's date, not January's.
+    assert (
+        rc.expected_publish_date("gacc", date(2026, 1, 1))
+        == rc.expected_publish_date("gacc", date(2026, 2, 1))
+        == date(2026, 3, 8)  # close(28 Feb) + 8d
+    )
+
+
+def test_gacc_january_not_overdue_while_waiting_for_february():
+    jan = date(2026, 1, 1)
+    # Mid-February, with the routine's candidate sitting on January: not yet due
+    # — without the carve-out this would already read `overdue`.
+    assert rc.classify_expectation("gacc", jan, date(2026, 2, 20)) == rc.NONE_EXPECTED
+    # On February's scheduled date → due; past it with nothing → genuinely
+    # overdue (the Jan–Feb combined is itself late).
+    assert rc.classify_expectation("gacc", jan, date(2026, 3, 8)) == rc.DUE
+    assert rc.classify_expectation("gacc", jan, date(2026, 3, 20)) == rc.OVERDUE
+
+
+def test_january_carve_out_is_gacc_only():
+    # Must not touch other GACC months, or January for the other sources.
+    assert rc.expected_publish_date("gacc", date(2026, 4, 1)) == date(2026, 5, 8)
+    assert (
+        rc.expected_publish_date("hmrc", date(2026, 1, 1))
+        != rc.expected_publish_date("hmrc", date(2026, 2, 1))
+    )
+    assert (
+        rc.expected_publish_date("eurostat", date(2026, 1, 1))
+        != rc.expected_publish_date("eurostat", date(2026, 2, 1))
+    )
+
+
 @pytest.mark.parametrize("today,want", [
     (date(2026, 6, 14), rc.NONE_EXPECTED),  # day before scheduled 15 Jun
     (date(2026, 6, 15), rc.DUE),            # on the scheduled date

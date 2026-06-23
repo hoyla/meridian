@@ -176,9 +176,18 @@ def expected_publish_date(source: str, period: date) -> date | None:
     if cal is None:
         return None
     anchor = period.replace(day=1)
+    # GACC publishes no standalone January (Chinese New Year): January data
+    # arrives folded into the Jan–Feb cumulative, which lands on February's
+    # schedule. Treat a GACC January candidate as due on February's date so it
+    # reads `none_expected` until the combined release is genuinely due — without
+    # this it reads `overdue` every February while the routine's candidate sits
+    # on January (next_period after December) waiting for a release that, alone,
+    # never comes.
+    if source == "gacc" and anchor.month == 1:
+        anchor = anchor.replace(month=2)
     if anchor in cal.exact:
         return cal.exact[anchor]
-    return period_close(period) + timedelta(days=cal.lag_days)
+    return period_close(anchor) + timedelta(days=cal.lag_days)
 
 
 def classify_expectation(

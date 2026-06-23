@@ -200,3 +200,50 @@ def test_message_includes_export_line_when_briefing_written(clean_db, stub_post)
     assert "fresh briefing" in msg
     assert "2026-04" in msg
     assert "exports/2026-06-16-0841/02_Findings.md" in msg
+
+
+def test_posts_on_newly_overdue_source(clean_db, stub_post):
+    """A source that has just gone overdue (past its scheduled date, nothing
+    seen) fires an alert even with no new data this run."""
+    routine_log.log_check("hmrc", "no_change", expectation="due",
+                          candidate_period=date(2026, 3, 1), notes="not published yet")
+    routine_log.log_check("hmrc", "no_change", expectation="overdue",
+                          candidate_period=date(2026, 3, 1), notes="not published yet")
+    res = notify.notify_new_data()
+    assert res.posted is True
+    msg = stub_post.calls[0]
+    assert "overdue" in msg.lower()
+    assert "HMRC" in msg
+    assert "2026-03" in msg
+
+
+def test_overdue_does_not_refire_while_still_overdue(clean_db, stub_post):
+    """One alert per overdue spell: a later probe with the source still overdue
+    (already alerted) must not post again."""
+    routine_log.log_check("hmrc", "no_change", expectation="due",
+                          candidate_period=date(2026, 3, 1))
+    routine_log.log_check("hmrc", "no_change", expectation="overdue",
+                          candidate_period=date(2026, 3, 1))
+    assert notify.notify_new_data().posted is True
+    # Another day, still overdue — must not re-alert.
+    routine_log.log_check("hmrc", "no_change", expectation="overdue",
+                          candidate_period=date(2026, 3, 1))
+    second = notify.notify_new_data()
+    assert second.posted is False
+    assert len(stub_post.calls) == 1
+
+
+def test_late_arrival_reports_as_new_data_not_overdue(clean_db, stub_post):
+    """A release that finally lands logs new_data × overdue — reported by the
+    new-data path, not as an overdue alert."""
+    routine_log.log_check("hmrc", "no_change", expectation="overdue",
+                          candidate_period=date(2026, 3, 1))
+    routine_log.log_check("hmrc", "new_data", expectation="overdue",
+                          candidate_period=date(2026, 3, 1),
+                          notes="ingested 38935 raw rows for 2026-03")
+    res = notify.notify_new_data()
+    assert res.posted is True
+    msg = stub_post.calls[0]
+    assert "new trade data" in msg
+    assert "ingested 38935" in msg
+    assert "source release overdue" not in msg
