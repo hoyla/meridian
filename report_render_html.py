@@ -508,10 +508,10 @@ def _container_gauge_svg(frac: float, *, n: int = 24) -> str:
             + hull + bridge + funnel + boxes + "</svg>")
 
 
-def _more_about(section) -> str:
-    """The collapsed 'More about this section' disclosure carrying the section's
-    longer explanatory `about` copy (ported from the Findings preamble)."""
-    about = getattr(section, "about", None)
+def _more_about_html(about: str) -> str:
+    """The collapsed 'More about this section' disclosure markup for a block of
+    explanatory copy. Shared by `_more_about` (Section-driven) and the sections
+    whose copy is built inline in the renderer (e.g. What's changed)."""
     if not about:
         return ""
     return (
@@ -519,6 +519,12 @@ def _more_about(section) -> str:
         f'<div class="more-body">{_md_blocks_to_html(about)}</div>'
         "</details>"
     )
+
+
+def _more_about(section) -> str:
+    """The collapsed 'More about this section' disclosure carrying the section's
+    longer explanatory `about` copy (ported from the Findings preamble)."""
+    return _more_about_html(getattr(section, "about", None) or "")
 
 
 _ABOUT_SITE = (
@@ -1502,6 +1508,18 @@ def _shift_line_html(s) -> str:
     )
 
 
+_WHAT_CHANGED_ABOUT = (
+    "Each figure here was already reported in an earlier briefing and has "
+    "since been revised — most often because a recent month's data has filled "
+    "in as Eurostat's figures mature, which shifts the rolling 12-month rate. "
+    "These are corrections to previously-published numbers, not new findings.\n"
+    "\n"
+    "Where each group currently stands is in **Sector detail** (partners in "
+    "**Mirror-trade gaps**); the count of newly-added findings is in "
+    "**Sources & coverage**."
+)
+
+
 def _what_changed(wc: WhatChanged) -> str:
     """The 'what moved since the last briefing' register — the material YoY shifts
     (change of ≥5 percentage points, direction flips), NOT a count of new
@@ -1534,15 +1552,8 @@ def _what_changed(wc: WhatChanged) -> str:
         '<h2 class="lead">What\'s changed since the last briefing</h2>'
         f'<p class="since"><strong>Since the last briefing:</strong> '
         f'{html.escape(lead)}</p>'
-        f'<ul class="changed">{rows}</ul>'
-        '<p class="note">Each figure here was already reported in an earlier '
-        'briefing and has since been <em>revised</em> — most often because a recent '
-        'month&rsquo;s data has filled in as Eurostat&rsquo;s figures mature, '
-        'which shifts the rolling 12-month rate. These are corrections to '
-        'previously-published numbers, not new findings. Where each group and '
-        'partner currently <em>stands</em> is in <strong>Europe&rsquo;s deficit with China</strong>; '
-        'the count of newly-added findings is in <strong>Sources &amp; '
-        'coverage</strong>.</p>'
+        + _more_about_html(_WHAT_CHANGED_ABOUT)
+        + f'<ul class="changed">{rows}</ul>'
     )
 
 
