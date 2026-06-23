@@ -46,9 +46,9 @@ soon") — captured so they're not lost.
 6. **`eurostat_raw_rows` UNIQUE constraint** — data-integrity hardening (detail
    in the Portal-polish bullet below): a partial unique index → `ON CONFLICT DO
    NOTHING`, concurrency-safe dedup.
-7. **Sticky LLM takes (graft-prior-takes)** — retain prior takes on an LLM-less
-   rebuild so cosmetic portal refreshes stop costing money (dedicated section
-   below).
+7. **Sticky LLM takes (graft-prior-takes) — DONE 2026-06-23.** Retain prior
+   takes on an LLM-less rebuild so cosmetic portal refreshes stop costing money.
+   Shipped as the opt-in `--portal-reuse-takes` flag (dedicated section below).
 
 ## Portal polish — small items from the 2026-06-22 Lisa-feedback batch
 
@@ -221,6 +221,17 @@ append-only + provenance on everything new (principles 3/4/7).
    correlate moves with policy — also feeds the LLM-takes v2 retrieval angle).
 
 ## Portal deploy — retain prior LLM content on an LLM-less rebuild (2026-06-22)
+
+**DONE 2026-06-23 — shipped as opt-in `--portal-reuse-takes`.** The graft-at-
+build approach below was built verbatim (`portal_takes_reuse.graft_prior_takes`,
+a pure function; prior read via `portal_publish.read_latest_report`; wired into
+`periodic.write_portal_snapshot`). One deliberate departure from a first
+instinct: reuse is **opt-in, not the default** — the default redeploy still pays
+for fresh takes (`--portal-takes`), because a stale interpretation of changed
+content is a data-rigor risk; refusing reinterpretation must be a deliberate act
+(Luke, 2026-06-23). The flag is for *amending an existing release* — cosmetic
+fixes or low-impact corrections. Command matrix in `portal_service/README.md`.
+The rest of this section is the (still-accurate) design record.
 
 **The gap.** A portal rebuild *without* `--portal-takes` doesn't leave the
 previous LLM material alone — it **overwrites it with empty placeholders**. So a

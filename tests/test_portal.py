@@ -1207,6 +1207,134 @@ def test_publish_period_read_from_snapshot(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# Reuse / graft prior takes (sticky takes — the LLM-less rebuild path)
+# --------------------------------------------------------------------------
+
+def _prior_with_takes(period="2026-04-01"):
+    """A prior snapshot dict (as a parsed report.json) carrying a generated
+    per-finding take on finding 2 and a generated general slot."""
+    return {
+        "meta": {"data_period": period, "variant": "eurostat"},
+        "headline": {
+            "items": [{
+                "provenance": {"finding_ids": [2]},
+                "take": {"slot_type": "specific", "grounded_in": [2],
+                         "status": "generated",
+                         "questions": [{"q": "Is the fall volume-driven?",
+                                        "axis": "volume-vs-value"}]},
+            }],
+            "llm_slots": [{"slot_type": "general", "grounded_in": [2],
+                           "status": "generated",
+                           "content": "Magnets fell 23% — worth a look?"}],
+        },
+    }
+
+
+def _bare_report(period_iso="2026-04-01"):
+    """A freshly-built LLM-less report: one mover on finding 2 with no take and a
+    placeholder general slot — the shape build_report(generate_takes=False)
+    produces."""
+    from datetime import date
+    y, m, d = (int(x) for x in period_iso.split("-"))
+    item = rm.HeadlineItem(
+        subject={"scope": "eu_27", "flow": "export", "group_name": "Cars"},
+        metrics={"direction": "fell", "pct": 0.4},
+        stability={"badge": "🟡", "hedge_phrase": None},
+        prose="EU-27 exports of Cars fell 40%",
+        provenance=rm.Provenance(finding_ids=[2], source="eurostat"),
+        take=None,
+    )
+    headline = rm.Headline(
+        variant="eurostat", lead_title="x", note="n", items=[item],
+        llm_slots=[rm.LLMSlot(slot_type="general", grounded_in=[2])])
+    return rm.Report(
+        meta=rm.ReportMeta(data_period=date(y, m, d), variant="eurostat",
+                           snapshot_id="s"),
+        headline=headline)
+
+
+def test_reuse_grafts_take_on_matching_period_and_finding():
+    """Same data_period + same finding id → the per-finding take and the general
+    slot both carry over, and the grafted take then renders (the empty-on-
+    placeholder gate now passes)."""
+    import portal_takes_reuse as ptr
+    report = _bare_report("2026-04-01")
+    n = ptr.graft_prior_takes(report, _prior_with_takes("2026-04-01"))
+    assert n == 2  # the per-finding take + the general slot
+    take = report.headline.items[0].take
+    assert take is not None and take.status == "generated"
+    assert take.questions[0]["axis"] == "volume-vs-value"
+    gen = report.headline.llm_slots[0]
+    assert gen.status == "generated" and "worth a look" in gen.content
+    assert 'class="take"' in render_html(report)
+
+
+def test_reuse_drops_on_period_mismatch():
+    """A take is NEVER carried onto a different data_period — fresh takes are
+    wanted on a new cycle; a stale take must not show against new numbers."""
+    import portal_takes_reuse as ptr
+    report = _bare_report("2026-05-01")              # newer period
+    n = ptr.graft_prior_takes(report, _prior_with_takes("2026-04-01"))
+    assert n == 0
+    assert report.headline.items[0].take is None
+    assert report.headline.llm_slots[0].status == "placeholder"
+
+
+def test_reuse_drops_per_finding_take_on_id_mismatch():
+    """Same period but the mover is now a DIFFERENT finding id (it was
+    superseded) → no per-finding graft. The finding-id match is the backstop
+    against mis-attaching a stale take to changed numbers. The general slot
+    still carries (same period ⇒ same finding set)."""
+    import portal_takes_reuse as ptr
+    report = _bare_report("2026-04-01")
+    report.headline.items[0].provenance.finding_ids = [999]  # superseded → new id
+    n = ptr.graft_prior_takes(report, _prior_with_takes("2026-04-01"))
+    assert report.headline.items[0].take is None
+    assert report.headline.llm_slots[0].status == "generated"
+    assert n == 1
+
+
+def test_reuse_never_clobbers_a_live_take():
+    """A take already generated on the new report (e.g. a partial paid run) is
+    left untouched by reuse."""
+    import portal_takes_reuse as ptr
+    report = _bare_report("2026-04-01")
+    report.headline.items[0].take = rm.LLMSlot(
+        slot_type="specific", grounded_in=[2], status="generated",
+        questions=[{"q": "fresh?", "axis": "fresh"}])
+    ptr.graft_prior_takes(report, _prior_with_takes("2026-04-01"))
+    assert report.headline.items[0].take.questions[0]["axis"] == "fresh"
+
+
+def test_reuse_no_prior_is_noop():
+    """An empty / absent prior never grafts and never raises."""
+    import portal_takes_reuse as ptr
+    report = _bare_report("2026-04-01")
+    assert ptr.graft_prior_takes(report, {}) == 0
+    assert report.headline.items[0].take is None
+
+
+def test_read_latest_report_no_bucket_returns_none(monkeypatch):
+    """No bucket → None (the caller falls back to empty takes), never raises."""
+    import portal_publish
+    monkeypatch.delenv("PORTAL_BUCKET", raising=False)
+    assert portal_publish.read_latest_report(None) is None
+
+
+def test_write_portal_snapshot_reuse_is_best_effort(clean_db, tmp_path):
+    """reuse_takes with an injected prior must never break the snapshot write
+    (best-effort). On clean-db there are no movers/period to graft, so it's a
+    no-op but still writes report.json + index.html."""
+    import periodic
+    pdir = periodic.write_portal_snapshot(
+        str(tmp_path), None, generate_takes=False, reuse_takes=True,
+        prior_report={"meta": {"data_period": "2026-04-01"},
+                      "headline": {"items": [], "llm_slots": []}})
+    assert pdir is not None
+    assert (tmp_path / "04_Portal" / "report.json").exists()
+
+
+# --------------------------------------------------------------------------
 # General "one other thing worth a look" take (release-level LLMSlot)
 # --------------------------------------------------------------------------
 
