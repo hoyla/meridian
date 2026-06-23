@@ -519,6 +519,22 @@ _ABOUT_SITE = (
     "**Eurostat** (EU-27) and **HMRC** (UK). Each release is triggered when our "
     "scraper finds fresh data from one of these — the source and the month it "
     "covers are shown by the badge, top right.\n\n"
+    "**What's in a briefing.** Which sections appear depends on the data "
+    "release that triggered it; you may see:\n\n"
+    "- **Standout moves** — the largest year-on-year shifts in the freshest "
+    "figures, each with leading questions for a reporter to chase.\n"
+    "- **What's changed** — what materially moved since the previous briefing: "
+    "revisions to existing findings, not newly-discovered ones.\n"
+    "- **Europe's deficit with China** — the standing goods-trade deficit "
+    "(the ~€1bn/day level) across EU-27, UK and combined scopes; a level, not a "
+    "change.\n"
+    "- **Mirror-trade gaps** — China's reported exports to each partner vs that "
+    "partner's reported imports, and how much of the gap exceeds the normal "
+    "CIF/FOB accounting wedge (a possible transshipment signal).\n"
+    "- **Sector detail** — the full per-HS-group year-on-year breakdown, with "
+    "value, volume and predictability badges.\n"
+    "- **China's trade by country (GACC)** — China's own reported trade with "
+    "each of its ~24 named partner countries, both flows, rolling 12 months.\n\n"
     "Unless a figure is labelled **China-only**, **“China” includes Hong "
     "Kong and Macao**: a large share of China's exports route through Hong Kong, "
     "so the combined envelope reflects the trade flow more completely. Where a "
@@ -760,11 +776,11 @@ def _state_of_play_section(section) -> str:
     if section.intro:
         out.append(f'<p class="kicker">{html.escape(section.intro)}</p>')
     out.append(_more_about(section))
+    # The section carries a single "deficit" child holding the per-scope rows;
+    # a sub-heading would just restate the section title, so the rows render
+    # directly under the section h2 (the wrapper is a vestigial "first cut").
     for sub in section.sections:
         out.append(f'<div class="sector" id="{html.escape(sub.id)}">')
-        out.append(f'<h3 class="sector-h">{html.escape(sub.title)}</h3>')
-        if sub.intro:
-            out.append(f'<p class="note">{html.escape(sub.intro)}</p>')
         for f in sub.findings:
             out.append(_deficit_row(f))
         # The headline (EU-27, the first scope) deficit's monthly trajectory —
@@ -850,7 +866,7 @@ def _sources_html(section) -> str:
     if nf:
         nft = m.get("new_findings_total", 0)
         out.append('<h3 class="ref-h2">New this cycle</h3>'
-                   f'<p class="kicker">{nft:,} findings added since the last pack, '
+                   f'<p class="kicker">{nft:,} findings added since the last briefing, '
                    "by type:</p><ul class=\"ref\">")
         for f in nf:
             out.append(f'<li><strong>{f["count"]:,}</strong> new — '
@@ -1477,7 +1493,7 @@ def _shift_line_html(s) -> str:
 
 
 def _what_changed(wc: WhatChanged) -> str:
-    """The 'what moved since the last pack' register — the material YoY shifts
+    """The 'what moved since the last briefing' register — the material YoY shifts
     (change of ≥5 percentage points, direction flips), NOT a count of new
     findings (that's bookkeeping, in Sources & coverage). Renders the full
     section with the shift list when something moved; a slim, honest one-liner
@@ -1494,7 +1510,7 @@ def _what_changed(wc: WhatChanged) -> str:
             msg = ("nothing moved materially — no finding's 12-month change "
                    "shifted by more than 5 percentage points, and nothing "
                    "flipped direction.")
-        return (f'<p class="quiet-change"><strong>Since the last pack:</strong> '
+        return (f'<p class="quiet-change"><strong>Since the last briefing:</strong> '
                 f'{html.escape(msg)}</p>')
     flips = sum(1 for s in shifts if s.direction_flipped)
     lead = (f"{len(shifts)} finding{'s' if len(shifts) != 1 else ''} moved "
@@ -1505,16 +1521,16 @@ def _what_changed(wc: WhatChanged) -> str:
     lead += "."
     rows = "".join(_shift_line_html(s) for s in shifts)
     return (
-        '<h2 class="lead">What changed since the last pack</h2>'
-        f'<p class="since"><strong>Since the last pack:</strong> '
+        '<h2 class="lead">What\'s changed since the last briefing</h2>'
+        f'<p class="since"><strong>Since the last briefing:</strong> '
         f'{html.escape(lead)}</p>'
         f'<ul class="changed">{rows}</ul>'
         '<p class="note">Each figure here was already reported in an earlier '
-        'pack and has since been <em>revised</em> — most often because a recent '
+        'briefing and has since been <em>revised</em> — most often because a recent '
         'month&rsquo;s data has filled in as Eurostat&rsquo;s figures mature, '
         'which shifts the rolling 12-month rate. These are corrections to '
         'previously-published numbers, not new findings. Where each group and '
-        'partner currently <em>stands</em> is in <strong>State of play</strong>; '
+        'partner currently <em>stands</em> is in <strong>Europe&rsquo;s deficit with China</strong>; '
         'the count of newly-added findings is in <strong>Sources &amp; '
         'coverage</strong>.</p>'
     )
@@ -1645,7 +1661,7 @@ ul.ref li{font-size:13.5px;line-height:1.5;margin:0 0 7px;color:var(--ink)}
    element instead, so only one bar ever occupies the top (see .subnav). */
 .tabs{display:flex;gap:4px;background:var(--surface);padding:0 28px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .subnav{position:sticky;top:0;z-index:6;display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;background:var(--surface);border-bottom:1px solid var(--line);padding:8px 28px;font-family:var(--font-sans);font-size:13.5px}
-/* "See also" cross-link footing a section (e.g. State of play → the GACC By-partner
+/* "See also" cross-link footing a section (e.g. Europe's deficit → the GACC by-country
    section far below) — a quiet, top-ruled pointer, not a call to action. */
 .see-also{margin:16px 0 2px;padding-top:10px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
 .subnav a{color:var(--muted);text-decoration:none;font-weight:600;white-space:nowrap;padding:2px 0;border-bottom:2px solid transparent}
@@ -1983,8 +1999,8 @@ def render_html(report: Report) -> str:
                          + _what_changed(wc) + "</section>")
         else:                                # nothing moved → slim one-liner, no nav
             brief.append("<section>" + _what_changed(wc) + "</section>")
-    _BRIEF_NAV = {"state_of_play": "State of play", "mirror_gap": "Mirror gaps",
-                  "sector_detail": "Sector detail", "gacc_bilateral": "By partner"}
+    _BRIEF_NAV = {"state_of_play": "The deficit", "mirror_gap": "Mirror gaps",
+                  "sector_detail": "Sector detail", "gacc_bilateral": "GACC by country"}
     has_gacc = any(
         s.kind == "gacc_bilateral"
         and (s.sections or (s.metrics or {}).get("partner_charts"))
@@ -1994,13 +2010,13 @@ def render_html(report: Report) -> str:
         if sec.kind == "state_of_play" and sec.sections:
             inner = _state_of_play_section(sec)
             if has_gacc:
-                # Bridge to the GACC "By partner" section far below: the two do
+                # Bridge to the GACC "by country" section far below: the two do
                 # different jobs (EU↔China detail here; China's own-customs view
                 # of its whole world there) and sit far apart in this tab, so a
                 # reader sees the relationship and can jump straight to it.
                 inner += (
                     '<p class="see-also">→ See also '
-                    '<a href="#brief-gacc_bilateral">China’s trade by partner '
+                    '<a href="#brief-gacc_bilateral">China’s trade by country '
                     '(GACC)</a> — China’s own customs view of its trade with the '
                     'world, the global counterpart to the EU-focused picture '
                     'above.</p>')

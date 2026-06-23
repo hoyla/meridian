@@ -803,8 +803,10 @@ def _state_of_play_section(cur) -> Section:
     scopes — the canonical standing level (the ~€1bn/day figure). A level,
     not a change, so it lives here rather than in 'what changed'."""
     root = Section(
-        id="state-of-play", title="State of play", kind="state_of_play",
-        intro="Where things stand — standing levels, not this cycle's change.",
+        id="state-of-play", title="Europe's deficit with China",
+        kind="state_of_play",
+        intro="The standing deficit by reporter scope, on the CN+HK+MO "
+              "envelope — a level, not this cycle's change.",
         about=_ABOUT["the-deficit"],
     )
     deficit = Section(
@@ -1401,9 +1403,9 @@ def _gacc_bilateral_section(cur, period) -> Section:
     of its ~24 named partner countries (both flows), under the bloc-level
     macro lead."""
     root = Section(
-        id="gacc-bilateral", title="China’s trade by partner (GACC)",
+        id="gacc-bilateral", title="China’s trade by country (GACC)",
         kind="gacc_bilateral",
-        intro="China's own reported exports and imports by partner country, "
+        intro="China's own reported exports and imports by country, "
               "rolling 12 months — the per-country detail under the bloc lead.",
         about=_ABOUT["gacc-bilateral"],
     )
@@ -1618,6 +1620,10 @@ def build_report(
     (eurostat/hmrc only) via the configured backend — slow and backend-
     dependent, so it's off by default. The deterministic report is complete
     without it; a rejected or failed take just leaves a placeholder."""
+    # Hard publication dependency: without the SITC/BEC lookups every group
+    # collapses into "Other / unclassified". Fail loud rather than silently
+    # ship that (see classifications.assert_classifications_available).
+    classifications.assert_classifications_available()
     variant_cfg = _VARIANTS.get(source_trigger, _VARIANTS["eurostat"])
     with _conn() as conn, conn.cursor(
         cursor_factory=psycopg2.extras.DictCursor
