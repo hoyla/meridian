@@ -35,7 +35,7 @@ from datetime import date, datetime
 from typing import Iterable, Sequence
 
 import db
-from release_calendar import VALID_EXPECTATIONS
+from release_calendar import VALID_EXPECTATIONS, next_period
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +62,32 @@ VALID_RESULTS: frozenset[str] = frozenset(
         "started", "completed",
     }
 )
+
+
+def _missing_months(
+    periods: Sequence[date], *, allow_january_gap: bool,
+) -> list[date]:
+    """Months absent from a should-be-contiguous monthly series — holes
+    *behind* the latest published period. The probe walks one month at a time
+    (`next_period(MAX(releases))`) and so cannot skip one, but a manual / bulk
+    ingest or GACC's index walk can leave a hole that never re-probes.
+
+    `allow_january_gap` skips January: GACC publishes no standalone January
+    (Chinese New Year — folded into the Jan–Feb cumulative), so a missing
+    January is structural, not a gap.
+    """
+    present = sorted({p.replace(day=1) for p in periods})
+    if len(present) < 2:
+        return []
+    present_set = set(present)
+    missing: list[date] = []
+    m = next_period(present[0])
+    last = present[-1]
+    while m < last:
+        if m not in present_set and not (allow_january_gap and m.month == 1):
+            missing.append(m)
+        m = next_period(m)
+    return missing
 
 
 def log_check(
@@ -116,6 +142,7 @@ class SourceStatus:
     latest_period_in_db: date | None
     notes: str | None
     error: str | None
+    period_gaps: tuple[date, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -228,6 +255,15 @@ def compute_status(
         )
         latest_release = {row[0]: row[1] for row in cur.fetchall()}
 
+        cur.execute(
+            "SELECT source, period FROM releases WHERE source = ANY(%s) "
+            "ORDER BY source, period",
+            (source_list,),
+        )
+        periods_by_source: dict[str, list[date]] = {}
+        for src_, period in cur.fetchall():
+            periods_by_source.setdefault(src_, []).append(period)
+
     out: list[SourceStatus] = []
     for src in sources:
         check = last_check.get(src)
@@ -242,6 +278,9 @@ def compute_status(
             last_new_data_at=new[0] if new else None,
             last_period_brought_back=new[1] if new else None,
             latest_period_in_db=latest_release.get(src),
+            period_gaps=tuple(_missing_months(
+                periods_by_source.get(src, []), allow_january_gap=(src == "gacc"),
+            )),
         ))
     return out
 
@@ -304,6 +343,15 @@ def render_status_table(
             f"  OVERDUE: {', '.join(overdue)} — scheduled release date "
             "passed, data not yet seen"
         )
+    # Holes behind the frontier: a month missing from a source's published
+    # series. The probe can't skip one, but a manual/bulk ingest or GACC's
+    # index walk can leave a hole that never re-probes.
+    for row in rows:
+        if row.period_gaps:
+            months = ", ".join(m.strftime("%Y-%m") for m in row.period_gaps)
+            extras.append(
+                f"  GAPS: {row.source} — missing from the published series: {months}"
+            )
     for row in rows:
         if row.error:
             extras.append(f"  {row.source}: last error → {row.error}")
