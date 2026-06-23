@@ -1795,8 +1795,19 @@ _PORTAL_JS = """<script>
   // ---- tab router: panels show/hide; deep-links (#tab-x) and in-page anchors
   // (a drill-down into a panel) both resolve; degrades to anchored sections
   // with no JS (panels are just divs, all visible).
+  //
+  // Browser back/forward is honoured. Switching tab pushes a history entry
+  // carrying {tab, anchor, y}; on popstate we restore both the tab AND the exact
+  // scroll position you were at, so back from (say) the Glossary returns you to
+  // your place in the Briefing. In-tab jumps (subnav, sector drill-downs) use
+  // replaceState instead, so they don't pile up entries -- back steps between
+  // tabs, not through every jump. Scroll restore is manual because panels
+  // hide/show rather than truly navigate, so page height shifts under the
+  // browser's own restore. We route off popstate (not hashchange) to stay the
+  // single source of truth for back/forward; deep links still resolve on load.
   var tabs=[].slice.call(document.querySelectorAll('.tab'));
   var panels=[].slice.call(document.querySelectorAll('.tabpanel'));
+  var cur='tab-briefing';
   function panelOf(el){while(el&&el.classList&&!el.classList.contains('tabpanel'))el=el.parentElement;return el;}
   function expandDetail(el){ // open a drilled-to sector's collapsed charts/detail
     if(!el||(el.classList&&el.classList.contains('brief-sec')))return; // not whole-section jumps
@@ -1810,29 +1821,64 @@ _PORTAL_JS = """<script>
   }
   function show(id){
     if(!document.getElementById(id))id='tab-briefing';
+    cur=id;
     panels.forEach(function(p){p.classList.toggle('hide',p.id!==id);});
     tabs.forEach(function(t){t.classList.toggle('active',t.getAttribute('href')==='#'+id);});
   }
-  function go(hash){
+  var hist=!!(window.history&&history.pushState);
+  if(hist&&'scrollRestoration' in history)history.scrollRestoration='manual';
+  function stamp(){ // record where we are in the entry we're about to leave
+    if(hist)try{history.replaceState(Object.assign({},history.state||{},{y:window.scrollY}),'');}catch(e){}
+  }
+  // Navigate to panel `id`, optionally drilling to element `el` within it.
+  // A tab change pushes a back-stop; an in-tab jump only replaces.
+  function nav(id,el,hash){
+    var panelEl=document.getElementById(id);
+    var drill=el&&el!==panelEl;
+    var changing=id!==cur;
+    if(changing)stamp();
+    show(id);
+    if(drill){expandDetail(el);el.scrollIntoView();mark(el);}
+    else{mark(null);if(changing)window.scrollTo(0,0);}
+    if(!hist)return;
+    var st={tab:id,y:window.scrollY,anchor:drill?el.id:null};
+    if(changing)history.pushState(st,'','#'+(hash||id));
+    else history.replaceState(Object.assign({},history.state||{},st),'','#'+(hash||id));
+  }
+  function seed(id,anchor){ // give the first (load) entry a state for back/forward
+    if(hist)try{history.replaceState({tab:id,y:window.scrollY,anchor:anchor||null},'');}catch(e){}
+  }
+  function go(hash){ // initial deep-link resolution (load only)
     var id=(hash||'').replace(/^#/,'');
     var el=id&&document.getElementById(id);
-    if(el&&el.classList.contains('tabpanel')){show(id);window.scrollTo(0,0);return;}
-    if(el){var p=panelOf(el);if(p){show(p.id);expandDetail(el);el.scrollIntoView();mark(el);return;}}
-    show('tab-briefing');
+    if(el&&el.classList.contains('tabpanel')){show(id);window.scrollTo(0,0);seed(id,null);return;}
+    if(el){var p=panelOf(el);if(p){show(p.id);expandDetail(el);el.scrollIntoView();mark(el);seed(p.id,el.id);return;}}
+    show('tab-briefing');seed('tab-briefing',null);
   }
   tabs.forEach(function(t){t.addEventListener('click',function(e){
-    e.preventDefault();var id=t.getAttribute('href').slice(1);
-    show(id);if(history.replaceState)history.replaceState(null,'','#'+id);window.scrollTo(0,0);
+    e.preventDefault();nav(t.getAttribute('href').slice(1),null,null);
   });});
   document.addEventListener('click',function(e){
     var a=e.target.closest?e.target.closest('a[href^="#"]'):null;
     if(!a||a.classList.contains('tab'))return;
     var id=a.getAttribute('href').slice(1);var el=document.getElementById(id);if(!el)return;
-    var p=el.classList.contains('tabpanel')?el:panelOf(el);
-    if(p){show(p.id);if(el!==p){e.preventDefault();expandDetail(el);el.scrollIntoView();mark(el);
-      if(history.replaceState)history.replaceState(null,'','#'+id);}}
+    var p=el.classList.contains('tabpanel')?el:panelOf(el);if(!p)return;
+    e.preventDefault();nav(p.id,el===p?null:el,id);
   });
-  window.addEventListener('hashchange',function(){go(location.hash);});
+  window.addEventListener('popstate',function(e){
+    var st=e.state||{};var id=st.tab;
+    if(!id||!document.getElementById(id)){ // no state (e.g. landed via raw hash) -> resolve hash
+      var h=(location.hash||'').replace(/^#/,'');var hel=h&&document.getElementById(h);
+      if(hel&&hel.classList.contains('tabpanel'))id=h;
+      else if(hel){var pp=panelOf(hel);id=pp?pp.id:'tab-briefing';st.anchor=st.anchor||h;}
+      else id='tab-briefing';
+    }
+    show(id);
+    var aEl=st.anchor&&document.getElementById(st.anchor);
+    if(aEl){expandDetail(aEl);mark(aEl);}else mark(null);
+    var y=(typeof st.y==='number')?st.y:0;
+    requestAnimationFrame(function(){window.scrollTo(0,y);}); // after panel layout settles
+  });
   if(tabs.length)go(location.hash);
 
   // ---- briefing sub-nav: immediate active-state on click (works everywhere),
