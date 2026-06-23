@@ -335,6 +335,61 @@ def test_yoy_combined_scope_sums_eurostat_and_hmrc(empty_op, test_db_url):
     assert "cross_source_sum" in detail["caveat_codes"]
 
 
+def test_yoy_combined_scope_drops_month_hmrc_has_not_published(empty_op, test_db_url):
+    """Regression: when HMRC lags Eurostat, the combined (eu_27_plus_uk) scope
+    must NOT emit a finding for the month only Eurostat has published — summing a
+    full Eurostat month with a missing UK side and labelling it complete is what
+    the 2026-03 briefing shipped. The combined frontier stops at the last month
+    BOTH sources cover.
+
+    Eurostat: Dec 2023 .. Dec 2025 (25 months). HMRC: Dec 2023 .. Nov 2025 (24
+    months — one short). The only full 24-month window is the one ending Nov
+    2025; Dec 2025 is one-sided and must be dropped, so no combined finding may
+    carry a Dec-2025 current_end."""
+    eur_months = _make_24_months(date(2023, 12, 1), [100.0] * 25)   # ends Dec 2025
+    hmrc_months = _make_24_months(date(2023, 12, 1), [50.0] * 24)   # ends Nov 2025
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_eurostat_imports(conn, "85076010", eur_months)
+        cur = conn.cursor()
+        for period, val in hmrc_months:
+            cur.execute(
+                "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'success') RETURNING id",
+                (f"http://example/uk-lag-{period}",),
+            )
+            run = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO hmrc_raw_rows (scrape_run_id, period, reporter, partner, "
+                "                            product_nc, flow_type_id, flow, "
+                "                            suppression_index, value_gbp, value_eur, "
+                "                            net_mass_kg) "
+                "VALUES (%s, %s, 'GB', 'CN', '85076010', 3, 1, 0, %s, %s, %s)",
+                (run, period, val, val, val * 0.1),
+            )
+        conn.commit()
+
+    counts = anomalies.detect_hs_group_yoy(
+        group_names=["EV batteries (Li-ion)"], yoy_threshold_pct=0.0,
+        comparison_scope="eu_27_plus_uk",
+    )
+    assert counts["emitted"] >= 1, f"counts={counts}"
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT (detail->'windows'->>'current_end')::date "
+            "FROM findings WHERE subkind = 'hs_group_yoy_combined'"
+        )
+        ends = {row[0] for row in cur.fetchall()}
+
+    assert ends, "expected at least one combined finding"
+    # Dec 2025 is Eurostat-only — it must not produce a combined finding.
+    assert date(2025, 12, 1) not in ends, (
+        "combined scope emitted a finding for a month HMRC has not published; "
+        f"current_end values={sorted(ends)}"
+    )
+    # The combined frontier stops exactly at the last month both sources cover.
+    assert max(ends) == date(2025, 11, 1), f"current_end values={sorted(ends)}"
+
+
 def test_yoy_silent_when_below_threshold(empty_op, test_db_url):
     """No real growth → no finding when threshold is set."""
     with psycopg2.connect(test_db_url) as conn:

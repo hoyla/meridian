@@ -245,6 +245,43 @@ def test_render_produces_all_top_level_sections(empty_findings, test_db_url):
     # in test_top_n_truncates_movers below where seed data is present.
 
 
+def _seed_hmrc_release(cur, period: date) -> None:
+    cur.execute(
+        "INSERT INTO releases (source, period, source_url) "
+        "VALUES ('hmrc', %s, %s)",
+        (period, f"https://example.invalid/hmrc/{period.strftime('%Y%m')}"),
+    )
+
+
+def test_headline_flags_hmrc_behind_eurostat(empty_findings, test_db_url):
+    """When HMRC's latest release lags Eurostat's, the headline discloses that
+    the UK and combined views run behind — the combined-scope guard stops them at
+    the last shared month, and this explains why, so the shorter series is not
+    misread as missing data."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        for m in (1, 2, 3):
+            _seed_eurostat_release(cur, date(2026, m, 1))
+        for m in (1, 2):  # HMRC one month behind Eurostat
+            _seed_hmrc_release(cur, date(2026, m, 1))
+        conn.commit()
+        md = briefing_pack.render()
+    assert "UK figures (HMRC) for Mar 2026 are not yet published" in md
+    assert "run through Feb 2026" in md
+
+
+def test_headline_no_hmrc_flag_when_level(empty_findings, test_db_url):
+    """No freshness note when HMRC and Eurostat are level."""
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        for m in (1, 2, 3):
+            _seed_eurostat_release(cur, date(2026, m, 1))
+            _seed_hmrc_release(cur, date(2026, m, 1))
+        conn.commit()
+        md = briefing_pack.render()
+    assert "are not yet published" not in md
+
+
 def test_finding_lines_carry_trace_token(empty_findings, test_db_url):
     """Every finding rendered inline must have its `finding/{id}` citation."""
     with psycopg2.connect(test_db_url) as conn:

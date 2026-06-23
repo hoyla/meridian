@@ -6,6 +6,7 @@ from datetime import datetime
 
 from briefing_pack._helpers import (
     _Section,
+    _fmt_month,
     _in_this_export_folder_md,
     _subkind_plain_label,
 )
@@ -75,6 +76,21 @@ def _section_headline(
     lines.append("## Period coverage")
     for s in sources:
         lines.append(f"- **{s['source']}**: {s['lo']} → {s['hi']} ({s['n']} releases)")
+    # Freshness disclosure: when HMRC's latest release lags Eurostat's, the UK
+    # and combined EU-27 + UK views legitimately end a month earlier — the
+    # combined-scope guard stops them at the last month both sources cover. Say
+    # so here, beside the periods that show it, so the shorter UK/combined series
+    # is not misread as missing data.
+    _latest_period = {s["source"]: s["hi"] for s in sources}
+    _es_hi, _uk_hi = _latest_period.get("eurostat"), _latest_period.get("hmrc")
+    if _es_hi and _uk_hi and _uk_hi < _es_hi:
+        lines.append("")
+        lines.append(
+            f"> **UK figures (HMRC) for {_fmt_month(_es_hi)} are not yet published.** "
+            f"The UK and combined EU-27 + UK views run through {_fmt_month(_uk_hi)}, "
+            f"behind the EU-27 view; the combined series stops at the last month "
+            f"both sources cover rather than mixing months."
+        )
     lines.append("")
     lines.append("## Findings included")
     for k, n in counts:
