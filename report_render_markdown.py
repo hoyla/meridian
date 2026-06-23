@@ -159,9 +159,13 @@ def _render_what_changed(wc: WhatChanged) -> list[str]:
         out.append(f"- **{s.group_name}** ({_shift_flow_phrase(s.subkind)}, "
                    f"12 months to {_fmt_window_end(s.window_end)}): "
                    f"{_yoy_arc_md(s.old_yoy, s.new_yoy)}{pp}{flip}")
-    out += ["", "*Where each group and partner currently stands is in **State of "
-            "play**; the count of newly-added findings is in **Sources & "
-            "coverage**.*", ""]
+    out += ["", "*Each figure here was already reported in an earlier pack and "
+            "has since been revised — most often because a recent month's data "
+            "has filled in as Eurostat's figures mature, which shifts the rolling "
+            "12-month rate. These are corrections to previously-published numbers, "
+            "not new findings. Where each group and partner currently stands is in "
+            "**State of play**; the count of newly-added findings is in **Sources "
+            "& coverage**.*", ""]
     return out
 
 
