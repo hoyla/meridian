@@ -86,34 +86,83 @@ class PeriodicRunResult:
     written, else None. Additive and best-effort: a portal failure leaves this
     None but the findings/docx bundle still ships."""
 
+    next_releases: list[tuple[str, date]] = dataclasses.field(default_factory=list)
+    """Forecast of the next upcoming source releases — (source, scheduled-date)
+    pairs sorted soonest-first — rendered as the 'Next changes expected:' line
+    in summary(). Empty when no source has both a calendar and prior data."""
+
     def summary(self) -> str:
         """Human-readable per-run report for the scheduled Routine to
         surface. When a briefing was generated it includes which sources
         brought new data and the exact manual command to publish it to
         Drive — we deliberately do NOT auto-upload (the shared folder is
-        journalist-facing and the format is still under review)."""
+        journalist-facing and the format is still under review). The closing
+        'Next changes expected:' line forecasts the next upcoming source
+        releases and is appended on both the action and no-op paths (it is most
+        useful precisely when nothing landed this cycle)."""
         if not self.action_taken:
-            return f"Periodic run: no new briefing this cycle — {self.reason}"
-        lines = [
-            f"Periodic run: new briefing generated for data period "
-            f"{self.data_period}."
-        ]
-        if self.new_data:
-            lines.append(f"  New source data since the last cycle: {self.new_data}.")
-        elif self.new_data == "":
-            lines.append(
-                "  No new source releases since the last cycle "
-                "(forced rerun against the same data)."
-            )
-        if self.bundle_dir:
-            lines.append(f"  Bundle written to: {self.bundle_dir}")
-            if self.portal_dir:
-                lines.append(f"  Portal snapshot: {self.portal_dir}")
-            lines.append("  To publish it to Google Drive, run:")
-            lines.append(
-                f"    python scrape.py --upload-to-drive {self.bundle_dir}"
-            )
+            lines = [f"Periodic run: no new briefing this cycle — {self.reason}"]
+        else:
+            lines = [
+                f"Periodic run: new briefing generated for data period "
+                f"{self.data_period}."
+            ]
+            if self.new_data:
+                lines.append(f"  New source data since the last cycle: {self.new_data}.")
+            elif self.new_data == "":
+                lines.append(
+                    "  No new source releases since the last cycle "
+                    "(forced rerun against the same data)."
+                )
+            if self.bundle_dir:
+                lines.append(f"  Bundle written to: {self.bundle_dir}")
+                if self.portal_dir:
+                    lines.append(f"  Portal snapshot: {self.portal_dir}")
+                lines.append("  To publish it to Google Drive, run:")
+                lines.append(
+                    f"    python scrape.py --upload-to-drive {self.bundle_dir}"
+                )
+        next_line = _format_next_releases(self.next_releases)
+        if next_line:
+            lines.append(next_line)
         return "\n".join(lines)
+
+
+# Display names for the "Next changes expected:" forecast line — the source
+# keys (eurostat/hmrc/gacc) rendered as the journalist sees them.
+_SOURCE_DISPLAY = {"eurostat": "Eurostat", "hmrc": "HMRC", "gacc": "GACC"}
+
+
+def _format_next_releases(forecast: list[tuple[str, date]]) -> str | None:
+    """Render the forecast as the 'Next changes expected:' line, or None when
+    the forecast is empty. e.g.
+    'Next changes expected: GACC (due July 8); HMRC (due July 16)'."""
+    if not forecast:
+        return None
+    parts = [
+        f"{_SOURCE_DISPLAY.get(src, src)} (due {due:%B} {due.day})"
+        for src, due in forecast
+    ]
+    return "Next changes expected: " + "; ".join(parts)
+
+
+def _next_releases_forecast(limit: int | None = 2) -> list[tuple[str, date]]:
+    """Forecast the next `limit` upcoming source releases for the run summary.
+
+    Reads MAX(period) per source from the releases table and hands it to the
+    pure `release_calendar.next_release_forecast`. Best-effort: any DB hiccup
+    yields an empty forecast (the summary simply omits the line) rather than
+    sinking the run."""
+    import release_calendar
+    try:
+        import db
+        with db.transaction() as conn, conn.cursor() as cur:
+            cur.execute("SELECT source, MAX(period) FROM releases GROUP BY source")
+            latest_by_source = {src: mx for src, mx in cur.fetchall()}
+    except Exception:
+        log.exception("periodic-run: failed to compute next-release forecast")
+        return []
+    return release_calendar.next_release_forecast(latest_by_source, limit=limit)
 
 
 def write_portal_snapshot(
@@ -241,6 +290,12 @@ def run_periodic(
         except Exception:
             log.exception("Failed to write periodic_run_log row")
 
+    # Forecast the next upcoming source releases once, up front — attached to
+    # every PeriodicRunResult below so the 'Next changes expected:' line shows
+    # on the action and no-op paths alike. limit=None → every calendar source
+    # (so a co-due source is never silently dropped).
+    next_releases = _next_releases_forecast(limit=None)
+
     latest_data = briefing_pack.latest_eurostat_period()
     latest_published = briefing_pack.latest_recorded_data_period(
         trigger="periodic_run"
@@ -258,6 +313,7 @@ def run_periodic(
             data_period=None,
             findings_path=None,
             leads_path=None,
+            next_releases=next_releases,
         )
         _persist_log(result)
         return result
@@ -273,6 +329,7 @@ def run_periodic(
             data_period=latest_data,
             findings_path=None,
             leads_path=None,
+            next_releases=next_releases,
         )
         _persist_log(result)
         return result
@@ -457,6 +514,7 @@ def run_periodic(
         bundle_dir=bundle_dir,
         new_data=new_data_phrase,
         portal_dir=portal_dir,
+        next_releases=next_releases,
     )
     _persist_log(result)
     return result

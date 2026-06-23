@@ -100,6 +100,50 @@ def test_latest_recorded_data_period_filters_by_trigger(
     assert briefing_pack.latest_recorded_data_period(trigger="periodic_run") == date(2026, 1, 1)
 
 
+def test_format_next_releases_renders_line():
+    forecast = [("gacc", date(2026, 7, 8)), ("hmrc", date(2026, 7, 16))]
+    assert periodic._format_next_releases(forecast) == (
+        "Next changes expected: GACC (due July 8); HMRC (due July 16)"
+    )
+    # Empty forecast → no line (summary omits it rather than printing a stub).
+    assert periodic._format_next_releases([]) is None
+
+
+def test_summary_appends_forecast_on_noop_and_action_paths():
+    forecast = [("gacc", date(2026, 7, 8)), ("hmrc", date(2026, 7, 16))]
+    expected_line = "Next changes expected: GACC (due July 8); HMRC (due July 16)"
+
+    noop = periodic.PeriodicRunResult(
+        action_taken=False,
+        reason="data_period 2026-04-01 already published",
+        data_period=date(2026, 4, 1),
+        findings_path=None,
+        leads_path=None,
+        next_releases=forecast,
+    )
+    assert noop.summary().splitlines()[-1] == expected_line
+
+    action = periodic.PeriodicRunResult(
+        action_taken=True,
+        reason="new export written",
+        data_period=date(2026, 4, 1),
+        findings_path="/tmp/findings.md",
+        leads_path=None,
+        next_releases=forecast,
+    )
+    assert action.summary().splitlines()[-1] == expected_line
+
+    # No forecast available → summary is unchanged (no trailing forecast line).
+    bare = periodic.PeriodicRunResult(
+        action_taken=False,
+        reason="no Eurostat data ingested yet",
+        data_period=None,
+        findings_path=None,
+        leads_path=None,
+    )
+    assert "Next changes expected" not in bare.summary()
+
+
 def test_periodic_run_noop_when_no_eurostat_data(
     fresh_db, test_db_url, monkeypatch, tmp_path,
 ):
