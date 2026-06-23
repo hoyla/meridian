@@ -962,6 +962,19 @@ def main() -> None:
         ),
     )
     p.add_argument(
+        "--notify-chat", action="store_true",
+        help=(
+            "Post a Google Chat (Spaces) message iff a source (Eurostat / "
+            "HMRC / GACC) ingested new data since the last successful post. "
+            "Reads routine_check_log for the trigger (so GACC/HMRC arrivals "
+            "between Eurostat releases still notify) and the webhook URL from "
+            "MERIDIAN_CHAT_WEBHOOK (unset → harmless no-op). The daily Routine "
+            "calls this after the probes + --periodic-run. Idempotent: a "
+            "second call in the same fire finds nothing new. Combine with "
+            "--dry-run to preview the message without posting."
+        ),
+    )
+    p.add_argument(
         "--llm-rejections", action="store_true",
         help=(
             "Print recent rows from llm_rejection_log — LLM-framing "
@@ -1027,6 +1040,15 @@ def main() -> None:
         statuses = routine_log.compute_status()
         lifecycle = routine_log.compute_lifecycle()
         print(routine_log.render_status_table(statuses, lifecycle), end="")
+        return
+
+    if args.notify_chat:
+        import notify
+        result = notify.notify_new_data(dry_run=args.dry_run)
+        print(result.summary())
+        if result.message and (args.dry_run or not result.posted):
+            print("---")
+            print(result.message)
         return
 
     if args.llm_rejections:
