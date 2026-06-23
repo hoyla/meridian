@@ -11,7 +11,7 @@ navigation spine for the portal (see the taxonomy design note).
 - HS 2022 → SITC Rev 4: `hs2022_sitc4.xlsx`
 - HS 2017 → SITC Rev 4 (fallback): `hs2017_sitc4.xlsx`
 - Source: <https://unstats.un.org/unsd/classifications/Econ/tables/>, downloaded 2026-06-20.
-- Files live at `~/Code/un-classifications/` (shared local ref, not in-repo).
+- Files committed in-repo at `reference/un_classifications/` (build-only inputs).
 
 ## Method
 - CN8 mapped via its 6-digit HS stem.

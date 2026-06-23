@@ -6,7 +6,7 @@ CN8 → BEC Rev 4 → SNA broad end-use (Capital / Intermediate / Consumption /
 Fuel) for every real 8-digit code in the Eurostat data.
 
 - Source: `HS-SITC-BEC_Correlations_2022.xlsx` (UNSD, HS2022→BEC4 column),
-  at `~/Code/un-classifications/`.
+  committed in-repo at `reference/un_classifications/` (build-only).
 - **BEC Rev 4, not Rev 5** — Rev 4 is the documented standard for the
   capital/intermediate/consumption end-use split; Rev 5 restructured in ways
   that need its own legend to read end-use.

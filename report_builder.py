@@ -274,7 +274,13 @@ _ABOUT: dict[str, str] = {
         "\n"
         "**Three views** of each group sit side by side: **EU-27** (Eurostat), "
         "**UK** (HMRC), and **EU-27 + UK** combined (two agencies summed — a "
-        "useful approximation, not a like-for-like single source)."
+        "useful approximation, not a like-for-like single source).\n"
+        "\n"
+        "**A curated selection.** These groups are a hand-picked set of HS "
+        "product categories — journalist-defined clusters of customs codes, "
+        "not the full product universe — sorted into coarse **SITC buckets**. "
+        "See the **[Glossary](#tab-glossary)** for how “SITC bucket” and “HS "
+        "group” are defined."
     ),
     "trade-map": (
         "The trade map places **every** CN8 product code by its **SITC "
@@ -505,8 +511,8 @@ def _sector_detail_section(cur, predictability: dict | None = None) -> Section:
     """
     root = Section(
         id="sector-detail", title="Sector detail", kind="sector_detail",
-        intro="Every HS group's rolling 12-month value vs the prior 12 "
-              "months, China ↔ EU-27, both flows.",
+        intro="Every [HS group](#gloss-hs-group)'s rolling 12-month value vs "
+              "the prior 12 months, China ↔ EU-27, both flows.",
         about=_ABOUT["sector-detail"],
     )
     cur.execute(
@@ -805,14 +811,16 @@ def _state_of_play_section(cur) -> Section:
     root = Section(
         id="state-of-play", title="Europe's deficit with China",
         kind="state_of_play",
-        intro="The standing deficit by reporter scope, on the CN+HK+MO "
-              "envelope — a level, not this cycle's change.",
+        intro="The standing deficit by reporter scope, on the "
+              "[CN+HK+MO](#gloss-cn-hk-mo) envelope — a level, not this "
+              "cycle's change.",
         about=_ABOUT["the-deficit"],
     )
     deficit = Section(
         id="the-deficit",
         title="Europe's goods-trade deficit with China", kind="state_of_play",
-        intro="The standing level by reporter scope, on the CN+HK+MO envelope.",
+        intro="The standing level by reporter scope, on the CN+HK+MO "
+              "envelope.",
     )
     for subkind, cn_subkind, label, source in _TB_SCOPES:
         cur.execute(
@@ -964,7 +972,8 @@ def _structural_section(cur, anchor: date | None) -> Section:
 
     root = Section(
         id="trade-map", title="Trade map", kind="structural",
-        intro="Every CN8 code by SITC division, value-weighted — the whole "
+        intro="Every [CN8](#gloss-cn8-combined-nomenclature-8-digit) code by "
+              "[SITC division](#gloss-sitc-bucket), value-weighted — the whole "
               "structure, including the value outside the editorial groups. "
               f"EU-27 imports from China (CN+HK+MO), rolling 12 months to "
               f"{_fmt_month(anchor)}.",
