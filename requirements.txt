@@ -12,6 +12,8 @@ python-dotenv
 pandas
 matplotlib
 gspread
+google-api-python-client
 google-auth
+google-cloud-storage
 ollama
-google-generativeai
+anthropic
