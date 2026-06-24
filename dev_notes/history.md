@@ -10,6 +10,49 @@ to understand how the project got here.
 
 ---
 
+## 2026-06-24 — eurostat_raw_rows natural-key UNIQUE backstop (partial, 2019+)
+
+Closes the roadmap's "`eurostat_raw_rows` UNIQUE constraint" item — but the
+data investigation (principle 6: look before building infra) reshaped it from
+the "small partial index + `ON CONFLICT DO NOTHING`" the roadmap imagined.
+
+What the live data showed (19M rows, 112 periods):
+
+- **The natural key is ~14 columns, not the obvious 5–6.** Eurostat masks
+  confidential NC8 codes to chapter stubs like `28XXXXXX` that are distinguished
+  *only* by their classification columns (`product_sitc`/`product_cpa*`/
+  `product_bec*`/`product_section`). A naïve UNIQUE on
+  `(period, reporter, partner, product_nc, flow, stat_procedure)` would have
+  collapsed **3.9M legitimately-distinct rows**.
+- **The modern era (2019+, 88 periods, 13.4M rows) is already perfectly unique**
+  on the full 14-col key — zero violations, zero NULLs in any key column. The
+  append-only ingest guard is doing its job.
+- **All real duplication is legacy 2017–2018** (~1.96M excess rows; up to 50 per
+  cell) — the known pre-v2 COMEXT format issue, a *separate* forward-work item.
+- **No live double-count:** modern `000TOTAL` rows (the ones the trade-balance /
+  mirror analysers read) have zero duplicates — checked specifically.
+
+What shipped:
+
+- A **partial** unique index `uq_eurostat_raw_natural_key` on the 14 dimension
+  columns (never the measures), `COALESCE(col,'')` on the nullable dims so NULLs
+  can't slip past dedup, `WHERE period >= '2019-01'`. Scopes enforcement to the
+  era that's already clean and leaves the 2017–2018 cleanup as its prerequisite
+  forward work. In `schema.sql` (plain) + `migrations/2026-06-24-eurostat-raw-rows-unique-natural-key.sql`
+  (`CONCURRENTLY` for the no-lock build on the 13M-row table).
+- **No insert-path change.** The roadmap's `ON CONFLICT DO NOTHING` would have
+  broken `bulk_insert_eurostat_raw_rows`, which relies on `RETURNING` every input
+  row's id to build the `observations.eurostat_raw_row_ids` FK arrays. Instead
+  the guard stays the primary, graceful dedup (clean noop) and the index is the
+  backstop that turns a (near-impossible-today) concurrency race or guard bug
+  from *silent duplication* into a *loud abort*.
+- A DB-gated regression test: a duplicate modern row is refused, a row differing
+  only in a classification column is allowed (the masked-NC8 case), and legacy
+  pre-2019 duplicates stay insertable (outside the partial index).
+
+Verified the exact COALESCE index expression has zero violations on live modern
+data before shipping, so the `CONCURRENTLY` build can't fail mid-way. Apply to a
+working DB with the command in the migration header.
 ## 2026-06-24 — Fail loud on a failed reuse-takes graft
 
 Closes the open follow-up to `--portal-reuse-takes` (#69). The reuse path read

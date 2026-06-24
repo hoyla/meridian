@@ -251,3 +251,63 @@ def test_eurostat_coverage_gaps_multi_covers_hk_mo_envelope(clean_db, test_db_ur
         (FEB, "DE", "HK"),
         (FEB, "NL", "CN"),
     ]
+
+
+def test_eurostat_raw_rows_natural_key_unique_backstop(clean_db, test_db_url):
+    """The partial unique index (uq_eurostat_raw_natural_key) is the DB-level
+    backstop for the append-only ingest guard:
+
+    - a duplicate *modern* raw line is refused (the concurrency/guard-bug case);
+    - rows that differ only in a classification column are allowed (Eurostat
+      masks confidential NC8 to chapter stubs like '28XXXXXX', distinguished
+      only by SITC/CPA/BEC — so those must be in the key, not collapsed);
+    - legacy pre-2019 rows — which the pre-v2 source itself duplicated — are
+      outside the partial index and stay insertable (that cleanup is separate).
+
+    Skips cleanly if the test DB predates the index (it's applied by the
+    migration / schema.sql, and conftest truncates rather than rebuilding)."""
+    import psycopg2
+    import psycopg2.errors
+    import pytest
+
+    conn = psycopg2.connect(test_db_url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM pg_indexes WHERE tablename='eurostat_raw_rows' "
+                "AND indexname='uq_eurostat_raw_natural_key'")
+            if cur.fetchone() is None:
+                pytest.skip("uq_eurostat_raw_natural_key not applied to the "
+                            "test DB — run the 2026-06-24 migration against it")
+            cur.execute("INSERT INTO scrape_runs (source_url, status) "
+                        "VALUES ('test://eu-unique', 'success') RETURNING id")
+            run_id = cur.fetchone()[0]
+        conn.commit()
+
+        def insert(period, sitc="100XX"):
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO eurostat_raw_rows (scrape_run_id, period, "
+                    "reporter, partner, trade_type, product_nc, product_sitc, "
+                    "flow, stat_procedure, suppl_unit, value_eur) VALUES "
+                    "(%s, %s, 'DE', 'CN', 'E', '28XXXXXX', %s, 1, '1', "
+                    "'NO_SU', 100)",
+                    (run_id, period, sitc))
+
+        # Modern row inserts; an identical one is refused by the backstop.
+        insert(date(2026, 1, 1)); conn.commit()
+        with pytest.raises(psycopg2.errors.UniqueViolation):
+            insert(date(2026, 1, 1)); conn.commit()
+        conn.rollback()
+
+        # Differs only in the classification column → a distinct flow, allowed.
+        insert(date(2026, 1, 1), sitc="200XX"); conn.commit()
+
+        # Legacy pre-2019 duplicates are outside the partial index → allowed.
+        insert(date(2017, 5, 1)); insert(date(2017, 5, 1)); conn.commit()
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM eurostat_raw_rows")
+            assert cur.fetchone()[0] == 4  # 2 modern distinct + 2 legacy dupes
+    finally:
+        conn.close()
