@@ -519,6 +519,13 @@ def _biggest_mover_indicator(cur, surfaced_groups: set[str]) -> Indicator | None
         (r["id"], r["detail"]) for r in rows
         if (r["detail"].get("windows") or {}).get("current_end") == latest_anchor
     ]
+    # Drop CN8s that are watched only because a held-back group (hidden:/draft:)
+    # widened the prefix set — keep a product if any non-held parent claims it.
+    held = db.held_group_names(cur)
+    cands = [(fid, d) for (fid, d) in cands
+             if set(d.get("parent_groups") or []) - held]
+    if not cands:
+        return None
 
     def rank_key(item):
         _, d = item
@@ -679,10 +686,11 @@ def _sector_detail_section(cur, predictability: dict | None = None) -> Section:
         return root
     # Group HS patterns → SITC division facet (the structural spine);
     # descriptions for the inline glossary.
-    cur.execute("SELECT name, hs_patterns, description FROM hs_groups")
+    cur.execute("SELECT name, hs_patterns, description, created_by FROM hs_groups")
     _g = cur.fetchall()
-    patterns_by_name = {n: (p or []) for n, p, d in _g}
-    desc_by_name = {n: d for n, p, d in _g}
+    patterns_by_name = {n: (p or []) for n, p, d, cb in _g}
+    desc_by_name = {n: d for n, p, d, cb in _g}
+    held_by_name = {n: db.is_held_created_by(cb) for n, p, d, cb in _g}
     # Reader-facing group labels. `name` stays the lookup key for every dict
     # above (patterns_by_name, desc_by_name, share_by_name, traj_by_name,
     # by_group, predictability…); disp is used only for displayed titles and
@@ -850,8 +858,17 @@ def _sector_detail_section(cur, predictability: dict | None = None) -> Section:
         metrics["section"] = {"code": sec_code, "title": sec_title}
         value = g.get("import_eur", g["max_eur"]) or 0.0
         name_disp = disp.get(name, name)  # reader-facing title/slug; name = key
+        # Held-back groups (hidden:/draft:) are listed here but flagged and kept
+        # out of the rankings (Standout movers + Biggest-mover KPI). The marker
+        # rides the title so it shows in any renderer; metrics['held'] lets the
+        # HTML style it. Slug stays name-based so existing links still resolve.
+        held = held_by_name.get(name, False)
+        if held:
+            metrics["held"] = True
+        title_disp = (f"{name_disp} (held back — not yet in rankings)"
+                      if held else name_disp)
         built.append((value, sec_code, Section(
-            id=_slugify_heading(name_disp), title=name_disp, kind="sector_detail",
+            id=_slugify_heading(name_disp), title=title_disp, kind="sector_detail",
             findings=fs, metrics=metrics, intro=desc_by_name.get(name),
             facets=Facets(commodity=[name_disp], sector=sectors, theme=themes,
                           end_use=end_use),

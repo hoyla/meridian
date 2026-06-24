@@ -912,9 +912,17 @@ def _compute_top_movers(
     )
     rows = cur.fetchall()
 
+    # Held-back groups (hidden:/draft: created_by) are analysed but kept out of
+    # the published rankings — a journalist stages a group, eyeballs it in a
+    # --portal-no-publish preview, then promotes it. See db.is_held_created_by.
+    import db
+    held = db.held_group_names(cur)
+
     scored: list[dict] = []
     for r in rows:
         d = dict(r) if not isinstance(r, dict) else dict(r)
+        if d["group_name"] in held:
+            continue
         pred = predictability.get(d["group_name"])
         if pred is not None and pred[0] == "🔴":
             continue

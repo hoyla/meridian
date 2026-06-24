@@ -57,6 +57,34 @@ def group_display_names(cur) -> dict[str, str]:
         return {r[0]: r[1] for r in c.fetchall()}
 
 
+# A group is "held back" from the published rankings (the Standout movers list
+# and the Biggest-mover KPI) when its `created_by` carries a hold prefix:
+#   'hidden:' — analysed and previewable, deliberately staged out of the
+#              rankings until a journalist promotes it (valid, just not live yet)
+#   'draft:'  — methodology not yet validated (also kept out of the headlines)
+# Held groups are STILL analysed and STILL listed — flagged — in Sector detail,
+# so they can be eyeballed in a --portal-no-publish preview and promoted by
+# editing the prefix off `created_by`. Promotion needs no schema change.
+HELD_CREATED_BY_PREFIXES = ("hidden:", "draft:")
+
+
+def is_held_created_by(created_by: str | None) -> bool:
+    """True if a group with this `created_by` is held back from the published
+    rankings (see HELD_CREATED_BY_PREFIXES)."""
+    return (created_by or "").startswith(HELD_CREATED_BY_PREFIXES)
+
+
+def held_group_names(cur) -> set[str]:
+    """The set of hs_group `name`s held back from the published rankings.
+
+    Single source of truth for the gate so the two ranking surfaces
+    (`_compute_top_movers`, `_biggest_mover_indicator`) can't drift on the
+    prefix definition. Uses an independent cursor, RealDictCursor-agnostic."""
+    with cur.connection.cursor() as c:
+        c.execute("SELECT name, created_by FROM hs_groups")
+        return {r[0] for r in c.fetchall() if is_held_created_by(r[1])}
+
+
 def start_run(source_url: str) -> int:
     with transaction() as conn, conn.cursor() as cur:
         cur.execute(
