@@ -10,6 +10,50 @@ to understand how the project got here.
 
 ---
 
+## 2026-06-24 — Self-verifying portal: per-number provenance drawers (iteration 3 MVP)
+
+Closed the journalist-usability arc's iteration 3 — but rescoped from
+"self-verifying *bundle*" to "self-verifying *portal*" (decided with Luke earlier
+the same day): the portal is the live surface, so provenance has to live where the
+reader is. A `finding/N` token on the portal was a **dead end** for a journalist
+without DB access — the provenance *content* existed (`provenance.py`) but only as
+on-demand markdown docs with portal-incompatible links, and the portal serves a
+static `index.html` with no database.
+
+Three scope calls (all confirmed with Luke): **Quotability-gated** (only the
+numbers a reporter quotes), **source-URL-first** (SQL collapsed "for the record"),
+**portal canonical** (pre-render into the snapshot; drop the Drive-appendix half).
+
+What shipped:
+
+- **`provenance_payload.py`** — a structured, portal-native payload per finding:
+  the **source-URL trail** (the primary "where did this come from"), the headline
+  **arithmetic**, plain-English **caveats**, and a collapsed **replay-SQL**. The
+  source trail is generic — observation-based findings (`trade_balance`,
+  `china_all_goods_share`, GACC bilateral) cite via `observation_ids`; raw-row
+  findings (`hs_group_yoy`, which carry none) fall back to the source releases for
+  their current 12-month window. So KPIs *and* movers are covered without
+  per-subkind markdown renderers.
+- **Build-time bake.** `report_builder` collects the Quotability-gated finding ids
+  (the KPI standing levels + the headline movers) and bakes their payloads into
+  `report.json` (`report_model.provenance_payloads`), so the static portal needs no
+  DB at serve time — the same pattern as the takes/findings.
+- **No-JS drawer.** `report_render_html` renders the citation line as a
+  `<details>` whose summary is the cite ("finding/N · Eurostat · as of Apr ·
+  where this came from ▸") and whose panel lists the source links first, then the
+  arithmetic, caveats, and a nested collapsed Replay-SQL. No payload → the plain
+  citation line, unchanged (the long tail isn't gated).
+
+Verified live: the €964M/day deficit KPI expands to **all 12 monthly Eurostat
+releases it draws on** (each a link) + "imports €572.1bn − exports €220.4bn =
+deficit €351.7bn ≈ €964M/day, +9.2% YoY"; the headline movers likewise. 8 payloads
+baked, 9 drawers rendered. Tests: drawer renders for a gated KPI + mover, and is
+absent (plain cite) without a payload. Full suite green (567). Remaining
+follow-ups (extend the gated set to the long tail; richer per-subkind arithmetic)
+are in roadmap.md.
+
+---
+
 ## 2026-06-24 — China's share of EU all-goods trade: dependency donut + trend
 
 The headline "how dependent is the EU on China?" metric, as a donut KPI + a
