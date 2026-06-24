@@ -91,11 +91,17 @@ class Indicator:
     value: float
     unit: str
     formatted: str
+    # Short ALL-CAPS card title (the consolidated KPI design). The long `label`
+    # becomes the description line beneath the figure. Falls back to `label`.
+    kicker: Optional[str] = None
     chart: ChartType = "bignumber"
     delta: Optional[dict] = None  # {value, direction, formatted}
     # A muted sub-line under the figure: scope disclosure / comparator (e.g. the
     # CN+HK+MO envelope note + the China-only counterpart). Optional.
     note: Optional[str] = None
+    # 'How this is calculated' rollover (a no-JS title tooltip on a small ⓘ by
+    # the kicker). Only set where the figure isn't self-explanatory (the mover).
+    tooltip: Optional[str] = None
     chart_data: Optional[ChartData] = None
     provenance: Provenance = field(default_factory=Provenance)
 

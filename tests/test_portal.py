@@ -29,28 +29,36 @@ def _sample_report() -> rm.Report:
     series = [rm.SeriesPoint(period=date(2025, 1, 1), value=1.0),
               rm.SeriesPoint(period=date(2025, 2, 1), value=2.0)]
     deficit_ind = rm.Indicator(
-        key="eu_china_deficit_per_day", label="EU-27 deficit", value=9.4e8,
-        unit="eur_per_day", formatted="€939M/day", chart="sparkline",
+        key="eu_china_deficit_per_day", kicker="EU-27 DEFICIT",
+        label="EU-27 goods-trade deficit with China, HK & Macao",
+        value=9.4e8, unit="eur_per_day", formatted="€939M/day", chart="sparkline",
         delta={"value": 0.065, "direction": "wider", "formatted": "+6.5% YoY"},
+        note="China-only: €990M/day (+5.0% YoY)",
         chart_data=rm.ChartData(chart_type="sparkline", series=series,
                                 extra={"caption": "Monthly figures for the 36 months to Apr 2026"}),
         provenance=rm.Provenance(finding_ids=[1], source="eurostat", as_of=date(2026, 4, 1)),
     )
     level_ind = rm.Indicator(
-        key="eu_china_imports_12mo", label="EU-27 imports (12mo)", value=5.6e11,
-        unit="eur", formatted="€561.37B", chart="bignumber",
+        key="eu_china_imports_12mo", kicker="EU-27 IMPORTS",
+        label="EU-27 goods imports from China, HK & Macao (12-month)",
+        value=5.6e11, unit="eur", formatted="€561.37B", chart="bignumber",
+        note="China-only: €548.00B",
         provenance=rm.Provenance(finding_ids=[1], source="eurostat", as_of=date(2026, 4, 1)),
     )
     donut_ind = rm.Indicator(
-        key="china_import_share", label="China share of EU imports", value=0.23,
-        unit="share", formatted="23%", chart="donut", note="China-only 22.5%",
+        key="china_import_share", kicker="SHARE OF TRADE",
+        label="China, HK & Macao share of EU-27 goods imports from outside the EU",
+        value=0.23, unit="share", formatted="23%", chart="donut",
+        note="China-only: 22.5%",
         provenance=rm.Provenance(finding_ids=[20], source="eurostat", as_of=date(2026, 4, 1)),
     )
     mover_ind = rm.Indicator(
-        key="cn8_biggest_mover", label="Biggest single-product mover", value=2.33,
-        unit="yoy_pct", formatted="+233%", chart="bignumber",
-        note="Electronic integrated circuits (DRAM) · €278.1M imports, 12mo · "
-             "outside the headline movers",
+        key="cn8_biggest_mover", kicker="BIGGEST MOVER",
+        label="Electronic integrated circuits (DRAM) · €278.1M imports, 12mo · "
+              "outside the headline movers",
+        value=2.33, unit="yoy_pct", formatted="+233%", chart="bignumber",
+        tooltip="Biggest single product by 12-month import change; filtered for "
+                "size, persistence and single-shipment robustness.",
         provenance=rm.Provenance(finding_ids=[21], source="eurostat", as_of=date(2026, 4, 1)),
     )
     headline = rm.Headline(
@@ -383,16 +391,33 @@ def test_kpi_sparkline_cards_span_two_columns():
 
 
 def test_biggest_mover_kpi_card_renders():
-    """The CN8 biggest-mover card (Option A): a 1-column bignumber carrying the
-    %, the product, and the 'outside the headline movers' framing — not a wide
-    sparkline card, so it completes a KPI row rather than stranding one."""
+    """The CN8 biggest-mover card (Option A), consolidated design: a BIGGEST
+    MOVER kicker, the % move as a green/red coloured value, the product in the
+    description line, the framing, and a 'how it's calculated' rollover. Not
+    wide, so it completes a KPI row."""
     h = render_html(_sample_report())
-    assert "Biggest single-product mover" in h
-    assert "+233%" in h                                  # the move, as the big number
-    assert "Electronic integrated circuits (DRAM)" in h  # the product (in the note)
-    assert "outside the headline movers" in h            # the provocation framing
+    assert 'class="kpi-kicker">BIGGEST MOVER' in h        # the consolidated kicker
+    assert "+233%" in h                                   # the move, as the value
+    assert "Electronic integrated circuits (DRAM)" in h   # the product (description)
+    assert "outside the headline movers" in h             # the provocation framing
+    assert "#22874d" in h                                 # green-coloured value (up)
+    assert 'class="mover-arrow"' not in h                 # arrow dropped in the redesign
+    assert 'class="kpi-info"' in h                        # the how-calculated rollover (ⓘ)
+    assert 'title="Biggest single product' in h           # ...carrying the method
     # Exactly one wide card — the headline EU-27 deficit; the mover is 1-column.
     assert h.count('class="kpi kpi-wide"') == 1
+
+
+def test_kpi_cards_use_consolidated_type():
+    """All KPI cards share the consolidated template: a bold-caps kicker and a
+    standard-size description line; the old per-card label/note classes are gone."""
+    h = render_html(_sample_report())
+    for kick in ("EU-27 DEFICIT", "EU-27 IMPORTS", "SHARE OF TRADE", "BIGGEST MOVER"):
+        assert f'class="kpi-kicker">{kick}' in h
+    assert 'class="kpi-desc"' in h          # the unified description line
+    assert "China-only:" in h               # comparator folded into the description
+    assert 'class="kpi-label"' not in h     # old per-card title style retired
+    assert 'class="kpi-note"' not in h      # old sub-line style retired
 
 
 def test_provenance_drawer_renders_for_gated_findings():
@@ -445,8 +470,8 @@ def test_china_share_donut_note_and_dependency_trend_render():
     note, and the state-of-play section renders the share-over-time trend chart
     with a percent y-axis."""
     h = render_html(_sample_report())
-    # Donut comparator note (the CN-only figure under the donut).
-    assert "China-only 22.5%" in h
+    # Donut comparator (the CN-only figure, folded into the description line).
+    assert "China-only: 22.5%" in h
     # The dependency trend chart card + its percent axis labels.
     assert 'id="china-share-trend"' in h
     assert "share of EU-27 goods imports from outside the EU" in h  # title (apostrophe escaped)

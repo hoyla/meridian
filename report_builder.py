@@ -329,7 +329,8 @@ def _deficit_indicator(
     *,
     subkind: str = "trade_balance",
     key: str = "eu_china_deficit_per_day",
-    label: str = "EU-27 goods-trade deficit with China, Hong Kong & Macao",
+    kicker: str = "EU-27 DEFICIT",
+    label: str = "EU-27 goods-trade deficit with China, HK & Macao",
     source: str = "eurostat",
     chart: str = "sparkline",
 ) -> Indicator | None:
@@ -391,10 +392,11 @@ def _deficit_indicator(
         cn_yoy_str = (
             f" ({'+' if float(cn_yoy) >= 0 else ''}{float(cn_yoy) * 100:.1f}% YoY)"
             if cn_yoy is not None else "")
-        note = f"China-only €{float(cn_pd) / 1e6:,.0f}M/day{cn_yoy_str}"
+        note = f"China-only: €{float(cn_pd) / 1e6:,.0f}M/day{cn_yoy_str}"
 
     return Indicator(
         key=key,
+        kicker=kicker,
         label=label,
         value=float(per_day),
         unit="eur_per_day",
@@ -425,10 +427,11 @@ def _import_level_indicator(cur) -> Indicator | None:
     as_of = date.fromisoformat(anchor) if isinstance(anchor, str) else None
     _, cn_detail = _latest_trade_balance(cur, "trade_balance_cn_only")
     cn_imp = (cn_detail or {}).get("totals", {}).get("rolling_12mo", {}).get("import_eur")
-    note = f"China-only {_fmt_eur(cn_imp)}" if cn_imp is not None else None
+    note = f"China-only: {_fmt_eur(cn_imp)}" if cn_imp is not None else None
     return Indicator(
         key="eu_china_imports_12mo",
-        label="EU-27 goods imports from China, Hong Kong & Macao (12-month)",
+        kicker="EU-27 IMPORTS",
+        label="EU-27 goods imports from China, HK & Macao (12-month)",
         value=float(imp),
         unit="eur",
         formatted=_fmt_eur(imp),
@@ -471,14 +474,15 @@ def _china_share_indicator(cur) -> Indicator | None:
     anchor = (detail or {}).get("windows", {}).get("anchor_period")
     as_of = date.fromisoformat(anchor) if isinstance(anchor, str) else None
     cn = roll.get("share_cn_only")
-    note = f"China-only {cn * 100:.1f}%" if cn is not None else None
+    note = f"China-only: {cn * 100:.1f}%" if cn is not None else None
     return Indicator(
         key="china_share_eu_imports",
+        kicker="SHARE OF TRADE",
         # Name the CN+HK+MO envelope in the label, as the deficit/imports KPIs do
         # — the headline figure is the envelope; the note carries the China-only
         # comparator. (Convention: never report a "China" figure without saying
         # whether Hong Kong & Macao are in it.)
-        label="China, Hong Kong & Macao share of EU-27 goods imports "
+        label="China, HK & Macao share of EU-27 goods imports "
               "from outside the EU (12-month)",
         value=float(share),
         unit="share",
@@ -534,24 +538,38 @@ def _biggest_mover_indicator(cur, surfaced_groups: set[str]) -> Indicator | None
     as_of = date.fromisoformat(anchor) if isinstance(anchor, str) else None
     parents = d.get("parent_groups") or []
     off_watch = not (set(parents) & surfaced_groups)
-    label_short = (prod.get("label_short") or prod.get("cn8") or "").strip()
-    if len(label_short) > 46:
-        # Break at a word boundary so the note doesn't read "…dynamic ran…";
-        # the full denomination is always in the provenance drawer.
-        label_short = (label_short[:46].rsplit(" ", 1)[0] or label_short[:45]).rstrip() + "…"
+    # The product is the card's prominent line now (not a truncated tail), so
+    # allow a longer label, word-boundary-trimmed; the full denomination is in
+    # the provenance drawer.
+    product = (prod.get("label_short") or prod.get("cn8") or "").strip()
+    if len(product) > 58:
+        product = (product[:58].rsplit(" ", 1)[0] or product[:57]).rstrip() + "…"
     frame = ("outside the headline movers" if off_watch
              else f"within {parents[0]}" if parents else "")
-    note = f"{label_short} · {_fmt_eur(cur_eur)} imports, 12mo"
+    # Description line = the product (the interesting thing) + value + framing;
+    # the big coloured value carries the % move and its direction.
+    desc = f"{product} · {_fmt_eur(cur_eur)} imports, 12mo"
     if frame:
-        note += f" · {frame}"
+        desc += f" · {frame}"
+    # 'How this is calculated' rollover; the provenance drawer carries the full
+    # source trail + arithmetic.
+    tooltip = (
+        "Biggest single product (8-digit CN8 code) by change in its 12-month "
+        "import value (EU-27 from China, HK & Macao). Filtered for size "
+        "(≥ €25M in both the latest and prior year), a move that held across the "
+        "last 3 months, and robustness to any single shipment. Open the citation "
+        "below for the full workings."
+    )
     return Indicator(
         key="cn8_biggest_mover",
-        label="Biggest single-product mover",
+        kicker="BIGGEST MOVER",
+        label=desc,
         value=float(yoy),
-        unit="yoy_pct",
+        unit="yoy_pct",   # signals a signed change → the value is coloured
         formatted=f"{'+' if yoy >= 0 else '−'}{abs(yoy) * 100:.0f}%",
         chart="bignumber",
-        note=note,
+        note=None,
+        tooltip=tooltip,
         provenance=Provenance(finding_ids=[fid], source="eurostat", as_of=as_of),
     )
 
@@ -1850,7 +1868,8 @@ def build_report(
                 _china_share_indicator(cur),
                 _deficit_indicator(
                     cur, subkind="trade_balance_uk", key="uk_china_deficit_per_day",
-                    label="UK goods-trade deficit with China, Hong Kong & Macao",
+                    kicker="UK DEFICIT",
+                    label="UK goods-trade deficit with China, HK & Macao",
                     source="hmrc", chart="bignumber",
                 ),
                 _biggest_mover_indicator(
