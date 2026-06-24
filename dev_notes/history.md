@@ -10,6 +10,43 @@ to understand how the project got here.
 
 ---
 
+## 2026-06-24 — Fail loud on a failed reuse-takes graft
+
+Closes the open follow-up to `--portal-reuse-takes` (#69). The reuse path read
+the live snapshot via `portal_publish.read_latest_report`, which returned `None`
+for three different things — no bucket, no `latest/report.json` yet (first
+publish), *and any GCS/auth/parse error*. The caller couldn't tell them apart, so
+a **read error** was treated as "no prior" and the build fell back to **empty
+takes** while still reporting success. Harmless under `--portal-no-publish`
+(a preview), but on a real publish it would push a takes-less portal live — a
+silent production regression (hit live 2026-06-23 with `GOOGLE_CLOUD_PROJECT`
+unresolved).
+
+The fix separates **absent** from **read errored**:
+
+- `read_latest_report(bucket, *, required=False)` — "absent" (no bucket / no
+  object yet) still returns `None` regardless. A genuine read error returns
+  `None` when best-effort (`required=False`) but raises the new
+  `portal_publish.PriorSnapshotUnreadable` when `required=True`.
+- `periodic.write_portal_snapshot(..., publishing=False)` — `publishing=True`
+  makes the prior read strict (`required=publishing`) and re-raises
+  `PriorSnapshotUnreadable` past the best-effort wrapper, so a publish that asked
+  to carry takes forward refuses rather than ships empty. The graft itself stays
+  best-effort. `run_periodic` keeps `publishing=False`, so its behaviour is
+  unchanged.
+- `scrape.py --portal-snapshot` computes `publishing = bucket and not
+  --portal-no-publish`, and on `PriorSnapshotUnreadable` prints an actionable
+  refusal (retry with project/bucket reachable, or drop `--portal-reuse-takes`)
+  instead of publishing.
+
+This narrows the deliberate "never raises" contract to "never raises on absent;
+raises on read error when publishing". Tests: three pure cases on
+`read_latest_report` (no-bucket / absent-object / read-error × required) plus a
+DB-gated `write_portal_snapshot` case asserting publish fails loud while a preview
+stays best-effort.
+
+---
+
 ## 2026-06-23 — Source-freshness & release-timing hardening (LIVE)
 
 The 2026-06-23 HMRC↔Eurostat release-timing investigation closed the whole
