@@ -21,6 +21,14 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+
+class PriorSnapshotUnreadable(RuntimeError):
+    """The live snapshot exists (or might) but could not be read — a GCS/auth/
+    parse error, distinct from "no prior snapshot yet". Raised by
+    `read_latest_report(required=True)` so a publish that asked to carry prior
+    takes forward refuses to ship takes-less rather than silently emptying them.
+    """
+
 # Snapshot file -> content-type. report.json is the canonical artefact; the
 # index.html is the rendered preview the v1 service serves at /.
 _SNAPSHOT_FILES: dict[str, str] = {
@@ -41,15 +49,27 @@ def _period_from_snapshot(portal_dir: Path) -> str | None:
         return None
 
 
-def read_latest_report(bucket: str | None = None) -> dict | None:
+def read_latest_report(
+    bucket: str | None = None, *, required: bool = False,
+) -> dict | None:
     """Fetch and parse `gs://<bucket>/latest/report.json` — the currently-live
-    snapshot — as a plain dict, or None if absent/unreadable.
+    snapshot — as a plain dict, or None when there is no prior snapshot to read.
 
     The source for the reuse-takes graft (carry prior LLM takes onto an
     LLM-less rebuild; see `portal_takes_reuse`). Bucket from the arg or
-    PORTAL_BUCKET. Best-effort: a missing bucket, a missing object, or any
-    GCS/parse error returns None (the caller falls back to empty takes) — it
-    never raises, so a redeploy is never blocked by the reuse lookup."""
+    PORTAL_BUCKET.
+
+    Two outcomes are deliberately separated:
+
+    - **Absent** — no bucket configured, or no `latest/report.json` yet (the
+      first publish) — returns None regardless of `required`. There is nothing
+      to carry forward; empty takes are correct.
+    - **Read errored** — a GCS/auth/parse failure, so a prior snapshot might
+      exist but we couldn't read it. With `required=False` (the default,
+      best-effort) this logs and returns None. With `required=True` it raises
+      `PriorSnapshotUnreadable` — used when a publish explicitly asked to reuse
+      takes, so it must not silently ship them empty (a read error read as
+      "absent" was the silent-regression bug this guards)."""
     bucket = bucket or os.environ.get("PORTAL_BUCKET")
     if not bucket:
         return None
@@ -61,6 +81,10 @@ def read_latest_report(bucket: str | None = None) -> dict | None:
             return None
         return json.loads(blob.download_as_bytes())
     except Exception as e:
+        if required:
+            raise PriorSnapshotUnreadable(
+                f"could not read latest/report.json from gs://{bucket} ({e})"
+            ) from e
         log.warning(
             "reuse-takes: could not read latest/report.json from gs://%s "
             "(%s); takes will be empty", bucket, e,

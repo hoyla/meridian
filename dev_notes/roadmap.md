@@ -223,36 +223,6 @@ append-only + provenance on everything new (principles 3/4/7).
    commodity, for "China-specific vs worldwide"); tariff-change timelines (to
    correlate moves with policy — also feeds the LLM-takes v2 retrieval angle).
 
-## Portal deploy — fail loud on a failed reuse-takes graft (2026-06-23)
-
-The `--portal-reuse-takes` feature shipped (#69; see history.md). One open
-follow-up remains on it:
-
-**Fail loud on a failed graft; don't ship empty takes.**
-`portal_publish.read_latest_report` is best-effort *by contract* ("never raises, so
-a redeploy is never blocked by the reuse lookup"), so it returns `None` for three
-different things: no bucket, no `latest/report.json` yet (first publish), *and any
-GCS/auth/parse error*. The caller can't tell them apart, so a failed read falls
-back to **empty takes** and the build still "succeeds". Hit live 2026-06-23: with
-`GOOGLE_CLOUD_PROJECT` unresolved the read errored (`portal_publish.py:65`,
-"…takes will be empty") and `--portal-reuse-takes` built a takes-less snapshot.
-Harmless under `--portal-no-publish` (a local preview), but on a real publish it
-would push a **takes-less portal live while reporting success** — a silent
-production regression. (The publish *write* fails loud at `storage.Client()`
-construction; only the reuse *read* swallows.)
-
-Fix: distinguish "absent" (fine — first publish / no bucket) from "read errored",
-and when `--portal-reuse-takes` was explicitly asked for AND we're publishing,
-**raise / refuse to publish** on the errored case so the operator retries (project
-+ `--portal-bucket` set) or consciously drops the flag. Keep the benign "none yet"
-path (`portal_publish.py:60`) and `--portal-no-publish` previews non-fatal. Touch
-points: `read_latest_report`'s `except` (returns `None` for everything today,
-`portal_publish.py:63`) and the reuse branch in `periodic.write_portal_snapshot`
-(`periodic.py:210`). This narrows the deliberate "never raises" contract — itself
-the cause of the silent failure — to "never raises on absent; raises on read error
-when publishing". Small; do before relying on reuse for unattended/scripted
-publishes.
-
 ## Observability / logging follow-ups (2026-05-15 evening arc)
 
 Four new audit-log surfaces shipped tonight along with
