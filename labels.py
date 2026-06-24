@@ -203,6 +203,23 @@ SEED_LABELS: list[Label] = [
             "Titanium dioxide (CN8 320611)",
         ],
     ),
+    Label(
+        "Oil & gas: origin watch",
+        "Crude, refined products and gas as a re-export / origin-laundering "
+        "lens rather than a commodity category: the EU/UK extract little of "
+        "these, so member-state EXPORTS to China here flag entrepot re-selling "
+        "of product made elsewhere rather than domestic output. The trade-flow "
+        "footprint of the 'shadow fleet' sanctions-evasion story — the cargo "
+        "side, not the vessels. Caveat: the bilateral counterparty is always "
+        "China, so this sees reselling to China only, not to other destinations.",
+        "origin_risk",
+        member_groups=[
+            "Crude oil (HS 2709)",
+            "Refined petroleum products (HS 2710)",
+            "Natural gas & other petroleum gases (HS 2711)",
+        ],
+        created_by="seed:reporter_request_2026_06",
+    ),
 ]
 
 
