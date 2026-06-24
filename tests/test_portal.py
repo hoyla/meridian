@@ -393,6 +393,10 @@ def test_provenance_drawer_renders_for_gated_findings():
     assert "Replay SQL" in h
     # The mover (finding 2) also gets a drawer with its workings.
     assert "the prior 12 months = -40.0% by value" in h
+    # A human-friendly Eurostat context link sits alongside the raw bulk-file
+    # sources (Eurostat has no constructible filtered deep-link).
+    assert "China-EU_-_international_trade_in_goods_statistics" in h
+    assert "EU–China trade" in h
 
 
 def test_provenance_drawer_absent_without_payload():

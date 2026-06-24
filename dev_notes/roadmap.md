@@ -363,6 +363,31 @@ Remaining (follow-ups, not blocking):
   structured payload, not markdown renderers).
 - **Markdown bundle** still carries the on-demand `provenance/finding-N.md` docs
   (provenance.py) as the LLM-ingestion corpus; unchanged by this.
+- **Eurostat human-friendly companion link — narrative shipped; interactive
+  parked.** The drawer's source links point at the raw COMEXT `.7z` bulk files
+  (the true source, but not human-friendly). Shipped a per-drawer **narrative**
+  link to Eurostat's "EU–China trade in goods" Statistics Explained page
+  (auto-current, zero-maintenance). Revisit adding an **interactive** Data
+  Browser link. Findings from a live browser+API investigation (2026-06-24):
+  - There is **no constructible deep-link** to a filtered Data Browser view —
+    selections are client-side; the address bar stays dataset-level, and
+    "Share/bookmark" only copies the dataset URL.
+  - The reusable `…/view/ds-059331__custom_NNNNNN/…` URLs are **saved server-side
+    objects** (resolved via `api/custom-extraction/.../custom_NNNN`, which
+    returns the full selection as JSON: reporter/partner/product/flow/time). They
+    are reusable but **not constructible from values**; created via the
+    interactive "Customise + save" flow (login / "My datasets"); and they **pin
+    the time selection** (drift stale). Mass-creating one per finding via the
+    internal API would be fragile + abusive.
+  - Partner `CN`/`HK` **are** valid in `ds-059331` (the dataset is NOT
+    aggregate-partner-only — an earlier wrong read; the search box just wasn't
+    matching). The product axis there is SITC; the all-goods row is
+    `product=TOTAL`.
+  - **Realistic option:** ONE (or a few) hand-curated fixed custom-view links
+    (e.g. EU↔China all-goods, both flows, monthly — basically the shape of
+    `__custom_21936152`) as an editorial "browse interactively" link, accepting
+    the time-staleness. Not per-finding. The JSON API can deep-link the exact
+    slice but returns JSON-stat — no better than the `.7z` for a human.
 
 ### Iteration 4 — low-base threshold calibration
 

@@ -627,6 +627,18 @@ def _prov_body(payload: dict | None) -> str:
         parts.append('<div class="prov-grp"><div class="prov-h">Sources — every '
                      'release this figure draws on</div>'
                      f'<ul class="prov-src">{items}</ul></div>')
+        # A human-friendly companion to the raw bulk-file sources of truth:
+        # Eurostat's own narrative China–EU trade overview. (Eurostat exposes no
+        # constructible deep-link to a filtered Data Browser view — checked in
+        # the browser 2026-06-24 — so this is the readable context link, not a
+        # pre-filtered slice.) Shown when the figure draws on Eurostat.
+        if any(s.get("source") == "Eurostat" for s in srcs):
+            parts.append(
+                '<div class="prov-grp prov-context"><a href="'
+                "https://ec.europa.eu/eurostat/statistics-explained/index.php?"
+                'title=China-EU_-_international_trade_in_goods_statistics" '
+                'target="_blank" rel="noopener">Eurostat’s own EU–China trade '
+                "overview (charts &amp; commentary) →</a></div>")
     arith = payload.get("arithmetic") or []
     if arith:
         lines = "".join(f"<li>{html.escape(a)}</li>" for a in arith)
@@ -1741,6 +1753,7 @@ details.prov[open]>summary .prov-cue{opacity:.7}
 .prov-src li{margin:2px 0}.prov-src .prov-meta{color:var(--muted);margin-left:6px;font-size:11px}
 .prov-arith li,.prov-cav li{margin:2px 0;color:var(--ink)}
 .prov-cav code{background:#f3f3f3;padding:0 3px;border-radius:3px}
+.prov-context{border-top:1px dotted var(--line);padding-top:7px;font-size:12px}.prov-context a{color:var(--link)}
 details.prov-sql{margin-top:6px}details.prov-sql>summary{cursor:pointer;color:var(--muted);font-size:11px}
 details.prov-sql pre{overflow-x:auto;background:#f6f6f6;padding:8px;font-size:11px;border:1px solid var(--line);margin:6px 0 0}
 h2.lead{font-family:var(--font-headline);font-size:26px;line-height:1.15;color:var(--ink);margin:4px 0 6px;font-weight:700}
