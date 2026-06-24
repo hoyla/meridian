@@ -54,4 +54,7 @@ jobs:
           psql "$GACC_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -q -f schema.sql
 
       - name: Run tests
-        run: pytest -q
+        # `python -m pytest` (not bare `pytest`) puts the repo root on sys.path;
+        # pytest.ini's pythonpath does too, but this matches the verified local
+        # invocation and is robust either way.
+        run: python -m pytest -q

@@ -4,6 +4,7 @@ lxml
 pdfplumber
 xlrd<2.1
 openpyxl
+python-docx
 py7zr
 psycopg2-binary
 python-dotenv
