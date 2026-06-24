@@ -1027,6 +1027,21 @@ def test_seed_labels_well_formed():
     assert "origin_risk" in kinds         # Xinjiang-style lens exists
 
 
+def test_oil_gas_origin_watch_theme_membership():
+    """The energy/reselling theme unions refined (2710) + gases (2711) only.
+    Crude (2709) was dropped — zero EU↔China trade — so it must NOT reappear as
+    a member (a guard against an accidental re-add)."""
+    by_name = {l.name: l for l in labels.SEED_LABELS}
+    assert "Oil & gas: origin watch" in by_name
+    lab = by_name["Oil & gas: origin watch"]
+    assert lab.kind == "origin_risk"
+    assert set(lab.member_groups) == {
+        "Refined petroleum products (HS 2710)",
+        "Natural gas & other petroleum gases (HS 2711)",
+    }
+    assert "Crude oil (HS 2709)" not in lab.member_groups
+
+
 def test_wind_power_theme_replaces_retired_group():
     """The retired 'Wind turbine components' group is replaced by an
     overlapping 'Wind power' lens: the precise turbine flow plus the NdFeB

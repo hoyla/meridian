@@ -124,3 +124,35 @@ def test_biggest_mover_excludes_cn8_whose_only_parent_is_held(
     finally:
         with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM hs_groups WHERE name = %s", (_HIDDEN,))
+
+
+def test_biggest_mover_keeps_cn8_with_a_non_held_parent(clean_db, test_db_url):
+    """The other half of the gate: a CN8 watched via BOTH a held and a non-held
+    group is KEPT — only products whose *every* parent is held are dropped."""
+    from report_builder import _biggest_mover_indicator
+    try:
+        with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+            _seed_group(cur, _NORMAL, "seed:test", ["999991%"])
+            _seed_group(cur, _HIDDEN, "hidden:test", ["999992%"])
+            cur.execute("INSERT INTO scrape_runs (status, source_url) "
+                        "VALUES ('success', 'test://seed') RETURNING id")
+            run = cur.fetchone()[0]
+            detail = {"product": {"cn8": "99999101", "label_short": "shared widget"},
+                      "parent_groups": [_HIDDEN, _NORMAL],   # one held, one not
+                      "totals": {"yoy_pct": 4.0, "current_12mo_eur": 8e9},
+                      "windows": {"current_end": "2026-04-01"}}
+            cur.execute(
+                "INSERT INTO findings (scrape_run_id, kind, subkind, detail, "
+                "natural_key_hash) VALUES (%s,'anomaly','cn8_yoy_mover',%s::jsonb,'nkc_mix')",
+                (run, json.dumps(detail)),
+            )
+        with psycopg2.connect(test_db_url) as conn, conn.cursor(
+                cursor_factory=psycopg2.extras.DictCursor) as cur:
+            indicator = _biggest_mover_indicator(cur, surfaced_groups=set())
+        assert indicator is not None
+        assert indicator.key == "cn8_biggest_mover"
+        assert "shared widget" in (indicator.label or "")
+    finally:
+        with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM hs_groups WHERE name IN (%s, %s)",
+                        (_NORMAL, _HIDDEN))
