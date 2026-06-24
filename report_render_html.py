@@ -450,11 +450,16 @@ def _chart_card(title: str, value: str, legend: str, svg: str, *,
     )
 
 
-def _donut_svg(share: float, *, size: int = 116, label: str = "") -> str:
+def _donut_svg(share: float, *, size: int = 116, label: str = "",
+               pct_label: str | None = None) -> str:
     """A part-of-whole donut (one share of a whole). Stroke-dasharray on a ring,
     centre percentage. Ready for the China-import-share indicator once an
     all-goods denominator is ingested."""
     share = max(0.0, min(1.0, float(share)))
+    # Centre label: the caller's formatted figure when given (so the donut and the
+    # KPI headline agree to the same precision — e.g. 22.5%, not a re-rounded 23%);
+    # otherwise a whole-percent fallback.
+    centre = pct_label if pct_label else f"{share * 100:.0f}%"
     r = size / 2 - 9
     import math
     circ = 2 * math.pi * r
@@ -463,7 +468,7 @@ def _donut_svg(share: float, *, size: int = 116, label: str = "") -> str:
     return (
         f'<svg class="donut" viewBox="0 0 {size} {size}" width="{size}" '
         f'height="{size}" role="img" aria-label="{html.escape(label)} '
-        f'{share * 100:.0f}%">'
+        f'{html.escape(centre)}">'
         f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{_LINE}" '
         'stroke-width="11"/>'
         f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{_GUARDIAN_BLUE}" '
@@ -471,7 +476,7 @@ def _donut_svg(share: float, *, size: int = 116, label: str = "") -> str:
         f'stroke-dashoffset="{circ / 4:.1f}" transform="rotate(-90 {cx} {cy})" '
         'stroke-linecap="butt"/>'
         f'<text x="{cx}" y="{cy + 1}" text-anchor="middle" dominant-baseline="middle" '
-        f'class="donut-pct">{share * 100:.0f}%</text>'
+        f'class="donut-pct">{html.escape(centre)}</text>'
         "</svg>"
     )
 
@@ -605,7 +610,8 @@ def _indicator_card(ind: Indicator) -> str:
         return (
             '<div class="kpi kpi-donut">'
             f'<div class="kpi-label">{html.escape(ind.label)}</div>'
-            f'<div class="kpi-donut-wrap">{_donut_svg(share, label=ind.label)}</div>'
+            '<div class="kpi-donut-wrap">'
+            f'{_donut_svg(share, label=ind.label, pct_label=ind.formatted)}</div>'
             f"{dnote}{delta}{prov}"
             "</div>"
         )

@@ -10,6 +10,53 @@ to understand how the project got here.
 
 ---
 
+## 2026-06-24 — China's share of EU all-goods trade: dependency donut + trend
+
+The headline "how dependent is the EU on China?" metric, as a donut KPI + a
+share-over-time trend line. Closes breadth-expansion item 1 (the highest-leverage
+piece) and the long-deferred share-of-EU-imports donut, which had been waiting on
+an honest all-goods denominator.
+
+**The denominator (the missing piece).** `eurostat_world_aggregates` only held the
+*tracked* HS prefixes; there was no all-goods total to divide China's slice into.
+Now `000TOTAL` (the per-partner all-products aggregate row) is in the world-totals
+default prefix set, so the extra-EU all-goods total is aggregated and stored like
+any other. A hands-on probe first confirmed the shape (principle 6): no pre-computed
+WORLD/EXTRA_EU partner code exists, so extra-EU = sum over 246 ISO-2 partners minus
+the EU-27 — exactly what `aggregate_to_world_totals` already does. Backfilled
+2017→2026 (one-time, ~5GB of bulk files; 8 transient connection-reset gaps cleared
+by an idempotent retry pass).
+
+**The analyser.** `anomalies.detect_china_all_goods_share` emits, per flow and
+anchor, the rolling-12mo share = CN+HK+MO `000TOTAL` (eurostat_raw_rows numerator)
+÷ extra-EU `000TOTAL` (eurostat_world_aggregates denominator), EU-27 reporters,
+with a CN-only comparator and a `share_series` back to the start anchor. One finding
+per (flow, anchor); the latest drives the donut, its series the trend. Wired into
+the periodic cycle (beside partner_share) and `--analyse china-all-goods-share`.
+
+**Start anchor 2019-01.** The stored CN+HK+MO `000TOTAL` numerator is
+pre-v2-contaminated for 2017–2018 (~1.8× — the same duplicate-rows era the partial
+unique index scoped around), so a share off it would read far too high. 2019+ is
+verified clean; extending to 2017 waits on a clean re-ingest of those months
+(separate roadmap item). Decided with Luke after the data showed the contamination.
+
+**The surfaces.** The donut KPI (`_china_share_indicator`) fills the deferred slot
+in `report_builder`; the donut render now also shows its `note` (the CN-only
+comparator) and takes the headline-precision centre label (22.5%, not a re-rounded
+23%). The dependency trend renders in the "Europe's deficit with China" section
+from the finding's `share_series`, with a percent y-axis (`_line_chart_svg`/`_y_axis`
+gained an optional value-formatter). Both verified live: **22.5% of EU-27 extra-EU
+goods imports (12mo to 2026-04)**, CN-only 22.3%, export share 8.4%; trend
+18.3% (2019) → 23.1% (2021 COVID surge) → 20.7% (2024) → 22.5% (2026). The import
+share reconciles with the ~20–21% Eurostat/press figure, and the CN+HK+MO all-goods
+deficit cross-checks against the tool's own €964M/day standing deficit.
+
+Tests: the analyser (share arithmetic, CN-only, GB exclusion, the 2019 floor,
+idempotency) + the portal surfaces (donut note + the dependency trend card with its
+percent axis). Going-forward ingest keeps the denominator fresh automatically.
+
+---
+
 ## 2026-06-24 — eurostat_raw_rows natural-key UNIQUE backstop (partial, 2019+)
 
 Closes the roadmap's "`eurostat_raw_rows` UNIQUE constraint" item — but the
