@@ -227,6 +227,85 @@ append-only + provenance on everything new (principles 3/4/7).
    commodity, for "China-specific vs worldwide"); tariff-change timelines (to
    correlate moves with policy — also feeds the LLM-takes v2 retrieval angle).
 
+## "Biggest mover" KPI — surface what we're *not* watching (A→B); design 2026-06-24
+
+**Motivation.** A fifth KPI card that highlights an out-of-the-ordinary sector
+move. The real goal (Luke, 2026-06-24) is to surface something **we're not
+already looking for** — to fight fixation on the curated watchlist. With several
+reporters now on differing beats (not just Lisa), you can no longer hand-tune the
+~46 `hs_groups` to one person's interests; a fixed watchlist quietly encodes last
+cycle's priorities. So this card's real job is less "content feature" and more
+**instrument for discovering demand**: throw an unexpected product in front of
+several people, and whoever's beat it touches says "watch that" — and *that*
+signal drives where we spend the (real) ingest budget for breadth expansion. It
+is the editorial-instinct check of global principle 1 made into a UI surface
+(see **Breadth expansion** above — Option B is an instance of it).
+
+**The asterisk that shapes the design.** We do *not* ingest the whole COMEXT
+product universe. The bulk file is filtered at ingest to a prefix set derived
+from the watchlist itself (`scrape._world_aggregate_hs_prefixes_from_hs_groups`
+→ `eurostat.iter_raw_rows(hs_prefixes=…)`), plus `000TOTAL`. So:
+- *Within* watched HS chapters/headings we hold **every** CN8 sub-code (raw rows
+  persist in `eurostat_raw_rows`) — finer than the 60-ish displayed groups.
+- *Outside* the watched prefixes the data isn't in our DB at all — filtered out
+  at ingest. A chapter we don't watch is a blind spot we literally cannot see.
+
+So "biggest mover from everything" splits into two builds:
+
+- **Option A — biggest single-product mover *within* watched sectors (cheap; data
+  already here).** New CN8-grain YoY analyser over `eurostat_raw_rows`, deduped
+  against what's surfaced at group level, strict floors applied. Surfaces a
+  specific code a flat-looking group is masking — and breaks the `top_movers[0]`
+  duplication (a naive "biggest mover" card would just restate Standout moves'
+  #1). Honest framing: "biggest single-product move *within what we monitor*",
+  **not** a blind-spot detector. **This is the stepping stone — build first to
+  provoke reporter feedback.**
+- **Option B — true blind-spot radar (needs wider ingest).** Periodically (not
+  necessarily every cycle) ingest a much broader prefix set, compute YoY at
+  HS-heading/chapter grain across *everything*, exclude the watched chapters,
+  surface the biggest mover in the remainder. The principle-1-pure version and
+  what the motivation actually asks for — but a real piece of work: bigger/slower
+  ingest (we filter deliberately for size/speed), a new aggregation grain, and
+  serious noise control. **Gated on whether reporter feedback to Option A shows
+  the blind-spot mandate is worth the ingest cost.**
+
+**Traps (both options; worse for B).**
+- *Low-base explosion.* Across thousands of CN8 codes the biggest YoY mover is
+  almost always a tiny/noisy/newly-reported code with a spurious +5000%. The EUR
+  value floor + `low_base` gate become load-bearing, not nice-to-have (ties to
+  the still-open low-base threshold calibration).
+- *CN8 churn.* The Combined Nomenclature is revised annually; split/merge/new
+  codes manufacture phantom ∞% moves — needs a code-continuity guard (require N
+  prior comparable periods).
+- *No curated context = dead-end risk.* An off-watchlist code has a CN8
+  description (PR #87) but no theme/drill-down section, so the card must be
+  **self-contained** (number + CN8 label + provenance drawer + "outside the
+  watchlist — worth a look" framing), not a link into detail that doesn't exist.
+- *Granularity.* CN8 is noisy; scan blind spots (Option B) at HS heading/chapter,
+  where a move is material and robust, not at 8-digit.
+- *"Biggest", not "unusual".* There is no per-sector z-score yet (only
+  `mirror_gap_zscore`). Ranking is magnitude-on-a-real-base; don't label a
+  magnitude leader "unusual" until a YoY z-score analyser exists.
+
+**Looser noise contract than a normal KPI.** Because this card's job is
+provocation, not authority, a slightly weird single-product mover that makes a
+reporter go "huh, why?" is doing its job even if it isn't headline-grade — the
+opposite of the deficit card, where a glance-wrong number is a failure. Be
+deliberate that this card is allowed to be exploratory.
+
+**Feedback loop to design in.** Make the path *card surfaces code Y → reporter
+flags interest → editorial promotes it into an `hs_group`* low-friction (even an
+informal Chat nudge via the existing `--notify-chat` hook at first). The
+journalist-editable `hs_groups` already make the "promote it" step cheap.
+
+**Layout (do regardless).** The KPI strip is a 3-column grid; `sparkline` cards
+get `kpi-wide` (span 2). Today EU-deficit (2) + UK-deficit (2) + import-level (1)
++ donut (1) = two rows of three, but the UK card is wide only *by accident* of
+being a sparkline, not by importance. Render UK deficit as a 1-col `bignumber`
+and a slot frees up: EU-deficit (2) + import-level (1); donut (1) + UK-deficit (1)
++ **new card (1)**. EU-deficit becomes the sole wide card — correct, it's the one
+number that earns the emphasis.
+
 ## Reference-data freshness — keeping externally-sourced lookups current (2026-06-24)
 
 The portal leans on several committed reference lookups derived from external
