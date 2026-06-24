@@ -296,6 +296,19 @@ def nk_partner_share(
     return (str(hs_group_id), current_end_yyyymm)
 
 
+def nk_china_all_goods_share(
+    current_end_yyyymm: str,
+) -> tuple[str]:
+    """A china_all_goods_share finding is identified by the window-end alone;
+    flow direction (imports / exports) lives in the subkind
+    (`china_all_goods_share` vs `china_all_goods_share_export`), mirroring the
+    partner_share family. The metric is China's (CN+HK+MO) share of EU-27
+    extra-EU all-goods trade for the rolling 12 months to that period —
+    numerator from eurostat_raw_rows 000TOTAL, denominator from
+    eurostat_world_aggregates 000TOTAL."""
+    return (current_end_yyyymm,)
+
+
 def nk_gacc_bilateral_aggregate_yoy(
     alias_id: int,
     current_end_yyyymm: str,

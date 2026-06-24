@@ -262,20 +262,27 @@ def scrape_eurostat(
 
 def _world_aggregate_hs_prefixes_from_hs_groups() -> tuple[str, ...]:
     """Read the active `hs_groups.hs_patterns` and convert them to the prefix
-    set the bulk-file streamer can use. Each pattern ends with '%' (SQL LIKE
-    convention); we strip the '%' to get a literal startswith prefix.
+    set the bulk-file streamer can use, PLUS the all-goods `000TOTAL` aggregate.
+    Each pattern ends with '%' (SQL LIKE convention); we strip the '%' to get a
+    literal startswith prefix.
 
     The resulting tuple is passed to `iter_raw_rows(hs_prefixes=...)` which
     filters via `str.startswith` — so '2922%' becomes '2922' and '85044084%'
     becomes '85044084'. Eurostat product_nc is zero-padded to 8 chars, so a
     short prefix like '2922' matches every CN8 sub-code beneath HS chapter
     2922 as you'd expect.
+
+    `000TOTAL` (the per-partner all-products aggregate row) is always included:
+    its extra-EU sum is the denominator for the China all-goods-share metric
+    (the dependency donut + trend, anomalies.detect_china_all_goods_share). It's
+    cheap — one aggregate row per (reporter, flow) — and harmless to the
+    per-group partner_share analyser, which filters on its own HS prefixes.
     """
     import psycopg2
     with psycopg2.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
         cur.execute("SELECT hs_patterns FROM hs_groups")
         rows = cur.fetchall()
-    prefixes: set[str] = set()
+    prefixes: set[str] = {"000TOTAL"}
     for (patterns,) in rows:
         for p in (patterns or []):
             if p.endswith("%"):
@@ -641,7 +648,7 @@ def main() -> None:
                    choices=["mirror-trade", "mirror-gap-trends", "hs-group-yoy",
                             "hs-group-trajectory", "gacc-aggregate-yoy",
                             "gacc-bilateral-aggregate-yoy", "partner-share",
-                            "trade-balance", "llm-framing"],
+                            "trade-balance", "china-all-goods-share", "llm-framing"],
                    help="Run a deterministic anomaly pass over already-ingested data, "
                         "or 'llm-framing' to generate per-hs-group lead scaffolds "
                         "(anomaly summary + 2-3 picked hypotheses + corroboration steps; "
@@ -1309,6 +1316,17 @@ def main() -> None:
         # rows. Surfaces the "€1bn a day" register the press quotes.
         counts = anomalies.detect_eu_china_trade_balance()
         log.info("EU–China trade-balance analysis: %s", counts)
+        return
+
+    if args.analyse == "china-all-goods-share":
+        # China's share of EU-27 extra-EU all-goods trade — the dependency
+        # donut + trend line. Numerator: eurostat_raw_rows 000TOTAL (CN+HK+MO);
+        # denominator: eurostat_world_aggregates 000TOTAL (extra-EU) — populate
+        # via `--eurostat-world-aggregates-period YYYY-MM` (default prefixes now
+        # include 000TOTAL) before running this. From 2019-01 (pre-v2 numerator
+        # dupes make 2017-18 unreliable).
+        counts = anomalies.detect_china_all_goods_share()
+        log.info("China all-goods share analysis: %s", counts)
         return
 
     if args.analyse == "llm-framing":
