@@ -220,6 +220,47 @@ append-only + provenance on everything new (principles 3/4/7).
    commodity, for "China-specific vs worldwide"); tariff-change timelines (to
    correlate moves with policy — also feeds the LLM-takes v2 retrieval angle).
 
+## Reference-data freshness — keeping externally-sourced lookups current (2026-06-24)
+
+The portal leans on several committed reference lookups derived from external
+authorities, and they go stale **silently**: the source-freshness alert suite
+watches incoming *trade data* (Eurostat / HMRC / GACC releases), but nothing
+watches the *reference* vintages. Inventory and cadence:
+
+- **CN8 product descriptions** (`reference/cn8_descriptions.csv`, built from
+  `reference/cn_descriptions/cn8_2025_en.xlsx` — the "Top products" labels +
+  hover text). The EU Combined Nomenclature is **reissued every 1 January**
+  (codes added / split / withdrawn); `cn_year` records the edition. Refresh:
+  drop the new year's KSH self-explanatory xlsx in and rerun
+  `classifications.build_cn8_descriptions()`. Currently CN 2025. See
+  [`reference/cn8_descriptions.PROVENANCE.md`](../reference/cn8_descriptions.PROVENANCE.md).
+- **CN8 → SITC / BEC crosswalks** (`cn8_sitc.csv`, `cn8_bec.csv`) — keyed on
+  **HS editions** (HS2017 / HS2022), which revise ~every 5 years. Next is
+  **HS2027**: when it ships, add the HS2027→SITC/BEC correspondence ahead of
+  HS2022 in the fallback chain (see `classifications.py` and the *CN8
+  concordance table* item below).
+- **CIF/FOB baselines** (`cif_fob_baselines`, OECD ITIC) — refresh in a future
+  year (see [`2026-05-10-cif-fob-baselines.md`](2026-05-10-cif-fob-baselines.md)).
+
+Two cheap, additive guards worth building (neither scheduled):
+
+1. **Build-time staleness warning.** When `cn_year` (or the active HS edition)
+   trails the current calendar year by more than the known cadence, emit a
+   `log.warning` on the build path — the same fail-visible instinct as
+   `assert_classifications_available`, but a soft nudge: descriptions are reader
+   enrichment, not publication-critical, so warn, don't refuse.
+2. **Annual reference-refresh reminder** as a once-a-year Routine/cron line,
+   separate from the data-release cadence, so the 1-Jan CN reissue and the
+   HS-edition changes don't depend on someone remembering.
+
+Defensibility holds across refreshes by construction: derived descriptions are
+stored *alongside* the source codes (the codes stay canonical, never
+overwritten — global principle 3), and the cross-validation against the EU
+primary SKOS/RDF is re-runnable on each refresh via `CN_RDF_PATH`. Ties to the
+**CN8 concordance table** item below — a real old→new concordance would let a
+refreshed description set remap superseded codes rather than silently dropping
+them.
+
 ## Observability / logging follow-ups (2026-05-15 evening arc)
 
 Four new audit-log surfaces shipped tonight along with

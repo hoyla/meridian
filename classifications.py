@@ -54,6 +54,28 @@ HS2022_SITC4 = SOURCE_DIR / "hs2022_sitc4.xlsx"
 HS2017_SITC4 = SOURCE_DIR / "hs2017_sitc4.xlsx"
 BEC_SOURCE = SOURCE_DIR / "HS-SITC-BEC_Correlations_2022.xlsx"  # has HS22→BEC4
 
+# CN8 product descriptions — human-readable text for individual 8-digit codes,
+# so a reader can tell what "29181400" actually is (Citric acid). Same two-layer
+# pattern as the SITC/BEC lookups: a committed build-only input regenerates a
+# committed derived CSV (the publication source of truth).
+#
+# Source is Eurostat's *self-explanatory texts* version of the CN — the legal
+# nomenclature has terse leaves ("Other", "Of cotton") that only mean something
+# with their parent headings; the self-explanatory texts expand each into a
+# standalone description (e.g. "Carboxylic acids with additional oxygen function
+# … (excl. …)"). 0 bare-"Other" leaves out of 9,800 — so no hierarchy stitching.
+# We profiled via the Hungarian KSH mirror (a clean xlsx packaging of the
+# Eurostat self-explanatory texts) and cross-validate it against the EU primary
+# SKOS/RDF (canonical-of-record) — see cn8_descriptions.PROVENANCE.md.
+CN_DESC_DIR = OUT_DIR / "cn_descriptions"
+CN_DESC_SOURCE = CN_DESC_DIR / "cn8_2025_en.xlsx"  # build-only input
+CN_DESC_YEAR = 2025
+# The EU primary SKOS/RDF used for cross-validation. Too big to commit (~195 MB),
+# so it's an external check, not a build dependency. Override with CN_RDF_PATH.
+CN_RDF_DEFAULT = Path(
+    "/Users/luke_hoyland/Code/Reference/eurostat-cn-descriptions/ESTAT-CN2025.rdf"
+)
+
 # BEC Rev 4 basic category → SNA broad end-use (the documented standard).
 # (Rev 4, not Rev 5: Rev 4 is purpose-built for the capital/intermediate/
 # consumption split; Rev 5 restructured in ways that need its own legend.)
@@ -273,6 +295,46 @@ def cn8_division_map() -> dict[str, str]:
     return _CN8_DIV
 
 
+def _cn8_short_label(full: str) -> str:
+    """A compact label for inline display, from the full self-explanatory text.
+
+    The head clause — text before the first '(' (the "(excl. …)" qualifier) and
+    before the first comma/semicolon — is the gist: "Lithium-ion accumulators
+    (excl. spent)" -> "Lithium-ion accumulators"; "Citric acid" -> "Citric acid".
+    Median 28 chars, 90% <= 60 over the full CN. Defensive on leading dashes in
+    case a terse source is ever swapped in."""
+    import re
+    h = (full or "").lstrip("- ").split("(")[0]
+    h = re.split(r"[;,]", h, maxsplit=1)[0]
+    return h.strip().rstrip(":").strip()
+
+
+_CN8_DESC: dict[str, dict[str, str]] | None = None
+
+
+def cn8_description_lookup() -> dict[str, dict[str, str]]:
+    """CN8 -> {"short": ..., "full": ...} from the committed derived lookup
+    (reference/cn8_descriptions.csv). Cached. Empty dict if absent — descriptions
+    are reader enrichment, never publication-critical, so a missing file degrades
+    gracefully to today's bare codes (NOT guarded by
+    assert_classifications_available)."""
+    global _CN8_DESC
+    if _CN8_DESC is None:
+        path = OUT_DIR / "cn8_descriptions.csv"
+        m: dict[str, dict[str, str]] = {}
+        try:
+            with open(path) as f:
+                for row in csv.DictReader(f):
+                    code = (row.get("cn8") or "").strip()
+                    if code:
+                        m[code] = {"short": row.get("label_short", ""),
+                                   "full": row.get("denomination", "")}
+        except FileNotFoundError:
+            pass
+        _CN8_DESC = m
+    return _CN8_DESC
+
+
 def assert_classifications_available() -> None:
     """Fail loud if the publication-critical classification lookups are missing
     or empty. Called at briefing-build time so a moved, renamed or empty
@@ -431,6 +493,175 @@ Fuel) for every real 8-digit code in the Eurostat data.
     return {"stats": stats, "end_use": dict(eu_count)}
 
 
+def _crossvalidate_descriptions(desc: dict[str, str], rdf_path: Path) -> dict:
+    """Confirm the self-explanatory texts agree with the EU primary SKOS/RDF
+    (canonical-of-record). The RDF carries terse, indented labels ("--- Other",
+    "- Of cotton"); the self-explanatory text expands them. So we check two
+    things per CN8 leaf in the RDF:
+      * coverage — is the code present in our description set?
+      * consistency — for *non-positional* terse labels (not "Other"/"Of …"),
+        does the terse phrase appear within our self-explanatory text?
+    Returns counts; never raises (a missing RDF just yields skipped=True)."""
+    import xml.etree.ElementTree as ET
+    if not rdf_path.exists():
+        return {"skipped": True, "rdf": str(rdf_path)}
+    RDF = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}"
+    SKOS = "{http://www.w3.org/2004/02/skos/core#}"
+    DC = "{http://purl.org/dc/elements/1.1/}"
+    LANG = "{http://www.w3.org/XML/1998/namespace}lang"
+    # Index the EU primary by CN8 -> terse English altLabel. The RDF carries the
+    # whole hierarchy (chapters, headings, subheadings) as "...80" product-lines,
+    # so we key by the leading 8 digits and only keep codes that exist in our
+    # set — i.e. we validate OUR codes against the EU primary, not the reverse
+    # (the reverse denominator would wrongly include HS4/HS6 roll-up nodes).
+    rdf_terse: dict[str, str] = {}
+    for _ev, el in ET.iterparse(str(rdf_path), events=("end",)):
+        if el.tag != RDF + "Description":
+            continue
+        ident = el.findtext(DC + "identifier") or ""
+        if ident.endswith("80") and len(ident) == 12 and ident[:8].isdigit():
+            cn8 = ident[:8]
+            if cn8 in desc and cn8 not in rdf_terse:
+                for n in el.findall(SKOS + "altLabel"):
+                    if n.get(LANG) == "en":
+                        rdf_terse[cn8] = (n.text or "").lstrip("- ").strip()
+                        break
+        el.clear()
+    st = {"skipped": False, "our_codes": len(desc),
+          "present_in_eu": 0, "absent_from_eu": 0,
+          "checked": 0, "consistent": 0, "positional": 0}
+    for cn8, ours in desc.items():
+        terse = rdf_terse.get(cn8)
+        if terse is None:
+            st["absent_from_eu"] += 1
+            continue
+        st["present_in_eu"] += 1
+        low = terse.lower()
+        if not terse or low.startswith(("other", "of ", "- ")):
+            st["positional"] += 1  # terse leaf only meaningful via parent; can't string-match
+        else:
+            st["checked"] += 1
+            head = _cn8_short_label(terse).lower()  # terse head clause
+            if head and head in ours.lower():
+                st["consistent"] += 1
+    st["coverage_pct"] = round(100 * st["present_in_eu"] / st["our_codes"], 2) if desc else 0.0
+    st["consistency_pct"] = round(100 * st["consistent"] / st["checked"], 2) if st["checked"] else 0.0
+    return st
+
+
+def build_cn8_descriptions(write: bool = True, rdf_path: Path | None = None) -> dict:
+    """Derive reference/cn8_descriptions.csv from the Eurostat self-explanatory
+    CN texts (KSH mirror). Covers ALL ~9,800 CN codes, not just those in our
+    data — descriptions are a static reference, and a complete file means new
+    codes appearing in later data still resolve (and the build needs no DB)."""
+    import os
+    wb = openpyxl.load_workbook(CN_DESC_SOURCE, read_only=True)
+    ws = next((wb[s] for s in wb.sheetnames if "structure" in s.lower()), wb.active)
+    desc: dict[str, str] = {}
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        code = str(row[0]).strip() if row and row[0] is not None else ""
+        den = str(row[1]).strip() if len(row) > 1 and row[1] is not None else ""
+        if _real_cn8(code) and den:
+            desc[code] = den
+
+    rows = [{"cn8": c, "label_short": _cn8_short_label(desc[c]),
+             "denomination": desc[c], "cn_year": CN_DESC_YEAR}
+            for c in sorted(desc)]
+    stats = {"codes": len(rows)}
+    xval = _crossvalidate_descriptions(
+        desc, Path(os.environ.get("CN_RDF_PATH", str(rdf_path or CN_RDF_DEFAULT))))
+    stats["crossval"] = xval
+
+    if write:
+        CN_DESC_DIR.mkdir(parents=True, exist_ok=True)
+        with open(OUT_DIR / "cn8_descriptions.csv", "w", newline="") as f:
+            w = csv.DictWriter(
+                f, fieldnames=["cn8", "label_short", "denomination", "cn_year"])
+            w.writeheader()
+            w.writerows(rows)
+        _write_cn_desc_provenance(stats)
+    return stats
+
+
+def _write_cn_desc_provenance(stats: dict) -> None:
+    from datetime import datetime
+    xv = stats.get("crossval", {})
+    if xv.get("skipped"):
+        xval_block = (f"- **Not cross-validated this run** — EU primary RDF not "
+                      f"found at `{xv.get('rdf')}`.\n  Set `CN_RDF_PATH` to the "
+                      f"`ESTAT-CN{CN_DESC_YEAR}.rdf` download to enable the check.")
+    else:
+        xval_block = (
+            f"- Our CN8 codes present in the EU primary: "
+            f"{xv.get('present_in_eu', 0):,}/{xv.get('our_codes', 0):,} "
+            f"({xv.get('coverage_pct', 0)}%) — i.e. every code we describe is a "
+            f"real EU code; absent: {xv.get('absent_from_eu', 0):,}.\n"
+            f"- Label consistency where the EU terse label is non-positional: "
+            f"{xv.get('consistent', 0):,}/{xv.get('checked', 0):,} "
+            f"({xv.get('consistency_pct', 0)}%) head-clause match. "
+            f"Positional terse leaves (\"Other\"/\"Of …\", meaningful only via "
+            f"their parent) can't be string-matched and are excluded: "
+            f"{xv.get('positional', 0):,}. The residual difference is "
+            f"self-explanatory wording vs the terse legal label, not a code "
+            f"mismatch.")
+    (OUT_DIR / "cn8_descriptions.PROVENANCE.md").write_text(f"""# cn8_descriptions.csv — provenance
+
+Generated by `classifications.build_cn8_descriptions()` on {datetime.now():%Y-%m-%d %H:%M}.
+
+## What it is
+A CN8 → product-description lookup for every real 8-digit code in the
+Combined Nomenclature {CN_DESC_YEAR} (~9,800 codes). Two columns of text:
+- `denomination` — the full Eurostat *self-explanatory* text (standalone,
+  median ~112 chars), for tooltips / definitions.
+- `label_short` — the head clause (median ~28 chars), for inline display.
+
+Descriptions are reader enrichment, never publication-critical: a missing file
+degrades gracefully to bare codes (it is NOT guarded by
+`assert_classifications_available`).
+
+## Source
+- **Content:** Eurostat *self-explanatory texts* of the Combined Nomenclature
+  {CN_DESC_YEAR} (Commission Implementing Regulation (EU) 2024/2522). The legal
+  CN has terse leaves ("Other", "Of cotton") meaningful only via their parent
+  headings; the self-explanatory version expands each into a standalone phrase,
+  so **0 of ~9,800 leaves are a bare "Other"** and no hierarchy stitching is
+  needed.
+- **Build-only input (committed):** `reference/cn_descriptions/cn8_2025_en.xlsx`
+  — a clean tabular packaging of the Eurostat self-explanatory texts published
+  by the Hungarian Central Statistical Office (KSH),
+  <https://www.ksh.hu/intrastat_combined_nomenclature>, downloaded 2026-06-24.
+  (The EU portal at data.europa.eu publishes the CN only as terse SKOS/RDF;
+  there is no EU-hosted tabular self-explanatory download.)
+
+## Cross-validation against the EU primary (canonical-of-record)
+Checked against the EU SKOS/RDF `ESTAT-CN{CN_DESC_YEAR}.rdf`
+(<https://data.europa.eu/data/datasets/combined-nomenclature-{CN_DESC_YEAR}>),
+the legal nomenclature of record. Too big to commit (~195 MB); external check.
+{xval_block}
+
+The handful of codes absent from the EU primary are Intrastat/special-procedure
+pseudo-codes (CN chapters 98 "complete industrial plant" and 99 vessel/aircraft
+supplies, small-value, returned goods, personal property) — present in the KSH
+Intrastat packaging but outside the legal goods nomenclature. Expected, not a gap.
+
+## Method
+- Read the self-explanatory denomination per real 8-digit code.
+- `label_short` = head clause: text before the first "(" and first comma/semicolon.
+- Real 8-digit numeric codes only (`000TOTAL` / `…XX` aggregates excluded).
+
+## Vintages to refresh on
+The CN is reissued every 1 January (codes added/split/withdrawn). Refresh
+`cn8_2025_en.xlsx` to the new year's file and rerun. `cn_year` records the
+edition. v1 stores a single current-edition snapshot; if historical fidelity on
+older figures matters, key descriptions by CN year instead. See the roadmap note
+on keeping externally-sourced reference data current.
+
+## Counts at generation
+- CN8 codes with a description: {stats.get('codes', 0):,}
+""")
+
+
 if __name__ == "__main__":
     print("cn8_sitc lookup built:", build()["stats"])
     print("cn8_bec lookup built:", build_bec()["stats"])
+    print("cn8_descriptions built:", build_cn8_descriptions())

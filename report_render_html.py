@@ -44,6 +44,23 @@ _MUTED = "#707070"          # --neutral-46
 _LINE = "#dcdcdc"           # --border-primary, hairline
 _SHIP_BASE = "#c3cbd4"      # muted blue-grey, the container-pictograph base
 
+def _top_product_item(t: dict) -> str:
+    """One "Top products" entry: "Citric acid (29181400) €168.1M", with the full
+    self-explanatory CN text on hover. Falls back to the bare code + value when no
+    description is baked in (the optional cn8_descriptions.csv was missing at build
+    time). Tooltip-only by design — no external link (see the CN-descriptions
+    design note); the inline short label carries the gist on every device."""
+    code = html.escape(t["code"])
+    eur = _fmt_eur(t["eur"])
+    label = (t.get("label") or "").strip()
+    full = (t.get("desc") or "").strip()
+    if not label:
+        return f"{code} {eur}"
+    code_el = (f'<span class="cn8" title="{html.escape(full)}">{code}</span>'
+               if full else code)
+    return f"{html.escape(label)} ({code_el}) {eur}"
+
+
 def _inline_md(s: str) -> str:
     """Minimal inline markdown -> HTML for prose fields (Fork-A wrinkle).
     Handles **bold**, [text](#anchor), `code`. Escapes the rest."""
@@ -902,6 +919,19 @@ def _sources_html(section) -> str:
             out.append(f'<li><strong>{html.escape(s["source"])}</strong> — '
                        f'{html.escape(s["note"])}</li>')
         out.append("</ul>")
+    refs = m.get("reference_sources", [])
+    if refs:
+        out.append('<h3 class="ref-h2">Reference &amp; classification data</h3>'
+                   '<p class="kicker">Static reference lookups the briefing draws '
+                   "on, separate from the trade-data releases above.</p>"
+                   '<ul class="ref">')
+        for r in refs:
+            url = r.get("url") or ""
+            link = (f' <a href="{html.escape(url)}" target="_blank" '
+                    'rel="noopener">source ›</a>') if url else ""
+            out.append(f'<li><strong>{html.escape(r["name"])}</strong> — '
+                       f'{html.escape(r["note"])}{link}</li>')
+        out.append("</ul>")
     cov = m.get("coverage", [])
     if cov:
         out.append('<h3 class="ref-h2">Period coverage</h3>'
@@ -1486,8 +1516,7 @@ def _sector_section(section) -> str:
         top = ms.get("top_cn8") or []
         if top:
             deep.append('<div class="detail">Top products: '
-                        + " · ".join(f'{html.escape(t["code"])} {_fmt_eur(t["eur"])}'
-                                     for t in top) + "</div>")
+                        + " · ".join(_top_product_item(t) for t in top) + "</div>")
         reps = ms.get("reporters") or []
         if reps:
             parts_r = []
@@ -1669,6 +1698,7 @@ a:hover{border-bottom-color:var(--link)}
 .cshare{font-size:12.5px;color:var(--news);font-weight:700;margin:0 0 8px}
 .gdesc{font-family:var(--font-body);font-size:14px;line-height:1.45;color:var(--muted);margin:2px 0 8px}
 .detail{font-size:12.5px;color:var(--muted);margin:4px 0 0}
+.cn8{font-family:ui-monospace,Menlo,monospace;border-bottom:1px dotted var(--muted);cursor:help}
 details.gdetail{margin:6px 0 2px}
 details.gdetail>summary{cursor:pointer;list-style:none;font-family:var(--font-sans);font-weight:700;font-size:12.5px;color:var(--masthead);padding:3px 0}
 details.gdetail>summary::-webkit-details-marker{display:none}

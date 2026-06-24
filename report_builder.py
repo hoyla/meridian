@@ -722,8 +722,17 @@ def _sector_detail_section(cur, predictability: dict | None = None) -> Section:
                        "china_share_period": send, "china_share_finding": sfid}
         top = (g.get("top_cn8") or [])[:3]
         if top:
-            metrics["top_cn8"] = [{"code": t.get("hs_code"),
-                                   "eur": _f(t.get("total_eur"))} for t in top]
+            # Bake the product description into the snapshot so the static portal
+            # can show "Citric acid (29181400)" with the full self-explanatory
+            # text on hover — no runtime lookup. Empty strings if the (optional)
+            # cn8_descriptions.csv is absent: the render degrades to bare codes.
+            _desc = classifications.cn8_description_lookup()
+            metrics["top_cn8"] = [
+                {"code": t.get("hs_code"),
+                 "eur": _f(t.get("total_eur")),
+                 "label": (_desc.get(t.get("hs_code") or "") or {}).get("short", ""),
+                 "desc": (_desc.get(t.get("hs_code") or "") or {}).get("full", "")}
+                for t in top]
         reps = sorted(g.get("reporters") or [],
                       key=lambda r: -(r.get("share_of_group_delta_pct") or 0))[:3]
         if reps:
@@ -1292,11 +1301,39 @@ def _sources_section(cur, diff=None) -> Section:
         {"subkind": sk, "label": _subkind_plain_label(sk), "count": n}
         for sk, n in ((diff.new_by_subkind or []) if diff is not None else [])
     ]
+    # Reference & classification lookups — externally-sourced static data the
+    # briefing leans on, distinct from the trade-data releases above. Disclosed
+    # for full provenance (principle 7). The CN product-description row only
+    # appears when those descriptions are actually loaded.
+    reference_sources = [
+        {"name": "CN → SITC sector classification",
+         "note": "UN SITC Rev. 4 correspondence (UNSD) mapping each 8-digit "
+                 "Combined Nomenclature code to a sector division — the "
+                 "structural spine for the Trade Map and sector navigation.",
+         "url": "https://unstats.un.org/unsd/classifications/Econ/"},
+        {"name": "CN → BEC end-use classification",
+         "note": "UN BEC Rev. 4 correspondence (UNSD) classifying codes by "
+                 "broad economic end-use (capital / intermediate / consumption "
+                 "/ fuel).",
+         "url": "https://unstats.un.org/unsd/classifications/Econ/"},
+    ]
+    if classifications.cn8_description_lookup():
+        reference_sources.insert(0, {
+            "name": f"CN product descriptions (CN {classifications.CN_DESC_YEAR})",
+            "note": "Combined Nomenclature self-explanatory texts (Eurostat; "
+                    "Commission Implementing Regulation (EU) 2024/2522), taken "
+                    "via the Hungarian KSH tabular mirror and cross-validated "
+                    "against the EU primary SKOS/RDF. Source of the plain-language "
+                    "product labels and the full hover definitions on 'Top "
+                    "products'.",
+            "url": "https://data.europa.eu/data/datasets/"
+                   "combined-nomenclature-2025"})
     return Section(
         id="sources", title="Sources & coverage", kind="sources",
         intro="What this briefing rests on — the data sources, how much of each "
               "we hold, and what the pack contains.",
         metrics={"sources": sources, "coverage": coverage,
+                 "reference_sources": reference_sources,
                  "new_findings": new_findings,
                  "new_findings_total": sum(f["count"] for f in new_findings),
                  "manifest": manifest, "manifest_total": total,
