@@ -9,7 +9,7 @@ canonical. Design decisions recorded in
 Governing rule: the model carries **data + semantics, never
 presentation**. A `HeadlineItem` holds `direction`/`pct`/`value` as
 fields; whether that becomes a sentence, a card, or a chart row is a
-renderer's call. The two deliberate exceptions are *editorial prose*
+renderer’s call. The two deliberate exceptions are *editorial prose*
 fields (`prose`) — the hedge wording is editorial substance, authored
 once, not formatting (Fork A, ratified 2026-06-20) — and chart `series`,
 which is data the renderer turns into PNG / inline SVG / interactive.
@@ -73,7 +73,7 @@ class SeriesPoint:
 
 @dataclass
 class ChartData:
-    """The chart's SERIES — not a rendered image. Renderers pick the
+    """The chart’s SERIES — not a rendered image. Renderers pick the
     encoding (PNG for docx, inline SVG for HTML, interactive for the
     portal)."""
     chart_type: ChartType

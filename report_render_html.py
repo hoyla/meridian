@@ -3,7 +3,7 @@ rendering-agnostic content model (`report_model.Report`) as
 `report_render_markdown`.
 
 Self-contained single document: inline CSS, inline-SVG sparklines built
-straight from the model's chart `series` (no external chart lib, no
+straight from the model’s chart `series` (no external chart lib, no
 image-by-URL — the model carries data, this renderer chooses SVG). This
 is what Cloud Run serves (or a static file); it needs no DB.
 
@@ -100,7 +100,7 @@ def _md_blocks_to_html(text: str) -> str:
     glossary definitions, methodology guides). Handles blank-line-separated
     paragraphs, `- ` bullet lists, and `### ` sub-headings; inline emphasis via
     `_inline_md`. Deliberately small — the content is authored to this subset, so
-    a full markdown dependency isn't warranted (and a 47KB methodology dump was
+    a full markdown dependency isn’t warranted (and a 47KB methodology dump was
     explicitly out of scope)."""
     if not text:
         return ""
@@ -216,7 +216,7 @@ def _x_tick_indices(n: int) -> list[int]:
     """Evenly spaced x-tick indices including both ends, ~4-5 intervals on a
     'nice' month step (1/2/3/6/12/24/36/60), so the time span is legible — a
     9-year deficit gets year ticks, a 2-year sector gets 6-month ticks. Without
-    intermediates, two end labels can't tell 4 months from 9 years."""
+    intermediates, two end labels can’t tell 4 months from 9 years."""
     if n <= 2:
         return list(range(n))
     step = 1
@@ -286,7 +286,7 @@ def _line_chart_svg(chart_data, *, split_last: int = 12, fmt=None) -> str:
 
 def _signed_y_axis(lo: float, hi: float) -> str:
     """3 horizontal gridlines (top/mid/bottom) with €-labels — like `_y_axis`
-    but spanning a [lo, hi] that may straddle zero (the balance chart's
+    but spanning a [lo, hi] that may straddle zero (the balance chart’s
     deficits). The visible zero *baseline* is drawn separately by the caller so
     it reads as a reference line, not just one more gridline."""
     x0, x1 = _GL, _CW - _PR
@@ -315,7 +315,7 @@ def _multiline_chart_svg(chart: dict) -> str:
     - balance carries negatives (deficits) → a SIGNED scale with a visible zero
       baseline line, so a deficit reads as below the line, not as a small bar.
     - The partial last year (latest period not December) is drawn with a dashed
-      final segment and a "(YYYY YTD)" x-label, so it can't be misread as a real
+      final segment and a "(YYYY YTD)" x-label, so it can’t be misread as a real
       full-year fall."""
     years = chart.get("years") or []
     series = chart.get("series") or []
@@ -409,7 +409,7 @@ def _multiline_chart_svg(chart: dict) -> str:
 
 def _multiline_legend_html(chart: dict) -> str:
     """The region key for a multi-line chart — a colour swatch + name per region
-    — for the chart card's LEFT meta column, under the headline (so the plot
+    — for the chart card’s LEFT meta column, under the headline (so the plot
     keeps its full width and height instead of losing a row to a bottom legend).
     A trailing note explains the dashed partial-year segment."""
     series = chart.get("series") or []
@@ -427,7 +427,7 @@ def _multiline_legend_html(chart: dict) -> str:
 
 def _bar_chart_svg(bars: list[dict]) -> str:
     """Inline-SVG vertical bar chart for relative-scale comparisons (e.g. imports
-    vs exports) — what a single line can't show. **Zero-based** y-axis so bar
+    vs exports) — what a single line can’t show. **Zero-based** y-axis so bar
     heights compare honestly. bars = [{label, value, color?}]."""
     bars = [b for b in bars if b.get("value") is not None]
     if not bars:
@@ -458,7 +458,7 @@ def _bar_chart_svg(bars: list[dict]) -> str:
 def _chart_card(title: str, value: str, legend: str, svg: str, *,
                 sub: str = "") -> str:
     """A chart with its number / title / key in a meta column to the LEFT of the
-    plot (so the plot isn't stretched and has room for axes). `sub` is a small
+    plot (so the plot isn’t stretched and has room for axes). `sub` is a small
     caption under the value (e.g. "12-month total" — the headline figure is an
     annual total while the plot is a monthly series). The card self-wraps: meta
     left on a wide card, on top when narrow (mobile, or two side by side in a
@@ -545,7 +545,7 @@ def _container_gauge_svg(frac: float, *, n: int = 24) -> str:
 def _more_about_html(about: str) -> str:
     """The collapsed 'More about this section' disclosure markup for a block of
     explanatory copy. Shared by `_more_about` (Section-driven) and the sections
-    whose copy is built inline in the renderer (e.g. What's changed)."""
+    whose copy is built inline in the renderer (e.g. What’s changed)."""
     if not about:
         return ""
     return (
@@ -556,40 +556,40 @@ def _more_about_html(about: str) -> str:
 
 
 def _more_about(section) -> str:
-    """The collapsed 'More about this section' disclosure carrying the section's
+    """The collapsed 'More about this section' disclosure carrying the section’s
     longer explanatory `about` copy (ported from the Findings preamble)."""
     return _more_about_html(getattr(section, "about", None) or "")
 
 
 _ABOUT_SITE = (
     "**Meridian** surfaces findings from China–Europe trade data, drawn from "
-    "three official sources: **GACC** (China's customs administration), "
+    "three official sources: **GACC** (China’s customs administration), "
     "**Eurostat** (EU-27) and **HMRC** (UK). Each release is triggered when our "
     "scraper finds fresh data from one of these — the source and the month it "
     "covers are shown by the badge, top right.\n\n"
-    "**What's in a briefing.** Which sections appear depends on the data "
+    "**What’s in a briefing.** Which sections appear depends on the data "
     "release that triggered it; you may see:\n\n"
     "- **Standout moves** — the largest year-on-year shifts in the freshest "
     "figures, each with leading questions for a reporter to chase.\n"
-    "- **What's changed** — what materially moved since the previous briefing: "
+    "- **What’s changed** — what materially moved since the previous briefing: "
     "revisions to existing findings, not newly-discovered ones.\n"
-    "- **Europe's deficit with China** — the standing goods-trade deficit "
+    "- **Europe’s deficit with China** — the standing goods-trade deficit "
     "(the ~€1bn/day level) across EU-27, UK and combined scopes; a level, not a "
     "change.\n"
-    "- **Mirror-trade gaps** — China's reported exports to each partner vs that "
-    "partner's reported imports, and how much of the gap exceeds the normal "
+    "- **Mirror-trade gaps** — China’s reported exports to each partner vs that "
+    "partner’s reported imports, and how much of the gap exceeds the normal "
     "CIF/FOB accounting wedge (a possible transshipment signal).\n"
     "- **Sector detail** — the full per-HS-group year-on-year breakdown, with "
     "value, volume and predictability badges.\n"
-    "- **China's trade by country (GACC)** — China's own reported trade with "
+    "- **China’s trade by country (GACC)** — China’s own reported trade with "
     "each of its ~24 named partner countries, both flows, rolling 12 months.\n\n"
     "Unless a figure is labelled **China-only**, **“China” includes Hong "
-    "Kong and Macao**: a large share of China's exports route through Hong Kong, "
+    "Kong and Macao**: a large share of China’s exports route through Hong Kong, "
     "so the combined envelope reflects the trade flow more completely. Where a "
     "figure is China-only it says so, and names the comparator.\n\n"
     "The analysis covers a configurable set of **Harmonised System (HS)** "
     "product categories, not all traded goods. The list is editorially "
-    "maintained and can be widened — tell the team if there's a category worth "
+    "maintained and can be widened — tell the team if there’s a category worth "
     "adding.\n\n"
     "Every figure drills back to its source release via its `finding/N` token. "
     "The **Sources & coverage** and **Methodology** tabs carry the full "
@@ -662,7 +662,7 @@ def _prov_body(payload: dict | None) -> str:
 def _prov_details(payload: dict | None, summary_inner: str,
                   *, summary_class: str) -> str:
     """A no-JS `<details>` provenance drawer: the citation line is the clickable
-    summary; the panel expands inline beneath it. Returns '' when there's no
+    summary; the panel expands inline beneath it. Returns '' when there’s no
     payload to show, so callers fall back to a plain citation line."""
     body = _prov_body(payload)
     if not body:
@@ -839,7 +839,7 @@ def _sector_flow_row(f) -> str:
     flow = f.metrics.get("flow")
     scope = f.metrics.get("scope", "EU-27")
     if scope == "China":  # GACC bilateral — the partner is the heading
-        label = "China's exports" if flow == "export" else "China's imports"
+        label = "China’s exports" if flow == "export" else "China’s imports"
     else:
         label = (f"{scope} exports to China" if flow == "export"
                  else f"{scope} imports from China")
@@ -957,7 +957,7 @@ def _state_of_play_section(section) -> str:
             '<div class="sector" id="china-share-trend">'
             + subhead
             + _chart_card(
-                trend.get("title", "China's share of EU imports"),
+                trend.get("title", "China’s share of EU imports"),
                 f"{now * 100:.1f}%" if now is not None else "",
                 _LINE_LEGEND,
                 _line_chart_svg(SimpleNamespace(series=pts),
@@ -1265,7 +1265,7 @@ def _mirror_gap_html(section) -> str:
             ship_svg = f'<div class="mg-ship">{_container_gauge_svg(ex)}</div>'
             cap = (f"Highlighted: the {ex * 100:.1f}% of "
                    f"{m.get('partner', '')}'s reported imports from China beyond "
-                   "what China's own export figures + normal freight explain "
+                   "what China’s own export figures + normal freight explain "
                    "(each block ≈ 4%).")
             ship_cap = f'<div class="ship-cap">{html.escape(cap)}</div>'
         # Text block (heading → gap stats below it → reports + finding token),
@@ -1287,7 +1287,7 @@ def _mirror_gap_html(section) -> str:
 
 def _gacc_bilateral_html(section) -> str:
     """Progressive disclosure: one collapsed button per partner (name + a
-    headline figure), expanding on click to that partner's flows. Keeps ~24
+    headline figure), expanding on click to that partner’s flows. Keeps ~24
     partners compact while offering full per-country granularity on demand."""
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
@@ -1311,8 +1311,8 @@ def _gacc_bilateral_html(section) -> str:
                    p.findings[0] if p.findings else None)
         summ = ""
         if hdr:
-            lab = ("China's exports" if hdr.metrics.get("flow") == "export"
-                   else "China's imports")
+            lab = ("China’s exports" if hdr.metrics.get("flow") == "export"
+                   else "China’s imports")
             val = _fmt_eur(hdr.metrics.get("current_eur"))
             yoy = hdr.metrics.get("yoy_pct")
             if yoy is not None:
@@ -1351,7 +1351,7 @@ def _gacc_bilateral_html(section) -> str:
 def _bilateral_ctx_row(f) -> str:
     """The muted secondary register under a partner flow row: year-to-date and
     the latest-month value — the substance the 12-month headline alone drops.
-    Restored from the finding's own totals; empty string when absent."""
+    Restored from the finding’s own totals; empty string when absent."""
     m = f.metrics
     bits: list[str] = []
     yp, ye, ym = m.get("ytd_pct"), m.get("ytd_eur"), m.get("ytd_months")
@@ -1369,18 +1369,18 @@ def _bilateral_ctx_row(f) -> str:
 
 
 def _bilateral_balance_row(p) -> str:
-    """The partner-level net balance: China's exports − imports on the same
+    """The partner-level net balance: China’s exports − imports on the same
     rolling-12-month window as the two flow rows above, with a muted YTD-net
     line beneath. Sign-aware label — GACC reports China-as-reporter, so a
-    positive net is China's surplus (the partner's deficit) and a negative net
-    China's deficit (the partner's surplus). Empty when either flow is absent
+    positive net is China’s surplus (the partner’s deficit) and a negative net
+    China’s deficit (the partner’s surplus). Empty when either flow is absent
     (nothing to net). Drillable via both flows' finding tokens."""
     m = getattr(p, "metrics", None) or {}
     be = m.get("bal_eur")
     if be is None:
         return ""
     surplus = be >= 0
-    label = "China's surplus" if surplus else "China's deficit"
+    label = "China’s surplus" if surplus else "China’s deficit"
     gloss = f"{p.title}'s {'deficit' if surplus else 'surplus'}"
     val = _fmt_eur(abs(be))
     pct = m.get("bal_yoy_pct")
@@ -1478,7 +1478,7 @@ def _structural_section_html(section) -> str:
 
 def _sector_section(section) -> str:
     """The sector-detail tree — one anchored block per HS group. Each
-    block's id is the group slug, so headline drill-down links land here."""
+    block’s id is the group slug, so headline drill-down links land here."""
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
         out.append(f'<p class="kicker">{_inline_md(section.intro)} '
@@ -1543,7 +1543,7 @@ def _sector_section(section) -> str:
         badge_html = ""
         if pbadge:
             pct = pb.get("persistence_pct")
-            tip = (f"{plabel.capitalize()} — {pct * 100:.0f}% of this group's "
+            tip = (f"{plabel.capitalize()} — {pct * 100:.0f}% of this group’s "
                    "year-on-year views held over the past 6 months"
                    if pct is not None else plabel.capitalize())
             badge_html = (f' <span class="pred" title="{html.escape(tip)}">'
@@ -1650,7 +1650,7 @@ def _sector_section(section) -> str:
 
 
 def _yoy_arc(old, new) -> str:
-    """'+12.0% → −4.0%' with the portal's typographic minus, or '—' if either
+    """'+12.0% → −4.0%' with the portal’s typographic minus, or '—' if either
     side is missing."""
     if old is None or new is None:
         return "—"
@@ -1677,8 +1677,8 @@ def _shift_line_html(s) -> str:
 
 _WHAT_CHANGED_ABOUT = (
     "Each figure here was already reported in an earlier briefing and has "
-    "since been revised — most often because a recent month's data has filled "
-    "in as Eurostat's figures mature, which shifts the rolling 12-month rate. "
+    "since been revised — most often because a recent month’s data has filled "
+    "in as Eurostat’s figures mature, which shifts the rolling 12-month rate. "
     "These are corrections to previously-published numbers, not new findings.\n"
     "\n"
     "Where each group currently stands is in **Sector detail** (partners in "
@@ -1690,7 +1690,7 @@ _WHAT_CHANGED_ABOUT = (
 def _what_changed(wc: WhatChanged) -> str:
     """The 'what moved since the last briefing' register — the material YoY shifts
     (change of ≥5 percentage points, direction flips), NOT a count of new
-    findings (that's bookkeeping, in Sources & coverage). Renders the full
+    findings (that’s bookkeeping, in Sources & coverage). Renders the full
     section with the shift list when something moved; a slim, honest one-liner
     when nothing did, so an empty cycle never claims an H2's weight."""
     shifts = wc.significant or []
@@ -1702,7 +1702,7 @@ def _what_changed(wc: WhatChanged) -> str:
             msg = ("this is the first pack from the database — everything below "
                    "is a baseline, not a change.")
         else:
-            msg = ("nothing moved materially — no finding's 12-month change "
+            msg = ("nothing moved materially — no finding’s 12-month change "
                    "shifted by more than 5 percentage points, and nothing "
                    "flipped direction.")
         return (f'<p class="quiet-change"><strong>Since the last briefing:</strong> '
@@ -1716,7 +1716,7 @@ def _what_changed(wc: WhatChanged) -> str:
     lead += "."
     rows = "".join(_shift_line_html(s) for s in shifts)
     return (
-        '<h2 class="lead">What\'s changed since the last briefing</h2>'
+        '<h2 class="lead">What’s changed since the last briefing</h2>'
         f'<p class="since"><strong>Since the last briefing:</strong> '
         f'{html.escape(lead)}</p>'
         + _more_about_html(_WHAT_CHANGED_ABOUT)
@@ -1760,7 +1760,7 @@ details.prov>summary{cursor:pointer;list-style:none}
 details.prov>summary::-webkit-details-marker{display:none}
 details.prov>summary.mover-prov{font-size:12px;color:var(--muted);margin-top:6px}
 /* A small, muted disclosure triangle after the finding token — the whole line is
-   clickable, so it's just an affordance, not a call to action. Rotates down when
+   clickable, so it’s just an affordance, not a call to action. Rotates down when
    open; nudges toward the link colour on hover so it stays discoverable. */
 .prov-tri{display:inline-block;margin-left:5px;color:var(--muted);font-size:10px;transition:transform .12s}
 details.prov>summary:hover .prov-tri{color:var(--link)}
@@ -1871,11 +1871,11 @@ ul.ref li{font-size:13.5px;line-height:1.5;margin:0 0 7px;color:var(--ink)}
 .take-prose{font-family:var(--font-sans);font-size:14.5px;line-height:1.5;color:#7a5c00;margin:6px 0 0}
 .take-cite{font-size:12px;color:#7a5c00;margin:7px 0 0;opacity:.85}
 /* tabs (Guardian Source — thick brand-blue underline over the hairline) */
-/* Main tabs are NOT sticky — the Briefing's in-page sub-nav is the sticky
+/* Main tabs are NOT sticky — the Briefing’s in-page sub-nav is the sticky
    element instead, so only one bar ever occupies the top (see .subnav). */
 .tabs{display:flex;gap:4px;background:var(--surface);padding:0 28px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .subnav{position:sticky;top:0;z-index:6;display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;background:var(--surface);border-bottom:1px solid var(--line);padding:8px 28px;font-family:var(--font-sans);font-size:13.5px}
-/* "See also" cross-link footing a section (e.g. Europe's deficit → the GACC by-country
+/* "See also" cross-link footing a section (e.g. Europe’s deficit → the GACC by-country
    section far below) — a quiet, top-ruled pointer, not a call to action. */
 .see-also{margin:16px 0 2px;padding-top:10px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
 .subnav a{color:var(--muted);text-decoration:none;font-weight:600;white-space:nowrap;padding:2px 0;border-bottom:2px solid transparent}
@@ -1934,7 +1934,7 @@ details.partner[open]>summary{border-bottom:1px solid var(--line)}
    legend, so two side-by-side would crowd. */
 @media(min-width:720px){.chart-row-1{grid-template-columns:1fr}}
 /* Region key for a multi-line chart — a colour swatch (a short bar matching the
-   line stroke) + name. Rendered in the card's left meta column, under the
+   line stroke) + name. Rendered in the card’s left meta column, under the
    headline, by _multiline_legend_html. */
 .ml-key{white-space:nowrap}
 .ml-sw{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:4px;border-radius:1px}
@@ -1951,7 +1951,7 @@ details.partner[open]>summary{border-bottom:1px solid var(--line)}
 .kpi-donut{align-items:center;text-align:center}
 .kpi-donut-wrap{margin:6px auto 2px}
 .donut-pct{font-family:var(--font-headline);font-weight:700;font-size:20px;fill:var(--ink)}
-/* glossary — groups are nested <section>s inside the tab's own <section>, so
+/* glossary — groups are nested <section>s inside the tab’s own <section>, so
    strip the inherited section padding (it would otherwise double up). */
 .gloss-group{margin:0 0 8px;padding:0}
 .gloss-item{padding:10px 0;border-bottom:1px solid var(--line)}
@@ -1992,16 +1992,16 @@ _PORTAL_JS = """<script>
   // carrying {tab, anchor, y}; on popstate we restore both the tab AND the exact
   // scroll position you were at, so back from (say) the Glossary returns you to
   // your place in the Briefing. In-tab jumps (subnav, sector drill-downs) use
-  // replaceState instead, so they don't pile up entries -- back steps between
+  // replaceState instead, so they don’t pile up entries -- back steps between
   // tabs, not through every jump. Scroll restore is manual because panels
   // hide/show rather than truly navigate, so page height shifts under the
-  // browser's own restore. We route off popstate (not hashchange) to stay the
+  // browser’s own restore. We route off popstate (not hashchange) to stay the
   // single source of truth for back/forward; deep links still resolve on load.
   var tabs=[].slice.call(document.querySelectorAll('.tab'));
   var panels=[].slice.call(document.querySelectorAll('.tabpanel'));
   var cur='tab-briefing';
   function panelOf(el){while(el&&el.classList&&!el.classList.contains('tabpanel'))el=el.parentElement;return el;}
-  function expandDetail(el){ // open a drilled-to sector's collapsed charts/detail
+  function expandDetail(el){ // open a drilled-to sector’s collapsed charts/detail
     if(!el||(el.classList&&el.classList.contains('brief-sec')))return; // not whole-section jumps
     if(el.tagName==='DETAILS')el.open=true;
     var d=el.querySelector&&el.querySelector('details.gdetail');
@@ -2019,7 +2019,7 @@ _PORTAL_JS = """<script>
   }
   var hist=!!(window.history&&history.pushState);
   if(hist&&'scrollRestoration' in history)history.scrollRestoration='manual';
-  function stamp(){ // record where we are in the entry we're about to leave
+  function stamp(){ // record where we are in the entry we’re about to leave
     if(hist)try{history.replaceState(Object.assign({},history.state||{},{y:window.scrollY}),'');}catch(e){}
   }
   // Navigate to panel `id`, optionally drilling to element `el` within it.
@@ -2187,7 +2187,7 @@ _PORTAL_JS = """<script>
 
 
 def _source_received_date(sources_sec, variant) -> str | None:
-    """When we last received the active source's data: the latest release's
+    """When we last received the active source’s data: the latest release’s
     fetch date from the sources appendix, formatted '16 Jun 2026'. None if the
     section, the matching source, or the date is unavailable."""
     from datetime import date as _d
@@ -2255,7 +2255,7 @@ def render_html(report: Report) -> str:
     if report.what_changed:
         wc = report.what_changed
         if wc.significant:                   # something actually moved → full section
-            subnav.append(("brief-changed", "What's changed"))
+            subnav.append(("brief-changed", "What’s changed"))
             brief.append('<section class="brief-sec" id="brief-changed">'
                          + _what_changed(wc) + "</section>")
         else:                                # nothing moved → slim one-liner, no nav
