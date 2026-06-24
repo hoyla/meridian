@@ -137,6 +137,27 @@ LOW_BASE_THRESHOLD_EUR = 50_000_000
 # tagged as low-base, the trajectory finding itself flags low_base_effect.
 TRAJECTORY_LOW_BASE_FRACTION = 0.5
 
+# --- CN8 "biggest mover" analyser (Option A; roadmap "Biggest mover KPI") ---
+# Single-product (CN8) movers within the watched HS prefixes — finer than the
+# ~46 displayed groups, to surface a product the group aggregation masks. The
+# data look (3,045 codes; the naive leader was +2,515,745% on €0.55M) showed the
+# gates below are load-bearing, not cosmetic.
+CN8_MOVER_SOURCE_URL = "analysis://cn8_biggest_mover/v1"
+# Both the current AND prior 12mo window must clear this (a current-only floor
+# still let +39,926% on €40M-from-€0.1M through). Lower than the €50M group
+# floor because a single CN8 is finer-grained.
+CN8_MOVER_MIN_WINDOW_EUR = 25_000_000
+CN8_MOVER_MIN_YOY_ABS = 0.25            # |12mo YoY| at the anchor
+CN8_MOVER_MIN_MONTHS_PER_WINDOW = 10    # of 12 in each of current/prior (continuity)
+# Persistence (Luke, 2026-06-24): the move must hold same-direction across the
+# last N rolling anchors, each genuinely elevated — smooths brief anomalies.
+CN8_MOVER_PERSIST_ANCHORS = 3
+CN8_MOVER_PERSIST_MIN_ABS = 0.10
+# Leave-one-out: the move must survive dropping the single largest month from
+# the window that would most flatter it (current for a rise, prior for a fall) —
+# i.e. no one shipment is the whole story.
+CN8_MOVER_LOO_MIN_ABS = 0.15
+
 # Eurostat partners for "Chinese trade" — CN plus the two Special
 # Administrative Regions. Editorially, China-via-Hong-Kong is still Chinese
 # trade for Lisa O'Carroll's "China shock" framing; Eurostat reports it under
@@ -2008,6 +2029,267 @@ def _insert_hs_group_yoy_finding(
             detail=detail,
         )
     return action
+
+
+# =============================================================================
+# CN8 "biggest mover" — single-product movers within the watched HS prefixes.
+# =============================================================================
+# Finer than the ~46 displayed hs_groups: a product the group aggregation masks.
+# Option A of the roadmap "Biggest mover KPI" (the stepping stone to the Option-B
+# blind-spot radar). The card (report_builder._biggest_mover_indicator) picks the
+# headline one, preferring codes whose parent group isn't already a Standout
+# mover. Gates are load-bearing — see the data look in the roadmap entry.
+
+
+def _cn8_mover_gates(
+    series: dict[date, float], latest: date,
+    min_window_eur: float, min_yoy_abs: float,
+) -> dict[str, Any] | None:
+    """Apply the five gates to one CN8 code's monthly value_eur series.
+    Returns the computed window stats if it qualifies as a robust mover at
+    `latest`, else None. See CN8_MOVER_* constants for the thresholds."""
+
+    def window(anchor: date) -> dict[str, Any] | None:
+        cur_w = [_months_back(anchor, i) for i in range(12)]       # anchor..-11
+        pri_w = [_months_back(anchor, i) for i in range(12, 24)]   # -12..-23
+        cur_present = {p: series[p] for p in cur_w if p in series}
+        pri_present = {p: series[p] for p in pri_w if p in series}
+        if (len(cur_present) < CN8_MOVER_MIN_MONTHS_PER_WINDOW
+                or len(pri_present) < CN8_MOVER_MIN_MONTHS_PER_WINDOW):
+            return None
+        cur_eur, pri_eur = sum(cur_present.values()), sum(pri_present.values())
+        if pri_eur <= 0:
+            return None
+        return {"cur_eur": cur_eur, "pri_eur": pri_eur,
+                "yoy": (cur_eur - pri_eur) / pri_eur,
+                "cur_months": cur_present, "pri_months": pri_present}
+
+    w0 = window(latest)
+    if w0 is None:
+        return None
+    # (1) both-sides value floor + (2) magnitude.
+    if w0["cur_eur"] < min_window_eur or w0["pri_eur"] < min_window_eur:
+        return None
+    if abs(w0["yoy"]) < min_yoy_abs:
+        return None
+    rising = w0["yoy"] > 0
+    # (4) persistence: same-direction & elevated across the last N anchors.
+    anchor_yoys: list[float] = []
+    for a in (_months_back(latest, i) for i in range(CN8_MOVER_PERSIST_ANCHORS)):
+        wa = window(a)
+        if wa is None:
+            return None
+        anchor_yoys.append(wa["yoy"])
+        if (wa["yoy"] > 0) != rising or abs(wa["yoy"]) < CN8_MOVER_PERSIST_MIN_ABS:
+            return None
+    # (5) leave-one-out: drop the largest month from the window that most
+    # flatters the move (current for a rise, prior baseline for a fall).
+    if rising:
+        loo_cur = w0["cur_eur"] - max(w0["cur_months"].values())
+        loo_yoy = (loo_cur - w0["pri_eur"]) / w0["pri_eur"]
+        if loo_yoy < CN8_MOVER_LOO_MIN_ABS:
+            return None
+    else:
+        loo_pri = w0["pri_eur"] - max(w0["pri_months"].values())
+        if loo_pri <= 0:
+            return None
+        loo_yoy = (w0["cur_eur"] - loo_pri) / loo_pri
+        if loo_yoy > -CN8_MOVER_LOO_MIN_ABS:
+            return None
+    return {"anchor": latest, "current_eur": w0["cur_eur"],
+            "prior_eur": w0["pri_eur"], "yoy_pct": w0["yoy"],
+            "anchor_yoys": anchor_yoys, "loo_yoy": loo_yoy,
+            "cur_months": w0["cur_months"], "pri_months": w0["pri_months"]}
+
+
+def _insert_cn8_mover_finding(
+    analysis_run_id: int, code: str, desc: dict[str, str],
+    res: dict[str, Any], kg_series: dict[date, float],
+    parents: list[_HsGroup], flow: int, min_window_eur: float,
+) -> findings_io.EmitAction:
+    anchor = res["anchor"]
+    yoy = res["yoy_pct"]
+    direction = "up" if yoy > 0 else "down"
+    label = desc.get("short") or code
+    full = desc.get("full") or ""
+    end_yyyymm = anchor.strftime("%Y-%m")
+    current_kg = sum(kg_series.get(p, 0.0) for p in res["cur_months"])
+    parent_names = [g.name for g in parents]
+    title = (
+        f"Single-product mover (EU imports from CN): {code} {label} — "
+        f"rolling 12mo to {end_yyyymm}: €{res['current_eur']/1e6:,.1f}M "
+        f"({yoy*100:+.1f}% {direction} value)"
+    )
+    body_lines = [f"CN8 {code}: {label}"]
+    if full and full != label:
+        body_lines.append(f"Full denomination: {full}")
+    body_lines += [
+        "",
+        f"EU-27 imports from CN+HK+MO, rolling 12 months to {end_yyyymm}:",
+        f"  Value: €{res['current_eur']:,.0f} ({yoy*100:+.2f}% YoY vs €{res['prior_eur']:,.0f})",
+        "  Persistence: YoY "
+        + ", ".join(f"{y*100:+.0f}%" for y in res["anchor_yoys"])
+        + f" over the last {CN8_MOVER_PERSIST_ANCHORS} anchors (most recent first).",
+        f"  Leave-one-out YoY (largest month dropped): {res['loo_yoy']*100:+.1f}%.",
+        (f"  Parent group(s): {', '.join(parent_names)}." if parent_names
+         else "  Not in any displayed group — outside the watchlist."),
+        "",
+        "A single-product (CN8) mover within the watched HS prefixes — finer "
+        "than the displayed groups; a 'worth a look' cue, not a headline-grade "
+        "finding.",
+    ]
+    months = sorted(set(res["cur_months"]) | set(res["pri_months"]))
+    detail = {
+        "method": "cn8_yoy_mover_v1",
+        "method_query": {
+            "source": "eurostat", "flow": flow,
+            "partners": list(EUROSTAT_PARTNERS),
+            "rolling_window_months": 12, "min_window_eur": min_window_eur,
+        },
+        "product": {"cn8": code, "label_short": label, "denomination": full},
+        "windows": {
+            "current_start": _months_back(anchor, 11).isoformat(),
+            "current_end": anchor.isoformat(),
+            "prior_start": _months_back(anchor, 23).isoformat(),
+            "prior_end": _months_back(anchor, 12).isoformat(),
+        },
+        "totals": {
+            "current_12mo_eur": res["current_eur"],
+            "prior_12mo_eur": res["prior_eur"],
+            "delta_eur": res["current_eur"] - res["prior_eur"],
+            "yoy_pct": yoy,
+            "current_12mo_kg": current_kg,
+            "low_base": False,  # both windows clear the floor by construction
+        },
+        "persistence": {
+            "anchors": CN8_MOVER_PERSIST_ANCHORS,
+            "anchor_yoys": res["anchor_yoys"],   # most-recent first
+            "min_abs": CN8_MOVER_PERSIST_MIN_ABS,
+        },
+        "leave_one_out": {"yoy": res["loo_yoy"], "min_abs": CN8_MOVER_LOO_MIN_ABS},
+        "parent_groups": parent_names,
+        "monthly_series": [
+            {"period": p.isoformat(),
+             "value_eur": res["cur_months"].get(p) or res["pri_months"].get(p)}
+            for p in months
+        ],
+        "caveat_codes": [],
+    }
+    with _conn() as conn, conn.cursor() as cur:
+        _, action = findings_io.emit_finding(
+            cur,
+            scrape_run_id=analysis_run_id,
+            kind="anomaly",
+            subkind="cn8_yoy_mover",
+            natural_key=findings_io.nk_cn8_yoy_mover(code, end_yyyymm),
+            value_fields={
+                "method": "cn8_yoy_mover_v1", "cn8": code,
+                "yoy_pct": round(yoy, 6),
+                "current_eur": round(res["current_eur"], 2),
+                "prior_eur": round(res["prior_eur"], 2),
+            },
+            hs_group_ids=[g.id for g in parents] or None,
+            score=abs(yoy),
+            title=title,
+            body="\n".join(body_lines),
+            detail=detail,
+        )
+    return action
+
+
+def detect_cn8_biggest_mover(
+    flow: int = 1,
+    min_window_eur: float = CN8_MOVER_MIN_WINDOW_EUR,
+    min_yoy_abs: float = CN8_MOVER_MIN_YOY_ABS,
+) -> dict[str, int]:
+    """Emit a `cn8_yoy_mover` finding for every single CN8 product that is a
+    *robust* 12-month YoY mover within the watched HS prefixes (flow=1, EU-27
+    imports from CN+HK+MO). The watched prefixes are exactly what we ingest, so
+    "everything" here = every CN8 beneath the watched chapters — finer than the
+    displayed groups, but not (yet) the out-of-watchlist blind spots (Option B).
+
+    Gates (CN8_MOVER_* constants): (1) both current & prior 12mo ≥ floor,
+    (2) |YoY| ≥ threshold, (3) ≥N months per window, (4) same-direction &
+    elevated across the last 3 rolling anchors, (5) survives leave-one-out of
+    the largest month. Append-only / idempotent via the (code, anchor)
+    natural key. Imports only in v1 (exports → a later `_export` subkind)."""
+    if flow != 1:
+        raise ValueError("detect_cn8_biggest_mover: only flow=1 (imports) in v1")
+    import classifications
+
+    counts = {"emitted": 0, "inserted_new": 0, "confirmed_existing": 0,
+              "superseded": 0, "candidates": 0, "skipped_gated": 0}
+    groups = _list_hs_groups()
+    prefixes = sorted({
+        (p[:-1] if p.endswith("%") else p)
+        for g in groups for p in g.hs_patterns
+    } - {"000TOTAL"})
+    if not prefixes:
+        return counts
+
+    like = " OR ".join(["product_nc LIKE %s"] * len(prefixes))
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT MAX(period) FROM eurostat_raw_rows WHERE flow=%s", (flow,))
+        latest = cur.fetchone()[0]
+        if latest is None:
+            return counts
+        cur.execute(
+            f"""SELECT product_nc, period,
+                       SUM(value_eur) AS eur, SUM(quantity_kg) AS kg
+                  FROM eurostat_raw_rows
+                 WHERE flow = %s AND partner = ANY(%s) AND reporter <> ALL(%s)
+                   AND product_nc <> '000TOTAL'
+                   AND ({like})
+                   AND period > (%s::date - INTERVAL '26 months')
+              GROUP BY product_nc, period""",
+            (flow, list(EUROSTAT_PARTNERS), list(EU27_EXCLUDE_REPORTERS),
+             *[p + "%" for p in prefixes], latest),
+        )
+        rows = cur.fetchall()
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) VALUES (%s,'running') RETURNING id",
+            (CN8_MOVER_SOURCE_URL,),
+        )
+        analysis_run_id = cur.fetchone()[0]
+
+    eur_by_code: dict[str, dict[date, float]] = {}
+    kg_by_code: dict[str, dict[date, float]] = {}
+    for code, p, e, k in rows:
+        eur_by_code.setdefault(code, {})[p] = float(e or 0.0)
+        kg_by_code.setdefault(code, {})[p] = float(k or 0.0)
+
+    try:
+        desc = classifications.cn8_description_lookup()
+        for code, series in eur_by_code.items():
+            res = _cn8_mover_gates(series, latest, min_window_eur, min_yoy_abs)
+            if res is None:
+                counts["skipped_gated"] += 1
+                continue
+            counts["candidates"] += 1
+            parents = [
+                g for g in groups
+                if any(code.startswith(pat[:-1] if pat.endswith("%") else pat)
+                       for pat in g.hs_patterns)
+            ]
+            action = _insert_cn8_mover_finding(
+                analysis_run_id, code, desc.get(code, {}), res,
+                kg_by_code.get(code, {}), parents, flow, min_window_eur,
+            )
+            _tally(counts, action)
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='success', ended_at=now() WHERE id=%s",
+                (analysis_run_id,),
+            )
+    except Exception as e:
+        log.exception("CN8 biggest-mover analysis failed")
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='failed', error_message=%s, ended_at=now() WHERE id=%s",
+                (str(e), analysis_run_id),
+            )
+        raise
+    return counts
 
 
 # =============================================================================

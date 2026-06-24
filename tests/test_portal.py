@@ -46,6 +46,13 @@ def _sample_report() -> rm.Report:
         unit="share", formatted="23%", chart="donut", note="China-only 22.5%",
         provenance=rm.Provenance(finding_ids=[20], source="eurostat", as_of=date(2026, 4, 1)),
     )
+    mover_ind = rm.Indicator(
+        key="cn8_biggest_mover", label="Biggest single-product mover", value=2.33,
+        unit="yoy_pct", formatted="+233%", chart="bignumber",
+        note="Electronic integrated circuits (DRAM) · €278.1M imports, 12mo · "
+             "outside the headline movers",
+        provenance=rm.Provenance(finding_ids=[21], source="eurostat", as_of=date(2026, 4, 1)),
+    )
     headline = rm.Headline(
         variant="eurostat", lead_title="What April changed", note="note.",
         items=[rm.HeadlineItem(
@@ -218,7 +225,7 @@ def _sample_report() -> rm.Report:
     meta = rm.ReportMeta(data_period=date(2026, 4, 1), variant="eurostat",
                          snapshot_id="t", generated_at=datetime(2026, 6, 20, 12, 0))
     return rm.Report(meta=meta,
-                     key_indicators=[deficit_ind, level_ind, donut_ind],
+                     key_indicators=[deficit_ind, level_ind, donut_ind, mover_ind],
                      headline=headline, what_changed=what_changed,
                      sections=[state, mirror, sector, structural, gacc_bi,
                                sources, data, reference, glossary],
@@ -373,6 +380,19 @@ def test_kpi_sparkline_cards_span_two_columns():
     assert 'class="kpi kpi-wide"' in h          # the sparkline deficit card is wide
     # The donut card is narrow (1 column) — never carries kpi-wide.
     assert "kpi-donut kpi-wide" not in h
+
+
+def test_biggest_mover_kpi_card_renders():
+    """The CN8 biggest-mover card (Option A): a 1-column bignumber carrying the
+    %, the product, and the 'outside the headline movers' framing — not a wide
+    sparkline card, so it completes a KPI row rather than stranding one."""
+    h = render_html(_sample_report())
+    assert "Biggest single-product mover" in h
+    assert "+233%" in h                                  # the move, as the big number
+    assert "Electronic integrated circuits (DRAM)" in h  # the product (in the note)
+    assert "outside the headline movers" in h            # the provocation framing
+    # Exactly one wide card — the headline EU-27 deficit; the mover is 1-column.
+    assert h.count('class="kpi kpi-wide"') == 1
 
 
 def test_provenance_drawer_renders_for_gated_findings():

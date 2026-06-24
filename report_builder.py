@@ -25,6 +25,7 @@ when the HTML renderer needs it. `facets` are likewise minimally stubbed
 from __future__ import annotations
 
 import logging
+import math
 import pathlib
 import re
 from collections import Counter, defaultdict
@@ -330,12 +331,15 @@ def _deficit_indicator(
     key: str = "eu_china_deficit_per_day",
     label: str = "EU-27 goods-trade deficit with China, Hong Kong & Macao",
     source: str = "eurostat",
+    chart: str = "sparkline",
 ) -> Indicator | None:
     """A goods-trade deficit with China as a vital sign — the standing
     €/day level + YoY delta + a monthly sparkline. Its home is Key
     indicators (amended Q3): a level the delta sections can’t carry.
     Parameterised by `subkind` so EU-27 (`trade_balance`) and the UK
-    (`trade_balance_uk`) reuse one builder."""
+    (`trade_balance_uk`) reuse one builder. `chart="bignumber"` drops the
+    sparkline so the card occupies a single KPI column (used for the UK
+    card, freeing a slot — the headline EU-27 card is the only wide one)."""
     fid, detail = _latest_trade_balance(cur, subkind)
     if fid is None:
         return None
@@ -395,11 +399,12 @@ def _deficit_indicator(
         value=float(per_day),
         unit="eur_per_day",
         formatted=f"€{float(per_day) / 1e6:,.0f}M/day",
-        chart="sparkline",
+        chart=chart,
         delta=delta,
         note=note,
-        chart_data=ChartData(chart_type="sparkline", series=series,
-                             extra={"caption": spark_caption} if spark_caption else {}),
+        chart_data=(ChartData(chart_type="sparkline", series=series,
+                              extra={"caption": spark_caption} if spark_caption else {})
+                    if chart == "sparkline" else None),
         provenance=Provenance(finding_ids=[fid], source=source, as_of=as_of),
     )
 
@@ -479,6 +484,73 @@ def _china_share_indicator(cur) -> Indicator | None:
         unit="share",
         formatted=f"{share * 100:.1f}%",
         chart="donut",
+        note=note,
+        provenance=Provenance(finding_ids=[fid], source="eurostat", as_of=as_of),
+    )
+
+
+def _biggest_mover_indicator(cur, surfaced_groups: set[str]) -> Indicator | None:
+    """The biggest *single-product* (CN8) mover within the watched HS prefixes
+    — a 'worth a look' provocation surfacing a product the ~46 displayed groups
+    aggregate away (Option A of the roadmap 'Biggest mover KPI'; the stepping
+    stone to the Option-B blind-spot radar). Reads `cn8_yoy_mover` findings at
+    the latest anchor, ranks by composite |YoY|×log(value) (material, not just a
+    high %), and *prefers a code whose parent group isn't already a Standout
+    mover* — so the card adds something rather than restating the headline.
+
+    Self-contained by design: there's no per-CN8 detail section to link to, so
+    the card carries the product, the move, and its citation, and the framing
+    flags whether it sits outside the headline movers."""
+    cur.execute(
+        """SELECT id, detail FROM findings
+            WHERE superseded_at IS NULL AND subkind = 'cn8_yoy_mover'
+            ORDER BY (detail->'windows'->>'current_end')::date DESC NULLS LAST""",
+    )
+    rows = cur.fetchall()
+    if not rows:
+        return None
+    # Restrict to the latest anchor so a back-filled older month can't win.
+    latest_anchor = (rows[0]["detail"].get("windows") or {}).get("current_end")
+    cands = [
+        (r["id"], r["detail"]) for r in rows
+        if (r["detail"].get("windows") or {}).get("current_end") == latest_anchor
+    ]
+
+    def rank_key(item):
+        _, d = item
+        t = d.get("totals", {})
+        yoy = abs(float(t.get("yoy_pct") or 0.0))
+        eur = max(float(t.get("current_12mo_eur") or 0.0), 10.0)
+        already = bool(set(d.get("parent_groups") or []) & surfaced_groups)
+        # Un-surfaced parents first (False < True), then composite descending.
+        return (already, -(yoy * math.log10(eur)))
+
+    fid, d = min(cands, key=rank_key)
+    t = d.get("totals", {})
+    prod = d.get("product", {})
+    yoy = float(t.get("yoy_pct"))
+    cur_eur = float(t.get("current_12mo_eur"))
+    anchor = (d.get("windows") or {}).get("current_end")
+    as_of = date.fromisoformat(anchor) if isinstance(anchor, str) else None
+    parents = d.get("parent_groups") or []
+    off_watch = not (set(parents) & surfaced_groups)
+    label_short = (prod.get("label_short") or prod.get("cn8") or "").strip()
+    if len(label_short) > 46:
+        # Break at a word boundary so the note doesn't read "…dynamic ran…";
+        # the full denomination is always in the provenance drawer.
+        label_short = (label_short[:46].rsplit(" ", 1)[0] or label_short[:45]).rstrip() + "…"
+    frame = ("outside the headline movers" if off_watch
+             else f"within {parents[0]}" if parents else "")
+    note = f"{label_short} · {_fmt_eur(cur_eur)} imports, 12mo"
+    if frame:
+        note += f" · {frame}"
+    return Indicator(
+        key="cn8_biggest_mover",
+        label="Biggest single-product mover",
+        value=float(yoy),
+        unit="yoy_pct",
+        formatted=f"{'+' if yoy >= 0 else '−'}{abs(yoy) * 100:.0f}%",
+        chart="bignumber",
         note=note,
         provenance=Provenance(finding_ids=[fid], source="eurostat", as_of=as_of),
     )
@@ -1766,10 +1838,11 @@ def build_report(
         disp = db.group_display_names(cur)
         # Key indicators (vital signs) — a small fixed set, each carrying its
         # figure + citation + as-of (the glyph never travels without its number).
-        # EU-27 deficit/day, the EU import level, the China-dependency donut, the
-        # UK deficit/day. The donut (China's share of extra-EU goods imports) now
-        # has its denominator: the all-goods 000TOTAL extra-EU world aggregate
-        # ingested for the china_all_goods_share analyser.
+        # Row 1: the headline EU-27 deficit/day (wide sparkline) + the EU import
+        # level. Row 2: the China-dependency donut, the UK deficit/day (rendered
+        # compact so it's 1 column, not wide-by-accident), and the biggest
+        # single-product (CN8) mover. The donut (China's share of extra-EU goods
+        # imports) carries its 000TOTAL extra-EU all-goods denominator.
         indicators = [
             ind for ind in (
                 _deficit_indicator(cur),
@@ -1778,8 +1851,10 @@ def build_report(
                 _deficit_indicator(
                     cur, subkind="trade_balance_uk", key="uk_china_deficit_per_day",
                     label="UK goods-trade deficit with China, Hong Kong & Macao",
-                    source="hmrc",
+                    source="hmrc", chart="bignumber",
                 ),
+                _biggest_mover_indicator(
+                    cur, {m["group_name"] for m in top_movers}),
             ) if ind is not None
         ]
 

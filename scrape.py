@@ -646,7 +646,8 @@ def main() -> None:
                    help="Only fetch FX rates from this period onwards (default: full history)")
     p.add_argument("--analyse",
                    choices=["mirror-trade", "mirror-gap-trends", "hs-group-yoy",
-                            "hs-group-trajectory", "gacc-aggregate-yoy",
+                            "hs-group-trajectory", "cn8-biggest-mover",
+                            "gacc-aggregate-yoy",
                             "gacc-bilateral-aggregate-yoy", "partner-share",
                             "trade-balance", "china-all-goods-share", "llm-framing"],
                    help="Run a deterministic anomaly pass over already-ingested data, "
@@ -1268,6 +1269,14 @@ def main() -> None:
             comparison_scope=args.comparison_scope,
         )
         log.info("HS-group trajectory analysis (flow=%d): %s", args.flow, counts)
+        return
+
+    if args.analyse == "cn8-biggest-mover":
+        # Biggest single-product (CN8) mover within the watched HS prefixes —
+        # finer than hs-group-yoy (roadmap "Biggest mover KPI", Option A).
+        # Imports only (flow=1). Reads eurostat_raw_rows.
+        counts = anomalies.detect_cn8_biggest_mover()
+        log.info("CN8 biggest-mover analysis: %s", counts)
         return
 
     if args.analyse == "gacc-aggregate-yoy":
