@@ -919,11 +919,14 @@ def _state_of_play_section(section) -> str:
     if section.intro:
         out.append(f'<p class="kicker">{_inline_md(section.intro)}</p>')
     out.append(_more_about(section))
-    # The section carries a single "deficit" child holding the per-scope rows;
-    # a sub-heading would just restate the section title, so the rows render
-    # directly under the section h2 (the wrapper is a vestigial "first cut").
+    # The section now spans two stories — the deficit (a level) and China's
+    # share of Europe's external trade (the dependency trend). Each child gets a
+    # sector sub-heading so the two trend charts aren't read as one.
     for sub in section.sections:
         out.append(f'<div class="sector" id="{html.escape(sub.id)}">')
+        out.append(f'<h3 class="sector-h">{html.escape(sub.title)}</h3>')
+        if sub.intro:
+            out.append(f'<p class="gdesc">{_inline_md(sub.intro)}</p>')
         for f in sub.findings:
             out.append(_deficit_row(f))
         # The headline (EU-27, the first scope) deficit's monthly trajectory —
@@ -947,8 +950,12 @@ def _state_of_play_section(section) -> str:
         pts = [SimpleNamespace(period=p["period"], value=p["share"])
                for p in trend["series"]]
         now = trend.get("share_now")
+        heading = trend.get("heading")
+        subhead = (f'<h3 class="sector-h">{html.escape(heading)}</h3>'
+                   if heading else "")
         out.append(
             '<div class="sector" id="china-share-trend">'
+            + subhead
             + _chart_card(
                 trend.get("title", "China's share of EU imports"),
                 f"{now * 100:.1f}%" if now is not None else "",
