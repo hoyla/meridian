@@ -1479,7 +1479,7 @@ def test_read_latest_report_absent_object_is_none_even_when_required(monkeypatch
     """No latest/report.json yet (first publish) is 'absent', not a read error —
     returns None even with required=True, so a first publish isn't blocked."""
     import portal_publish
-    from google.cloud import storage
+    storage = pytest.importorskip("google.cloud.storage")
 
     class _Blob:
         def exists(self):
@@ -1501,7 +1501,7 @@ def test_read_latest_report_read_error_raises_only_when_required(monkeypatch):
     """A genuine read error (GCS/auth/parse) is silent (None) by default but
     raises under required=True — the guard against silently emptying takes."""
     import portal_publish
-    from google.cloud import storage
+    storage = pytest.importorskip("google.cloud.storage")
 
     def boom(*a, **k):
         raise RuntimeError("no credentials")
@@ -1532,7 +1532,7 @@ def test_write_portal_snapshot_fails_loud_on_unreadable_prior_when_publishing(
     (publishing=False) stays best-effort and still writes the snapshot."""
     import periodic
     import portal_publish
-    from google.cloud import storage
+    storage = pytest.importorskip("google.cloud.storage")
 
     def boom(*a, **k):
         raise RuntimeError("no credentials")

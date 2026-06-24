@@ -13,6 +13,5 @@ pandas
 matplotlib
 gspread
 google-auth
-google-cloud-storage
 ollama
 google-generativeai
