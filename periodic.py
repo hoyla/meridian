@@ -33,6 +33,7 @@ from typing import Any
 import anomalies
 import briefing_pack
 import llm_framing
+import portal_publish  # cheap — its GCS deps are lazy-imported inside functions
 
 from briefing_pack._helpers import (
     _bundle_root,
@@ -169,7 +170,7 @@ def write_portal_snapshot(
     bundle_dir: str, data_period, *, generate_takes: bool,
     write_workbook: bool = False,
     reuse_takes: bool = False, portal_bucket: str | None = None,
-    prior_report: dict | None = None,
+    prior_report: dict | None = None, publishing: bool = False,
 ) -> str | None:
     """Write the portal snapshot into `<bundle_dir>/04_Portal/`: report.json
     (the canonical published snapshot the web portal serves) + index.html (a
@@ -194,8 +195,16 @@ def write_portal_snapshot(
     an existing release without re-paying the API. It reads the live snapshot
     (`prior_report` if injected, else `portal_bucket`'s latest/report.json) and
     grafts takes whose data_period + finding id still match (see
-    `portal_takes_reuse`). Best-effort: any reuse failure leaves empty takes and
-    never sinks the snapshot."""
+    `portal_takes_reuse`).
+
+    `publishing=True` says this snapshot is about to go live (not a
+    `--portal-no-publish` preview). It makes the prior-snapshot read STRICT: a
+    genuine read error (GCS/auth/parse — not "no prior yet") raises
+    `portal_publish.PriorSnapshotUnreadable` instead of falling back to empty
+    takes, so we refuse to publish a takes-less portal while reporting success.
+    With `publishing=False` (preview, or the periodic-run path) reuse stays
+    best-effort: any failure leaves empty takes and never sinks the snapshot.
+    The graft itself is always best-effort either way."""
     try:
         from pathlib import Path
         import report_model
@@ -208,25 +217,31 @@ def write_portal_snapshot(
         # Sticky takes: carry prior LLM takes onto this LLM-less rebuild. Only
         # when reuse is asked for AND we didn't just generate fresh ones.
         if reuse_takes and not generate_takes:
-            try:
-                import portal_takes_reuse
-                prior = prior_report
-                if prior is None:
-                    import portal_publish
-                    prior = portal_publish.read_latest_report(portal_bucket)
-                if prior is None:
-                    log.warning(
-                        "portal snapshot: --portal-reuse-takes set but no prior "
-                        "snapshot available (need --portal-bucket / PORTAL_BUCKET "
-                        "with a readable latest/report.json); takes will be empty"
-                    )
-                else:
+            import portal_takes_reuse
+            # Read the prior snapshot STRICTLY when publishing: a genuine read
+            # error must not be read as "no prior" and silently empty the takes.
+            # PriorSnapshotUnreadable propagates (caught below + re-raised past
+            # the best-effort wrapper) so the publish is refused, not faked.
+            prior = prior_report
+            if prior is None:
+                prior = portal_publish.read_latest_report(
+                    portal_bucket, required=publishing)
+            if prior is None:
+                log.warning(
+                    "portal snapshot: --portal-reuse-takes set but no prior "
+                    "snapshot available (need --portal-bucket / PORTAL_BUCKET "
+                    "with a readable latest/report.json); takes will be empty"
+                )
+            else:
+                # The graft itself stays best-effort — a shape mismatch in the
+                # prior blob shouldn't sink the snapshot.
+                try:
                     n = portal_takes_reuse.graft_prior_takes(report, prior)
                     log.info("portal snapshot: grafted %d prior take(s) "
                              "(reuse — no LLM spend)", n)
-            except Exception:
-                log.exception("portal snapshot: take reuse failed; continuing "
-                              "with empty takes")
+                except Exception:
+                    log.exception("portal snapshot: take graft failed; "
+                                  "continuing with empty takes")
         pdir = Path(bundle_dir) / "04_Portal"
         pdir.mkdir(parents=True, exist_ok=True)
         (pdir / "report.json").write_text(report_model.to_json(report))
@@ -253,6 +268,11 @@ def write_portal_snapshot(
                 )
         log.info("periodic-run: wrote portal snapshot to %s", pdir)
         return str(pdir)
+    except portal_publish.PriorSnapshotUnreadable:
+        # Deliberate fail-loud: a publish asked to carry prior takes forward but
+        # the prior snapshot couldn't be read. Refuse rather than ship empty
+        # takes while reporting success. The caller surfaces it actionably.
+        raise
     except Exception:
         log.exception(
             "periodic-run: portal snapshot failed; continuing "

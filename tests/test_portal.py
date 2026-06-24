@@ -1315,10 +1315,49 @@ def test_reuse_no_prior_is_noop():
 
 
 def test_read_latest_report_no_bucket_returns_none(monkeypatch):
-    """No bucket → None (the caller falls back to empty takes), never raises."""
+    """No bucket → None (the caller falls back to empty takes), never raises —
+    even when required: 'no bucket' is absent, not a read error."""
     import portal_publish
     monkeypatch.delenv("PORTAL_BUCKET", raising=False)
     assert portal_publish.read_latest_report(None) is None
+    assert portal_publish.read_latest_report(None, required=True) is None
+
+
+def test_read_latest_report_absent_object_is_none_even_when_required(monkeypatch):
+    """No latest/report.json yet (first publish) is 'absent', not a read error —
+    returns None even with required=True, so a first publish isn't blocked."""
+    import portal_publish
+    from google.cloud import storage
+
+    class _Blob:
+        def exists(self):
+            return False
+
+    class _Bucket:
+        def blob(self, name):
+            return _Blob()
+
+    class _Client:
+        def bucket(self, name):
+            return _Bucket()
+
+    monkeypatch.setattr(storage, "Client", lambda *a, **k: _Client())
+    assert portal_publish.read_latest_report("b", required=True) is None
+
+
+def test_read_latest_report_read_error_raises_only_when_required(monkeypatch):
+    """A genuine read error (GCS/auth/parse) is silent (None) by default but
+    raises under required=True — the guard against silently emptying takes."""
+    import portal_publish
+    from google.cloud import storage
+
+    def boom(*a, **k):
+        raise RuntimeError("no credentials")
+
+    monkeypatch.setattr(storage, "Client", boom)
+    assert portal_publish.read_latest_report("b") is None          # best-effort
+    with pytest.raises(portal_publish.PriorSnapshotUnreadable):
+        portal_publish.read_latest_report("b", required=True)
 
 
 def test_write_portal_snapshot_reuse_is_best_effort(clean_db, tmp_path):
@@ -1330,6 +1369,31 @@ def test_write_portal_snapshot_reuse_is_best_effort(clean_db, tmp_path):
         str(tmp_path), None, generate_takes=False, reuse_takes=True,
         prior_report={"meta": {"data_period": "2026-04-01"},
                       "headline": {"items": [], "llm_slots": []}})
+    assert pdir is not None
+    assert (tmp_path / "04_Portal" / "report.json").exists()
+
+
+def test_write_portal_snapshot_fails_loud_on_unreadable_prior_when_publishing(
+        clean_db, tmp_path, monkeypatch):
+    """A *publishing* reuse build whose prior snapshot can't be read must raise
+    (refuse to ship empty takes), while the same failure under a preview
+    (publishing=False) stays best-effort and still writes the snapshot."""
+    import periodic
+    import portal_publish
+    from google.cloud import storage
+
+    def boom(*a, **k):
+        raise RuntimeError("no credentials")
+
+    monkeypatch.setattr(storage, "Client", boom)
+    with pytest.raises(portal_publish.PriorSnapshotUnreadable):
+        periodic.write_portal_snapshot(
+            str(tmp_path), None, generate_takes=False, reuse_takes=True,
+            portal_bucket="b", publishing=True)
+    # Same read error, preview build — non-fatal, snapshot still written.
+    pdir = periodic.write_portal_snapshot(
+        str(tmp_path), None, generate_takes=False, reuse_takes=True,
+        portal_bucket="b", publishing=False)
     assert pdir is not None
     assert (tmp_path / "04_Portal" / "report.json").exists()
 

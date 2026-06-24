@@ -1120,11 +1120,25 @@ def main() -> None:
             print("--portal-reuse-takes needs a portal bucket to read the prior "
                   "takes from — pass --portal-bucket or set PORTAL_BUCKET.")
             return
-        portal_dir = periodic.write_portal_snapshot(
-            out_dir, period, generate_takes=args.portal_takes,
-            write_workbook=True,  # so the Tables-tab /data.xlsx download resolves (no briefing-pack run on this path)
-            reuse_takes=args.portal_reuse_takes, portal_bucket=bucket,
-        )
+        # Will this snapshot actually go live? If so, reuse-takes reads the prior
+        # snapshot strictly — a read error refuses the publish rather than
+        # shipping takes-less while reporting success.
+        publishing = bool(bucket) and not args.portal_no_publish
+        import portal_publish
+        try:
+            portal_dir = periodic.write_portal_snapshot(
+                out_dir, period, generate_takes=args.portal_takes,
+                write_workbook=True,  # so the Tables-tab /data.xlsx download resolves (no briefing-pack run on this path)
+                reuse_takes=args.portal_reuse_takes, portal_bucket=bucket,
+                publishing=publishing,
+            )
+        except portal_publish.PriorSnapshotUnreadable as e:
+            print(f"Refusing to publish: --portal-reuse-takes could not read the "
+                  f"prior snapshot to carry takes forward.\n  {e}\n"
+                  f"  Retry with the project + --portal-bucket/PORTAL_BUCKET "
+                  f"reachable, or drop --portal-reuse-takes to rebuild with "
+                  f"fresh/empty takes (use --portal-no-publish to preview first).")
+            return
         if portal_dir is None:
             print("Portal snapshot failed — see logs.")
             return
