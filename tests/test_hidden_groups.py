@@ -78,7 +78,7 @@ def test_hidden_excluded_from_top_movers_but_flagged_in_sector_detail(
 
         # (1) Standout movers: the normal group rides; the hidden one is gated out.
         with psycopg2.connect(test_db_url) as conn, conn.cursor(
-                cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cursor_factory=psycopg2.extras.DictCursor) as cur:
             names = {m["group_name"] for m in _compute_top_movers(cur)}
         assert _NORMAL in names
         assert _HIDDEN not in names
@@ -118,7 +118,7 @@ def test_biggest_mover_excludes_cn8_whose_only_parent_is_held(
                 (run, json.dumps(detail)),
             )
         with psycopg2.connect(test_db_url) as conn, conn.cursor(
-                cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cursor_factory=psycopg2.extras.DictCursor) as cur:
             indicator = _biggest_mover_indicator(cur, surfaced_groups=set())
         assert indicator is None
     finally:
