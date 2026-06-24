@@ -523,9 +523,12 @@ def _render_sections(sections) -> list[str]:
                     out.append(_sector_flow_line(f))
                 ms = grp.metrics or {}
                 if ms.get("top_cn8"):
+                    def _top_md(t: dict) -> str:
+                        lab = (t.get("label") or "").strip()
+                        return (f"{lab} ({t['code']}) {_fmt_eur(t['eur'])}" if lab
+                                else f"{t['code']} {_fmt_eur(t['eur'])}")
                     out.append("- _Top products: " + " · ".join(
-                        f"{t['code']} {_fmt_eur(t['eur'])}"
-                        for t in ms["top_cn8"]) + "_")
+                        _top_md(t) for t in ms["top_cn8"]) + "_")
                 if ms.get("reporters"):
                     rp = []
                     for r in ms["reporters"]:
@@ -595,6 +598,14 @@ def _render_sections(sections) -> list[str]:
                 out.append("")
                 for s in m["sources"]:
                     out.append(f"- **{s['source']}** — {s['note']}")
+                out.append("")
+            if m.get("reference_sources"):
+                out.append("**Reference & classification data**")
+                out.append("")
+                for r in m["reference_sources"]:
+                    url = r.get("url")
+                    src = f" ({url})" if url else ""
+                    out.append(f"- **{r['name']}** — {r['note']}{src}")
                 out.append("")
             if m.get("coverage"):
                 out.append("**Period coverage**")
