@@ -5,88 +5,23 @@ What's still open. For history of what shipped, see
 the original Phase 1–6 plan, look at the git log around
 `8f18e68`–`5d0e23e` (2026-05-09 to 2026-05-10).
 
-## Next deploy batch — priority order (Lisa via Luke, 2026-06-22)
+## Portal / data-integrity backlog — remaining small items
 
-Everything from this session (#52–#59) is merged but **undeployed** — the next
-redeploy ships it all (EV/Lisa coverage, the "Lithium-ion accumulators" rename +
-Wind retirement, the China-reports relabel, the glossary web-hide, docx-off, the
-coverage guard, the /data.xlsx fix, the Q2 expansion). Before deploying, bundle
-these in Lisa's priority order. **None urgent** ("not likely to get to very
-soon") — captured so they're not lost.
+Nearly all of the 2026-06-22/23 deploy batch shipped and is live (see history.md:
+the Eurostat data correction, Q2 sector expansion, group display-names,
+CN+HK+MO scope-labelling, GACC regional charts, Period-covered "Last updated"
+column, State-of-play→By-country link, section-naming, `--portal-reuse-takes`,
+and the source-freshness alerting suite). What's left:
 
-1. **CN+HK+MO envelope-labelling consistency.** The scope-clarity pass was only
-   half-done (#54 fixed the "China reports" mislabel); the **mirror-gap** and
-   **GACC-bilateral** sections still don't consistently state that "China" =
-   CN+HK+MO. Render-layer copy; reader-facing defensibility.
-2. **Q2 round 2 — cosmetics + paint.** The deferred half of the Q2 expansion:
-   essential oils / surfactants (cosmetics) + paints / varnishes / pigments,
-   plus the new **Cosmetics & personal care** and **Paint & coatings** themes
-   (which also give TiO₂ its themes). Same build pattern as tranche 1 (#59).
-3. **Multi-line trade-by-partner time-series charts (NEW — Lisa's colleague).**
-   Three over-time charts — import value, export value, balance — one line per
-   major region (ASEAN, Europe, Africa, Latin America, …), to show how China's
-   trading-relationship priorities have shifted. **Data confirmed present:** the
-   GACC bilateral feed already holds monthly observations **2019-01 → 2026-05
-   (81 periods)** for exactly those regions/blocs (ASEAN, Africa, European Union,
-   Latin America, RCEP, Belt & Road) plus the major countries — so
-   import / export / balance per region over time is fully derivable from what we
-   already ingest. The build is the new part: a regional monthly-series
-   aggregation (the analysers only emit YoY snapshots today) + a **multi-line**
-   time-series chart (we only render single-series sparklines now) + a portal
-   home (extends the existing GACC "Trading partners" section). Mild scope-shift
-   — China-global, not China-Europe — but it belongs in the GACC section that
-   already does China-vs-world. Do a quick label-normalisation pass first (the
-   feed has "Incl: X" / dup-label noise; the canonical regions are clean).
-4. **Most-recent-update date in the "Period covered" table (NEW).** Sources &
-   coverage. Small render add — we already hold fetch / last_seen dates.
-5. **State-of-play ↔ Trading-partners linkage (NEW).** The two sit far apart and
-   the relationship reads as confusing. Cheapest fix: a "see Trading partners"
-   link at the end of State of play; worth a short UX think on whether more is
-   wanted.
-6. **`eurostat_raw_rows` UNIQUE constraint** — data-integrity hardening (detail
-   in the Portal-polish bullet below): a partial unique index → `ON CONFLICT DO
-   NOTHING`, concurrency-safe dedup.
-7. **Sticky LLM takes (graft-prior-takes) — DONE 2026-06-23.** Retain prior
-   takes on an LLM-less rebuild so cosmetic portal refreshes stop costing money.
-   Shipped as the opt-in `--portal-reuse-takes` flag (dedicated section below).
-
-## Portal polish — small items from the 2026-06-22 Lisa-feedback batch
-
-Surfaced while shipping the Eurostat data correction + portal-clarity batch
-(history.md 2026-06-22; PRs #43–#48, all live). All small; none blocking.
-
-- **Docx-structure terms on a web surface — DONE 2026-06-22 (#55).** The leak was
-  the **Glossary** tab (baked from the shared `docs/glossary.md`), not the
-  Methodology tab (whose copy was already web-clean). A `<!--web-hide-->` marker
-  drops the bundle-only terms (Tier 1/2/3, `02_Findings.md`, provenance files,
-  etc.) from the web glossary while keeping them for the bundle/GitHub rendering.
-- **Scope-clarity pass (option 3) — half DONE.** The **"China reports" mislabel**
-  is fixed (#54): the Eurostat CN-only deficit counterpart now reads "(China only,
-  excl. HK/Macao …)" instead of borrowing GACC's "China reports" (which stays
-  correct in the mirror-gap section). STILL OPEN → deploy-batch item 1 above:
-  labelling the CN+HK+MO envelope consistently on the **mirror-gap** and
-  **GACC-bilateral** sections.
-- **`/data.xlsx` 404 on a `--portal-snapshot` publish — DONE 2026-06-22 (#57).**
-  `write_portal_snapshot(write_workbook=True)` now builds `04_Data.xlsx` on the
-  snapshot path (isolated/best-effort), so the Tables-tab download resolves.
-- **Eurostat coverage guard checks CN only — DONE 2026-06-22.** The periodic
-  completeness guard now checks the full CN+HK+MO envelope the ingest stores via
-  `db.eurostat_coverage_gaps_multi` (a missing HK/MO reporter-month was
-  previously invisible). Gaps are partner-tagged: CN = near-certainly missing
-  data; HK/MO = advisory (thin flows, can be a genuine no-trade month). (From
-  the #43 review.)
-- **No UNIQUE constraint on `eurostat_raw_rows`** — the additive guard is the sole
-  dedup defence and isn't concurrency-safe (check + insert in separate
-  transactions). A partial unique index on the natural key would let the insert
-  use `ON CONFLICT DO NOTHING`, enforcing in the DB what the guard enforces alone.
-  (From the #43 review.)
+- **`eurostat_raw_rows` UNIQUE constraint** — data-integrity hardening. The
+  additive presence-check guard is the sole dedup defence and isn't
+  concurrency-safe (check + insert in separate transactions). A partial unique
+  index on the natural key would let the insert use `ON CONFLICT DO NOTHING`,
+  enforcing in the DB what the guard enforces alone. (From the #43 review.)
 - **Minor / optional.** Fetch dates still render raw ISO (left deliberately — they
   are real calendar days, not the `-01` period artefact; could prettify to "15 Jun
   2026"). The month format is the abbreviated "Apr 2026" (full "April 2026" was an
-  option). And the **graft-prior-takes** feature (see the "retain prior LLM content
-  on an LLM-less rebuild" item) would make cosmetic portal rebuilds free instead of
-  paying for a `--portal-takes` regeneration each time — the cost-per-tweak pain
-  during this batch is the case for it.
+  option).
 
 ## HMRC-triggered release — headline-only today; design parked (2026-06-23)
 
@@ -154,50 +89,6 @@ Not scheduled — a thinking-question outcome from the same 2026-06-23 thread as
 HMRC release-timing work (which is what got built: the combined-scope guard, the
 HMRC-lag disclosure, the overdue alert, the gap-scan). Pick up when reporters want
 the earlier cadence.
-
-## Source-freshness alerting — push on overdue / missing source (2026-06-23)
-
-Surfaced by the 2026-06-23 HMRC↔Eurostat release-timing investigation (the same
-pass that produced the `eu_27_plus_uk` half-sourcing guard on branch
-`ljh-combined-period-guard`). The `overdue` classification already exists —
-`release_calendar.classify_expectation` → `none_expected`/`due`/`overdue`, from
-[`2026-06-02-eurostat-expectation-axis-design.md`](2026-06-02-eurostat-expectation-axis-design.md)
-— but **nothing pushes it**. That note deliberately left surfacing at the manual
-`--source-status` table, so a source going silently late is invisible unless a
-human runs the command.
-
-**The gap.** `notify.py` (`--notify-chat`, PR #74) fires only on
-`result = 'new_data'` rows (`_new_data_since`); it never reads the `expectation`
-column. The Chat notifier reports what *did* land, never what *didn't*. Live
-evidence: HMRC March 2026 was ~4 weeks late (ingested 13 Jun; the 19 May
-Eurostat-March briefing shipped without it) and **no alert fired** — it took a
-manual catch-up. This is the missing half of the "Per-run outcome notification"
-item (Near-term → Docx + Drive upload), where a late-source alert is noted as
-"just one possible outcome line."
-
-**The work**, smallest first:
-
-- Add an overdue line to the Chat notifier: read `expectation = 'overdue'` from
-  `routine_check_log` alongside the existing new-data path and post "source X
-  late — scheduled DATE, still nothing." Make it idempotent (one alert per
-  overdue spell, not a daily re-fire).
-- **GACC-January carve-out — required before enabling, or it false-fires every
-  February.** China Customs has no standalone January (Chinese New Year). After
-  December the candidate steps to `YYYY-01`, which never publishes as a monthly,
-  so `classify_expectation('gacc', Jan, …)` reads `overdue` from ~12 Feb until
-  the February release lands and `MAX(releases)` jumps Dec→Feb. The GACC calendar
-  must treat January as `none_expected` (never its own period). Background: the
-  Jan-Feb `period_kind` partition in `parse.py` and the *Derive January from Feb
-  release's (ytd − monthly)* item below. (2026 published a genuine standalone
-  February, but January is still never its own release, so the carve-out stands.)
-
-**Related — gap-scan behind the frontier (optional, same home).** The candidate
-is forward-only: `candidate = next_period(MAX(releases.period))` (`scrape.py:522`),
-so it only ever probes MAX+1. A hole *behind* the frontier — a skipped month, a
-revision, a partial release landing before its data — is never re-probed and
-nothing scans for it (the March-2026 HMRC gap needed a manual catch-up). A
-periodic "any missing months behind MAX, per source?" scan would close it and
-belongs with the overdue alert.
 
 ## docx → Drive pipeline — legacy; teardown deferred (2026-06-22)
 
@@ -288,8 +179,9 @@ append-only + provenance on everything new (principles 3/4/7).
    (**Cosmetics & personal care**, **Paint & coatings**) and rows that fill the
    already-declared **Pharma & fine chemicals** theme. Titanium dioxide
    (`320611`) is the worked multi-theme case (paint + cosmetics + pigment).
-   Awaiting Lisa's prioritisation before seeding (the analyser surfaces any
-   seeded group immediately, so we don't seed speculatively).
+   **Seeded + analysed 2026-06-22** (round 1 — critical minerals + pharma APIs +
+   engine parts: #59; round 2 — cosmetics + paint + the two new themes: #62; see
+   history.md). This sub-item is done; the broader breadth menu below remains.
 
    **Retrofit the 3 legacy application-bound groups — DONE 2026-06-22**
    (branch `ljh-legacy-group-taxonomy-retrofit`). Added a journalist-editable
@@ -331,77 +223,12 @@ append-only + provenance on everything new (principles 3/4/7).
    commodity, for "China-specific vs worldwide"); tariff-change timelines (to
    correlate moves with policy — also feeds the LLM-takes v2 retrieval angle).
 
-## Portal deploy — retain prior LLM content on an LLM-less rebuild (2026-06-22)
+## Portal deploy — fail loud on a failed reuse-takes graft (2026-06-23)
 
-**DONE 2026-06-23 — shipped as opt-in `--portal-reuse-takes`.** The graft-at-
-build approach below was built verbatim (`portal_takes_reuse.graft_prior_takes`,
-a pure function; prior read via `portal_publish.read_latest_report`; wired into
-`periodic.write_portal_snapshot`). One deliberate departure from a first
-instinct: reuse is **opt-in, not the default** — the default redeploy still pays
-for fresh takes (`--portal-takes`), because a stale interpretation of changed
-content is a data-rigor risk; refusing reinterpretation must be a deliberate act
-(Luke, 2026-06-23). The flag is for *amending an existing release* — cosmetic
-fixes or low-impact corrections. Command matrix in `portal_service/README.md`.
-The rest of this section is the (still-accurate) design record.
+The `--portal-reuse-takes` feature shipped (#69; see history.md). One open
+follow-up remains on it:
 
-**The gap.** A portal rebuild *without* `--portal-takes` doesn't leave the
-previous LLM material alone — it **overwrites it with empty placeholders**. So a
-deploy whose only purpose is a code/structure change (e.g. the per-partner
-balance row, PR #41) silently strips the takes, and the portal shows nothing
-where the leading questions / "one other thing" paragraph used to be. Luke hit
-this and flagged it as a real deploy hazard: there's currently no way to
-redeploy that *doesn't* impact the LLM material.
-
-**Why it happens (confirmed in code).** The LLM content — per-finding "takes"
-([report_builder.py](../report_builder.py) ~L1455, `llm_takes`) and the general
-take (~L1517, `llm_general_take`) — is generated **only** when
-`build_report(generate_takes=True)`, gated behind `--portal-takes`. Without the
-flag the slots are still created but as `status="placeholder"` with no content,
-and the renderer returns `""` for any non-`"generated"` slot
-([report_render_html.py](../report_render_html.py) `_take_block_html` /
-`_general_take_html`). The content is **never persisted durably** — it lives only
-inside the snapshot blob (`report.json`). `publish_snapshot`
-([portal_publish.py](../portal_publish.py)) overwrites `latest/report.json`
-wholesale, and the portal service reads only `latest/` with no prior-snapshot
-fallback ([portal_service/app.py](../portal_service/app.py)). Rebuild without
-takes → empty LLM fields in the blob → empty fields served.
-
-**Useful nuance:** the per-period archives *do* survive —
-`publish_snapshot` writes `periods/{period}/report.json` alongside `latest/`, so
-the last build that *did* generate takes still has them in GCS. The raw material
-to carry forward already exists; it's just never read back.
-
-**Fix (chosen approach): graft prior takes at build time.** Before writing the
-new snapshot, fetch the existing `gs://…/latest/report.json`, pull its
-`generated` `LLMSlot`s, and attach them to the freshly-built report by matching
-`grounded_in` finding id. New structural/data content refreshes; the LLM takes
-carry over untouched. No new infrastructure, ~one function. The finding-id match
-is a free correctness guard.
-
-**Key safety constraint — gate carry-over on an unchanged `data_period`:**
-- A **pure redeploy at the same `data_period`** (Luke's case: a code/structure
-  change, byte-identical underlying numbers) → carry-over is unambiguously safe;
-  finding N's take is still valid against finding N.
-- A **new cycle where `data_period` advanced** → want fresh takes anyway, and any
-  prior take whose finding was superseded/re-id'd simply won't match and gets
-  dropped — the right behaviour (never show a stale take grounded in a finding
-  that no longer exists). So: reuse only when same `data_period`, drop-on-no-match
-  otherwise. Keeps it aligned with the provenance / "never confidently wrong"
-  principles.
-
-**Alternatives considered (not chosen):**
-- *Persist takes in the DB* keyed by finding id, append-only, read back when not
-  regenerating. More durable and fits principle 4, but more work and unnecessary
-  to close *this* gap — the graft-from-`latest` approach already does.
-- *Portal-service fallback* to a prior period when `latest` is all-placeholder.
-  Rejected: mixes concerns and would show stale takes against fresh numbers with
-  no grounding validation — editorially worse.
-
-Trigger: any deploy that changes portal code/structure without wanting to
-re-spend the LLM budget (i.e. most of them). Small; do before the next such
-redeploy if the missing-takes gap bites again.
-
-**Follow-up (2026-06-23) — fail loud on a failed graft; don't ship empty takes.**
+**Fail loud on a failed graft; don't ship empty takes.**
 `portal_publish.read_latest_report` is best-effort *by contract* ("never raises, so
 a redeploy is never blocked by the reuse lookup"), so it returns `None` for three
 different things: no bucket, no `latest/report.json` yet (first publish), *and any
