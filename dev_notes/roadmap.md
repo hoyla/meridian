@@ -127,16 +127,17 @@ append-only + provenance on everything new (principles 3/4/7).
 
 ### Concrete pieces (roughly priority order)
 
-1. **All-goods extra-EU world totals → unlocks the donut + dependency-over-time.**
-   Ingest the world (extra-EU) all-goods import/export totals we don't hold today
-   — `eurostat_world_aggregates` covers only the *tracked* HS prefixes, so there
-   is no honest all-goods denominator (see
-   `dev_notes/2026-06-21-portal-findings-expansion.md`). Once ingested: the
-   deferred **"China's share of EU goods imports" donut** becomes a clean KPI,
-   *and* that share can be shown as a **time series** (the dependency trend, not
-   just a point). Smallest, highest-leverage item — **this supersedes the
-   standalone "donut data source" open question**: widen the data rather than
-   fake a denominator.
+1. **All-goods extra-EU world totals → donut + dependency-over-time — DONE 2026-06-24.**
+   Shipped (history.md): `000TOTAL` is now aggregated into `eurostat_world_aggregates`
+   (extra-EU all-goods denominator), backfilled 2017→2026; the
+   `detect_china_all_goods_share` analyser emits China's (CN+HK+MO, + CN-only)
+   share of EU-27 extra-EU all-goods trade per anchor with a `share_series`; and
+   the portal renders the long-deferred **donut KPI** + the **dependency trend
+   line**. Live: 22.5% imports (12mo to 2026-04), 18.3%→23.1%(2021)→22.5% trend.
+   **Trend starts 2019-01** — the stored numerator is pre-v2-contaminated for
+   2017–2018, so extending the trend back waits on a clean re-ingest of those
+   months (the "2017 pre-v2 … duplicate rows" item below). Closes the standalone
+   "donut data source" open question.
 
 2. **More HS groups.** The curated `hs_groups` set (~46) is an editorial
    selection; the portal's filter + per-group disclosure now make a much larger

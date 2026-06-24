@@ -42,8 +42,8 @@ def _sample_report() -> rm.Report:
     )
     donut_ind = rm.Indicator(
         key="china_import_share", label="China share of EU imports", value=0.23,
-        unit="share", formatted="23%", chart="donut",
-        provenance=rm.Provenance(source="eurostat", as_of=date(2026, 4, 1)),
+        unit="share", formatted="23%", chart="donut", note="China-only 22.5%",
+        provenance=rm.Provenance(finding_ids=[20], source="eurostat", as_of=date(2026, 4, 1)),
     )
     headline = rm.Headline(
         variant="eurostat", lead_title="What April changed", note="note.",
@@ -77,6 +77,12 @@ def _sample_report() -> rm.Report:
         ])
     state = rm.Section(
         id="state-of-play", title="Europe's deficit with China", kind="state_of_play",
+        metrics={"china_share_trend": {
+            "title": "China's share of EU-27 goods imports from outside the EU",
+            "series": [{"period": "2024-01-01", "share": 0.205},
+                       {"period": "2025-01-01", "share": 0.218},
+                       {"period": "2026-04-01", "share": 0.227}],
+            "share_now": 0.227, "finding_id": 20}},
         sections=[rm.Section(
             id="the-deficit", title="The deficit", kind="state_of_play",
             findings=[rm.Finding(
@@ -339,6 +345,19 @@ def test_key_indicators_level_and_donut_render():
     assert 'class="donut"' in h            # part-of-whole donut
     assert ">23%</text>" in h              # donut centre percentage
     assert "€561.37B" in render_markdown(_sample_report())
+
+
+def test_china_share_donut_note_and_dependency_trend_render():
+    """The China-dependency surfaces: the donut carries the CN-only comparator
+    note, and the state-of-play section renders the share-over-time trend chart
+    with a percent y-axis."""
+    h = render_html(_sample_report())
+    # Donut comparator note (the CN-only figure under the donut).
+    assert "China-only 22.5%" in h
+    # The dependency trend chart card + its percent axis labels.
+    assert 'id="china-share-trend"' in h
+    assert "share of EU-27 goods imports from outside the EU" in h  # title (apostrophe escaped)
+    assert "%</text>" in h  # percent gridline labels (not € on this chart)
 
 
 def test_latest_month_register_in_sector_rows():

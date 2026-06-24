@@ -489,6 +489,15 @@ def run_periodic(
             flow=flow_int_,
         )
 
+    # China's share of EU all-goods trade — the dependency donut + trend.
+    # All-goods generalisation of partner_share; same denominator dependency
+    # (eurostat_world_aggregates 000TOTAL), so it sits alongside it and is a
+    # light no-op when the denominator isn't fresh.
+    counts["china_all_goods_share"] = _run_analyser(
+        "china_all_goods_share", "china_all_goods_share",
+        anomalies.detect_china_all_goods_share,
+    )
+
     if not skip_llm:
         log.info("periodic-run: running llm-framing")
         t_start_llm = time.monotonic()

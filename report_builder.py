@@ -423,6 +423,52 @@ def _import_level_indicator(cur) -> Indicator | None:
     )
 
 
+def _latest_china_share(cur, subkind: str = "china_all_goods_share"):
+    """The latest (by anchor) live china_all_goods_share finding — (id, detail)
+    or (None, None). Ordered by anchor period so a back-filled revision can't
+    masquerade as the newest month."""
+    cur.execute(
+        """SELECT id, detail FROM findings
+            WHERE superseded_at IS NULL AND subkind = %s
+            ORDER BY (detail->'windows'->>'anchor_period')::date DESC NULLS LAST,
+                     id DESC
+            LIMIT 1""",
+        (subkind,),
+    )
+    row = cur.fetchone()
+    return (row["id"], row["detail"]) if row else (None, None)
+
+
+def _china_share_indicator(cur) -> Indicator | None:
+    """China's share of EU-27 extra-EU all-goods imports — the dependency
+    headline, as a donut. CN+HK+MO share (our editorial standard) with the
+    CN-only comparator the press cites in the note. Reads the latest
+    china_all_goods_share finding (the all-goods generalisation of
+    partner_share; denominator is extra-EU, so this is China's slice of the
+    EU's trade with the wider world, not 'share of EU consumption')."""
+    fid, detail = _latest_china_share(cur, "china_all_goods_share")
+    if fid is None:
+        return None
+    roll = (detail or {}).get("rolling_12mo", {})
+    share = roll.get("share")
+    if share is None:
+        return None
+    anchor = (detail or {}).get("windows", {}).get("anchor_period")
+    as_of = date.fromisoformat(anchor) if isinstance(anchor, str) else None
+    cn = roll.get("share_cn_only")
+    note = f"China-only {cn * 100:.1f}%" if cn is not None else None
+    return Indicator(
+        key="china_share_eu_imports",
+        label="China's share of EU-27 goods imports from outside the EU (12-month)",
+        value=float(share),
+        unit="share",
+        formatted=f"{share * 100:.1f}%",
+        chart="donut",
+        note=note,
+        provenance=Provenance(finding_ids=[fid], source="eurostat", as_of=as_of),
+    )
+
+
 def _headline_item(m: dict, disp: dict[str, str]) -> HeadlineItem:
     """One restated quotable mover → a HeadlineItem (Q2)."""
     is_export = m["subkind"].endswith("_export")
@@ -865,6 +911,25 @@ def _state_of_play_section(cur) -> Section:
         ))
     if deficit.findings:
         root.sections.append(deficit)
+    # China-dependency trend — the share-of-EU-imports line over time, the
+    # companion to the donut KPI. From the latest china_all_goods_share (import)
+    # finding's share_series. Kept as a plain dict (like the GACC partner_charts)
+    # so it JSON-serialises into the snapshot.
+    cs_fid, cs_detail = _latest_china_share(cur, "china_all_goods_share")
+    if cs_fid is not None:
+        ser = [
+            {"period": p["period"], "share": float(p["share"])}
+            for p in ((cs_detail or {}).get("share_series") or [])
+            if p.get("period") and p.get("share") is not None
+        ]
+        if len(ser) >= 2:
+            roll = (cs_detail or {}).get("rolling_12mo", {})
+            root.metrics["china_share_trend"] = {
+                "title": "China's share of EU-27 goods imports from outside the EU",
+                "series": ser,
+                "share_now": roll.get("share"),
+                "finding_id": cs_fid,
+            }
     return root
 
 
@@ -1645,14 +1710,15 @@ def build_report(
         disp = db.group_display_names(cur)
         # Key indicators (vital signs) — a small fixed set, each carrying its
         # figure + citation + as-of (the glyph never travels without its number).
-        # EU-27 deficit/day, the EU import level, the UK deficit/day. (China's
-        # share-of-EU-imports donut is deferred: it needs an all-goods extra-EU
-        # world denominator we don't yet ingest — eurostat_world_aggregates
-        # covers only the tracked codes, so any share off it would mislabel.)
+        # EU-27 deficit/day, the EU import level, the China-dependency donut, the
+        # UK deficit/day. The donut (China's share of extra-EU goods imports) now
+        # has its denominator: the all-goods 000TOTAL extra-EU world aggregate
+        # ingested for the china_all_goods_share analyser.
         indicators = [
             ind for ind in (
                 _deficit_indicator(cur),
                 _import_level_indicator(cur),
+                _china_share_indicator(cur),
                 _deficit_indicator(
                     cur, subkind="trade_balance_uk", key="uk_china_deficit_per_day",
                     label="UK goods-trade deficit with China, Hong Kong & Macao",

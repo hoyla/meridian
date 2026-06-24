@@ -4378,6 +4378,236 @@ def _insert_trade_balance_finding(
 
 
 # =============================================================================
+# China's share of EU all-goods trade — the dependency headline (donut + trend).
+# =============================================================================
+# "What share of the EU's trade with the world is with China?" — the all-goods
+# generalisation of partner_share (which is per-HS-group). Numerator: EU-27
+# imports/exports from CN+HK+MO, all-goods 000TOTAL (the same figure the
+# trade_balance family reads). Denominator: EU-27 extra-EU all-goods 000TOTAL,
+# from eurostat_world_aggregates (intra-EU excluded at aggregation time, so it
+# is "share of trade with the world outside the EU" — the register the press
+# uses). One finding per (flow, anchor); each carries the rolling-12mo share
+# (donut) plus the full share_series back to the start anchor (trend line).
+#
+# START ANCHOR 2019-01: the stored CN+HK+MO 000TOTAL numerator is contaminated
+# by the pre-v2 duplicate rows for 2017–2018 (~1.8x inflated), so a share off it
+# for those years would read far too high. 2019+ is verified clean. Extending
+# the trend to 2017 waits on a clean v2 re-ingest of 2017–2018 (roadmap).
+CHINA_SHARE_SOURCE_URL = "analysis://china_all_goods_share/v1"
+CHINA_SHARE_METHOD = "china_all_goods_share_v1_000total"
+CHINA_SHARE_MIN_ANCHOR = date(2019, 1, 1)
+# flow_label -> (subkind, flow_int)
+CHINA_SHARE_FLOWS: dict[str, tuple[str, int]] = {
+    "import": ("china_all_goods_share", 1),
+    "export": ("china_all_goods_share_export", 2),
+}
+
+
+def _world_extra_eu_allgoods_totals(
+    flow: str,
+) -> dict[date, tuple[float, list[int]]]:
+    """Extra-EU all-goods totals per period — the denominator for China's share
+    of EU trade — read from `eurostat_world_aggregates` 000TOTAL rows. EU-27
+    reporters only (GB excluded); the aggregates already exclude intra-EU
+    partners, so the sum is extra-EU (trade with the world outside the EU).
+    Returns {period: (value_eur, [])} — the empty id list keeps the shape
+    compatible with `_allgoods_window` (world aggregates aren't observations)."""
+    flow_int = {"import": 1, "export": 2}[flow]
+    out: dict[date, tuple[float, list[int]]] = {}
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT period, COALESCE(SUM(value_eur), 0) AS total_eur
+              FROM eurostat_world_aggregates
+             WHERE flow = %s
+               AND product_nc = %s
+               AND reporter <> ALL(%s)
+          GROUP BY period
+            """,
+            (flow_int, EUROSTAT_AGGREGATE_PRODUCT_NC, list(EU27_EXCLUDE_REPORTERS)),
+        )
+        for period, total in cur.fetchall():
+            out[period] = (float(total), [])
+    return out
+
+
+def detect_china_all_goods_share() -> dict[str, int]:
+    """Emit China's share of EU-27 extra-EU all-goods trade, per anchor period
+    and flow, for the rolling 12 months to the anchor.
+
+    One finding per (flow, anchor) from 2019-01 onward where a complete 12-month
+    window exists on BOTH the CN+HK+MO numerator and the extra-EU denominator.
+    Each finding carries the latest rolling-12mo share (the donut) and the full
+    share_series back to the first anchor (the dependency trend line), plus a
+    CN-only comparator (the slice the press cites).
+
+    Returns counts: emitted, inserted_new, confirmed_existing, superseded,
+    skipped_no_data, skipped_incomplete_window.
+    """
+    counts = {
+        "emitted": 0,
+        "inserted_new": 0, "confirmed_existing": 0, "superseded": 0,
+        "skipped_no_data": 0,
+        "skipped_incomplete_window": 0,
+    }
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'running') RETURNING id",
+            (CHINA_SHARE_SOURCE_URL,),
+        )
+        analysis_run_id = cur.fetchone()[0]
+
+    try:
+        for flow_label, (subkind, _flow_int) in CHINA_SHARE_FLOWS.items():
+            num_env = _eurostat_bloc_allgoods_totals(flow_label, EUROSTAT_PARTNERS)  # CN+HK+MO
+            num_cn = _eurostat_bloc_allgoods_totals(flow_label, ("CN",))             # CN-only
+            den = _world_extra_eu_allgoods_totals(flow_label)                        # extra-EU
+            anchors = sorted(a for a in (set(num_env) & set(den)) if a >= CHINA_SHARE_MIN_ANCHOR)
+            if not anchors:
+                counts["skipped_no_data"] += 1
+                continue
+
+            # Per-anchor rolling-12mo share, where both numerator and denominator
+            # windows are complete (12 of 12 months present) and the denominator
+            # is positive.
+            by_anchor: dict[date, dict] = {}
+            for t in anchors:
+                cs, ce = _months_back(t, 11), t
+                ne, ne_ids, n_ne = _allgoods_window(num_env, cs, ce)
+                nc, _, n_nc = _allgoods_window(num_cn, cs, ce)
+                dv, _, n_dv = _allgoods_window(den, cs, ce)
+                if n_ne < 12 or n_dv < 12 or dv <= 0:
+                    counts["skipped_incomplete_window"] += 1
+                    continue
+                by_anchor[t] = {
+                    "share": ne / dv,
+                    "share_cn_only": (nc / dv) if n_nc == 12 else None,
+                    "numerator_eur": ne,
+                    "numerator_cn_only_eur": nc if n_nc == 12 else None,
+                    "denominator_eur": dv,
+                    "obs_ids": ne_ids,
+                }
+
+            ordered = sorted(by_anchor)
+            for t in ordered:
+                # Each finding's series runs from the first anchor up to its own
+                # anchor — the historical view "as of" that period.
+                series = [
+                    {
+                        "period": a.isoformat(),
+                        "share": round(by_anchor[a]["share"], 6),
+                        "share_cn_only": (
+                            round(by_anchor[a]["share_cn_only"], 6)
+                            if by_anchor[a]["share_cn_only"] is not None else None
+                        ),
+                    }
+                    for a in ordered if a <= t
+                ]
+                action = _insert_china_share_finding(
+                    analysis_run_id, subkind, flow_label, t, by_anchor[t], series,
+                )
+                _tally(counts, action)
+
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='success', ended_at=now() WHERE id=%s",
+                (analysis_run_id,),
+            )
+    except Exception as e:
+        log.exception("China all-goods share analysis failed")
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='failed', error_message=%s, ended_at=now() WHERE id=%s",
+                (str(e), analysis_run_id),
+            )
+        raise
+    return counts
+
+
+def _insert_china_share_finding(
+    analysis_run_id: int,
+    subkind: str,
+    flow_label: str,
+    anchor_period: date,
+    block: dict,
+    series: list[dict],
+) -> findings_io.EmitAction:
+    cs, ce = _months_back(anchor_period, 11), anchor_period
+    share = block["share"]
+    share_cn = block["share_cn_only"]
+    flow_word = "imports from" if flow_label == "import" else "exports to"
+    cn_note = (
+        f" (CN-only {share_cn*100:.1f}%)" if share_cn is not None else ""
+    )
+    title = (
+        f"China is {share*100:.1f}% of EU-27 extra-EU all-goods {flow_label}s, "
+        f"12mo to {ce.strftime('%Y-%m')}{cn_note}"
+    )
+    body_lines = [
+        f"China's (CN+HK+MO) share of EU-27 {flow_word} the world outside the EU, "
+        f"all goods, rolling 12 months to {ce.strftime('%Y-%m')}.",
+        "",
+        f"  Share (CN+HK+MO):  {share*100:.2f}%",
+    ]
+    if share_cn is not None:
+        body_lines.append(f"  Share (CN only):   {share_cn*100:.2f}%")
+    body_lines += [
+        f"  EU-27 {flow_label}s from CN+HK+MO:  €{block['numerator_eur']:,.0f}",
+        f"  EU-27 extra-EU {flow_label}s (all partners outside the EU):  "
+        f"€{block['denominator_eur']:,.0f}",
+        "",
+        "Denominator is extra-EU only (intra-EU trade excluded), so this is "
+        "China's share of the EU's trade with the wider world — the register "
+        "the press uses, not 'share of EU consumption'. All-goods 000TOTAL "
+        "basis; Eurostat values imports CIF and exports FOB.",
+    ]
+    detail = {
+        "method": CHINA_SHARE_METHOD,
+        "method_query": {
+            "numerator": "eurostat_raw_rows 000TOTAL, partner in (CN,HK,MO), EU-27 reporters",
+            "denominator": "eurostat_world_aggregates 000TOTAL (extra-EU), EU-27 reporters",
+            "reporters_excluded": list(EU27_EXCLUDE_REPORTERS),
+            "flow": flow_label,
+        },
+        "caveat_codes": ["cif_fob"],
+        "windows": {
+            "anchor_period": anchor_period.isoformat(),
+            "rolling_current_start": cs.isoformat(),
+            "rolling_current_end": ce.isoformat(),
+        },
+        "rolling_12mo": {
+            "share": share,
+            "share_cn_only": share_cn,
+            "numerator_eur": block["numerator_eur"],
+            "numerator_cn_only_eur": block["numerator_cn_only_eur"],
+            "denominator_eur": block["denominator_eur"],
+        },
+        "share_series": series,
+    }
+    with _conn() as conn, conn.cursor() as cur:
+        _, action = findings_io.emit_finding(
+            cur,
+            scrape_run_id=analysis_run_id,
+            kind="anomaly",
+            subkind=subkind,
+            natural_key=findings_io.nk_china_all_goods_share(ce.strftime("%Y-%m")),
+            value_fields={
+                "method": CHINA_SHARE_METHOD,
+                "share": round(share, 6),
+                "share_cn_only": round(share_cn, 6) if share_cn is not None else None,
+                "numerator_eur": round(block["numerator_eur"], 2),
+                "denominator_eur": round(block["denominator_eur"], 2),
+            },
+            observation_ids=block["obs_ids"],
+            score=share,
+            title=title,
+            body="\n".join(body_lines),
+            detail=detail,
+        )
+    return action
+
+
+# =============================================================================
 # Partner share: China's share of EU-27 extra-EU imports/exports by value + kg.
 # =============================================================================
 # The 2026-05-12 Soapbox A1 re-test surfaced a structural metric gap: every

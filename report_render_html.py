@@ -169,9 +169,12 @@ _LINE_LEGEND = ('<span class="sw sw-prior"></span> earlier · '
                 '<span class="sw sw-curr"></span> latest 12 months · auto-scaled')
 
 
-def _y_axis(lo: float, hi: float, zero_based: bool) -> str:
-    """3 horizontal gridlines (top/mid/bottom) with €-labels in the left gutter.
-    Bars are zero-based (honest scale comparison); the auto-scaled line is not."""
+def _y_axis(lo: float, hi: float, zero_based: bool, fmt=None) -> str:
+    """3 horizontal gridlines (top/mid/bottom) with labels in the left gutter.
+    Bars are zero-based (honest scale comparison); the auto-scaled line is not.
+    `fmt` formats the gridline value (default €); pass e.g. a percent formatter
+    for a share trend."""
+    fmt = fmt or _fmt_eur
     x0, x1 = _GL, _CW - _PR
     y0, y1 = _PT, _CH - _GB
     out = []
@@ -180,7 +183,7 @@ def _y_axis(lo: float, hi: float, zero_based: bool) -> str:
         out.append(f'<line x1="{x0}" y1="{yy:.1f}" x2="{x1}" y2="{yy:.1f}" '
                    f'stroke="{_LINE}" stroke-width="1"/>')
         out.append(f'<text x="{x0 - 4}" y="{yy + 3:.1f}" text-anchor="end" '
-                   f'class="ct">{html.escape(_fmt_eur(val))}</text>')
+                   f'class="ct">{html.escape(fmt(val))}</text>')
     return "".join(out)
 
 
@@ -203,12 +206,13 @@ def _x_tick_indices(n: int) -> list[int]:
     return idxs
 
 
-def _line_chart_svg(chart_data, *, split_last: int = 12) -> str:
+def _line_chart_svg(chart_data, *, split_last: int = 12, fmt=None) -> str:
     """Inline-SVG line chart with real axes — the docx trajectory graph, restored
     and made legible. The last `split_last` points (current 12 months) are red
-    over the earlier period in grey, with a divider. Y-axis (3 €-gridlines) and
-    x-axis (start / divider / end months) are drawn; auto-scaled (not zero-based)
-    — fine for a trend, and the legend says so. No chart lib."""
+    over the earlier period in grey, with a divider. Y-axis (3 gridlines, €
+    by default — pass `fmt` for e.g. a percent share trend) and x-axis (start /
+    divider / end months) are drawn; auto-scaled (not zero-based) — fine for a
+    trend, and the legend says so. No chart lib."""
     if not chart_data or len(chart_data.series) < 2:
         return ""
     pts = chart_data.series
@@ -228,7 +232,7 @@ def _line_chart_svg(chart_data, *, split_last: int = 12) -> str:
         return (f'<polyline fill="none" stroke="{color}" stroke-width="{wdt}" '
                 f'points="{seg}"/>') if seg else ""
 
-    body = [_y_axis(lo, hi, zero_based=False)]
+    body = [_y_axis(lo, hi, zero_based=False, fmt=fmt)]
     # Vertical gridlines + intermediate date labels at 'nice' steps, so the time
     # span reads at a glance (the divider is a separate dashed line, unlabelled —
     # on a long series its label would crowd the end).
@@ -446,11 +450,16 @@ def _chart_card(title: str, value: str, legend: str, svg: str, *,
     )
 
 
-def _donut_svg(share: float, *, size: int = 116, label: str = "") -> str:
+def _donut_svg(share: float, *, size: int = 116, label: str = "",
+               pct_label: str | None = None) -> str:
     """A part-of-whole donut (one share of a whole). Stroke-dasharray on a ring,
     centre percentage. Ready for the China-import-share indicator once an
     all-goods denominator is ingested."""
     share = max(0.0, min(1.0, float(share)))
+    # Centre label: the caller's formatted figure when given (so the donut and the
+    # KPI headline agree to the same precision — e.g. 22.5%, not a re-rounded 23%);
+    # otherwise a whole-percent fallback.
+    centre = pct_label if pct_label else f"{share * 100:.0f}%"
     r = size / 2 - 9
     import math
     circ = 2 * math.pi * r
@@ -459,7 +468,7 @@ def _donut_svg(share: float, *, size: int = 116, label: str = "") -> str:
     return (
         f'<svg class="donut" viewBox="0 0 {size} {size}" width="{size}" '
         f'height="{size}" role="img" aria-label="{html.escape(label)} '
-        f'{share * 100:.0f}%">'
+        f'{html.escape(centre)}">'
         f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{_LINE}" '
         'stroke-width="11"/>'
         f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{_GUARDIAN_BLUE}" '
@@ -467,7 +476,7 @@ def _donut_svg(share: float, *, size: int = 116, label: str = "") -> str:
         f'stroke-dashoffset="{circ / 4:.1f}" transform="rotate(-90 {cx} {cy})" '
         'stroke-linecap="butt"/>'
         f'<text x="{cx}" y="{cy + 1}" text-anchor="middle" dominant-baseline="middle" '
-        f'class="donut-pct">{share * 100:.0f}%</text>'
+        f'class="donut-pct">{html.escape(centre)}</text>'
         "</svg>"
     )
 
@@ -596,11 +605,14 @@ def _indicator_card(ind: Indicator) -> str:
         share = ind.value if 0 <= ind.value <= 1 else 0.0
         if (not share) and ind.chart_data:
             share = ind.chart_data.extra.get("share", 0.0)
+        dnote = (f'<div class="kpi-note">{html.escape(ind.note)}</div>'
+                 if ind.note else "")
         return (
             '<div class="kpi kpi-donut">'
             f'<div class="kpi-label">{html.escape(ind.label)}</div>'
-            f'<div class="kpi-donut-wrap">{_donut_svg(share, label=ind.label)}</div>'
-            f"{delta}{prov}"
+            '<div class="kpi-donut-wrap">'
+            f'{_donut_svg(share, label=ind.label, pct_label=ind.formatted)}</div>'
+            f"{dnote}{delta}{prov}"
             "</div>"
         )
 
@@ -809,6 +821,25 @@ def _state_of_play_section(section) -> str:
                 _line_chart_svg(charted.chart_data),
                 sub="12-month total · monthly series"))
         out.append("</div>")
+    # China-dependency trend — share of extra-EU goods imports over time, the
+    # companion to the donut KPI. Carried as a plain dict on the section metrics
+    # (like the GACC partner_charts); rendered with a percent y-axis.
+    trend = (getattr(section, "metrics", None) or {}).get("china_share_trend")
+    if trend and len(trend.get("series") or []) >= 2:
+        from types import SimpleNamespace
+        pts = [SimpleNamespace(period=p["period"], value=p["share"])
+               for p in trend["series"]]
+        now = trend.get("share_now")
+        out.append(
+            '<div class="sector" id="china-share-trend">'
+            + _chart_card(
+                trend.get("title", "China's share of EU imports"),
+                f"{now * 100:.1f}%" if now is not None else "",
+                _LINE_LEGEND,
+                _line_chart_svg(SimpleNamespace(series=pts),
+                                fmt=lambda v: f"{v * 100:.0f}%"),
+                sub="share of extra-EU goods imports · 12-month rolling")
+            + "</div>")
     return "\n".join(out)
 
 
