@@ -573,9 +573,10 @@ _ABOUT_SITE = (
     "figures, each with leading questions for a reporter to chase.\n"
     "- **What’s changed** — what materially moved since the previous briefing: "
     "revisions to existing findings, not newly-discovered ones.\n"
-    "- **Europe’s deficit with China** — the standing goods-trade deficit "
-    "(the ~€1bn/day level) across EU-27, UK and combined scopes; a level, not a "
-    "change.\n"
+    "- **Europe’s trade position with China** — the standing goods-trade "
+    "deficit (the ~€1bn/day level) across EU-27, UK and combined scopes, and "
+    "how much of Europe’s trade from outside the bloc China accounts for; "
+    "levels, not this cycle’s change.\n"
     "- **Mirror-trade gaps** — China’s reported exports to each partner vs that "
     "partner’s reported imports, and how much of the gap exceeds the normal "
     "CIF/FOB accounting wedge (a possible transshipment signal).\n"
@@ -2260,7 +2261,7 @@ def render_html(report: Report) -> str:
                          + _what_changed(wc) + "</section>")
         else:                                # nothing moved → slim one-liner, no nav
             brief.append("<section>" + _what_changed(wc) + "</section>")
-    _BRIEF_NAV = {"state_of_play": "The deficit", "mirror_gap": "Mirror gaps",
+    _BRIEF_NAV = {"state_of_play": "Trade position", "mirror_gap": "Mirror gaps",
                   "sector_detail": "Sector detail", "gacc_bilateral": "GACC by country"}
     has_gacc = any(
         s.kind == "gacc_bilateral"

@@ -767,7 +767,7 @@ def test_briefing_subnav_is_the_sticky_element_not_the_tabs():
     assert 'class="subnav-top" href="#top"' in h          # Top → masthead
     assert 'id="top"' in h                                  # the masthead anchor
     # the section anchors + their sub-nav links
-    for anchor, label in (("brief-state_of_play", "The deficit"),
+    for anchor, label in (("brief-state_of_play", "Trade position"),
                           ("brief-mirror_gap", "Mirror gaps"),
                           ("brief-sector_detail", "Sector detail")):
         assert f'id="{anchor}"' in h
