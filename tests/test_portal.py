@@ -32,7 +32,8 @@ def _sample_report() -> rm.Report:
         key="eu_china_deficit_per_day", label="EU-27 deficit", value=9.4e8,
         unit="eur_per_day", formatted="€939M/day", chart="sparkline",
         delta={"value": 0.065, "direction": "wider", "formatted": "+6.5% YoY"},
-        chart_data=rm.ChartData(chart_type="sparkline", series=series),
+        chart_data=rm.ChartData(chart_type="sparkline", series=series,
+                                extra={"caption": "Monthly figures for the 36 months to Apr 2026"}),
         provenance=rm.Provenance(finding_ids=[1], source="eurostat", as_of=date(2026, 4, 1)),
     )
     level_ind = rm.Indicator(
@@ -355,6 +356,16 @@ def test_kpi_sparkline_cards_span_two_columns():
     assert 'class="kpi kpi-wide"' in h          # the sparkline deficit card is wide
     # The donut card is narrow (1 column) — never carries kpi-wide.
     assert "kpi-donut kpi-wide" not in h
+
+
+def test_sparkline_caption_renders_as_hover_tooltip():
+    """The sparkline's period/cadence lives in a <title> hover tooltip (keeping
+    the card face uncluttered), not as on-card text. A captioned sparkline is
+    also labelled for assistive tech rather than aria-hidden."""
+    h = render_html(_sample_report())
+    assert "<title>Monthly figures for the 36 months to Apr 2026</title>" in h
+    # The captioned spark exposes the label to a11y instead of hiding it.
+    assert 'role="img" aria-label="Monthly figures for the 36 months to Apr 2026"' in h
 
 
 def test_china_share_donut_note_and_dependency_trend_render():

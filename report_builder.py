@@ -356,6 +356,15 @@ def _deficit_indicator(
                 period=date.fromisoformat(per) if isinstance(per, str) else per,
                 value=float(val),
             ))
+    # The sparkline is a glanceable vital sign, not the full record — window it to
+    # the most recent 36 months so the recent trajectory is legible rather than 9
+    # years of dense wiggle. The window + cadence go in a hover tooltip (the
+    # `<title>`) so the card itself stays uncluttered.
+    series = series[-36:]
+    spark_caption = (
+        f"Monthly figures for the {len(series)} months to "
+        f"{_fmt_month(series[-1].period)}" if series else None
+    )
 
     delta = None
     if yoy is not None:
@@ -389,7 +398,8 @@ def _deficit_indicator(
         chart="sparkline",
         delta=delta,
         note=note,
-        chart_data=ChartData(chart_type="sparkline", series=series),
+        chart_data=ChartData(chart_type="sparkline", series=series,
+                             extra={"caption": spark_caption} if spark_caption else {}),
         provenance=Provenance(finding_ids=[fid], source=source, as_of=as_of),
     )
 

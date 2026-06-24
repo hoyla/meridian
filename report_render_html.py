@@ -139,9 +139,17 @@ def _sparkline_svg(chart_data, w: int = 150, h: int = 36) -> str:
     def y(v): return pad + (1 - (v - lo) / span) * (h - 2 * pad)
     pts = " ".join(f"{x(i):.1f},{y(v):.1f}" for i, v in enumerate(vals))
     lx, ly = x(n - 1), y(vals[-1])
+    # Optional caption → a native hover tooltip (SVG <title>) naming the window +
+    # cadence, e.g. "Monthly figures for the 36 months to Apr 2026". Keeps the
+    # explanation off the card face. When present the SVG is labelled (role/aria)
+    # rather than aria-hidden so the caption is exposed to assistive tech too.
+    caption = (getattr(chart_data, "extra", None) or {}).get("caption")
+    title_el = f"<title>{html.escape(caption)}</title>" if caption else ""
+    a11y = (f'role="img" aria-label="{html.escape(caption)}"'
+            if caption else 'aria-hidden="true"')
     return (
         f'<svg class="spark" viewBox="0 0 {w} {h}" width="{w}" height="{h}" '
-        f'preserveAspectRatio="none" aria-hidden="true">'
+        f'preserveAspectRatio="none" {a11y}>{title_el}'
         f'<polyline fill="none" stroke="{_GUARDIAN_BLUE}" stroke-width="1.5" points="{pts}"/>'
         f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="2.2" fill="{_NEWS}"/>'
         f"</svg>"
