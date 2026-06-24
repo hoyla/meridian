@@ -205,16 +205,18 @@ SEED_LABELS: list[Label] = [
     ),
     Label(
         "Oil & gas: origin watch",
-        "Crude, refined products and gas as a re-export / origin-laundering "
-        "lens rather than a commodity category: the EU/UK extract little of "
-        "these, so member-state EXPORTS to China here flag entrepot re-selling "
-        "of product made elsewhere rather than domestic output. The trade-flow "
-        "footprint of the 'shadow fleet' sanctions-evasion story — the cargo "
-        "side, not the vessels. Caveat: the bilateral counterparty is always "
-        "China, so this sees reselling to China only, not to other destinations.",
+        "Refined products and gas as a re-export / origin-laundering lens "
+        "rather than a commodity category: the EU/UK refine and re-ship more "
+        "than they extract, so member-state EXPORTS to China here can flag "
+        "product made elsewhere rather than domestic output. The live signal is "
+        "EU refined-petroleum (HS 2710) exports to China — order ~EUR 1bn/12mo, "
+        "led by Greece and Hungary (Hungary a new post-2023 surge worth a look). "
+        "The trade-flow footprint of the 'shadow fleet' story — the cargo side, "
+        "not the vessels. Crude (HS 2709) was dropped: zero EU-China trade. "
+        "Caveat: the counterparty is always China (+HK/MO), so this catches "
+        "reselling to China only, and shows the export leg, not the origin.",
         "origin_risk",
         member_groups=[
-            "Crude oil (HS 2709)",
             "Refined petroleum products (HS 2710)",
             "Natural gas & other petroleum gases (HS 2711)",
         ],
