@@ -106,6 +106,32 @@ CREATE INDEX idx_eu_raw_run ON eurostat_raw_rows (scrape_run_id);
 CREATE INDEX idx_eu_raw_analyser ON eurostat_raw_rows
   USING btree (flow, partner, product_nc text_pattern_ops, period)
   INCLUDE (value_eur, quantity_kg, reporter);
+-- Natural-key UNIQUE backstop. The append-only ingest guard
+-- (db.eurostat_reporters_present_for_period) is a check-then-insert across two
+-- transactions, so it isn't concurrency-safe; this index makes the DB refuse a
+-- duplicate raw line so a race or guard bug can't silently duplicate a row and
+-- inflate the aggregates derived from it. The key is every DIMENSION column,
+-- never the measures — Eurostat masks confidential NC8 codes to chapter stubs
+-- (e.g. '28XXXXXX') distinguished only by their classification columns, so those
+-- must be in the key or legitimately-distinct flows would collide. COALESCE on
+-- the nullable dims so NULLs don't slip past dedup (NULL != NULL in a plain
+-- unique index). PARTIAL, 2019+: the pre-v2 2017–2018 bulk format emitted genuine
+-- duplicate lines (separate forward-work to dedupe/re-ingest); scope to the era
+-- that's already clean. See migrations/2026-06-24-eurostat-raw-rows-unique-natural-key.sql.
+CREATE UNIQUE INDEX uq_eurostat_raw_natural_key ON eurostat_raw_rows (
+    period, reporter, partner,
+    COALESCE(trade_type, ''),
+    product_nc,
+    COALESCE(product_sitc, ''),
+    COALESCE(product_cpa21, ''),
+    COALESCE(product_cpa22, ''),
+    COALESCE(product_bec, ''),
+    COALESCE(product_bec5, ''),
+    COALESCE(product_section, ''),
+    flow,
+    COALESCE(stat_procedure, ''),
+    COALESCE(suppl_unit, '')
+) WHERE period >= DATE '2019-01-01';
 
 -- Eurostat extra-EU aggregates per (period, reporter, product_nc, flow).
 -- Populated from the same bulk files as `eurostat_raw_rows` but with no

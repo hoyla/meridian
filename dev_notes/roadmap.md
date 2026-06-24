@@ -11,13 +11,9 @@ Nearly all of the 2026-06-22/23 deploy batch shipped and is live (see history.md
 the Eurostat data correction, Q2 sector expansion, group display-names,
 CN+HK+MO scope-labelling, GACC regional charts, Period-covered "Last updated"
 column, State-of-play→By-country link, section-naming, `--portal-reuse-takes`,
-and the source-freshness alerting suite). What's left:
+the `eurostat_raw_rows` natural-key UNIQUE backstop, and the source-freshness
+alerting suite). What's left:
 
-- **`eurostat_raw_rows` UNIQUE constraint** — data-integrity hardening. The
-  additive presence-check guard is the sole dedup defence and isn't
-  concurrency-safe (check + insert in separate transactions). A partial unique
-  index on the natural key would let the insert use `ON CONFLICT DO NOTHING`,
-  enforcing in the DB what the guard enforces alone. (From the #43 review.)
 - **Minor / optional.** Fetch dates still render raw ISO (left deliberately — they
   are real calendar days, not the `-01` period artefact; could prettify to "15 Jun
   2026"). The month format is the abbreviated "Apr 2026" (full "April 2026" was an
@@ -564,6 +560,13 @@ has 648 rows vs 2018 sp=1 has 351. Analyser output is unaffected
 aggregate rollup is 2x inflated. Forward work to dedupe or
 re-ingest 2017 with the v2 parser. Independent of the 000TOTAL
 filter rule resolution from 2026-05-10.
+
+Now broader than just `000TOTAL`: the 2026-06-24 natural-key UNIQUE backstop
+(`uq_eurostat_raw_natural_key`, history.md) measured ~1.96M duplicate raw rows
+across 2017–2018 (up to 50 per cell, HS detail included), so it scopes itself to
+`period >= 2019-01` and deliberately leaves this era untouched. Deduping /
+re-ingesting 2017–2018 is the prerequisite to extending the unique index back
+over those periods.
 
 ## Methodology depth (pick up if a story warrants it)
 
