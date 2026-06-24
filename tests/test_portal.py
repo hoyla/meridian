@@ -1027,6 +1027,21 @@ def test_seed_labels_well_formed():
     assert "origin_risk" in kinds         # Xinjiang-style lens exists
 
 
+def test_oil_gas_origin_watch_theme_membership():
+    """The energy/reselling theme unions refined (2710) + gases (2711) only.
+    Crude (2709) was dropped — zero EU↔China trade — so it must NOT reappear as
+    a member (a guard against an accidental re-add)."""
+    by_name = {l.name: l for l in labels.SEED_LABELS}
+    assert "Oil & gas: origin watch" in by_name
+    lab = by_name["Oil & gas: origin watch"]
+    assert lab.kind == "origin_risk"
+    assert set(lab.member_groups) == {
+        "Refined petroleum products (HS 2710)",
+        "Natural gas & other petroleum gases (HS 2711)",
+    }
+    assert "Crude oil (HS 2709)" not in lab.member_groups
+
+
 def test_wind_power_theme_replaces_retired_group():
     """The retired 'Wind turbine components' group is replaced by an
     overlapping 'Wind power' lens: the precise turbine flow plus the NdFeB
@@ -1464,7 +1479,7 @@ def test_read_latest_report_absent_object_is_none_even_when_required(monkeypatch
     """No latest/report.json yet (first publish) is 'absent', not a read error —
     returns None even with required=True, so a first publish isn't blocked."""
     import portal_publish
-    from google.cloud import storage
+    storage = pytest.importorskip("google.cloud.storage")
 
     class _Blob:
         def exists(self):
@@ -1486,7 +1501,7 @@ def test_read_latest_report_read_error_raises_only_when_required(monkeypatch):
     """A genuine read error (GCS/auth/parse) is silent (None) by default but
     raises under required=True — the guard against silently emptying takes."""
     import portal_publish
-    from google.cloud import storage
+    storage = pytest.importorskip("google.cloud.storage")
 
     def boom(*a, **k):
         raise RuntimeError("no credentials")
@@ -1517,7 +1532,7 @@ def test_write_portal_snapshot_fails_loud_on_unreadable_prior_when_publishing(
     (publishing=False) stays best-effort and still writes the snapshot."""
     import periodic
     import portal_publish
-    from google.cloud import storage
+    storage = pytest.importorskip("google.cloud.storage")
 
     def boom(*a, **k):
         raise RuntimeError("no credentials")

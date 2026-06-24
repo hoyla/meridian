@@ -4,10 +4,13 @@ lxml
 pdfplumber
 xlrd<2.1
 openpyxl
+python-docx
+mistune
 py7zr
 psycopg2-binary
 python-dotenv
 pandas
+matplotlib
 gspread
 google-auth
 ollama

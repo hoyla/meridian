@@ -1,0 +1,60 @@
+name: tests
+
+# Runs the pytest suite against a real Postgres on every PR and on pushes to
+# main. The DB-backed tests (the bulk of meaningful coverage) skip unless
+# GACC_TEST_DATABASE_URL is set — so before this workflow, nothing exercised
+# them and two stale-assertion breakages reached main (PRs #101, #102). This is
+# the gate that makes the existing coverage actually guard the branch.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gacc_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # The conftest gates DB-backed tests on this; clean_db monkeypatches
+      # DATABASE_URL to the same URL at runtime, so this is all we need to set.
+      GACC_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gacc_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Load schema into the test DB
+        run: |
+          command -v psql >/dev/null || (sudo apt-get update -qq && sudo apt-get install -yqq postgresql-client)
+          psql "$GACC_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -q -f schema.sql
+
+      - name: Run tests
+        # `python -m pytest` (not bare `pytest`) puts the repo root on sys.path;
+        # pytest.ini's pythonpath does too, but this matches the verified local
+        # invocation and is robust either way.
+        run: python -m pytest -q

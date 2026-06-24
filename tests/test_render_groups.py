@@ -120,6 +120,35 @@ def test_draft_groups_in_their_own_section(clean_db, db_conn):
     assert "figures appear in `02_Findings.md` for transparency" in text
 
 
+def test_hidden_group_tagged_and_in_held_back_section(clean_db, db_conn):
+    """A `hidden:` group renders under the same consolidated 'Held back' section
+    as drafts, but with the held-back / (hidden) flag — NOT the draft
+    'methodology not yet validated' caveat (#99 staging tool)."""
+    with db_conn, db_conn.cursor() as cur:
+        cur.execute("DELETE FROM hs_groups WHERE id = 999994")
+        cur.execute(
+            """INSERT INTO hs_groups (id, name, description, hs_patterns,
+                                      created_by, created_at)
+               VALUES (999994, 'TestRender — staged energy',
+                       'Synthetic hidden group for the held-back-section test.',
+                       ARRAY['9997%'], 'hidden:test_category', now())"""
+        )
+    try:
+        text = rg.render_groups()
+        # Body heading carries the held-back flag, not the draft caveat.
+        assert ("### TestRender — staged energy "
+                "*(held back — not yet in the published rankings)*") in text
+        assert "### TestRender — staged energy *(draft" not in text
+        # Sits in the consolidated held-back section...
+        assert "## Held back (not in the published rankings)" in text
+        # ...and its quick-index entry is tagged (hidden), not (draft).
+        slug = _slugify_heading("TestRender — staged energy")
+        assert f"[TestRender — staged energy](#{slug}) *(hidden)*" in text
+    finally:
+        with db_conn, db_conn.cursor() as cur:
+            cur.execute("DELETE FROM hs_groups WHERE id = 999994")
+
+
 def test_sibling_groups_link_via_4_digit_hs_prefix(clean_db, db_conn):
     """The two TestRender active groups share the 9999 HS prefix and
     should appear in each other's 'Related groups' list."""
