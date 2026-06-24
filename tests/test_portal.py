@@ -347,6 +347,16 @@ def test_key_indicators_level_and_donut_render():
     assert "€561.37B" in render_markdown(_sample_report())
 
 
+def test_kpi_sparkline_cards_span_two_columns():
+    """KPI layout: sparkline cards take the wide (2-of-3) column span so four
+    cards land as two even rows; the level (bignumber) and donut cards don't."""
+    h = render_html(_sample_report())
+    assert ".kpis{display:grid" in h            # 3-column grid, not stretched flex
+    assert 'class="kpi kpi-wide"' in h          # the sparkline deficit card is wide
+    # The donut card is narrow (1 column) — never carries kpi-wide.
+    assert "kpi-donut kpi-wide" not in h
+
+
 def test_china_share_donut_note_and_dependency_trend_render():
     """The China-dependency surfaces: the donut carries the CN-only comparator
     note, and the state-of-play section renders the share-over-time trend chart

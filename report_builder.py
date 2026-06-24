@@ -459,7 +459,12 @@ def _china_share_indicator(cur) -> Indicator | None:
     note = f"China-only {cn * 100:.1f}%" if cn is not None else None
     return Indicator(
         key="china_share_eu_imports",
-        label="China's share of EU-27 goods imports from outside the EU (12-month)",
+        # Name the CN+HK+MO envelope in the label, as the deficit/imports KPIs do
+        # — the headline figure is the envelope; the note carries the China-only
+        # comparator. (Convention: never report a "China" figure without saying
+        # whether Hong Kong & Macao are in it.)
+        label="China, Hong Kong & Macao share of EU-27 goods imports "
+              "from outside the EU (12-month)",
         value=float(share),
         unit="share",
         formatted=f"{share * 100:.1f}%",

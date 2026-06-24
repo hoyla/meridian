@@ -622,11 +622,15 @@ def _indicator_card(ind: Indicator) -> str:
         spark = f'<div class="kpi-spark">{_sparkline_svg(ind.chart_data)}</div>'
     note = (f'<div class="kpi-note">{html.escape(ind.note)}</div>'
             if ind.note else "")
+    # Sparkline cards span 2 of the 3 KPI columns (they need width for the plot);
+    # the level + donut cards take 1 — so four cards land as two even rows rather
+    # than a stretched lone card.
+    wide = " kpi-wide" if spark else ""
     # Order: value, the headline figure's YoY (delta), then the China-only
     # comparator (note, with its own YoY) — so the delta can't be read as the
     # comparator's.
     return (
-        '<div class="kpi">'
+        f'<div class="kpi{wide}">'
         f'<div class="kpi-label">{html.escape(ind.label)}</div>'
         f'<div class="kpi-value">{html.escape(ind.formatted)}</div>'
         f"{delta}{note}{spark}{prov}"
@@ -1607,8 +1611,10 @@ body{margin:0;background:var(--surface-alt);color:var(--ink);font:16px/1.4 var(-
    'triggered by' note as its tooltip. */
 .tag{background:#fff;color:var(--masthead);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:2px 10px;border-radius:62.5rem;cursor:help}
 section{padding:18px 28px}
-.kpis{display:flex;flex-wrap:wrap;gap:16px;border-bottom:1px solid var(--line)}
-.kpi{flex:1 1 230px;background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--news);padding:14px 16px}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;border-bottom:1px solid var(--line)}
+.kpi{background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--news);padding:14px 16px}
+.kpi-wide{grid-column:span 2}
+@media(max-width:640px){.kpis{grid-template-columns:1fr}.kpi-wide{grid-column:auto}}
 .kpi-label{font-size:13px;color:var(--muted)}
 .kpi-note{font-size:11px;color:var(--muted);margin-top:3px}
 .kpi-value{font-family:var(--font-headline);font-size:28px;font-weight:700;line-height:1.15;margin-top:4px}
