@@ -225,6 +225,14 @@ def nk_hs_group_yoy(hs_group_id: int, current_end_yyyymm: str) -> tuple[int, str
     return (hs_group_id, current_end_yyyymm)
 
 
+def nk_cn8_yoy_mover(product_nc: str, current_end_yyyymm: str) -> tuple[str, str]:
+    """A cn8_yoy_mover finding is identified by (CN8 code, window-end period).
+    Flow direction is encoded in the subkind (`cn8_yoy_mover` imports;
+    `cn8_yoy_mover_export` would carry exports). One qualifying single-product
+    mover per (code, anchor); new data lands at a new anchor (append-only)."""
+    return (product_nc, current_end_yyyymm)
+
+
 def nk_hs_group_trajectory(hs_group_id: int) -> tuple[int]:
     """A trajectory finding has no period in its natural key — there's only
     one current trajectory per group per flow at any time. New data lands

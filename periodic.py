@@ -450,6 +450,15 @@ def run_periodic(
                 flow=flow, comparison_scope=scope,
             )
 
+    # Biggest single-product (CN8) mover within the watched HS prefixes — the
+    # finer-grained companion to the hs_group_yoy movers (roadmap "Biggest mover
+    # KPI", Option A). Imports only (flow=1) in v1; reads eurostat_raw_rows, so
+    # it's a no-op cost on cycles without fresh Eurostat detail.
+    counts["cn8_biggest_mover"] = _run_analyser(
+        "cn8_biggest_mover", "cn8_yoy_mover", anomalies.detect_cn8_biggest_mover,
+        flow_label=1, flow=1,
+    )
+
     for flow_str in ("export", "import"):
         key = f"gacc_aggregate_yoy_{flow_str}"
         counts[key] = _run_analyser(

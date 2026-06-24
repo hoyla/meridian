@@ -165,6 +165,31 @@ def _arithmetic(subkind: str, detail: dict | None) -> list[str]:
         if t.get("low_base"):
             out.append("Low base — quote the € amount, not the percentage.")
         return out
+    if subkind.startswith("cn8_yoy_mover"):
+        t = d.get("totals") or {}
+        prod = d.get("product") or {}
+        cur_, pri = t.get("current_12mo_eur"), t.get("prior_12mo_eur")
+        out = []
+        if prod.get("cn8"):
+            out.append(f"CN8 {prod['cn8']}"
+                       + (f" — {prod.get('denomination') or prod.get('label_short')}"
+                          if (prod.get('denomination') or prod.get('label_short')) else "")
+                       + ".")
+        if cur_ is not None and pri is not None:
+            out.append(f"12 months {_eur(cur_)} vs {_eur(pri)} the prior 12 months "
+                       f"= {_pct(t.get('yoy_pct'))} by value.")
+        persist = (d.get("persistence") or {}).get("anchor_yoys") or []
+        if persist:
+            out.append("Held across the last "
+                       + ", ".join(_pct(y) for y in persist)
+                       + " (most recent first), and survives dropping its single "
+                       "largest month — so it isn't one shipment.")
+        groups = d.get("parent_groups") or []
+        out.append("Single product within the watched chapters"
+                   + (f", inside the displayed group {groups[0]}." if groups
+                      else ", outside any displayed group.")
+                   + " A 'worth a look' cue, not a headline-grade finding.")
+        return out
     return []
 
 
