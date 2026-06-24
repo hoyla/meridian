@@ -111,10 +111,13 @@ def test_draft_groups_in_their_own_section(clean_db, db_conn):
         "### TestRender — Honey *(draft — methodology not yet validated)*"
         in text
     )
-    # And the dedicated draft-section header appears.
-    assert "## Draft groups" in text
-    # Draft preamble warns against quoting.
-    assert "Figures appear in `02_Findings.md` for transparency" in text
+    # And the dedicated held-back section header appears — #99 consolidated
+    # draft + hidden groups into one "Held back" section (each tagged), so a
+    # draft group now sits there rather than under a "Draft groups" header.
+    assert "## Held back (not in the published rankings)" in text
+    # Preamble keeps the transparency note (figures shown for transparency, but
+    # held out of the live rankings — not quotable as validated).
+    assert "figures appear in `02_Findings.md` for transparency" in text
 
 
 def test_sibling_groups_link_via_4_digit_hs_prefix(clean_db, db_conn):
