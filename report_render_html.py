@@ -667,10 +667,18 @@ def _prov_details(payload: dict | None, summary_inner: str,
     body = _prov_body(payload)
     if not body:
         return ""
+    # A small disclosure triangle right after the finding/N token (the whole
+    # summary line is the click target, so no words needed); it rotates on open.
+    tri = '<span class="prov-tri" aria-hidden="true">▸</span>'
+    marker = "</span>"
+    if marker in summary_inner:  # inject just after the first token span
+        i = summary_inner.index(marker) + len(marker)
+        summary = summary_inner[:i] + tri + summary_inner[i:]
+    else:
+        summary = summary_inner + tri
     return (
-        f'<details class="prov"><summary class="{summary_class}">{summary_inner}'
-        '<span class="prov-cue"> · where this came from ▸</span></summary>'
-        f'<div class="prov-body">{body}</div></details>'
+        f'<details class="prov"><summary class="{summary_class}">{summary}'
+        f'</summary><div class="prov-body">{body}</div></details>'
     )
 
 
@@ -1744,8 +1752,12 @@ details.prov{margin-top:8px}
 details.prov>summary{cursor:pointer;list-style:none}
 details.prov>summary::-webkit-details-marker{display:none}
 details.prov>summary.mover-prov{font-size:12px;color:var(--muted);margin-top:6px}
-.prov-cue{color:var(--news);font-weight:600}
-details.prov[open]>summary .prov-cue{opacity:.7}
+/* A small, muted disclosure triangle after the finding token — the whole line is
+   clickable, so it's just an affordance, not a call to action. Rotates down when
+   open; nudges toward the link colour on hover so it stays discoverable. */
+.prov-tri{display:inline-block;margin-left:5px;color:var(--muted);font-size:10px;transition:transform .12s}
+details.prov>summary:hover .prov-tri{color:var(--link)}
+details.prov[open]>summary .prov-tri{transform:rotate(90deg)}
 .prov-body{margin-top:8px;padding:10px 12px;background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--news);font-size:12.5px;line-height:1.45}
 .prov-grp{margin-bottom:8px}.prov-grp:last-child{margin-bottom:0}
 .prov-h{font-weight:700;color:var(--ink);font-size:11px;text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px}

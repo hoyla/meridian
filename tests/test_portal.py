@@ -382,7 +382,7 @@ def test_provenance_drawer_renders_for_gated_findings():
     replay-SQL. Covers both a KPI (finding 1) and a headline mover (finding 2)."""
     h = render_html(_sample_report())
     assert 'details class="prov"' in h                       # the drawer exists
-    assert "where this came from" in h                        # the click cue
+    assert 'class="prov-tri"' in h                            # the disclosure triangle cue
     # Source-URL trail leads, as a real clickable link.
     assert 'href="https://example/eu-2026-04.7z"' in h
     assert "every release this figure draws on" in h.lower()
