@@ -18,6 +18,13 @@ alerting suite). What's left:
   are real calendar days, not the `-01` period artefact; could prettify to "15 Jun
   2026"). The month format is the abbreviated "Apr 2026" (full "April 2026" was an
   option).
+- **"Top products" long-label tail.** The CN8 product-description labels (PR #87)
+  read cleanly for ~90% of codes, but ~10% — mostly chemicals and vehicles, e.g.
+  `29183000` "Carboxylic acids with aldehyde or ketone function but without other
+  oxygen function" — run long enough to stretch the Top-products line. Optional:
+  CSS-clamp the inline `label_short` (truncate with an ellipsis) and let the
+  existing hover tooltip carry the full self-explanatory text. Cosmetic only; the
+  full text is always reachable on hover.
 
 ## HMRC-triggered release — headline-only today; design parked (2026-06-23)
 
