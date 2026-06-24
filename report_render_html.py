@@ -670,7 +670,7 @@ def _prov_details(payload: dict | None, summary_inner: str,
         return ""
     # A small disclosure triangle right after the finding/N token (the whole
     # summary line is the click target, so no words needed); it rotates on open.
-    tri = '<span class="prov-tri" aria-hidden="true">▸</span>'
+    tri = '<span class="prov-tri" aria-hidden="true"></span>'
     marker = "</span>"
     if marker in summary_inner:  # inject just after the first token span
         i = summary_inner.index(marker) + len(marker)
@@ -821,7 +821,16 @@ def _headline(h: Headline, payloads: dict | None = None) -> str:
                 (payloads or {}).get(str(fid)) if fid is not None else None,
                 f'<span class="token">finding/{fid}</span>' if fid is not None else "source",
                 summary_class="mover-prov")
-            out.append(f'<li>{_inline_md(item.prose)} {dd}{chips}'
+            # The mover sentence ends in its own `finding/N` cite (shared with
+            # the briefing-pack copy). When the clickable provenance drawer is
+            # shown below, that in-prose token is just a non-clickable duplicate,
+            # so drop it — leaving the openable drawer as the single citation.
+            prose = item.prose
+            if prov and fid is not None:
+                prose = re.sub(
+                    rf"\s*(?:`finding/{fid}`|\[finding/{fid}\]\([^)]*\))\s*$",
+                    "", prose)
+            out.append(f'<li>{_inline_md(prose)} {dd}{chips}'
                        f'{_take_block_html(item.take)}{prov}</li>')
         out.append("</ol>")
         if h.variant == "eurostat":
@@ -1760,11 +1769,13 @@ details.prov{margin-top:8px}
 details.prov>summary{cursor:pointer;list-style:none}
 details.prov>summary::-webkit-details-marker{display:none}
 details.prov>summary.mover-prov{font-size:12px;color:var(--muted);margin-top:6px}
-/* A small, muted disclosure triangle after the finding token — the whole line is
-   clickable, so it’s just an affordance, not a call to action. Rotates down when
+/* A muted disclosure triangle after the finding token — the whole line is
+   clickable, so it’s just an affordance, not a call to action. Drawn from CSS
+   borders (not a glyph, which renders sub-cap-height and looks like a stray dot)
+   on a zero-size box so its 10px height never grows the line. Rotates down when
    open; nudges toward the link colour on hover so it stays discoverable. */
-.prov-tri{display:inline-block;margin-left:5px;color:var(--muted);font-size:10px;transition:transform .12s}
-details.prov>summary:hover .prov-tri{color:var(--link)}
+.prov-tri{display:inline-block;width:0;height:0;margin-left:6px;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:8px solid var(--muted);vertical-align:middle;position:relative;bottom:2px;transition:transform .12s}
+details.prov>summary:hover .prov-tri{border-left-color:var(--link)}
 details.prov[open]>summary .prov-tri{transform:rotate(90deg)}
 .prov-body{margin-top:8px;padding:10px 12px;background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--news);font-size:12.5px;line-height:1.45}
 .prov-grp{margin-bottom:8px}.prov-grp:last-child{margin-bottom:0}
