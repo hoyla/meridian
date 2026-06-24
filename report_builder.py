@@ -879,18 +879,19 @@ def _state_of_play_section(cur) -> Section:
     scopes — the canonical standing level (the ~€1bn/day figure). A level,
     not a change, so it lives here rather than in 'what changed'."""
     root = Section(
-        id="state-of-play", title="Europe's deficit with China",
+        id="state-of-play", title="Europe's trade position with China",
         kind="state_of_play",
-        intro="The standing deficit by reporter scope, on the "
-              "[CN+HK+MO](#gloss-cn-hk-mo) envelope — a level, not this "
-              "cycle's change.",
+        intro="The standing picture from Europe's side of the ledger — how big "
+              "the deficit is, and how much of its trade from outside the bloc "
+              "China accounts for.",
         about=_ABOUT["the-deficit"],
     )
     deficit = Section(
         id="the-deficit",
-        title="Europe's goods-trade deficit with China", kind="state_of_play",
-        intro="The standing level by reporter scope, on the CN+HK+MO "
-              "envelope.",
+        title="Europe's deficit with China", kind="state_of_play",
+        intro="The standing level by reporter scope, on the "
+              "[CN+HK+MO](#gloss-cn-hk-mo) envelope — a level, not this "
+              "cycle's change.",
     )
     for subkind, cn_subkind, label, source in _TB_SCOPES:
         cur.execute(
@@ -912,10 +913,12 @@ def _state_of_play_section(cur) -> Section:
         for p in (d or {}).get("monthly_deficit_series", []) or []:
             per, val = p.get("period"), p.get("deficit_eur")
             if per is not None and val is not None:
-                series.append(SeriesPoint(
-                    period=date.fromisoformat(per) if isinstance(per, str) else per,
-                    value=float(val),
-                ))
+                pd = date.fromisoformat(per) if isinstance(per, str) else per
+                # Start at 2019 so this chart shares an x-axis range with the
+                # China-dependency trend below (which can't be extended earlier).
+                if pd is not None and pd.year < 2019:
+                    continue
+                series.append(SeriesPoint(period=pd, value=float(val)))
         deficit.findings.append(Finding(
             finding_id=fid, subkind=subkind,
             title=f"{label} deficit with China",
@@ -949,6 +952,7 @@ def _state_of_play_section(cur) -> Section:
         if len(ser) >= 2:
             roll = (cs_detail or {}).get("rolling_12mo", {})
             root.metrics["china_share_trend"] = {
+                "heading": "China vs the rest of the world",
                 "title": "China's share of EU-27 goods imports from outside the EU",
                 "series": ser,
                 "share_now": roll.get("share"),
