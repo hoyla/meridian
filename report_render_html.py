@@ -693,15 +693,23 @@ def _indicator_card(ind: Indicator, payloads: dict | None = None) -> str:
     # origin (Eurostat / HMRC / GACC); the as-of is the data month, not a raw
     # ISO day (which misreads as the 1st — Lisa, 2026-06-22). Becomes a no-JS
     # drawer when the finding carries a baked provenance payload.
-    parts = []
-    if ind.provenance.finding_ids:
-        parts.append(f'<span class="token">finding/{ind.provenance.finding_ids[0]}</span>')
+    token = (f'<span class="token">finding/{ind.provenance.finding_ids[0]}</span>'
+             if ind.provenance.finding_ids else "")
+    rest = []
     src = _source_label(ind.provenance.source)
     if src:
-        parts.append(html.escape(src))
+        rest.append(html.escape(src))
     if ind.provenance.as_of:
-        parts.append(f"as of {html.escape(_fmt_month(ind.provenance.as_of))}")
-    prov_inner = " · ".join(parts)
+        rest.append(f"as of {html.escape(_fmt_month(ind.provenance.as_of))}")
+    rest_str = " · ".join(rest)
+    # Source + month sit in their own span so a narrow (1-column) card can drop
+    # them to a second line under the finding token (CSS .kpi-prov-rest); on a
+    # wide card they stay inline and the leading separator (.kpi-prov-sep) shows.
+    if token and rest_str:
+        prov_inner = (f'{token}<span class="kpi-prov-rest">'
+                      f'<span class="kpi-prov-sep"> · </span>{rest_str}</span>')
+    else:
+        prov_inner = " · ".join(p for p in (token, rest_str) if p)
     fid = ind.provenance.finding_ids[0] if ind.provenance.finding_ids else None
     drawer = _prov_details((payloads or {}).get(str(fid)) if fid is not None else None,
                            prov_inner, summary_class="kpi-prov")
@@ -733,9 +741,16 @@ def _indicator_card(ind: Indicator, payloads: dict | None = None) -> str:
         col = _DOWN if ind.delta.get("direction") in ("wider", "down") else _UP
         pct = f'<div class="kpi-pct" style="color:{col}">{html.escape(ind.delta["formatted"])}</div>'
 
-    # Description + China-only comparator (standard 'findings' size).
-    desc_text = ind.label + (f" · {ind.note}" if ind.note else "")
-    desc = f'<div class="kpi-desc">{html.escape(desc_text)}</div>' if desc_text else ""
+    # Description = label, optionally a "· note" comparator/detail (standard
+    # 'findings' size). The note sits in its own span so the Biggest-mover card
+    # (.kpi-mover) can drop it to a second line under the product name; on other
+    # cards it stays inline after the separator.
+    if ind.note:
+        desc_inner = (f'{html.escape(ind.label)}<span class="kpi-desc-rest">'
+                      f'<span class="kpi-desc-sep"> · </span>{html.escape(ind.note)}</span>')
+    else:
+        desc_inner = html.escape(ind.label)
+    desc = f'<div class="kpi-desc">{desc_inner}</div>' if ind.label or ind.note else ""
 
     # Sparkline if a series is present (these cards span 2 of the 3 columns).
     spark = ""
@@ -743,8 +758,9 @@ def _indicator_card(ind: Indicator, payloads: dict | None = None) -> str:
         spark = f'<div class="kpi-spark">{_sparkline_svg(ind.chart_data)}</div>'
     wide = " kpi-wide" if spark else ""
 
+    mover = " kpi-mover" if ind.key == "cn8_biggest_mover" else ""
     return (
-        f'<div class="kpi{wide}{donut_cls}">'
+        f'<div class="kpi{wide}{donut_cls}{mover}">'
         f"{kicker}{value}{pct}{desc}{spark}{prov}"
         "</div>"
     )
@@ -1759,7 +1775,7 @@ body{margin:0;background:var(--surface-alt);color:var(--ink);font:16px/1.4 var(-
 .tag{background:#fff;color:var(--masthead);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:2px 10px;border-radius:62.5rem;cursor:help}
 section{padding:18px 28px}
 .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;border-bottom:1px solid var(--line)}
-.kpi{background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--news);padding:14px 16px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--news);padding:14px 16px;display:flex;flex-direction:column}
 .kpi-wide{grid-column:span 2}
 @media(max-width:640px){.kpis{grid-template-columns:1fr}.kpi-wide{grid-column:auto}}
 /* Consolidated KPI card (2026-06-24): only the value and %-change are large;
@@ -1776,6 +1792,18 @@ section{padding:18px 28px}
 .kpi-info{font-size:11px;color:var(--muted);cursor:help;font-weight:400}
 .kpi-spark{margin-top:10px}.spark{width:100%;height:36px;display:block}
 .kpi-prov{margin-top:8px;font-size:14px;color:var(--muted)}
+/* Narrow (1-column) cards: the source + month drop to their own line beneath
+   the finding token; the leading separator is then redundant. Wide cards keep
+   the whole citation inline. */
+.kpi:not(.kpi-wide) .kpi-prov-rest{display:block}
+.kpi:not(.kpi-wide) .kpi-prov-sep{display:none}
+/* The citation (plain line or drawer) is the last thing in every card; pin it
+   to the card's bottom edge so it lines up across a row whatever sits above. */
+.kpi>.kpi-prov,.kpi>details.prov{margin-top:auto;padding-top:8px}
+/* Biggest-mover card: the import detail sits on its own line under the product
+   name (the label), so the inline separator before it is dropped. */
+.kpi-mover .kpi-desc-rest{display:block}
+.kpi-mover .kpi-desc-sep{display:none}
 /* Provenance drawer (iteration 3) — a no-JS <details>: the citation line is the
    clickable summary, the panel expands inline beneath. */
 details.prov{margin-top:8px}
@@ -1973,8 +2001,8 @@ details.partner[open]>summary{border-bottom:1px solid var(--line)}
 .ml-ytd{display:block;margin-top:6px;font-style:italic;opacity:.8}
 .flow-sm{font-size:12px;color:var(--muted);white-space:nowrap;flex:0 0 auto}
 /* donut indicator */
-.kpi-donut{align-items:center;text-align:center}
-.kpi-donut-wrap{margin:6px auto 2px}
+.kpi-donut{align-items:flex-start;text-align:left}
+.kpi-donut-wrap{margin:6px 0 2px}
 .donut-pct{font-family:var(--font-headline);font-weight:700;font-size:20px;fill:var(--ink)}
 /* glossary — groups are nested <section>s inside the tab’s own <section>, so
    strip the inherited section padding (it would otherwise double up). */

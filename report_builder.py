@@ -546,11 +546,13 @@ def _biggest_mover_indicator(cur, surfaced_groups: set[str]) -> Indicator | None
         product = (product[:58].rsplit(" ", 1)[0] or product[:57]).rstrip() + "…"
     frame = ("outside the headline movers" if off_watch
              else f"within {parents[0]}" if parents else "")
-    # Description line = the product (the interesting thing) + value + framing;
-    # the big coloured value carries the % move and its direction.
-    desc = f"{product} · {_fmt_eur(cur_eur)} imports, 12mo"
+    # Product is the prominent label (card line 1); value + framing become the
+    # note so the HTML card can drop them to their own line beneath it
+    # (.kpi-mover). Markdown rejoins "label · note" with the same separator, so
+    # its rendered line is unchanged.
+    detail = f"{_fmt_eur(cur_eur)} imports, 12mo"
     if frame:
-        desc += f" · {frame}"
+        detail += f" · {frame}"
     # 'How this is calculated' rollover; the provenance drawer carries the full
     # source trail + arithmetic.
     tooltip = (
@@ -563,12 +565,12 @@ def _biggest_mover_indicator(cur, surfaced_groups: set[str]) -> Indicator | None
     return Indicator(
         key="cn8_biggest_mover",
         kicker="BIGGEST MOVER",
-        label=desc,
+        label=product,
         value=float(yoy),
         unit="yoy_pct",   # signals a signed change → the value is coloured
         formatted=f"{'+' if yoy >= 0 else '−'}{abs(yoy) * 100:.0f}%",
         chart="bignumber",
-        note=None,
+        note=detail,
         tooltip=tooltip,
         provenance=Provenance(finding_ids=[fid], source="eurostat", as_of=as_of),
     )
