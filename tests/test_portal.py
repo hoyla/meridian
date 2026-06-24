@@ -519,7 +519,7 @@ def test_new_findings_breakdown_lives_in_sources_not_what_changed():
     assert "New this cycle" in h and h.index("New this cycle") > si
     assert "year-on-year change for an HS group" in h and ">44</strong> new" in h
     # NOT in the What-changed block (which keeps only the digest)
-    wi = h.index("What's changed since the last briefing")
+    wi = h.index("What’s changed since the last briefing")
     assert "New this cycle" not in h[wi:si]
     md = render_markdown(_sample_report())
     assert "**New this cycle**" in md and "44 new — year-on-year change" in md
@@ -578,12 +578,12 @@ def test_what_changed_demotes_to_one_liner_on_quiet_cycle():
         significant=[]))
     h = render_html(r)
     assert 'class="quiet-change"' in h and "nothing moved materially" in h
-    assert "What's changed since the last briefing" not in h     # no H2 section
+    assert "What’s changed since the last briefing" not in h     # no H2 section
     assert 'data-spy="brief-changed"' not in h             # no sub-nav entry
     assert 'id="brief-changed"' not in h
     # the material case (sample carries significant shifts) gets the full section + nav
     full = render_html(_sample_report())
-    assert "What's changed since the last briefing" in full and 'data-spy="brief-changed"' in full
+    assert "What’s changed since the last briefing" in full and 'data-spy="brief-changed"' in full
 
 
 def test_what_changed_renders_the_material_shifts():
@@ -672,7 +672,7 @@ def test_gacc_bilateral_per_partner_expanders():
     h = render_html(_sample_report())
     assert 'class="partner"' in h and "<summary>" in h
     assert "United States" in h
-    assert "China's exports" in h and "€460.00B" in h   # headline in the summary
+    assert "China’s exports" in h and "€460.00B" in h   # headline in the summary
     md = render_markdown(_sample_report())               # LLM surface keeps it flat
     assert "## China’s trade by country (GACC)" in md
 

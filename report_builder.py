@@ -14,7 +14,7 @@ here.
 
 Known v0 wrinkle (Fork A): `HeadlineItem.prose` currently reuses
 `_mover_sentence`, whose string carries light markdown (bold subject, a
-`[group](#slug)` anchor, a backtick citation token). That's fine for the
+`[group](#slug)` anchor, a backtick citation token). That’s fine for the
 markdown renderer but leaks doc-specific nav into the model; the clean
 path is the structured `subject`/`metrics`/`stability`/`drill_down`
 fields, and prose gets decoupled into plain text + structured emphasis
@@ -88,7 +88,7 @@ _ROW_HIDDEN_CAVEATS = {"low_base_effect", "cross_source_sum"}
 def _visible_caveats(codes) -> list[str]:
     """Per-finding-variable caveats only — drop the family-universal ones (shown
     once in Methodology) and the structural/already-shown ones, so a row carries
-    only what's unusual *about it* (partial window, low kg coverage…)."""
+    only what’s unusual *about it* (partial window, low kg coverage…)."""
     return [c for c in (codes or [])
             if c not in _ALL_UNIVERSAL_CAVEATS and c not in _ROW_HIDDEN_CAVEATS]
 
@@ -105,7 +105,7 @@ def _month_label(period) -> str | None:
 
 
 def _bilateral_context(detail) -> dict:
-    """The richer registers behind a partner flow, restored from the finding's
+    """The richer registers behind a partner flow, restored from the finding’s
     own `totals`/`windows` — the YTD and latest-month figures plus a plain-prose
     incomplete-window note. All already computed upstream; this only reshapes
     them for the expanded panel (the collapsed summary stays terse)."""
@@ -146,7 +146,7 @@ def _bilateral_context(detail) -> dict:
 
 
 def _primary_section(divisions) -> tuple[str, str]:
-    """A group's primary SITC section (1-digit) — the coarse bucket the sector
+    """A group’s primary SITC section (1-digit) — the coarse bucket the sector
     list groups by. Mode of its divisions' sections (ties → lowest code); section
     '9' (Other / unclassified) when it maps to no division. A heuristic: single-
     division groups (most) are exact; the few multi-division groups land in their
@@ -170,18 +170,18 @@ _VARIANTS: dict[str, dict] = {
             "at their freshest month."
         ),
         "has_sector_movers": True,
-        "general_slot": "surface what connects {month}'s findings — and what's notably absent",
+        "general_slot": "surface what connects {month}'s findings — and what’s notably absent",
     },
     "gacc": {
         "lead": "Standout moves in China’s own {month} figures",
         "note": (
-            "Triggered by new GACC data, a month ahead of Europe's. No "
+            "Triggered by new GACC data, a month ahead of Europe’s. No "
             "mirror-gap or HS-sector detail at this altitude — GACC "
             "preliminary is partner/bloc totals, so the headline is "
             "macro/geographic."
         ),
         "has_sector_movers": False,
-        "general_slot": "read what China's {month} geography shift implies — grounded in the totals above",
+        "general_slot": "read what China’s {month} geography shift implies — grounded in the totals above",
     },
     "hmrc": {
         "lead": "Standout moves in the UK’s {month} figures",
@@ -198,7 +198,7 @@ _VARIANTS: dict[str, dict] = {
 def _latest_trade_balance(cur, subkind: str):
     """The latest (by anchor period) live trade-balance finding for a subkind —
     (id, detail) or (None, None). Ordered by anchor period, not id, so a
-    back-filled revision can't masquerade as the newest month."""
+    back-filled revision can’t masquerade as the newest month."""
     cur.execute(
         """SELECT id, detail FROM findings
             WHERE superseded_at IS NULL AND subkind = %s
@@ -219,9 +219,9 @@ def _latest_trade_balance(cur, subkind: str):
 _ABOUT: dict[str, str] = {
     "the-deficit": (
         "Unlike the year-on-year moves elsewhere in the briefing, this is a "
-        "**standing level, not a change** — Europe's all-goods trade balance "
+        "**standing level, not a change** — Europe’s all-goods trade balance "
         "with China (imports minus exports), straight from Eurostat and HMRC. "
-        "It barely moves cycle to cycle, so it never trips the \"what's new\" "
+        "It barely moves cycle to cycle, so it never trips the \"what’s new\" "
         "thresholds — but its size, per day, is usually the most quotable single "
         "number in the pack.\n"
         "\n"
@@ -229,27 +229,27 @@ _ABOUT: dict[str, str] = {
         "and exports FOB, which widens the deficit — but it is the basis "
         "Eurostat publishes on. **\"China\" includes Hong Kong and Macao** "
         "(CN+HK+MO) on both sides. The EU-27 + UK line adds two statistical "
-        "agencies' figures: a close approximation, not a single-source number."
+        "agencies’ figures: a close approximation, not a single-source number."
     ),
     "mirror-gaps": (
-        "**Mirror trade** compares the two sides' own books: China's reported "
-        "exports to a partner against that partner's reported imports from "
+        "**Mirror trade** compares the two sides’ own books: China’s reported "
+        "exports to a partner against that partner’s reported imports from "
         "China. They never match exactly — but a gap *beyond* the normal "
         "accounting wedge (China reports exports FOB; the partner reports "
         "imports CIF, ~5–10% higher) can signal **transshipment**: goods routed "
         "through a hub (often Rotterdam or Hong Kong) and cleared into the EU "
         "elsewhere.\n"
         "\n"
-        "**Scope:** the partner's-imports (Eurostat) side sums the same "
+        "**Scope:** the partner’s-imports (Eurostat) side sums the same "
         "**CN+HK+MO** envelope used across the pack — **\"China\" includes Hong "
-        "Kong and Macao** — while the other side is China's own reported exports "
+        "Kong and Macao** — while the other side is China’s own reported exports "
         "to that partner (GACC). The two agencies define and value trade "
         "differently, which is why a residual gap beyond the CIF/FOB wedge is "
         "the signal.\n"
         "\n"
         "Each row shows both reported totals, the gap, how much of it exceeds "
         "the CIF/FOB baseline, and — where flagged — the named hub and a "
-        "z-score for how unusual the gap is against the partner's own six-month "
+        "z-score for how unusual the gap is against the partner’s own six-month "
         "history."
     ),
     "sector-detail": (
@@ -257,7 +257,7 @@ _ABOUT: dict[str, str] = {
         "total** compared with the prior 12 months, unless a latest-month "
         "figure is shown beside it. The 12-month figure smooths seasonal swings "
         "and is the one to quote; the **latest month** is a direction hint that "
-        "swings wildly on lumpy categories (aircraft, ships) — don't headline "
+        "swings wildly on lumpy categories (aircraft, ships) — don’t headline "
         "it.\n"
         "\n"
         "- **Value vs volume** — *value* is what the goods cost (€); *volume* is "
@@ -265,9 +265,9 @@ _ABOUT: dict[str, str] = {
         "goods got cheaper.\n"
         "- **low base** — when flagged, the percentage rests on a small total "
         "(under €50M); quote the absolute € amount, not the %.\n"
-        "- **🟢 🟡 🔴 predictability** — whether the group's year-on-year signal "
+        "- **🟢 🟡 🔴 predictability** — whether the group’s year-on-year signal "
         "held over the past six months: 🟢 held (reliable) / 🟡 mixed / 🔴 "
-        "didn't hold (verify before quoting). No badge means too little history "
+        "didn’t hold (verify before quoting). No badge means too little history "
         "to score.\n"
         "- **`finding/N`** — the citation token: a permanent handle to the exact "
         "database row behind the number, with its full audit trail.\n"
@@ -296,16 +296,16 @@ _ABOUT: dict[str, str] = {
         "would double-count."
     ),
     "gacc-bilateral": (
-        "China's own customs figures (GACC) for its trade with each major "
-        "partner and bloc — released about a month ahead of Europe's data, so "
-        "the **earliest read** on where China's trade is shifting. These are "
+        "China’s own customs figures (GACC) for its trade with each major "
+        "partner and bloc — released about a month ahead of Europe’s data, so "
+        "the **earliest read** on where China’s trade is shifting. These are "
         "**China-reported** totals (exports valued FOB), not the EU mirror, and "
-        "cover China's whole world, not just Europe.\n"
+        "cover China’s whole world, not just Europe.\n"
         "\n"
         "**Scope note:** here China is the *reporter*, so — unlike the Eurostat "
         "sections above, where \"China\" means the **CN+HK+MO** envelope — **Hong "
-        "Kong and Macao appear as China's own partners** here, not folded into "
-        "\"China\". It's the one place that envelope doesn't apply, by "
+        "Kong and Macao appear as China’s own partners** here, not folded into "
+        "\"China\". It’s the one place that envelope doesn’t apply, by "
         "construction.\n"
         "\n"
         "Partners are ordered biggest first; **click one to expand** its rolling "
@@ -333,7 +333,7 @@ def _deficit_indicator(
 ) -> Indicator | None:
     """A goods-trade deficit with China as a vital sign — the standing
     €/day level + YoY delta + a monthly sparkline. Its home is Key
-    indicators (amended Q3): a level the delta sections can't carry.
+    indicators (amended Q3): a level the delta sections can’t carry.
     Parameterised by `subkind` so EU-27 (`trade_balance`) and the UK
     (`trade_balance_uk`) reuse one builder."""
     fid, detail = _latest_trade_balance(cur, subkind)
@@ -408,7 +408,7 @@ def _import_level_indicator(cur) -> Indicator | None:
     """EU-27 goods imports from China, rolling-12-month level (the size of
     the inflow, not its change). A clean all-goods figure straight off the
     same `trade_balance` finding as the deficit (`rolling_12mo.import_eur`,
-    CN+HK+MO, 000TOTAL basis) — so it carries that finding's citation."""
+    CN+HK+MO, 000TOTAL basis) — so it carries that finding’s citation."""
     fid, detail = _latest_trade_balance(cur, "trade_balance")
     if fid is None:
         return None
@@ -435,7 +435,7 @@ def _import_level_indicator(cur) -> Indicator | None:
 
 def _latest_china_share(cur, subkind: str = "china_all_goods_share"):
     """The latest (by anchor) live china_all_goods_share finding — (id, detail)
-    or (None, None). Ordered by anchor period so a back-filled revision can't
+    or (None, None). Ordered by anchor period so a back-filled revision can’t
     masquerade as the newest month."""
     cur.execute(
         """SELECT id, detail FROM findings
@@ -450,12 +450,12 @@ def _latest_china_share(cur, subkind: str = "china_all_goods_share"):
 
 
 def _china_share_indicator(cur) -> Indicator | None:
-    """China's share of EU-27 extra-EU all-goods imports — the dependency
+    """China’s share of EU-27 extra-EU all-goods imports — the dependency
     headline, as a donut. CN+HK+MO share (our editorial standard) with the
     CN-only comparator the press cites in the note. Reads the latest
     china_all_goods_share finding (the all-goods generalisation of
-    partner_share; denominator is extra-EU, so this is China's slice of the
-    EU's trade with the wider world, not 'share of EU consumption')."""
+    partner_share; denominator is extra-EU, so this is China’s slice of the
+    EU’s trade with the wider world, not 'share of EU consumption')."""
     fid, detail = _latest_china_share(cur, "china_all_goods_share")
     if fid is None:
         return None
@@ -564,7 +564,7 @@ def _series_chart(monthly_series) -> ChartData | None:
 
 def _sector_detail_section(cur, predictability: dict | None = None) -> Section:
     """The navigable granularity layer: one child Section per HS group,
-    each carrying its import + export Finding. The group's Section id is
+    each carrying its import + export Finding. The group’s Section id is
     `_slugify_heading(name)` — the SAME slug the headline movers point
     their drill-downs at, so those links resolve here. Groups ordered by
     12-month value (biggest sectors first); navigation/search by `facets`
@@ -795,7 +795,7 @@ def _gacc_latest_period(cur) -> date | None:
 
 
 def _gacc_macro_items(cur, period) -> list[HeadlineItem]:
-    """The GACC variant's macro/geographic lead: China's own reported
+    """The GACC variant’s macro/geographic lead: China’s own reported
     exports and imports by partner *bloc* (ASEAN / Africa / Latin America /
     Total), both flows. The bilateral (per-country) detail is the deeper
     layer, a future GACC sections tree."""
@@ -815,8 +815,8 @@ def _gacc_macro_items(cur, period) -> list[HeadlineItem]:
         tot = (detail or {}).get("totals", {})
         yoy = _f(tot.get("yoy_pct"))
         eur = _f(tot.get("current_12mo_eur"))
-        subj = (f"China's exports to {bloc}" if is_export
-                else f"China's imports from {bloc}")
+        subj = (f"China’s exports to {bloc}" if is_export
+                else f"China’s imports from {bloc}")
         # No YoY → state the level, never a direction. Asserting "fell" for a
         # missing change (e.g. a first-period bloc) publishes a move the data
         # doesn't support; the magnitude was already dashed out, so the verb
@@ -874,24 +874,24 @@ def _latest_deficit_per_day(cur, subkind):
 
 
 def _state_of_play_section(cur) -> Section:
-    """The 'where things stand' companion (Q3). First cut: Europe's
+    """The 'where things stand' companion (Q3). First cut: Europe’s
     standing goods-trade deficit with China across the three reporter
     scopes — the canonical standing level (the ~€1bn/day figure). A level,
     not a change, so it lives here rather than in 'what changed'."""
     root = Section(
-        id="state-of-play", title="Europe's trade position with China",
+        id="state-of-play", title="Europe’s trade position with China",
         kind="state_of_play",
-        intro="The standing picture from Europe's side of the ledger — how big "
+        intro="The standing picture from Europe’s side of the ledger — how big "
               "the deficit is, and how much of its trade from outside the bloc "
               "China accounts for.",
         about=_ABOUT["the-deficit"],
     )
     deficit = Section(
         id="the-deficit",
-        title="Europe's deficit with China", kind="state_of_play",
+        title="Europe’s deficit with China", kind="state_of_play",
         intro="The standing level by reporter scope, on the "
               "[CN+HK+MO](#gloss-cn-hk-mo) envelope — a level, not this "
-              "cycle's change.",
+              "cycle’s change.",
     )
     for subkind, cn_subkind, label, source in _TB_SCOPES:
         cur.execute(
@@ -953,7 +953,7 @@ def _state_of_play_section(cur) -> Section:
             roll = (cs_detail or {}).get("rolling_12mo", {})
             root.metrics["china_share_trend"] = {
                 "heading": "China vs the rest of the world",
-                "title": "China's share of EU-27 goods imports from outside the EU",
+                "title": "China’s share of EU-27 goods imports from outside the EU",
                 "series": ser,
                 "share_now": roll.get("share"),
                 "finding_id": cs_fid,
@@ -963,12 +963,12 @@ def _state_of_play_section(cur) -> Section:
 
 def _mirror_gap_section(cur) -> Section:
     """The China↔EU mirror-trade discrepancy — the signature distinctive
-    analysis. Per partner: China's reported exports vs the partner's reported
+    analysis. Per partner: China’s reported exports vs the partner’s reported
     imports, the gap, and how much exceeds the CIF/FOB accounting baseline
     (the transshipment signal), with the named hub where relevant."""
     root = Section(
         id="mirror-gaps", title="Mirror-trade gaps", kind="mirror_gap",
-        intro="China's reported exports to each partner vs the partner's "
+        intro="China’s reported exports to each partner vs the partner’s "
               "reported imports from China — the discrepancy, and how much of "
               "it exceeds the CIF/FOB accounting baseline (a transshipment "
               "signal).",
@@ -1042,7 +1042,7 @@ def _structural_section(cur, anchor: date | None) -> Section:
     surfacing the value / codes that sit in no editorial group. Each division
     is a *summary* node (Section.metrics): its value share, how much is covered
     by editorial groups, code count, and the groups within it. No per-code
-    findings (those don't exist for the tail); this is the spine made visible.
+    findings (those don’t exist for the tail); this is the spine made visible.
 
     Value is the rolling 12-month EU-27 import total to `anchor`, summed from
     the canonical Eurostat CN8 detail (`eurostat_raw_rows`) with the *same*
@@ -1155,11 +1155,11 @@ _METHOD_GUIDES: list[dict] = [
         "title": "The three comparison scopes",
         "body": (
             "Each category is shown three ways. **EU-27** is Eurostat data with "
-            "UK rows excluded at all times (so it's comparable across the whole "
+            "UK rows excluded at all times (so it’s comparable across the whole "
             "period, including pre-Brexit years). **UK** is HMRC data, converted "
-            "to EUR at the period's reference rate. **EU-27 + UK** adds the two "
+            "to EUR at the period’s reference rate. **EU-27 + UK** adds the two "
             "together — a useful combined view, but it sums two different "
-            "statistical agencies' figures, so it is not a like-for-like number "
+            "statistical agencies’ figures, so it is not a like-for-like number "
             "from a single source.\n"
             "\n"
             "**\"China\" always includes Hong Kong and Macao** (CN+HK+MO): "
@@ -1172,9 +1172,9 @@ _METHOD_GUIDES: list[dict] = [
         "title": "Predictability badges (🟢 🟡 🔴)",
         "body": (
             "Some HS-group findings carry a badge scoring how *stable* the "
-            "group's year-on-year signal has been. Each (scope, flow) view is "
+            "group’s year-on-year signal has been. Each (scope, flow) view is "
             "compared with its reading six months earlier and counts as "
-            "**persistent** if the direction didn't flip and the rate moved by "
+            "**persistent** if the direction didn’t flip and the rate moved by "
             "less than 5 percentage points:\n"
             "\n"
             "- 🟢 **Reliable** — at least 67% of views persistent; the move has "
@@ -1205,17 +1205,17 @@ _METHOD_GUIDES: list[dict] = [
 _SOURCE_NOTES = {
     "eurostat": "Eurostat Comext — EU-27 extra-EU imports/exports with China "
                 "(CN+HK+MO), CN8 8-digit, monthly. Imports valued CIF.",
-    "gacc": "China General Administration of Customs — China's own reported "
+    "gacc": "China General Administration of Customs — China’s own reported "
             "trade, preliminary monthly releases (CNY and USD), exports FOB.",
     "hmrc": "HMRC Overseas Trade Statistics — UK trade with China, converted "
-            "to EUR at the period's reference rate.",
+            "to EUR at the period’s reference rate.",
 }
 
 
 def _reference_section(cur) -> Section:
     """The endmatter — methodology orientation, the caveats that apply, and the
     sources. The defensibility scaffolding ported from the old Findings doc
-    (reader's guide + methodology footer + sources appendix), minus the LLM
+    (reader’s guide + methodology footer + sources appendix), minus the LLM
     narrative which stays deferred."""
     cur.execute("SELECT code, summary, detail FROM caveats ORDER BY code")
     caveats = [{"code": c, "summary": s, "detail": d}
@@ -1256,7 +1256,7 @@ def _finding_family(subkind: str) -> str:
 
 def _sources_section(cur, diff=None) -> Section:
     """The Sources & coverage tab: the data sources, how much of each we hold
-    (period coverage), the per-type count of what's new this cycle, and a
+    (period coverage), the per-type count of what’s new this cycle, and a
     readable manifest of what the pack contains. The Trade Map (structural)
     renders in the same tab — together they answer 'what the briefing rests on
     and how completely it covers the ground' (principle 7, given its own home)."""
@@ -1347,8 +1347,8 @@ def _sources_section(cur, diff=None) -> Section:
 
 def _bal_yoy(cur, prior):
     """YoY change of a *balance* (a signed net), returned as (pct, low_base).
-    A ratio on a net is unstable two ways the portal's normal low-base guard
-    doesn't cover: a near-zero prior makes it explode, and a sign flip
+    A ratio on a net is unstable two ways the portal’s normal low-base guard
+    doesn’t cover: a near-zero prior makes it explode, and a sign flip
     (surplus→deficit) makes the % meaningless. In both cases we suppress the %
     and let the renderer quote the € swing instead — same philosophy as the
     low-base flag on the flow rows."""
@@ -1366,11 +1366,11 @@ def _bal_yoy(cur, prior):
 
 
 def _partner_balance(flows: dict) -> dict:
-    """China's net balance with a partner (exports − imports; positive = China
-    surplus, i.e. the partner's deficit), on the same rolling-12-month and YTD
+    """China’s net balance with a partner (exports − imports; positive = China
+    surplus, i.e. the partner’s deficit), on the same rolling-12-month and YTD
     windows as the per-flow rows — so the balance never drifts onto a different
-    clock from the lines it's derived from. Empty dict when either flow is
-    missing (can't net one side)."""
+    clock from the lines it’s derived from. Empty dict when either flow is
+    missing (can’t net one side)."""
     exp, imp = flows.get("export"), flows.get("import")
     if not exp or not imp:
         return {}
@@ -1416,13 +1416,13 @@ _PARTNER_CHART_COLORS = [
 
 def _gacc_annual_by_region(labels: list[str], flow: str) -> dict[int, float]:
     """{year: annual_eur} for one region (one logical line) and one flow,
-    from GACC's *year-to-date cumulative* observations.
+    from GACC’s *year-to-date cumulative* observations.
 
     Each GACC release carries the running total of the calendar year so far,
-    so the LATEST period within a year is that year's annual EUR — December for
+    so the LATEST period within a year is that year’s annual EUR — December for
     a complete year, the latest published month for the current (partial) one.
     `labels` is usually one GACC partner label; the US passes two (the label
-    changed in 2020) and we union them — the year ranges don't overlap, but if
+    changed in 2020) and we union them — the year ranges don’t overlap, but if
     they ever did we keep the value from the later period (a fuller cumulative).
 
     Reuses anomalies._gacc_aggregate_per_period_totals (canonical CNY releases,
@@ -1444,7 +1444,7 @@ def _gacc_annual_by_region(labels: list[str], flow: str) -> dict[int, float]:
 
 def _gacc_annual_latest_period_by_year(labels: list[str], flow: str) -> dict[int, date]:
     """{year: latest_period} companion to `_gacc_annual_by_region` — the period
-    each year's annual figure was taken at, so the caller can tell which year is
+    each year’s annual figure was taken at, so the caller can tell which year is
     partial (latest period not December)."""
     out: dict[int, date] = {}
     for label in labels:
@@ -1458,16 +1458,16 @@ def _gacc_annual_latest_period_by_year(labels: list[str], flow: str) -> dict[int
 
 
 def _gacc_partner_charts() -> list[dict]:
-    """Three multi-line annual charts — China's exports, imports and balance per
+    """Three multi-line annual charts — China’s exports, imports and balance per
     region (one line per region) — as plain JSON-serialisable dicts attached to
-    the gacc_bilateral root Section's `metrics` (so they travel in the portal
-    snapshot). Annual EUR per region per flow comes from GACC's YTD-cumulative
-    observations (latest period in each calendar year = that year's total).
+    the gacc_bilateral root Section’s `metrics` (so they travel in the portal
+    snapshot). Annual EUR per region per flow comes from GACC’s YTD-cumulative
+    observations (latest period in each calendar year = that year’s total).
 
     Balance = annual_exports − annual_imports per year (only where both exist;
     it can be negative — a deficit). `partial_last_year` flags the latest year
-    whose latest period isn't December, so the renderer can mark it as not a
-    full year (and a reader can't misread a partial year as a real drop)."""
+    whose latest period isn’t December, so the renderer can mark it as not a
+    full year (and a reader can’t misread a partial year as a real drop)."""
     # Per region: {flow: {year: eur}} plus the latest period per year (to detect
     # the partial year — same across flows in practice, but we union to be safe).
     exports: dict[str, dict[int, float]] = {}
@@ -1529,13 +1529,13 @@ def _gacc_partner_charts() -> list[dict]:
 
 
 def _gacc_bilateral_section(cur, period) -> Section:
-    """The GACC variant's deeper layer: China's own reported trade with each
+    """The GACC variant’s deeper layer: China’s own reported trade with each
     of its ~24 named partner countries (both flows), under the bloc-level
     macro lead."""
     root = Section(
         id="gacc-bilateral", title="China’s trade by country (GACC)",
         kind="gacc_bilateral",
-        intro="China's own reported exports and imports by country, "
+        intro="China’s own reported exports and imports by country, "
               "rolling 12 months — the per-country detail under the bloc lead.",
         about=_ABOUT["gacc-bilateral"],
     )
@@ -1748,7 +1748,7 @@ def build_report(
 
     `generate_takes` (opt-in) runs the LLM per-finding take on the top movers
     (eurostat/hmrc only) via the configured backend — slow and backend-
-    dependent, so it's off by default. The deterministic report is complete
+    dependent, so it’s off by default. The deterministic report is complete
     without it; a rejected or failed take just leaves a placeholder."""
     # Hard publication dependency: without the SITC/BEC lookups every group
     # collapses into "Other / unclassified". Fail loud rather than silently

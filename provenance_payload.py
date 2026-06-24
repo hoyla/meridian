@@ -8,12 +8,12 @@ portal snapshot (`report.json`) so the STATIC portal can show a per-finding
 provenance drawer with NO database access:
 
   - the **source-URL trail** — the primary "where did this come from", a link
-    per release the finding's observations came from;
+    per release the finding’s observations came from;
   - the headline **arithmetic** — how the figure was computed;
   - the plain-English **caveats**;
   - a collapsed **replay-SQL** "for the record".
 
-The source trail is GENERIC — any finding's `observation_ids` resolve to their
+The source trail is GENERIC — any finding’s `observation_ids` resolve to their
 release source URLs — so the KPIs (`trade_balance`, `china_all_goods_share`) are
 covered even though they have no per-subkind markdown renderer in
 `provenance.py`. The arithmetic is best-effort per gated subkind family with a
@@ -55,7 +55,7 @@ def _pct(p: Any) -> str:
 def _obs_sources(cur, observation_ids: list[int]) -> list[dict]:
     """Source-URL trail for observation-based findings (trade_balance,
     china_all_goods_share, GACC bilateral …): one entry per distinct release the
-    finding's observations came from. Generic across eurostat / gacc / hmrc."""
+    finding’s observations came from. Generic across eurostat / gacc / hmrc."""
     if not observation_ids:
         return []
     cur.execute(
@@ -96,7 +96,7 @@ def _window_source_kinds(subkind: str) -> list[str]:
 def _window_sources(cur, subkind: str, detail: dict) -> list[dict]:
     """Source-URL trail for findings that read the raw rows directly and so carry
     no observation_ids (e.g. hs_group_yoy): the source releases for each month in
-    the finding's *current* 12-month window — the figure being quoted."""
+    the finding’s *current* 12-month window — the figure being quoted."""
     w = (detail or {}).get("windows") or {}
     start, end = w.get("current_start"), w.get("current_end")
     if not (start and end):
@@ -125,7 +125,7 @@ def _window_sources(cur, subkind: str, detail: dict) -> list[dict]:
 
 def _arithmetic(subkind: str, detail: dict | None) -> list[str]:
     """Best-effort headline-arithmetic lines for the gated subkind families.
-    Returns [] when the shape isn't recognised — the drawer then shows just the
+    Returns [] when the shape isn’t recognised — the drawer then shows just the
     source trail + caveats, which is still the core 'where did this come from'."""
     d = detail or {}
     if subkind.startswith("trade_balance"):
@@ -138,7 +138,7 @@ def _arithmetic(subkind: str, detail: dict | None) -> list[str]:
                        f"{'deficit' if (defi or 0) >= 0 else 'surplus'} {_eur(abs(defi or 0))} "
                        f"(rolling 12 months).")
         if per_day is not None:
-            out.append(f"Over the window's days ≈ {_eur(abs(per_day))}/day.")
+            out.append(f"Over the window’s days ≈ {_eur(abs(per_day))}/day.")
         if roll.get("yoy_pct") is not None:
             out.append(f"Year on year: {_pct(roll['yoy_pct'])} vs the prior 12 months.")
         return out
