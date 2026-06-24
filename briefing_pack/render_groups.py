@@ -136,6 +136,17 @@ def _is_draft(group: dict) -> bool:
     return (group.get("created_by") or "").startswith("draft:")
 
 
+def _is_hidden(group: dict) -> bool:
+    return (group.get("created_by") or "").startswith("hidden:")
+
+
+def _is_held(group: dict) -> bool:
+    """Held back from the published rankings — `hidden:` (valid but staged) or
+    `draft:` (methodology not yet validated). Both are flagged so a reader
+    doesn't quote a figure that isn't in the live rankings as if it were."""
+    return _is_draft(group) or _is_hidden(group)
+
+
 def _section_for_group(
     group: dict, all_groups: list[dict], finding: dict | None,
     disp: dict[str, str] | None = None,
@@ -147,10 +158,13 @@ def _section_for_group(
     patterns = group["hs_patterns"] or []
     created_by = group.get("created_by") or "(unknown)"
     created_at = group.get("created_at")
-    draft = _is_draft(group)
-
     out: list[str] = []
-    suffix = " *(draft — methodology not yet validated)*" if draft else ""
+    if _is_draft(group):
+        suffix = " *(draft — methodology not yet validated)*"
+    elif _is_hidden(group):
+        suffix = " *(held back — not yet in the published rankings)*"
+    else:
+        suffix = ""
     out.append(f"### {name_disp}{suffix}")
     out.append("")
     if desc:
@@ -232,7 +246,8 @@ def _section_for_group(
         out.append("**Related groups** (overlapping HS chapter+heading):")
         out.append("")
         for s in siblings:
-            label = f" *(draft)*" if _is_draft(s) else ""
+            label = (" *(draft)*" if _is_draft(s)
+                     else " *(hidden)*" if _is_hidden(s) else "")
             s_disp = disp.get(s["name"], s["name"])  # link text + anchor
             out.append(f"- [{s_disp}](#{_slug(s_disp)}){label}")
         out.append("")
@@ -248,8 +263,8 @@ def render_groups(
     Pulls every row from `hs_groups`, fetches the latest active
     `hs_group_yoy*` finding per group, and renders one section per
     group — alphabetised, with a quick index at the top and a separate
-    section at the bottom for draft groups (so journalists don't quote
-    a draft figure thinking it's been validated)."""
+    section at the bottom for held-back groups (hidden:/draft:, so
+    journalists don't quote a figure that isn't in the live rankings)."""
 
     lines: list[str] = []
     lines.append("# HS group reference")
@@ -296,8 +311,11 @@ def render_groups(
             if f is not None:
                 latest_by_group[g["id"]] = dict(f)
 
-    active = [g for g in groups if not _is_draft(g)]
-    drafts = [g for g in groups if _is_draft(g)]
+    active = [g for g in groups if not _is_held(g)]
+    held = [g for g in groups if _is_held(g)]
+
+    def _held_tag(g: dict) -> str:
+        return " *(draft)*" if _is_draft(g) else " *(hidden)*"
 
     # ---- Quick index ----------------------------------------------------
     lines.append("## Quick index")
@@ -309,16 +327,16 @@ def render_groups(
             gd = disp.get(g["name"], g["name"])
             lines.append(f"- [{gd}](#{_slug(gd)})")
         lines.append("")
-    if drafts:
+    if held:
         lines.append(
-            "**Draft groups** (methodology not yet validated — figures "
-            "are surfaced in the brief but should not be quoted without "
-            "a verification pass):"
+            "**Held back** (analysed but kept out of the live rankings — "
+            "`hidden:` staged for promotion, `draft:` not yet validated; "
+            "figures appear in the brief for transparency):"
         )
         lines.append("")
-        for g in drafts:
+        for g in held:
             gd = disp.get(g["name"], g["name"])
-            lines.append(f"- [{gd}](#{_slug(gd)})")
+            lines.append(f"- [{gd}](#{_slug(gd)}){_held_tag(g)}")
         lines.append("")
 
     # ---- Active groups ---------------------------------------------------
@@ -330,20 +348,21 @@ def render_groups(
                 _section_for_group(g, groups, latest_by_group.get(g["id"]), disp)
             )
 
-    # ---- Draft groups ----------------------------------------------------
-    if drafts:
-        lines.append("## Draft groups")
+    # ---- Held-back groups ------------------------------------------------
+    if held:
+        lines.append("## Held back (not in the published rankings)")
         lines.append("")
         lines.append(
-            "These groups are seeded but their HS code selection has "
-            "not yet been editorially validated against a real story. "
-            "Figures appear in `02_Findings.md` for transparency but "
-            "should not be quoted without verification. Each will "
-            "either be promoted (the `draft:` prefix on `created_by` "
-            "removed) or dropped once a journalist tests it in anger."
+            "These groups are analysed and their figures appear in "
+            "`02_Findings.md` for transparency, but they are kept out of the "
+            "live rankings (the Standout-movers list and the Biggest-mover "
+            "KPI). `hidden:` groups are valid but deliberately staged; "
+            "`draft:` groups have not yet been editorially validated. Promote "
+            "a group by removing the `hidden:`/`draft:` prefix from "
+            "`created_by`; it enters the rankings on the next snapshot."
         )
         lines.append("")
-        for g in drafts:
+        for g in held:
             lines.append(
                 _section_for_group(g, groups, latest_by_group.get(g["id"]), disp)
             )
