@@ -607,7 +607,82 @@ def _about_site_html() -> str:
     )
 
 
-def _indicator_card(ind: Indicator) -> str:
+def _prov_body(payload: dict | None) -> str:
+    """The inner HTML of a provenance drawer (iteration 3) — source-URL trail
+    first (the primary 'where did this come from'), then the arithmetic, the
+    caveats, and a collapsed replay-SQL 'for the record'. Returns '' when there
+    is nothing to show (the caller then renders a plain, non-expandable cite)."""
+    if not payload:
+        return ""
+    parts: list[str] = []
+    srcs = [s for s in (payload.get("sources") or []) if s.get("url")]
+    if srcs:
+        items = "".join(
+            f'<li><a href="{html.escape(s["url"])}" target="_blank" rel="noopener">'
+            f'{html.escape(s.get("label") or s["url"])}</a>'
+            f'<span class="prov-meta">{html.escape(s.get("source", ""))}'
+            + (f' · {html.escape(s["coverage"])}' if s.get("coverage") else "")
+            + "</span></li>"
+            for s in srcs)
+        parts.append('<div class="prov-grp"><div class="prov-h">Sources — every '
+                     'release this figure draws on</div>'
+                     f'<ul class="prov-src">{items}</ul></div>')
+        # A human-friendly companion to the raw bulk-file sources of truth:
+        # Eurostat's own narrative China–EU trade overview. (Eurostat exposes no
+        # constructible deep-link to a filtered Data Browser view — checked in
+        # the browser 2026-06-24 — so this is the readable context link, not a
+        # pre-filtered slice.) Shown when the figure draws on Eurostat.
+        if any(s.get("source") == "Eurostat" for s in srcs):
+            parts.append(
+                '<div class="prov-grp prov-context"><a href="'
+                "https://ec.europa.eu/eurostat/statistics-explained/index.php?"
+                'title=China-EU_-_international_trade_in_goods_statistics" '
+                'target="_blank" rel="noopener">Eurostat’s own EU–China trade '
+                "overview (charts &amp; commentary) →</a></div>")
+    arith = payload.get("arithmetic") or []
+    if arith:
+        lines = "".join(f"<li>{html.escape(a)}</li>" for a in arith)
+        parts.append('<div class="prov-grp"><div class="prov-h">How it’s '
+                     f'computed</div><ul class="prov-arith">{lines}</ul></div>')
+    cavs = payload.get("caveats") or []
+    if cavs:
+        lines = "".join(
+            f'<li><code>{html.escape(c["code"])}</code>'
+            + (f' — {html.escape(c["gloss"])}' if c.get("gloss") else "")
+            + "</li>" for c in cavs)
+        parts.append('<div class="prov-grp"><div class="prov-h">Caveats</div>'
+                     f'<ul class="prov-cav">{lines}</ul></div>')
+    sql = payload.get("replay_sql")
+    if sql:
+        parts.append('<details class="prov-sql"><summary>Replay SQL (for the '
+                     f'record)</summary><pre>{html.escape(sql)}</pre></details>')
+    return "".join(parts)
+
+
+def _prov_details(payload: dict | None, summary_inner: str,
+                  *, summary_class: str) -> str:
+    """A no-JS `<details>` provenance drawer: the citation line is the clickable
+    summary; the panel expands inline beneath it. Returns '' when there's no
+    payload to show, so callers fall back to a plain citation line."""
+    body = _prov_body(payload)
+    if not body:
+        return ""
+    # A small disclosure triangle right after the finding/N token (the whole
+    # summary line is the click target, so no words needed); it rotates on open.
+    tri = '<span class="prov-tri" aria-hidden="true">▸</span>'
+    marker = "</span>"
+    if marker in summary_inner:  # inject just after the first token span
+        i = summary_inner.index(marker) + len(marker)
+        summary = summary_inner[:i] + tri + summary_inner[i:]
+    else:
+        summary = summary_inner + tri
+    return (
+        f'<details class="prov"><summary class="{summary_class}">{summary}'
+        f'</summary><div class="prov-body">{body}</div></details>'
+    )
+
+
+def _indicator_card(ind: Indicator, payloads: dict | None = None) -> str:
     delta = ""
     if ind.delta:
         col = _DOWN if ind.delta.get("direction") in ("wider", "down") else _UP
@@ -624,7 +699,13 @@ def _indicator_card(ind: Indicator) -> str:
         parts.append(html.escape(src))
     if ind.provenance.as_of:
         parts.append(f"as of {html.escape(_fmt_month(ind.provenance.as_of))}")
-    prov = f'<div class="kpi-prov">{" · ".join(parts)}</div>'
+    prov_inner = " · ".join(parts)
+    # If this indicator's finding carries a provenance payload, the citation line
+    # becomes a no-JS drawer (source trail + workings); otherwise a plain line.
+    fid = ind.provenance.finding_ids[0] if ind.provenance.finding_ids else None
+    drawer = _prov_details((payloads or {}).get(str(fid)) if fid is not None else None,
+                           prov_inner, summary_class="kpi-prov")
+    prov = drawer or f'<div class="kpi-prov">{prov_inner}</div>'
 
     if ind.chart == "donut":
         share = ind.value if 0 <= ind.value <= 1 else 0.0
@@ -714,7 +795,7 @@ def _general_take_html(slot) -> str:
     )
 
 
-def _headline(h: Headline) -> str:
+def _headline(h: Headline, payloads: dict | None = None) -> str:
     out = [f'<h2 class="lead">{html.escape(h.lead_title)}</h2>']
     if h.items:
         out.append('<p class="kicker">The most quotable shifts this cycle — '
@@ -732,8 +813,15 @@ def _headline(h: Headline) -> str:
                 chips = '<div class="mover-chips">' + "".join(
                     f'<button class="chip mover-chip" data-q="{html.escape(t.lower())}">'
                     f'{html.escape(t)}</button>' for t in themes) + "</div>"
+            # Provenance drawer for the mover (iteration 3): the finding/N in the
+            # prose is a visual cite; this is the click-to-verify panel beneath.
+            fid = item.provenance.finding_ids[0] if item.provenance.finding_ids else None
+            prov = _prov_details(
+                (payloads or {}).get(str(fid)) if fid is not None else None,
+                f'<span class="token">finding/{fid}</span>' if fid is not None else "source",
+                summary_class="mover-prov")
             out.append(f'<li>{_inline_md(item.prose)} {dd}{chips}'
-                       f'{_take_block_html(item.take)}</li>')
+                       f'{_take_block_html(item.take)}{prov}</li>')
         out.append("</ol>")
         if h.variant == "eurostat":
             out.append('<p class="note">The smaller and shakier moves are in '
@@ -1658,6 +1746,28 @@ section{padding:18px 28px}
 .delta{font-size:13px;font-weight:700;margin-top:2px}
 .kpi-spark{margin-top:10px}.spark{width:100%;height:36px;display:block}
 .kpi-prov{margin-top:8px;font-size:12px;color:var(--muted)}
+/* Provenance drawer (iteration 3) — a no-JS <details>: the citation line is the
+   clickable summary, the panel expands inline beneath. */
+details.prov{margin-top:8px}
+details.prov>summary{cursor:pointer;list-style:none}
+details.prov>summary::-webkit-details-marker{display:none}
+details.prov>summary.mover-prov{font-size:12px;color:var(--muted);margin-top:6px}
+/* A small, muted disclosure triangle after the finding token — the whole line is
+   clickable, so it's just an affordance, not a call to action. Rotates down when
+   open; nudges toward the link colour on hover so it stays discoverable. */
+.prov-tri{display:inline-block;margin-left:5px;color:var(--muted);font-size:10px;transition:transform .12s}
+details.prov>summary:hover .prov-tri{color:var(--link)}
+details.prov[open]>summary .prov-tri{transform:rotate(90deg)}
+.prov-body{margin-top:8px;padding:10px 12px;background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--news);font-size:12.5px;line-height:1.45}
+.prov-grp{margin-bottom:8px}.prov-grp:last-child{margin-bottom:0}
+.prov-h{font-weight:700;color:var(--ink);font-size:11px;text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px}
+.prov-body ul{margin:0;padding-left:16px}
+.prov-src li{margin:2px 0}.prov-src .prov-meta{color:var(--muted);margin-left:6px;font-size:11px}
+.prov-arith li,.prov-cav li{margin:2px 0;color:var(--ink)}
+.prov-cav code{background:#f3f3f3;padding:0 3px;border-radius:3px}
+.prov-context{border-top:1px dotted var(--line);padding-top:7px;font-size:12px}.prov-context a{color:var(--link)}
+details.prov-sql{margin-top:6px}details.prov-sql>summary{cursor:pointer;color:var(--muted);font-size:11px}
+details.prov-sql pre{overflow-x:auto;background:#f6f6f6;padding:8px;font-size:11px;border:1px solid var(--line);margin:6px 0 0}
 h2.lead{font-family:var(--font-headline);font-size:26px;line-height:1.15;color:var(--ink);margin:4px 0 6px;font-weight:700}
 .kicker{color:var(--muted);font-size:14px;margin:0 0 12px}
 .source{color:var(--muted);font-size:12px;margin:0 0 12px;font-style:italic}
@@ -2123,12 +2233,13 @@ def render_html(report: Report) -> str:
     subnav: list[tuple[str, str]] = []   # (anchor id, short label) for the sub-nav
     if report.key_indicators:
         brief.append('<section class="kpis">'
-                     + "".join(_indicator_card(i) for i in report.key_indicators)
+                     + "".join(_indicator_card(i, report.provenance_payloads)
+                               for i in report.key_indicators)
                      + "</section>")
     # Page-level "About this site" box, just above the Standout-moves lead.
     brief.append("<section>" + _about_site_html() + "</section>")
     if report.headline:
-        brief.append("<section>" + _headline(report.headline) + "</section>")
+        brief.append("<section>" + _headline(report.headline, report.provenance_payloads) + "</section>")
         for slot in report.headline.llm_slots:
             if slot.slot_type == "general":
                 block = _general_take_html(slot)

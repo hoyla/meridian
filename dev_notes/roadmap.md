@@ -338,24 +338,56 @@ everything 🟢) are the calibration data for everything below.
 
 Then, in order:
 
-### Iteration 3 — self-verifying bundle
+### Iteration 3 — self-verifying portal (MVP DONE 2026-06-24)
 
-Make the bundle carry its own audit trail so a journalist never needs
-DB access to verify a cited number:
+Rescoped from "self-verifying *bundle*" to "self-verifying *portal*" (the live
+surface; the Drive-appendix half is dropped) and the **MVP shipped** — see
+history.md. A `finding/N` token on the portal was a dead end for a journalist
+without DB access; now the Quotability-gated numbers (KPI standing levels +
+headline movers) carry a no-JS `<details>` drawer baked into the snapshot:
+source-URL trail (links to every release), arithmetic, caveats, collapsed
+replay-SQL. `provenance_payload.py` + `report_model.provenance_payloads`.
 
-- Detailed provenance renderers for the remaining subkind families
-  (`mirror_gap*`, `partner_share*`, `gacc_aggregate_yoy*`) — the
-  § "Provenance renderers for remaining subkinds" item below, which
-  this iteration absorbs and de-defers.
-- Bundle provenance for everything the brief cites (full entries for
-  front page + Tier 1 findings, compact entries for the Tier 2 long
-  tail), not just the opt-in fresh subset; render `finding/N` tokens
-  as working links into it.
-- Drive form: likely a single "06_Provenance" appendix Doc with one
-  heading per finding, so tokens can link to `#heading=` anchors via
-  the existing heading-anchor minting machinery in
-  `briefing_pack/drive_export.py` — the cross-document link problem
-  noted under the Drive-upload arc is already half-solved there.
+Remaining (follow-ups, not blocking):
+
+- **Extend the gated set** to the long tail — sector-detail rows, mirror-gap,
+  partner-share, GACC bilateral — once the MVP's been used. Each is just another
+  finding id added to the gated collection in `report_builder`; the generic
+  source trail already covers them (mirror_gap/partner_share are observation- or
+  window-based). Watch snapshot size as the set grows.
+- **Richer per-subkind arithmetic.** The drawer arithmetic is best-effort per
+  family (trade_balance / china_share / hs_group_yoy) with a graceful fallback
+  to "sources + caveats only". `mirror_gap*`, `partner_share*`,
+  `gacc_aggregate_yoy*` would benefit from their own arithmetic lines (absorbs
+  the old § "Provenance renderers for remaining subkinds" item — but as
+  structured payload, not markdown renderers).
+- **Markdown bundle** still carries the on-demand `provenance/finding-N.md` docs
+  (provenance.py) as the LLM-ingestion corpus; unchanged by this.
+- **Eurostat human-friendly companion link — narrative shipped; interactive
+  parked.** The drawer's source links point at the raw COMEXT `.7z` bulk files
+  (the true source, but not human-friendly). Shipped a per-drawer **narrative**
+  link to Eurostat's "EU–China trade in goods" Statistics Explained page
+  (auto-current, zero-maintenance). Revisit adding an **interactive** Data
+  Browser link. Findings from a live browser+API investigation (2026-06-24):
+  - There is **no constructible deep-link** to a filtered Data Browser view —
+    selections are client-side; the address bar stays dataset-level, and
+    "Share/bookmark" only copies the dataset URL.
+  - The reusable `…/view/ds-059331__custom_NNNNNN/…` URLs are **saved server-side
+    objects** (resolved via `api/custom-extraction/.../custom_NNNN`, which
+    returns the full selection as JSON: reporter/partner/product/flow/time). They
+    are reusable but **not constructible from values**; created via the
+    interactive "Customise + save" flow (login / "My datasets"); and they **pin
+    the time selection** (drift stale). Mass-creating one per finding via the
+    internal API would be fragile + abusive.
+  - Partner `CN`/`HK` **are** valid in `ds-059331` (the dataset is NOT
+    aggregate-partner-only — an earlier wrong read; the search box just wasn't
+    matching). The product axis there is SITC; the all-goods row is
+    `product=TOTAL`.
+  - **Realistic option:** ONE (or a few) hand-curated fixed custom-view links
+    (e.g. EU↔China all-goods, both flows, monthly — basically the shape of
+    `__custom_21936152`) as an editorial "browse interactively" link, accepting
+    the time-staleness. Not per-finding. The JSON API can deep-link the exact
+    slice but returns JSON-stat — no better than the `.7z` for a human.
 
 ### Iteration 4 — low-base threshold calibration
 

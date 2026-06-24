@@ -1823,6 +1823,16 @@ def build_report(
                             _reference_section(cur),
                             _glossary_section()]
 
+        # Iteration 3 — bake provenance drawers for the Quotability-gated set:
+        # the KPI standing levels + the headline movers, i.e. the numbers a
+        # reporter actually quotes. Built here (with DB access) and carried in
+        # the snapshot so the static portal can show "where this came from" with
+        # no database. Source-trail-first; best-effort per finding.
+        import provenance_payload
+        _gated = {f for ind in indicators for f in ind.provenance.finding_ids}
+        _gated |= {f for it in items for f in it.provenance.finding_ids}
+        prov_payloads = provenance_payload.build_payloads_for(cur, _gated)
+
     month = _fmt_month(data_period)
     # Per-finding takes live on each HeadlineItem (the 'specific' interpretation);
     # only the across-release 'general' slot sits at the headline level.
@@ -1852,6 +1862,7 @@ def build_report(
         headline=headline,
         what_changed=_what_changed(diff, disp),
         sections=sections,  # the navigable content tree (Eurostat variant)
+        provenance_payloads=prov_payloads,
     )
     # Across-release 'general' take — "One other thing worth a look". It selects
     # from a shortlist of NON-headline findings, so it needs the finished report

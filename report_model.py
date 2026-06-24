@@ -218,6 +218,12 @@ class Report:
     headline: Optional[Headline] = None
     what_changed: Optional[WhatChanged] = None
     sections: list[Section] = field(default_factory=list)
+    # Per-finding provenance drawers (iteration 3 — the self-verifying portal),
+    # keyed by str(finding_id). Baked in at build time for the Quotability-gated
+    # set (KPIs + headline movers) so the static portal can show "where this
+    # number came from" — source-URL trail, arithmetic, caveats, replay-SQL —
+    # with no database access. See provenance_payload.build_payloads_for.
+    provenance_payloads: dict[str, dict] = field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------

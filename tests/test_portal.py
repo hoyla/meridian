@@ -221,7 +221,24 @@ def _sample_report() -> rm.Report:
                      key_indicators=[deficit_ind, level_ind, donut_ind],
                      headline=headline, what_changed=what_changed,
                      sections=[state, mirror, sector, structural, gacc_bi,
-                               sources, data, reference, glossary])
+                               sources, data, reference, glossary],
+                     provenance_payloads={
+                         # KPI finding (the deficit indicator cites finding 1).
+                         "1": {"finding_id": 1, "title": "EU-27 deficit",
+                               "sources": [{"period": "2026-04-01", "source": "Eurostat",
+                                            "url": "https://example/eu-2026-04.7z",
+                                            "label": "Eurostat April 2026", "coverage": None}],
+                               "arithmetic": ["Imports €561.4bn − exports €221.4bn = deficit €340.0bn."],
+                               "caveats": [{"code": "cif_fob", "gloss": "Eurostat values imports CIF."}],
+                               "replay_sql": "SELECT o.id FROM observations o WHERE o.id IN (1,2);"},
+                         # Headline mover (the Cars item cites finding 2).
+                         "2": {"finding_id": 2, "title": "EU-27 exports of Cars",
+                               "sources": [{"period": "2026-04-01", "source": "Eurostat",
+                                            "url": "https://example/eu.7z",
+                                            "label": "Eurostat April 2026", "coverage": None}],
+                               "arithmetic": ["12 months €7.5bn vs €12.5bn the prior 12 months = -40.0% by value."],
+                               "caveats": [], "replay_sql": None},
+                     })
 
 
 # ---- model serialisation ----
@@ -356,6 +373,41 @@ def test_kpi_sparkline_cards_span_two_columns():
     assert 'class="kpi kpi-wide"' in h          # the sparkline deficit card is wide
     # The donut card is narrow (1 column) — never carries kpi-wide.
     assert "kpi-donut kpi-wide" not in h
+
+
+def test_provenance_drawer_renders_for_gated_findings():
+    """Iteration 3 — the self-verifying portal. A finding with a baked provenance
+    payload turns its citation into a no-JS <details> drawer: source-URL trail
+    first (clickable links), then the arithmetic, caveats, and a collapsed
+    replay-SQL. Covers both a KPI (finding 1) and a headline mover (finding 2)."""
+    h = render_html(_sample_report())
+    assert 'details class="prov"' in h                       # the drawer exists
+    assert 'class="prov-tri"' in h                            # the disclosure triangle cue
+    # Source-URL trail leads, as a real clickable link.
+    assert 'href="https://example/eu-2026-04.7z"' in h
+    assert "every release this figure draws on" in h.lower()
+    # Arithmetic + caveat gloss render; the SQL is present but in a nested,
+    # collapsed "for the record" details.
+    assert "deficit €340.0bn" in h
+    assert "Eurostat values imports CIF" in h
+    assert "Replay SQL" in h
+    # The mover (finding 2) also gets a drawer with its workings.
+    assert "the prior 12 months = -40.0% by value" in h
+    # A human-friendly Eurostat context link sits alongside the raw bulk-file
+    # sources (Eurostat has no constructible filtered deep-link).
+    assert "China-EU_-_international_trade_in_goods_statistics" in h
+    assert "EU–China trade" in h
+
+
+def test_provenance_drawer_absent_without_payload():
+    """No payload → the citation stays a plain, non-expandable line (the long
+    tail of findings isn't gated), so the drawer machinery never fires."""
+    import dataclasses
+    r = _sample_report()
+    bare = dataclasses.replace(r, provenance_payloads={})
+    h = render_html(bare)
+    assert 'details class="prov"' not in h
+    assert 'class="kpi-prov"' in h          # falls back to the plain citation line
 
 
 def test_sparkline_caption_renders_as_hover_tooltip():
