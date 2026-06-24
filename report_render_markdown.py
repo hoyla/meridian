@@ -24,11 +24,19 @@ _COMPANIONS = (
 
 
 def _indicator_line(ind: Indicator) -> str:
-    bits = [f"**{ind.label}:** {ind.formatted}"]
+    title = ind.kicker or ind.label
+    bits = [f"**{title}:** {ind.formatted}"]
     if ind.delta:
         bits.append(f"({ind.delta['formatted']})")
+    # Description = the long label (when a kicker carries the title) + the
+    # China-only comparator.
+    desc = []
+    if ind.kicker and ind.label and ind.label != ind.kicker:
+        desc.append(ind.label)
     if ind.note:
-        bits.append(f"— _{ind.note}_")
+        desc.append(ind.note)
+    if desc:
+        bits.append("— _" + " · ".join(desc) + "_")
     spark = ""
     if ind.chart_data and ind.chart_data.series:
         spark = f" · sparkline: {len(ind.chart_data.series)} pts"

@@ -684,14 +684,15 @@ def _prov_details(payload: dict | None, summary_inner: str,
 
 
 def _indicator_card(ind: Indicator, payloads: dict | None = None) -> str:
-    delta = ""
-    if ind.delta:
-        col = _DOWN if ind.delta.get("direction") in ("wider", "down") else _UP
-        delta = f'<div class="delta" style="color:{col}">{html.escape(ind.delta["formatted"])}</div>'
+    """One KPI card, consolidated template (2026-06-24): a bold ALL-CAPS kicker,
+    a very-big value (the donut for the share card), a quite-big %-change when
+    there's a delta, a standard-size description + China-only line, an optional
+    sparkline, and the finding/source/month line. Only the value and %-change
+    are large — everything else is the small 'findings' size."""
     # Provenance line: finding token · source · month. The source names the
-    # origin (Eurostat / HMRC / GACC) so single-source figures are legible on
-    # the card; the as-of is the data month, not a raw ISO day (which misreads
-    # as the 1st — Lisa, 2026-06-22).
+    # origin (Eurostat / HMRC / GACC); the as-of is the data month, not a raw
+    # ISO day (which misreads as the 1st — Lisa, 2026-06-22). Becomes a no-JS
+    # drawer when the finding carries a baked provenance payload.
     parts = []
     if ind.provenance.finding_ids:
         parts.append(f'<span class="token">finding/{ind.provenance.finding_ids[0]}</span>')
@@ -701,46 +702,50 @@ def _indicator_card(ind: Indicator, payloads: dict | None = None) -> str:
     if ind.provenance.as_of:
         parts.append(f"as of {html.escape(_fmt_month(ind.provenance.as_of))}")
     prov_inner = " · ".join(parts)
-    # If this indicator's finding carries a provenance payload, the citation line
-    # becomes a no-JS drawer (source trail + workings); otherwise a plain line.
     fid = ind.provenance.finding_ids[0] if ind.provenance.finding_ids else None
     drawer = _prov_details((payloads or {}).get(str(fid)) if fid is not None else None,
                            prov_inner, summary_class="kpi-prov")
     prov = drawer or f'<div class="kpi-prov">{prov_inner}</div>'
 
-    if ind.chart == "donut":
-        share = ind.value if 0 <= ind.value <= 1 else 0.0
-        if (not share) and ind.chart_data:
-            share = ind.chart_data.extra.get("share", 0.0)
-        dnote = (f'<div class="kpi-note">{html.escape(ind.note)}</div>'
-                 if ind.note else "")
-        return (
-            '<div class="kpi kpi-donut">'
-            f'<div class="kpi-label">{html.escape(ind.label)}</div>'
-            '<div class="kpi-donut-wrap">'
-            f'{_donut_svg(share, label=ind.label, pct_label=ind.formatted)}</div>'
-            f"{dnote}{delta}{prov}"
-            "</div>"
-        )
+    # Kicker (bold caps) + an optional 'how it's calculated' rollover (ⓘ).
+    info = (f' <span class="kpi-info" title="{html.escape(ind.tooltip)}">ⓘ</span>'
+            if ind.tooltip else "")
+    kicker = f'<div class="kpi-kicker">{html.escape(ind.kicker or ind.label)}{info}</div>'
 
-    # bignumber (a level, no series) shows no sparkline; sparkline indicators do.
+    # Value block — the donut is its own visual (carrying its % centre); every
+    # other card shows a big number, coloured by sign when it's a signed change.
+    if ind.chart == "donut":
+        share = ind.value if 0 <= ind.value <= 1 else (
+            (ind.chart_data.extra.get("share", 0.0) if ind.chart_data else 0.0))
+        value = ('<div class="kpi-donut-wrap">'
+                 f'{_donut_svg(share, label=ind.kicker or ind.label, pct_label=ind.formatted)}'
+                 '</div>')
+        donut_cls = " kpi-donut"
+    else:
+        style = (f' style="color:{_UP if ind.value >= 0 else _DOWN}"'
+                 if ind.unit == "yoy_pct" else "")
+        value = f'<div class="kpi-value"{style}>{html.escape(ind.formatted)}</div>'
+        donut_cls = ""
+
+    # % change (quite big), coloured — only when a delta is carried.
+    pct = ""
+    if ind.delta:
+        col = _DOWN if ind.delta.get("direction") in ("wider", "down") else _UP
+        pct = f'<div class="kpi-pct" style="color:{col}">{html.escape(ind.delta["formatted"])}</div>'
+
+    # Description + China-only comparator (standard 'findings' size).
+    desc_text = ind.label + (f" · {ind.note}" if ind.note else "")
+    desc = f'<div class="kpi-desc">{html.escape(desc_text)}</div>' if desc_text else ""
+
+    # Sparkline if a series is present (these cards span 2 of the 3 columns).
     spark = ""
     if ind.chart_data and ind.chart_data.series:
         spark = f'<div class="kpi-spark">{_sparkline_svg(ind.chart_data)}</div>'
-    note = (f'<div class="kpi-note">{html.escape(ind.note)}</div>'
-            if ind.note else "")
-    # Sparkline cards span 2 of the 3 KPI columns (they need width for the plot);
-    # the level + donut cards take 1 — so four cards land as two even rows rather
-    # than a stretched lone card.
     wide = " kpi-wide" if spark else ""
-    # Order: value, the headline figure's YoY (delta), then the China-only
-    # comparator (note, with its own YoY) — so the delta can't be read as the
-    # comparator's.
+
     return (
-        f'<div class="kpi{wide}">'
-        f'<div class="kpi-label">{html.escape(ind.label)}</div>'
-        f'<div class="kpi-value">{html.escape(ind.formatted)}</div>'
-        f"{delta}{note}{spark}{prov}"
+        f'<div class="kpi{wide}{donut_cls}">'
+        f"{kicker}{value}{pct}{desc}{spark}{prov}"
         "</div>"
     )
 
@@ -1757,12 +1762,20 @@ section{padding:18px 28px}
 .kpi{background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--news);padding:14px 16px}
 .kpi-wide{grid-column:span 2}
 @media(max-width:640px){.kpis{grid-template-columns:1fr}.kpi-wide{grid-column:auto}}
-.kpi-label{font-size:13px;color:var(--muted)}
-.kpi-note{font-size:11px;color:var(--muted);margin-top:3px}
-.kpi-value{font-family:var(--font-headline);font-size:28px;font-weight:700;line-height:1.15;margin-top:4px}
-.delta{font-size:13px;font-weight:700;margin-top:2px}
+/* Consolidated KPI card (2026-06-24): only the value and %-change are large;
+   the kicker, description and finding line all share the small 'findings' size,
+   the kicker set apart by weight + caps rather than size. */
+/* Kicker, description and the finding/source/month line all share one size,
+   14px — only the value and %-change are larger still. The finding/NNNN token
+   keeps its own 12px monospace pill (the shared citation style, left
+   untouched). */
+.kpi-kicker{font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink)}
+.kpi-value{font-family:var(--font-headline);font-size:32px;font-weight:700;line-height:1.1;margin-top:6px}
+.kpi-pct{font-size:18px;font-weight:700;line-height:1.1;margin-top:3px}
+.kpi-desc{font-size:14px;color:var(--muted);margin-top:7px;line-height:1.4}
+.kpi-info{font-size:11px;color:var(--muted);cursor:help;font-weight:400}
 .kpi-spark{margin-top:10px}.spark{width:100%;height:36px;display:block}
-.kpi-prov{margin-top:8px;font-size:12px;color:var(--muted)}
+.kpi-prov{margin-top:8px;font-size:14px;color:var(--muted)}
 /* Provenance drawer (iteration 3) — a no-JS <details>: the citation line is the
    clickable summary, the panel expands inline beneath. */
 details.prov{margin-top:8px}
