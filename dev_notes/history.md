@@ -10,6 +10,116 @@ to understand how the project got here.
 
 ---
 
+## 2026-06-23 — Source-freshness & release-timing hardening (LIVE)
+
+The 2026-06-23 HMRC↔Eurostat release-timing investigation closed the whole
+"a source goes silently late" gap. Live trigger: HMRC March 2026 had shipped
+~4 weeks late with no alert (the 19 May Eurostat-March briefing went out without
+it; it took a manual catch-up). Closes the roadmap's "Source-freshness alerting"
+section.
+
+- **HMRC-lag guard + brief disclosure (#76).** `anomalies` guards the
+  `eu_27_plus_uk` combined scope against half-sourced months (one reporter present,
+  the other not), and the brief discloses when HMRC lags the Eurostat frontier
+  instead of silently shipping an Eurostat-only figure as if combined.
+- **Overdue push alert (#77).** `notify` posts a Google Chat alert when a source
+  passes its expected release date with nothing ingested — the missing half of the
+  new-data notifier (#74), which only ever reported what *did* land. Reads the
+  `expectation` column the new-data path ignored.
+- **GACC-January carve-out (edc1361).** `release_calendar` treats January as
+  `none_expected` for GACC (China Customs publishes no standalone January —
+  Chinese New Year), so the overdue alert can't false-fire every February.
+- **Gap-scan behind the frontier (#78).** The candidate prober was forward-only
+  (`MAX+1`); `--source-status` now also flags period gaps *behind* the frontier — a
+  skipped month or a late backfill the forward probe never re-checks.
+- **Chat new-data notifier (#74).** `--notify-chat` posts to a Google Chat Space
+  when Eurostat/HMRC/GACC ingest new data (wired as routine step 8; triggers off
+  `routine_check_log`; webhook in `.env`).
+- **GACC section precedence (#79).** The parser now trusts the GACC release
+  *description* over a glitchy numeric section prefix when the two disagree.
+- **GACC release-calendar expectation (#50).** Gave GACC a release-calendar entry
+  so `classify_expectation` can mark it overdue in the first place.
+
+---
+
+## 2026-06-23 — Portal & briefing clarity + sticky LLM takes (LIVE)
+
+- **`--portal-reuse-takes` (#69).** Carry prior LLM takes onto an LLM-less rebuild
+  so cosmetic portal refreshes stop re-spending the takes budget.
+  `portal_takes_reuse.graft_prior_takes` (a pure fn) pulls the `generated` slots
+  from `gs://…/latest/report.json` (via `portal_publish.read_latest_report`) and
+  re-attaches them to the freshly-built report by matching `grounded_in` finding
+  id; wired into `periodic.write_portal_snapshot`. **Opt-in, not the default** —
+  the default redeploy still pays for fresh takes, because a stale interpretation
+  of changed content is a data-rigor risk; refusing reinterpretation must be a
+  deliberate act. Reuse is gated on an **unchanged `data_period`**; on a new cycle
+  any prior take whose finding was superseded/re-id'd simply won't match and is
+  dropped. Command matrix in `portal_service/README.md`. (The remaining fail-loud
+  follow-up stays in roadmap.md.)
+- **Clearer section names + "About this site" guide (#70).** "State of play" →
+  "Europe's deficit with China", GACC "by partner" → "by country", "last pack" →
+  "last briefing", plus an About-box section guide.
+- **"What changed" = revisions, not new findings (#68).** A More-about widget
+  explains the lines are revisions of existing findings, not fresh ones.
+- **"Next changes expected" forecast line (#67)** on the periodic-run summary.
+- **SITC/BEC classifications in-repo + glossary cross-refs (#72)**; "What's
+  changed" explanation moved into a More-about widget + standings-pointer fix.
+- **Browser back/forward (#73).** The portal restores tab + scroll position.
+- **Macao spelling standardised (#66)** across copy/docs/exports (was mixed
+  Macau/Macao).
+
+---
+
+## 2026-06-22 (later) — Q2 sector expansion, group display-names, scope-clarity, regional charts (LIVE)
+
+The evening batch after the morning data-correction work (next entry). Expands
+sector coverage now that the portal's progressive disclosure makes breadth
+navigable (global principle 1: ingest broadly), retrofits a journalist-editable
+display-name layer, finishes the CN+HK+MO scope-labelling pass, and adds the GACC
+regional time-series charts.
+
+**Coverage expansion**
+- **Q2 expansion — critical minerals + pharma APIs + engine parts/engines (#59);
+  round 2 — cosmetics + paint, plus two new themes (#62).** ~19 new HS groups
+  seeded + analysed ("Conventional hybrids" surfaced as a top mover). Titanium
+  dioxide (`320611`) is the worked multi-theme case (paint + cosmetics + pigment).
+- **EV coverage + hybrid-car mislabel fix (#52)** from Lisa's Jun-2026 sector
+  questions.
+
+**Group taxonomy / display-names (#53)**
+- Added a journalist-editable `hs_groups.display_name` column + `db.group_display_names`
+  resolver, plumbed through every reader-facing surface (portal, briefing sections,
+  sheets, glossary). `EV batteries (Li-ion)` now displays as `Lithium-ion
+  accumulators (HS 850760)`; the `name` key — and all findings/tests keyed off it —
+  is untouched, so no orphan backfill. `Wind turbine components` retired (its
+  patterns weren't wind-specific); a new `Wind power` theme gathers the
+  wind-relevant groups. Theme-layer fixes from a material-vs-application audit
+  landed alongside (cc37e83).
+
+**Scope clarity (finishes the #43–#48 pass)**
+- **CN+HK+MO scope labelling on the mirror-gap + GACC sections (#61)** — the open
+  half of the option-3 scope pass; "China" = CN+HK+MO now stated consistently.
+- **"China reports" mislabel fixed (#54)** — the Eurostat CN-only deficit
+  comparator no longer borrows GACC's "China reports" register.
+- **Coverage guard checks the full CN+HK+MO envelope (#58)**, not just CN.
+- **Docx-bundle-only terms hidden from the web Glossary (#55)** via a
+  `<!--web-hide-->` marker (Tier 1/2/3, file names, provenance files, etc.).
+
+**Portal surfaces**
+- **GACC regional annual multi-line charts (#63)** — exports / imports / balance,
+  one line per region, on the GACC trading-partners section (key under the
+  headline, narrower meta column, cleaner x-axis).
+- **"Last updated" column on the Period-covered table (#64).**
+- **"See also" link from Europe's-deficit to the GACC by-country section (#65).**
+- **`/data.xlsx` workbook built on `--portal-snapshot` (#57)** so the Tables-tab
+  download resolves on the snapshot path.
+
+**Pipeline**
+- **`docx=False` default for periodic runs (#56)** — the docx→Drive half is legacy;
+  the `.md` bundle stays (it's the LLM-ingestion corpus).
+
+---
+
 ## 2026-06-22 — Eurostat data correction + Lisa-feedback portal clarity (LIVE)
 
 Two member-state months were silently missing from `eurostat_raw_rows`
