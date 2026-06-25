@@ -256,6 +256,25 @@ def scrape_eurostat(
             hs_prefixes or "ANY",
         )
 
+        # A2 guard: the EU-27 analysers scope by EXCLUDING GB, trusting that the
+        # only non-EU-27 declarant Eurostat ever ships is GB. Alert loudly if an
+        # unknown reporter code appears, before it folds into EU-27 and inflates
+        # a published number. Alert-only — we don't drop the rows (ingest broadly,
+        # judge downstream); a human then adds a genuine new member to
+        # eurostat.EU27_PARTNER_CODES or confirms the code stays out of scope.
+        # Runs before the persist/dry-run branches so it surfaces in --dry-run too.
+        surprise = eurostat.unexpected_reporters(r["reporter"] for r in raw_rows)
+        if surprise:
+            log.error(
+                "Eurostat %s: unexpected reporter code(s) ingested: %s. The EU-27 "
+                "analysers scope by excluding GB, so an unknown declarant (an "
+                "EU/EU27_2020 aggregate row, a new member, a candidate country, or "
+                "a special territory) is silently folded into EU-27 and would "
+                "double-count or inflate it. Verify before trusting EU-27 figures "
+                "for this period.",
+                period.strftime("%Y-%m"), ", ".join(sorted(surprise)),
+            )
+
         if dry_run:
             obs = list(eurostat.aggregate_to_observations(period, [(None, r) for r in raw_rows]))
             log.info("Dry run: would aggregate to %d observations", len(obs))

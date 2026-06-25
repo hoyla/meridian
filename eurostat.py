@@ -261,6 +261,30 @@ EU27_PARTNER_CODES: frozenset[str] = frozenset({
     "SI", "ES", "SE",
 })
 
+# Reporters (declarants) we ever expect in the bulk file: the 27 EU member
+# states plus GB (the UK ships pre-2020 EU-28 rows). The whole-period ingest
+# stores every reporter code Eurostat publishes verbatim, and the EU-27
+# analysers define their scope by EXCLUDING GB (anomalies.EU27_EXCLUDE_REPORTERS)
+# rather than including the 27 — so a declarant outside this set (an EU /
+# EU27_2020 aggregate row, a newly-acceded member, a candidate country, a
+# special territory) would be silently folded into "EU-27" and double-count or
+# inflate it. unexpected_reporters() lets the ingest alert when one appears, so
+# it is caught before it reaches a published number. The full fix is an
+# inclusion list across all the EU-27 query sites (5 surfaces); this is the
+# cheap detect-and-alert until that lands. See finding A2,
+# dev_notes/2026-06-25-adversarial-correctness-review.md.
+EU27_KNOWN_REPORTERS: frozenset[str] = EU27_PARTNER_CODES | frozenset({"GB"})
+
+
+def unexpected_reporters(reporters: Iterable[str]) -> set[str]:
+    """Reporter codes outside EU27_KNOWN_REPORTERS (the 27 members + GB).
+
+    Empty/falsy codes are ignored. Returns the surprising codes (if any) so the
+    caller can alert; an empty set means the stored reporter scope is still
+    exactly the EU-27 + UK the analysers assume.
+    """
+    return {r for r in reporters if r and r not in EU27_KNOWN_REPORTERS}
+
 
 def aggregate_to_world_totals(
     archive_bytes: bytes,
