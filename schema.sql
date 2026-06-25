@@ -263,7 +263,20 @@ CREATE TABLE hs_groups (
     description     TEXT,
     hs_patterns     TEXT[]      NOT NULL,
     created_by      TEXT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- hs_patterns are journalist-editable and spliced into SQL LIKE clauses, so
+    -- a malformed entry silently produces a wrong group total. Enforce the
+    -- convention: each pattern is 2–8 digits then '%' (e.g. '85%', '850760%'),
+    -- the array is non-empty, and no element is NULL. This blocks junk like
+    -- '8%', a stray '%', or a missing '%'; it deliberately can't catch a
+    -- semantically-wrong-but-valid prefix (that's an editorial judgement). The
+    -- 000TOTAL sweep that a regex-valid '00%'/'000%' would cause is closed at
+    -- query level in anomalies._hs_pattern_or_clause. See finding A3,
+    -- dev_notes/2026-06-25-adversarial-correctness-review.md.
+    CONSTRAINT hs_groups_patterns_valid CHECK (
+        array_position(hs_patterns, NULL) IS NULL
+        AND array_to_string(hs_patterns, ',') ~ '^[0-9]{2,8}%(,[0-9]{2,8}%)*$'
+    )
 );
 
 -- =============================================================================
