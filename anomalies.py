@@ -239,7 +239,19 @@ def _hs_pattern_or_clause(patterns: list[str]) -> tuple[str, list[str]]:
     rows rather than a SQL error."""
     if not patterns:
         return ("FALSE", [])
-    fragment = "(" + " OR ".join(["product_nc LIKE %s"] * len(patterns)) + ")"
+    likes = " OR ".join(["product_nc LIKE %s"] * len(patterns))
+    # product_nc <> '000TOTAL' guard: hs_patterns are journalist-editable and
+    # matched with LIKE, so a regex-valid but over-broad pattern ('00%', '000%')
+    # would otherwise sweep the Eurostat all-goods 000TOTAL aggregate rows
+    # (~40k of them in eurostat_raw_rows) into a group total and 2x-inflate it
+    # under a clean "success". No CN8 detail code equals '000TOTAL' and HMRC
+    # ships no such row, so this is a no-op for every legitimate pattern and on
+    # the HMRC branch. Stated once here so all six hs-group callers inherit it.
+    # (The schema CHECK on hs_groups.hs_patterns blocks structurally-malformed
+    # entries, but '00%'/'000%' are regex-valid, so this query-level backstop is
+    # load-bearing, not just defence-in-depth.) See finding A3 of
+    # dev_notes/2026-06-25-adversarial-correctness-review.md.
+    fragment = f"(product_nc <> '000TOTAL' AND ({likes}))"
     return (fragment, list(patterns))
 
 
