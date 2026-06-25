@@ -668,7 +668,7 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
     if r.excess_over_cif_fob_baseline_pct is not None:
         body += (
             f"CIF/FOB baseline ({baseline_scope}) expects ~{baseline_pct*100:.1f}% "
-            f"Eurostat-higher; excess over baseline is "
+            f"Eurostat-higher; excess over the CIF/FOB freight baseline is "
             f"{r.excess_over_cif_fob_baseline_pct*100:+.1f} percentage points."
         )
     else:

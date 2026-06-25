@@ -278,7 +278,7 @@ def test_mirror_gap_negative_gap_has_null_excess(empty_op_tables, test_db_url):
     assert float(detail["gap_pct"]) < 0, "default seed should produce a negative gap"
     assert detail["excess_over_baseline_pct"] is None
     assert "does not apply" in body
-    assert "excess over baseline is" not in body
+    assert "excess over the CIF/FOB freight baseline is" not in body
 
 
 def test_mirror_gap_positive_gap_excess_is_gap_minus_baseline(
@@ -302,7 +302,7 @@ def test_mirror_gap_positive_gap_excess_is_gap_minus_baseline(
     assert gap_pct > 0, "small GACC value should produce a positive gap"
     assert excess is not None
     assert abs(float(excess) - (gap_pct - baseline)) < 1e-9
-    assert "excess over baseline is" in body
+    assert "excess over the CIF/FOB freight baseline is" in body
 
 
 def _seed_extra_eurostat_partner(conn, period: date, reporter: str,
