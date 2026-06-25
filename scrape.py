@@ -109,6 +109,31 @@ def scrape_release(
             "Parsed %d observations from section %d (%s, %s)",
             len(result.observations), meta.section_number, meta.currency, meta.period.isoformat(),
         )
+        if not result.observations:
+            # A GACC page that fetched (HTTP 200) and parsed without raising
+            # but yielded ZERO observations is not a benign "no data yet"
+            # state: GACC publishes a release only once the table exists, and
+            # section 4 is the only section we parse. An empty parse almost
+            # always means the structural row detector skipped every row
+            # because the column layout drifted — _parse_section_4_by_country
+            # keeps only <tr>s with exactly the expected cell count, so one
+            # added or removed column zeroes the whole parse. Record a FAILURE
+            # and create NO release row, matching the Eurostat/HMRC contract of
+            # never writing a release on an empty parse. A phantom release here
+            # reads as "new data" to the overdue-release alert and feeds a
+            # silently-missing month to the YoY analysers (the partial_window
+            # bias the Jan/Feb fix addressed) — all under a green "success".
+            # status='failed' (not 'no_parser'/'success') also lets the next
+            # walk retry, since gacc_release_url_already_processed skips failed.
+            msg = (
+                f"GACC parse yielded 0 observations for section {meta.section_number} "
+                f"({meta.currency}, {meta.period.isoformat()}) — likely an upstream "
+                f"column-layout change; recording failed, no release row created"
+            )
+            log.error(msg)
+            if not dry_run:
+                db.finish_run(run_id, status="failed", error_message=msg)
+            return
         if not dry_run:
             # Combined Jan+Feb cumulative releases get their own
             # release_kind so the natural-key on `releases`

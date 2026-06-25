@@ -398,6 +398,18 @@ def _select_gacc_export_rows(period: date | None) -> list[dict]:
         where = "AND r.period = %s"
         params = (period,)
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        # currency = 'CNY' pin: GACC publishes each monthly bulletin in two
+        # editions (in CNY and in USD) — discover_release_urls matches both,
+        # and the seed walk ingests both into separate `releases` rows (same
+        # section 4, different release_id and currency). Without this filter
+        # the DISTINCT ON below — whose key includes release_id — keeps BOTH
+        # the CNY and the USD row for every partner, so each mirror gap is
+        # computed twice down two FX paths under one natural key (iso2,
+        # period); which edition wins the supersede race then decides the
+        # active finding's value and its provenance obs_id. The GACC aggregate
+        # selectors already pin CNY; this export selector was the one missing
+        # it. (CNY is the canonical edition everywhere else in the system.)
+        #
         # DISTINCT ON dedup so a re-scrape that bumped version_seen on a
         # row (without changing its content, or with the bad content the
         # parser now rejects) doesn't produce two mirror-gap findings for
@@ -421,6 +433,7 @@ def _select_gacc_export_rows(period: date | None) -> list[dict]:
                   FROM observations o
                   JOIN releases r ON r.id = o.release_id
                  WHERE r.source = 'gacc'
+                   AND r.currency = 'CNY'
                    AND o.flow = 'export'
                    AND o.period_kind = 'monthly'
                    AND o.partner_country != 'Total'
