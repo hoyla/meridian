@@ -145,9 +145,14 @@ def test_unit_scale_unrecognised_returns_none_not_silent_fallback(caplog):
 
 
 def _seed_pair_for_partner(conn, period: date, gacc_label: str,
-                            eurostat_reporter: str) -> tuple[int, list[int]]:
+                            eurostat_reporter: str,
+                            gacc_value: int = 1000) -> tuple[int, list[int]]:
     """Variant of _seed_one_pair for a specific partner. Used for the
-    transshipment-hub tests in Phase 2.1."""
+    transshipment-hub tests in Phase 2.1.
+
+    Default gacc_value=1000 (×100M CNY ×0.125 FX = €12.5bn) exceeds the €11bn
+    Eurostat 000TOTAL seed → a NEGATIVE gap (Eurostat < GACC). Pass a smaller
+    value (e.g. 50 → €0.625bn) for a positive gap."""
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO releases (source, section_number, currency, period, release_kind, "
@@ -166,8 +171,8 @@ def _seed_pair_for_partner(conn, period: date, gacc_label: str,
     cur.execute(
         "INSERT INTO observations (release_id, scrape_run_id, period_kind, flow, "
         "                          partner_country, value_amount, value_currency, source_row) "
-        "VALUES (%s, %s, 'monthly', 'export', %s, 1000, 'CNY', '{}') RETURNING id",
-        (gacc_release_id, gacc_run_id, gacc_label),
+        "VALUES (%s, %s, 'monthly', 'export', %s, %s, 'CNY', '{}') RETURNING id",
+        (gacc_release_id, gacc_run_id, gacc_label, gacc_value),
     )
     gacc_obs_id = cur.fetchone()[0]
     cur.execute(
@@ -253,6 +258,51 @@ def test_mirror_gap_no_transshipment_caveat_for_non_hub(empty_op_tables, test_db
     assert detail["transshipment_hub"] is None
     assert "transshipment_hub" not in detail["caveat_codes"]
     assert "TRANSSHIPMENT-HUB CONTEXT" not in body
+
+
+def test_mirror_gap_negative_gap_has_null_excess(empty_op_tables, test_db_url):
+    """B1: for a negative gap (Eurostat < GACC) the CIF/FOB freight markup
+    doesn't apply, so excess_over_baseline_pct is None — not |gap| - baseline,
+    which the abs() previously turned into a spurious figure. The default seed
+    gives GACC €12.5bn > Eurostat €11bn (DE is the real-world negative-gap case
+    post-000TOTAL-fix)."""
+    period = date(2025, 12, 1)
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_pair_for_partner(conn, period, "Germany", "DE")
+
+    anomalies.detect_mirror_trade_gaps(period=period)
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT body, detail FROM findings WHERE subkind = 'mirror_gap'")
+        body, detail = cur.fetchone()
+
+    assert float(detail["gap_pct"]) < 0, "default seed should produce a negative gap"
+    assert detail["excess_over_baseline_pct"] is None
+    assert "does not apply" in body
+    assert "excess over baseline is" not in body
+
+
+def test_mirror_gap_positive_gap_excess_is_gap_minus_baseline(
+    empty_op_tables, test_db_url,
+):
+    """Control: a positive gap (Eurostat > GACC) still computes
+    excess = gap_pct - baseline_pct (a real number, unchanged by the B1 fix).
+    gacc_value=50 → GACC €0.625bn << Eurostat €11bn → positive gap."""
+    period = date(2025, 12, 1)
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_pair_for_partner(conn, period, "Germany", "DE", gacc_value=50)
+
+    anomalies.detect_mirror_trade_gaps(period=period)
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT body, detail FROM findings WHERE subkind = 'mirror_gap'")
+        body, detail = cur.fetchone()
+
+    gap_pct = float(detail["gap_pct"])
+    baseline = float(detail["cif_fob_baseline_pct"])
+    excess = detail["excess_over_baseline_pct"]
+    assert gap_pct > 0, "small GACC value should produce a positive gap"
+    assert excess is not None
+    assert abs(float(excess) - (gap_pct - baseline)) < 1e-9
+    assert "excess over baseline is" in body
 
 
 def _seed_extra_eurostat_partner(conn, period: date, reporter: str,
@@ -367,7 +417,10 @@ def test_mirror_gap_uses_per_partner_cif_fob_override(empty_op_tables, test_db_u
     — otherwise it leaks into subsequent tests."""
     period = date(2025, 12, 1)
     with psycopg2.connect(test_db_url) as conn:
-        _seed_pair_for_partner(conn, period, "Germany", "DE")
+        # gacc_value=50 → positive gap, so the per-partner CIF/FOB override is
+        # exercised against a computed excess (negative gaps now have
+        # excess=None by design — see test_mirror_gap_negative_gap_has_null_excess).
+        _seed_pair_for_partner(conn, period, "Germany", "DE", gacc_value=50)
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO cif_fob_baselines (partner_iso2, baseline_pct, source, source_url, notes) "
@@ -387,8 +440,8 @@ def test_mirror_gap_uses_per_partner_cif_fob_override(empty_op_tables, test_db_u
         assert cf["scope"] == "per-partner"
         assert cf["partner_iso2"] == "DE"
         assert abs(cf["baseline_pct"] - 0.12) < 1e-9
-        # Excess is recomputed using the new baseline.
-        expected_excess = abs(detail["gap_pct"]) - 0.12
+        # Excess is recomputed using the new baseline (positive gap → applies).
+        expected_excess = detail["gap_pct"] - 0.12
         assert abs(detail["excess_over_baseline_pct"] - expected_excess) < 1e-9
     finally:
         with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:

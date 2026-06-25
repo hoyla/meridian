@@ -682,9 +682,13 @@ def _mirror_gaps_sheet() -> SheetData:
     for r in rows_raw:
         gap_pct = float(r["gap_pct"]) if r["gap_pct"] is not None else None
         baseline_pct = float(r["baseline_pct"]) if r["baseline_pct"] is not None else None
+        # Positive gap only — CIF/FOB freight markup explains Eurostat being
+        # higher, not lower. Mirrors anomalies._compute_one_gap (B1 fix): a
+        # negative gap has no excess-over-baseline, not |gap| - baseline.
         excess_pp = (
-            (abs(gap_pct) - baseline_pct) * 100
-            if gap_pct is not None and baseline_pct is not None else None
+            (gap_pct - baseline_pct) * 100
+            if gap_pct is not None and baseline_pct is not None and gap_pct > 0
+            else None
         )
         visible = _filter_visible_caveats(r["caveat_codes"] or [])
         rows.append([
@@ -703,9 +707,11 @@ def _mirror_gaps_sheet() -> SheetData:
         description=(
             "China-export-to-X (GACC, EUR-converted) vs X-import-from-China "
             "(Eurostat). Per-country CIF/FOB baseline from OECD ITIC; "
-            "excess_over_baseline_pp = (|gap_pct| - baseline_pct) in "
-            "percentage points (the part that isn't structural freight + "
-            "insurance). is_transshipment_hub = TRUE for known routing "
+            "excess_over_baseline_pp = (gap_pct - baseline_pct) in percentage "
+            "points for positive gaps (the part beyond structural freight + "
+            "insurance); blank for a negative gap, where Eurostat reports less "
+            "than GACC and the CIF/FOB baseline does not apply. "
+            "is_transshipment_hub = TRUE for known routing "
             "hubs (NL, BE, HK, SG, AE, MX) where gap mostly reflects "
             "transit, not direct trade."
         ),
