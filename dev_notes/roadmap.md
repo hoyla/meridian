@@ -28,6 +28,10 @@ alerting suite). What's left:
 
 ## Analyser de-duplication / shared windowing primitive (E1) — flagged 2026-06-25
 
+**Full plan:** [`2026-06-25-e1-analyser-dedup-plan.md`](2026-06-25-e1-analyser-dedup-plan.md)
+(problem + drift table, the `WindowScope` design, the phased behaviour-locked
+migration, risks, and the cheapest partial win). Summary below.
+
 From the adversarial-correctness review
 ([`2026-06-25-adversarial-correctness-review.md`](2026-06-25-adversarial-correctness-review.md),
 finding E1). `anomalies.py` (~240KB) re-implements per-family
