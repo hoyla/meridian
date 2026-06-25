@@ -278,7 +278,7 @@ class _MirrorGapResult:
     alias_id: int
     gap_eur: float                 # eurostat - gacc_eur (positive = EU reports more)
     gap_pct: float                 # gap_eur / max(both)
-    excess_over_cif_fob_baseline_pct: float
+    excess_over_cif_fob_baseline_pct: float | None   # None when gap ≤ 0 (CIF/FOB N/A)
     cif_fob_baseline: lookups.CifFobBaseline | None
     transshipment_hub: lookups.TransshipmentHub | None
     eurostat_partners: list[str]   # partners summed on the EU import side (always EUROSTAT_PARTNERS = CN+HK+MO)
@@ -533,7 +533,13 @@ def _compute_one_gap(
     lookup_partner_iso2 = resolved.iso2 if aggregate_kind is None else None
     cif_fob = lookups.lookup_cif_fob_baseline(lookup_partner_iso2)
     baseline_pct = cif_fob.baseline_pct if cif_fob else CIF_FOB_BASELINE_PCT_FALLBACK
-    excess = abs(gap_pct) - baseline_pct
+    # CIF/FOB freight markup only explains a POSITIVE gap (Eurostat values
+    # imports CIF, structurally higher than GACC's FOB). For a negative gap
+    # (Eurostat < GACC) it does not apply, so excess-over-baseline is undefined
+    # (None) — not |gap_pct| - baseline, which the abs() previously turned into a
+    # spurious figure (e.g. DE post-000TOTAL-fix: |−4.5%| − 6.5% = −2pp of
+    # nothing). See B1, dev_notes/2026-06-25-adversarial-correctness-review.md.
+    excess = (gap_pct - baseline_pct) if gap_pct > 0 else None
 
     # Phase 2.1: transshipment hub auto-flag. Aggregates don't have an
     # iso2; only check single-country partners.
@@ -658,9 +664,23 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
         f"aggregate row(s) for {eurostat_descriptor} ({r.eurostat_n_aggregate_rows:,} "
         f"aggregate row(s)) = €{r.eurostat_total_eur:,.0f}.\n\n"
         f"Gap: €{r.gap_eur:,.0f} ({r.gap_pct*100:+.1f}% of larger value). "
-        f"CIF/FOB baseline ({baseline_scope}) expects ~{baseline_pct*100:.1f}% Eurostat-higher; "
-        f"excess over baseline is {r.excess_over_cif_fob_baseline_pct*100:+.1f} percentage points."
     )
+    if r.excess_over_cif_fob_baseline_pct is not None:
+        body += (
+            f"CIF/FOB baseline ({baseline_scope}) expects ~{baseline_pct*100:.1f}% "
+            f"Eurostat-higher; excess over baseline is "
+            f"{r.excess_over_cif_fob_baseline_pct*100:+.1f} percentage points."
+        )
+    else:
+        # Negative gap (Eurostat < GACC): the CIF/FOB freight markup only
+        # explains Eurostat being *higher*, so excess-over-baseline is undefined
+        # here — not |gap| - baseline (the B1 abs() bug). Factual note only; the
+        # richer "counterpart to a hub's inflation" framing is the relabel PR.
+        body += (
+            f"CIF/FOB baseline ({baseline_scope}, ~{baseline_pct*100:.1f}% "
+            f"Eurostat-higher) does not apply: Eurostat reports less than GACC, "
+            f"a gap freight/insurance cost cannot explain."
+        )
     if r.transshipment_hub is not None:
         # Phase 2.1: editorial framing for known hubs. The body annotation is
         # what a journalist sees; the caveat code is what the LLM framing
@@ -695,7 +715,7 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
         caveat_codes.append("transshipment_hub")
 
     detail = {
-        "method": "mirror_trade_v6_000total_allgoods_fix",
+        "method": "mirror_trade_v7_negative_gap_excess_na",
         # Caveat codes — journalists should weigh these when interpreting the gap.
         # Promote to a dedicated findings.caveat_codes column when the schema
         # gets its first migration after the lookups went in.
