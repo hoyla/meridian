@@ -127,8 +127,14 @@ A non-exhaustive list, in rough order of magnitude:
    as imported from CN under DE's mirror flow — or under partner=NL
    if the importer is Dutch. The known transshipment hubs (NL, BE,
    HK, SG, AE, MX) get a `transshipment_hub` caveat
-   automatically. The positive NL mirror gap is mostly this,
-   NOT a smuggling story. (See §3 caveat `transshipment_hub`.)
+   automatically. A hub's positive gap is largely this re-routing,
+   NOT a smuggling story — though it travels with ordinary
+   statistical discrepancy, so we treat transshipment as the
+   dominant component, not the whole residual. The mechanism cuts
+   both ways: a member state reporting *less* than GACC (a negative
+   gap, e.g. DE) can be the counterpart — goods declared by the hub,
+   not the destination — rather than an independent discrepancy.
+   (See §3 caveat `transshipment_hub`.)
 
 4. **Different HS classifications at HS-8.** GACC uses CHS8
    (Chinese 8-digit harmonised); Eurostat uses CN8 (Combined
@@ -182,11 +188,17 @@ A non-exhaustive list, in rough order of magnitude:
     detail is typically 0-5% lower than the corresponding `'000TOTAL'`
     row — that gap is the suppression rate.
 
-The net effect: a "mirror gap" of, say, +65% for NL is mostly the
-transshipment effect (≈65%) plus the CIF/FOB baseline (≈6.5%)
-minus some reporting noise; the *change* in the gap, when the gap
-itself is normally stable for a partner, is what `mirror_gap_zscore`
-flags.
+The net effect: a positive mirror gap of, say, +20% for NL breaks
+down as ~6.5pp of CIF/FOB freight markup and a ~13.5pp residual.
+For a hub like NL that residual is dominated by transshipment
+(Rotterdam re-routing) — but it isn't *only* transshipment;
+statistical discrepancy, timing and classification differences sit
+in there too, and we don't try to split them. So the gap *level*
+isn't itself the story; the *change* in a partner's gap, when its
+gap is normally stable, is what `mirror_gap_zscore` flags. (Before
+the 2026-06-17 000TOTAL fix this example read +65% with a ≈65%
+transshipment share — both artefacts of a doubled Eurostat total;
+see §1 `mirror_gap`.)
 
 ### Source freshness: the expectation axis
 
@@ -228,7 +240,11 @@ the findings document renders.
 
 For a (period, country) pair where both GACC and Eurostat have
 data, computes `gap_pct = (eurostat_eur - gacc_eur) / max(...)`.
-Stores `excess_over_baseline_pct = |gap_pct| - cif_fob_baseline_pct`.
+Stores `excess_over_baseline_pct = gap_pct - cif_fob_baseline_pct` for a
+positive gap (Eurostat higher); **null for a negative gap**, where the CIF/FOB
+freight markup — which only makes Eurostat *higher* — doesn't apply. (The
+earlier `|gap_pct|` form manufactured a value for negative-gap partners; see the
+B1 correction, method `mirror_trade_v7`.)
 
 The Eurostat side reads the **`000TOTAL` all-goods aggregate row**, not a
 sum over the CN8 detail. The `observations` table holds both the detail
