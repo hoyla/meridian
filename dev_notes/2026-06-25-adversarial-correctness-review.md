@@ -15,9 +15,9 @@ question — *correctness and robustness* ("where is it actually wrong, or one
 upstream change away from being silently wrong"). The two don't overlap much.
 
 > [!NOTE]
-> Items A1 & B2 addressed in https://github.com/hoyla/meridian/pull/106
-> Item A3 addressed in https://github.com/hoyla/meridian/pull/107
-> Item A2 addressed in https://github.com/hoyla/meridian/pull/108
+> Items A1 & B2 addressed in https://github.com/hoyla/meridian/pull/106. <br/>
+> Item A3 addressed in https://github.com/hoyla/meridian/pull/107. <br/>
+> Item A2 addressed in https://github.com/hoyla/meridian/pull/108. <br/>
 
 
 ---
