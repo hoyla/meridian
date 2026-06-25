@@ -26,6 +26,49 @@ alerting suite). What's left:
   existing hover tooltip carry the full self-explanatory text. Cosmetic only; the
   full text is always reachable on hover.
 
+## Analyser de-duplication / shared windowing primitive (E1) — flagged 2026-06-25
+
+From the adversarial-correctness review
+([`2026-06-25-adversarial-correctness-review.md`](2026-06-25-adversarial-correctness-review.md),
+finding E1). `anomalies.py` (~240KB) re-implements per-family
+windowing/aggregation SQL, so the *same* correctness rule has to be applied
+per-site and drifts between copies: the `000TOTAL` exclusion, the GACC
+`currency='CNY'` pin, and the EU-27 reporter scope each lived in some analyser
+copies and not others. A1 / B2 / A3 were per-site fixes (all shipped — see
+history.md); A3 went one better and made the `000TOTAL` backstop un-driftable by
+baking it into the shared `_hs_pattern_or_clause` helper. The structural fix
+extends that "state it once" move to the window sum itself: a single primitive
+taking `(source, scope, partners, patterns)` that bakes in the `000TOTAL` rule,
+the currency pin, and the EU-27 inclusion list — so each correctness rule is
+stated exactly once. Not urgent (the point fixes hold); this is what makes the
+whole bug-class impossible to reintroduce.
+
+### A2 — EU-27 reporter scope: exclusion → inclusion (ready to implement within E1)
+
+The cheap detect-and-alert guard shipped (PR #108: `eurostat.unexpected_reporters`
++ an ingest-time ERROR when a declarant outside the 27 + GB lands). The *correct*
+fix is to scope the EU-27 by an **inclusion list** (the 27 member states) rather
+than `reporter <> 'GB'` (everything-but-GB), which silently folds any stray
+aggregate / territory / newly-acceded reporter into "EU-27". Deferred to E1
+because the "exclude GB" rule is **duplicated across 5 surfaces** — a partial
+swap would make them disagree:
+
+1. `anomalies.py` — `EU27_EXCLUDE_REPORTERS` + ~8 inline `reporter <> ALL(%s)` SQL sites
+2. `report_builder.py` — imports `EU27_EXCLUDE_REPORTERS` (one query)
+3. `scrape.py` — passes it into the Eurostat world-aggregate ingest (`exclude_reporters=`)
+4. `sheets_export.py` — hardcoded copy `_CHARTS_EU27_EXCLUDE_REPORTERS = ("GB",)`
+5. `briefing_pack/docx.py` — hardcoded copy `_EU27_EXCLUDE_REPORTERS = ("GB",)`
+
+Recipe: one canonical `EU27_REPORTER_CODES` (= `eurostat.EU27_PARTNER_CODES`, the
+27 — `anomalies.py` adds `import eurostat`, no circular import); flip every
+`reporter <> ALL(<exclude>)` → `reporter = ANY(<include>)`; retire the two
+hardcoded copies; rename the `reporters_excluded` provenance fields (grep it) to
+`reporters_included`. Behaviour-preserving on current data: the live reporter set
+is exactly the 27 + GB (Greece as `GR`, not Eurostat's `EL`) — verified
+2026-06-25 — so the swap moves no published number today and only differs if a
+stray code appears, which the #108 guard now alerts on. Keep the full suite
+green; the existing EU-27 tests seed the 27 reporters, so they exercise the swap.
+
 ## HMRC-triggered release — headline-only today; design parked (2026-06-23)
 
 An HMRC-triggered briefing currently renders **the standout-movers headline and
