@@ -14,6 +14,10 @@ decisions without re-deriving them.
 question — *correctness and robustness* ("where is it actually wrong, or one
 upstream change away from being silently wrong"). The two don't overlap much.
 
+> [!NOTE]
+> Items A1 & A2 addressed in https://github.com/hoyla/meridian/pull/106
+
+
 ---
 
 ## Headline
