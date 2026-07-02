@@ -319,8 +319,50 @@ def run_periodic(
     the same routine, before this call) — keeping fetch and pipeline as
     separate concerns means a network failure during fetch doesn't leave
     the analyser pipeline in an in-flight state.
+
+    A crash anywhere mid-cycle still writes a periodic_run_log row
+    (action_taken=False, the exception in `error`) before propagating,
+    so `--periodic-history` and the Chat notifier can distinguish
+    "the cycle broke" from "the cycle never ran".
     """
     started_monotonic = time.monotonic()
+    try:
+        return _run_periodic_cycle(
+            started_monotonic,
+            force=force, out_dir=out_dir, top_n=top_n, llm_model=llm_model,
+            skip_llm=skip_llm, docx=docx, generate_takes=generate_takes,
+        )
+    except Exception as exc:
+        try:
+            import periodic_run_log
+            periodic_run_log.log_run(
+                action_taken=False,
+                reason=f"cycle crashed: {type(exc).__name__}",
+                data_period=None,
+                findings_path=None,
+                analyser_counts=None,
+                duration_ms=int((time.monotonic() - started_monotonic) * 1000),
+                forced=force,
+                skip_llm=skip_llm,
+                error=str(exc) or type(exc).__name__,
+            )
+        except Exception:
+            log.exception("Failed to write periodic_run_log row for crashed cycle")
+        raise
+
+
+def _run_periodic_cycle(
+    started_monotonic: float,
+    *,
+    force: bool,
+    out_dir: str | None,
+    top_n: int,
+    llm_model: str | None,
+    skip_llm: bool,
+    docx: bool,
+    generate_takes: bool,
+) -> PeriodicRunResult:
+    """Body of run_periodic — see its docstring."""
 
     def _persist_log(result: "PeriodicRunResult", error: str | None = None) -> None:
         """Best-effort persistence to periodic_run_log. A failure here
