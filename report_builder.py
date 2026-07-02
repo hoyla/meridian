@@ -42,7 +42,7 @@ from briefing_pack._helpers import (
     _compute_top_movers,
     _conn,
     _fmt_eur,
-    _fmt_eur_m_per_day,
+    _fmt_eur_per_day,
     _fmt_month,
     _fmt_pct_kpi,
     _slugify_heading,
@@ -394,7 +394,7 @@ def _deficit_indicator(
         cn_yoy_str = (
             f" ({'+' if float(cn_yoy) >= 0 else ''}{float(cn_yoy) * 100:.1f}% YoY)"
             if cn_yoy is not None else "")
-        note = f"China-only: {_fmt_eur_m_per_day(cn_pd)}{cn_yoy_str}"
+        note = f"China-only: {_fmt_eur_per_day(cn_pd)}{cn_yoy_str}"
 
     return Indicator(
         key=key,
@@ -402,7 +402,7 @@ def _deficit_indicator(
         label=label,
         value=float(per_day),
         unit="eur_per_day",
-        formatted=_fmt_eur_m_per_day(per_day),
+        formatted=_fmt_eur_per_day(per_day),
         chart=chart,
         delta=delta,
         note=note,

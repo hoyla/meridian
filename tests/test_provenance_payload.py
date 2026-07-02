@@ -265,3 +265,16 @@ def test_malformed_detail_is_skipped_not_fatal(empty_op_tables, test_db_url):
 
     assert str(bad_id) not in payloads
     assert str(good_id) in payloads
+
+
+def test_per_day_face_switches_to_bn_at_a_billion():
+    """Editorial call (Luke, 2026-07-02): at a billion and above the €/day
+    face reads "€1.03bn/day", not "€1,027M/day"; below it the M face stays.
+    The verbatim-restatement lock above guarantees the drawer follows
+    whatever this helper renders."""
+    from briefing_pack._helpers import _fmt_eur_per_day
+    assert _fmt_eur_per_day(1_027_000_000) == "€1.03bn/day"
+    assert _fmt_eur_per_day(1_000_000_000) == "€1.00bn/day"
+    assert _fmt_eur_per_day(999_000_000) == "€999M/day"
+    assert _fmt_eur_per_day(49_315_068) == "€49M/day"
+    assert _fmt_eur_per_day(None) == "—"
