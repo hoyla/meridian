@@ -836,10 +836,18 @@ def _sector_detail_section(cur, predictability: dict | None = None) -> Section:
         reps = sorted(g.get("reporters") or [],
                       key=lambda r: -(r.get("share_of_group_delta_pct") or 0))[:3]
         if reps:
-            metrics["reporters"] = [
-                {"reporter": r.get("reporter"),
-                 "share": _f(r.get("share_of_group_delta_pct")),
-                 "yoy": _f(r.get("yoy_pct"))} for r in reps]
+            # yoy is suppressed (None, plus a low_base flag) when the
+            # reporter's prior-window base is under the render-time floor —
+            # report.json is a data surface, so the misleading % must not
+            # ship in it even though the HTML only renders `share`.
+            metrics["reporters"] = []
+            for r in reps:
+                lb = anomalies.reporter_yoy_is_low_base(r.get("prior_eur"))
+                metrics["reporters"].append(
+                    {"reporter": r.get("reporter"),
+                     "share": _f(r.get("share_of_group_delta_pct")),
+                     "yoy": None if lb else _f(r.get("yoy_pct")),
+                     "low_base": lb})
         if traj_by_name.get(name):
             metrics["trajectory"] = traj_by_name[name]
             metrics["trajectory_findings"] = traj_ids_by_name.get(name, [])
