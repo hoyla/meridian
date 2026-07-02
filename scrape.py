@@ -439,14 +439,14 @@ def scrape_hmrc(
             db.finish_run(run_id, status="success", http_status=response.status_code)
             return IngestOutcome(status="empty")
 
-        # Idempotent re-ingest: clear any prior raw rows for this period
-        # before inserting the fresh fetch. Observations are handled by
-        # upsert_observations' supersede chain.
-        deleted = db.delete_hmrc_raw_rows_for_period(period)
+        # Idempotent re-ingest: atomically swap any prior raw rows for this
+        # period for the fresh fetch — delete and insert share one
+        # transaction, so a failed insert cannot leave the period cleared.
+        # Observations are handled by upsert_observations' supersede chain.
+        deleted, raw_ids = db.replace_hmrc_raw_rows_for_period(run_id, period, raw_rows)
         if deleted:
             log.info("Cleared %d stale hmrc_raw_rows for %s before re-insert",
                      deleted, period.strftime("%Y-%m"))
-        raw_ids = db.bulk_insert_hmrc_raw_rows(run_id, raw_rows)
         log.info("Inserted %d hmrc_raw_rows", len(raw_ids))
         observations = list(hmrc.aggregate_to_observations(period, list(zip(raw_ids, raw_rows))))
         log.info("Aggregated to %d observations", len(observations))

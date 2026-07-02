@@ -19,7 +19,7 @@ Pipeline:
     iter_raw_rows(api_rows, period, fx_rate)
         ↓ map CountryId → ISO-2, normalise flow, convert GBP → EUR
         yields one dict per row (keys lower-cased to match DB columns)
-    db.bulk_insert_hmrc_raw_rows(scrape_run_id, raws) → list[int] of inserted ids
+    db.replace_hmrc_raw_rows_for_period(scrape_run_id, period, raws) → (deleted, inserted ids)
     aggregate_to_observations(period, [(raw_id, raw_dict), ...])
         ↓ group by (partner, product_nc, flow), sum across ports
         yields aggregated observation dicts carrying hmrc_raw_row_ids in source_row
