@@ -198,3 +198,37 @@ def test_periodic_run_manual_render_does_not_advance_cycle(
     # helper functions agree.
     assert briefing_pack.latest_recorded_data_period(trigger="periodic_run") is None
     assert briefing_pack.latest_recorded_data_period(trigger="manual") == date(2026, 2, 1)
+
+
+def test_periodic_run_crash_still_writes_log_row(
+    fresh_db, test_db_url, monkeypatch, tmp_path,
+):
+    """F4 (2026-07-01 fresh review): a mid-cycle crash must leave a
+    periodic_run_log error row. Previously the cycle aborted with no row
+    at all, so --periodic-history and the Chat notifier could not
+    distinguish "the cycle broke" from "the cycle never ran"."""
+    monkeypatch.setenv("DATABASE_URL", test_db_url)
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute("TRUNCATE TABLE periodic_run_log RESTART IDENTITY")
+    # Pass both no-op gates: Eurostat data present, no prior periodic cycle.
+    _seed_eurostat_release(test_db_url, date(2026, 2, 1))
+
+    import anomalies
+
+    def _boom():
+        raise RuntimeError("analyser exploded")
+
+    # First analyser the cycle dispatches — the crash happens mid-Step-2.
+    monkeypatch.setattr(anomalies, "detect_mirror_trade_gaps", _boom)
+
+    with pytest.raises(RuntimeError, match="analyser exploded"):
+        periodic.run_periodic(out_dir=str(tmp_path))
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT action_taken, reason, error FROM periodic_run_log")
+        rows = cur.fetchall()
+    assert len(rows) == 1
+    action_taken, reason, error = rows[0]
+    assert action_taken is False
+    assert "RuntimeError" in reason
+    assert "analyser exploded" in error
