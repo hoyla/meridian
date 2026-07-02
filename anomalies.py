@@ -137,6 +137,27 @@ LOW_BASE_THRESHOLD_EUR = 50_000_000
 # tagged as low-base, the trajectory finding itself flags low_base_effect.
 TRAJECTORY_LOW_BASE_FRACTION = 0.5
 
+# Interim per-reporter floor (2026-07-01 fresh review, F2). The €50M group
+# gate says nothing about a single reporter's slice inside a passing group:
+# a member state going €150k → €9M renders "+5,900%" beneath a green
+# group-level verdict. A reporter slice whose prior-window base is below
+# this floor gets its YoY % suppressed at render time — the € figures still
+# show (a material move off a tiny base is information; the naked % is what
+# misleads). Render-time gate like the Quotability rubric: no method bump,
+# no supersede churn, and it applies retroactively to stored findings.
+# Proper calibration belongs to iteration 4, alongside LOW_BASE_THRESHOLD_EUR.
+REPORTER_LOW_BASE_THRESHOLD_EUR = 5_000_000
+
+
+def reporter_yoy_is_low_base(prior_eur: float | None) -> bool:
+    """True when a per-reporter YoY % rests on a prior-window base too small
+    to quote (missing, zero, or below REPORTER_LOW_BASE_THRESHOLD_EUR).
+    Shared by every surface that renders per_reporter_breakdown percentages,
+    so the rule is stated once."""
+    if prior_eur is None:
+        return True
+    return abs(float(prior_eur)) < REPORTER_LOW_BASE_THRESHOLD_EUR
+
 # --- CN8 "biggest mover" analyser (Option A; roadmap "Biggest mover KPI") ---
 # Single-product (CN8) movers within the watched HS prefixes — finer than the
 # ~46 displayed groups, to surface a product the group aggregation masks. The

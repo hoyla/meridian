@@ -850,3 +850,16 @@ def test_yoy_decomposition_suppressed_when_kg_coverage_low(empty_op, test_db_url
     assert "low_kg_coverage" in detail["caveat_codes"]
     # Body explains the suppression rather than silently omitting.
     assert "SUPPRESSED" in body
+
+
+def test_reporter_yoy_low_base_predicate_boundaries():
+    """Render-time floor for per-reporter YoY %s (F2 interim guard,
+    2026-07-01 fresh review). Missing/zero/sub-floor priors are low-base;
+    the floor itself and above are not."""
+    assert anomalies.reporter_yoy_is_low_base(None)
+    assert anomalies.reporter_yoy_is_low_base(0)
+    assert anomalies.reporter_yoy_is_low_base(4_999_999.99)
+    assert not anomalies.reporter_yoy_is_low_base(
+        anomalies.REPORTER_LOW_BASE_THRESHOLD_EUR
+    )
+    assert not anomalies.reporter_yoy_is_low_base(1.2e9)

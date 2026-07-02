@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import anomalies
 import db
 from briefing_pack._helpers import (
     PREDICTABILITY_SHIFT_PP,
@@ -170,9 +171,14 @@ def _section_hs_yoy_movers(
             for pr in per_rep[:5]:
                 rep = pr["reporter"]
                 yoy = pr.get("yoy_pct")
-                yoy_str = (
-                    f"{float(yoy)*100:+.1f}%" if yoy is not None else "n/a"
-                )
+                if anomalies.reporter_yoy_is_low_base(pr.get("prior_eur")):
+                    # A % off a sub-floor prior base misleads (+5,900% from
+                    # €150k); the € figures on the line carry the move.
+                    yoy_str = "n/a (low base)"
+                elif yoy is not None:
+                    yoy_str = f"{float(yoy)*100:+.1f}%"
+                else:
+                    yoy_str = "n/a"
                 share = pr.get("share_of_group_delta_pct")
                 share_str = (
                     f", {float(share)*100:+.0f}% of group's Δ"

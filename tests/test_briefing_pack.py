@@ -431,6 +431,47 @@ def test_reporter_contributions_block_renders_under_mover(
     assert "-100% of group's Δ" in md
 
 
+def test_reporter_contribution_pct_suppressed_on_low_base(
+    empty_findings, test_db_url,
+):
+    """F2 interim guard (2026-07-01 fresh review): a reporter whose
+    prior-window base is under REPORTER_LOW_BASE_THRESHOLD_EUR gets its
+    YoY % suppressed in the brief — €150k → €9M must not render as
+    "+5900.0%" beneath a green group-level verdict. The € figures and
+    share-of-delta still show, so the move itself stays visible."""
+    breakdown = [
+        {
+            "reporter": "DE", "current_eur": 6e8, "prior_eur": 1.2e9,
+            "delta_eur": -6e8, "yoy_pct": -0.5,
+            "current_kg": 6e7, "prior_kg": 1.2e8, "yoy_pct_kg": -0.5,
+            "share_of_group_delta_pct": 1.03,
+        },
+        {
+            # €150k prior base → +5900% — the misleading shape F2 names.
+            "reporter": "MT", "current_eur": 9e6, "prior_eur": 1.5e5,
+            "delta_eur": 8.85e6, "yoy_pct": 59.0,
+            "current_kg": 9e5, "prior_kg": 1.5e4, "yoy_pct_kg": 59.0,
+            "share_of_group_delta_pct": -0.015,
+        },
+    ]
+    with psycopg2.connect(test_db_url) as conn:
+        cur = conn.cursor()
+        run = _seed_run(cur)
+        _seed_hs_yoy_finding(
+            cur, run, "EV batteries (Li-ion)", yoy_pct=-0.1667,
+            current_eur=1.5e9, prior_eur=1.8e9,
+            per_reporter_breakdown=breakdown,
+        )
+        conn.commit()
+
+    md = briefing_pack.render()
+    # The healthy-base reporter keeps its %.
+    assert "DE: -50.0%" in md
+    # The low-base reporter's % is suppressed; its € trail still renders.
+    assert "MT: n/a (low base)" in md
+    assert "5900" not in md
+
+
 def test_permalink_base_changes_trace_token_to_link(
     empty_findings, test_db_url, monkeypatch,
 ):

@@ -39,6 +39,7 @@ from typing import Any, Protocol
 import psycopg2
 import psycopg2.extras
 
+import anomalies
 import db
 from briefing_pack import (
     _ALL_UNIVERSAL_CAVEATS,
@@ -472,7 +473,7 @@ def _hs_yoy_reporter_movers_sheet() -> SheetData:
         "finding_id", "link", "group", "scope", "flow", "period",
         "reporter", "rank_by_abs_delta",
         "current_12mo_eur", "prior_12mo_eur", "delta_eur",
-        "yoy_pct", "yoy_pct_kg", "share_of_group_delta_pct",
+        "yoy_pct", "yoy_pct_kg", "yoy_low_base", "share_of_group_delta_pct",
         "current_12mo_kg", "prior_12mo_kg",
     ]
     rows: list[list[Any]] = []
@@ -490,6 +491,7 @@ def _hs_yoy_reporter_movers_sheet() -> SheetData:
                 _to_float(pr.get("delta_eur")),
                 _to_float(pr.get("yoy_pct")),
                 _to_float(pr.get("yoy_pct_kg")),
+                anomalies.reporter_yoy_is_low_base(pr.get("prior_eur")),
                 _to_float(pr.get("share_of_group_delta_pct")),
                 _to_float(pr.get("current_kg")),
                 _to_float(pr.get("prior_kg")),
@@ -502,7 +504,10 @@ def _hs_yoy_reporter_movers_sheet() -> SheetData:
             "per finding, ranked by absolute EUR delta. `share_of_group_delta_pct` "
             "is the reporter's contribution to the group's overall delta — "
             "positive = pushed in the group's direction, negative = pushed "
-            "against. Filter `scope` / `flow` to narrow."
+            "against. Filter `scope` / `flow` to narrow. `yoy_low_base` marks "
+            "reporters whose prior-window base is below "
+            f"€{anomalies.REPORTER_LOW_BASE_THRESHOLD_EUR / 1e6:.0f}M — treat "
+            "their yoy_pct as noise (the EUR delta is still real)."
         ),
         headers=headers, rows=rows,
     )
