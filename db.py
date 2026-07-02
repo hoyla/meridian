@@ -346,35 +346,51 @@ _HMRC_RAW_COLS = (
 )
 
 
+def _insert_hmrc_raw_rows(cur, scrape_run_id: int, raw_rows: list[dict]) -> list[int]:
+    cols_sql = ", ".join(_HMRC_RAW_COLS)
+    placeholders = "(" + ", ".join(["%s"] * len(_HMRC_RAW_COLS)) + ")"
+    rows_values = []
+    for r in raw_rows:
+        rows_values.append(tuple([scrape_run_id if c == "scrape_run_id" else r.get(c) for c in _HMRC_RAW_COLS]))
+    args_str = b",".join(cur.mogrify(placeholders, v) for v in rows_values)
+    cur.execute(
+        f"INSERT INTO hmrc_raw_rows ({cols_sql}) VALUES " + args_str.decode("utf-8") + " RETURNING id"
+    )
+    return [r[0] for r in cur.fetchall()]
+
+
 def bulk_insert_hmrc_raw_rows(scrape_run_id: int, raw_rows: list[dict]) -> list[int]:
     """Insert raw HMRC OTS rows verbatim. Returns the inserted ids in input
     order so the caller can pair them with their dicts for downstream
     aggregation. Mirrors bulk_insert_eurostat_raw_rows."""
     if not raw_rows:
         return []
-    cols_sql = ", ".join(_HMRC_RAW_COLS)
-    placeholders = "(" + ", ".join(["%s"] * len(_HMRC_RAW_COLS)) + ")"
-    rows_values = []
-    for r in raw_rows:
-        rows_values.append(tuple([scrape_run_id if c == "scrape_run_id" else r.get(c) for c in _HMRC_RAW_COLS]))
     with transaction() as conn, conn.cursor() as cur:
-        args_str = b",".join(cur.mogrify(placeholders, v) for v in rows_values)
-        cur.execute(
-            f"INSERT INTO hmrc_raw_rows ({cols_sql}) VALUES " + args_str.decode("utf-8") + " RETURNING id"
+        return _insert_hmrc_raw_rows(cur, scrape_run_id, raw_rows)
+
+
+def replace_hmrc_raw_rows_for_period(
+    scrape_run_id: int, period: "date", raw_rows: list[dict],
+) -> tuple[int, list[int]]:
+    """Atomically swap the period's hmrc_raw_rows for a fresh fetch.
+
+    hmrc_raw_rows has no natural-key unique constraint (the same OTS row can
+    legitimately appear in multiple scrape runs), so re-ingest dedups by
+    clearing the period before inserting. Delete and insert share ONE
+    transaction: a failure anywhere rolls the delete back, so the raw layer
+    can never be left cleared-but-unfilled for a period whose release row
+    already exists (which no probe would re-ingest). The observations
+    table's upsert handles its own idempotency; this only swaps the raw
+    layer. Returns (deleted_count, inserted_ids)."""
+    if not raw_rows:
+        raise ValueError(
+            "replace_hmrc_raw_rows_for_period called with no rows; "
+            "refusing to clear the period's raw layer"
         )
-        return [r[0] for r in cur.fetchall()]
-
-
-def delete_hmrc_raw_rows_for_period(period: "date") -> int:
-    """Delete all hmrc_raw_rows for the given period. Used by scrape_hmrc to
-    make re-ingest idempotent: hmrc_raw_rows has no natural-key unique
-    constraint (the same OTS row can legitimately appear in multiple
-    scrape runs), so a re-run without first clearing would double-count
-    on aggregation. The observations table's upsert handles its own
-    idempotency; this only clears the raw layer. Returns the row count."""
     with transaction() as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM hmrc_raw_rows WHERE period = %s", (period,))
-        return cur.rowcount
+        deleted = cur.rowcount
+        return deleted, _insert_hmrc_raw_rows(cur, scrape_run_id, raw_rows)
 
 
 def find_or_create_hmrc_release(period: "date", source_url: str) -> int:
