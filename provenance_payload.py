@@ -28,11 +28,11 @@ from typing import Any
 # that restates a card's value in a different rendering ("≈€1.0bn/day" under a
 # "€1,027M/day" card) leaks trust at exactly the moment a journalist is
 # double-checking. Values that appear on a card face use that face's formatter
-# (_fmt_eur_m_per_day, _fmt_pct_kpi); everything else uses the bundle-wide
+# (_fmt_eur_per_day, _fmt_pct_kpi); everything else uses the bundle-wide
 # _fmt_eur/_fmt_pct.
 from briefing_pack._helpers import (
     _fmt_eur,
-    _fmt_eur_m_per_day,
+    _fmt_eur_per_day,
     _fmt_pct,
     _fmt_pct_kpi,
 )
@@ -132,7 +132,7 @@ def _arithmetic(subkind: str, detail: dict | None) -> list[str]:
                        f"(rolling 12 months).")
         if per_day is not None:
             # The card's own face format — the restated figure must match it.
-            out.append(f"Over the window’s days ≈ {_fmt_eur_m_per_day(abs(per_day))}.")
+            out.append(f"Over the window’s days ≈ {_fmt_eur_per_day(abs(per_day))}.")
         if roll.get("yoy_pct") is not None:
             out.append(f"Year on year: {_fmt_pct(roll['yoy_pct'])} vs the prior 12 months.")
         return out
