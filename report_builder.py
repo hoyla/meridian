@@ -42,7 +42,9 @@ from briefing_pack._helpers import (
     _compute_top_movers,
     _conn,
     _fmt_eur,
+    _fmt_eur_m_per_day,
     _fmt_month,
+    _fmt_pct_kpi,
     _slugify_heading,
     _subkind_plain_label,
 )
@@ -392,7 +394,7 @@ def _deficit_indicator(
         cn_yoy_str = (
             f" ({'+' if float(cn_yoy) >= 0 else ''}{float(cn_yoy) * 100:.1f}% YoY)"
             if cn_yoy is not None else "")
-        note = f"China-only: €{float(cn_pd) / 1e6:,.0f}M/day{cn_yoy_str}"
+        note = f"China-only: {_fmt_eur_m_per_day(cn_pd)}{cn_yoy_str}"
 
     return Indicator(
         key=key,
@@ -400,7 +402,7 @@ def _deficit_indicator(
         label=label,
         value=float(per_day),
         unit="eur_per_day",
-        formatted=f"€{float(per_day) / 1e6:,.0f}M/day",
+        formatted=_fmt_eur_m_per_day(per_day),
         chart=chart,
         delta=delta,
         note=note,
@@ -575,7 +577,7 @@ def _biggest_mover_indicator(cur, surfaced_groups: set[str]) -> Indicator | None
         label=product,
         value=float(yoy),
         unit="yoy_pct",   # signals a signed change → the value is coloured
-        formatted=f"{'+' if yoy >= 0 else '−'}{abs(yoy) * 100:.0f}%",
+        formatted=_fmt_pct_kpi(yoy),
         chart="bignumber",
         note=detail,
         tooltip=tooltip,

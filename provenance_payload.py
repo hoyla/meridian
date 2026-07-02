@@ -24,6 +24,18 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+# Formatting is deliberately NOT local (2026-07-01 fresh review, F3): a drawer
+# that restates a card's value in a different rendering ("≈€1.0bn/day" under a
+# "€1,027M/day" card) leaks trust at exactly the moment a journalist is
+# double-checking. Values that appear on a card face use that face's formatter
+# (_fmt_eur_m_per_day, _fmt_pct_kpi); everything else uses the bundle-wide
+# _fmt_eur/_fmt_pct.
+from briefing_pack._helpers import (
+    _fmt_eur,
+    _fmt_eur_m_per_day,
+    _fmt_pct,
+    _fmt_pct_kpi,
+)
 from provenance import _CAVEAT_GLOSSARY
 
 log = logging.getLogger(__name__)
@@ -31,25 +43,6 @@ log = logging.getLogger(__name__)
 _SOURCE_LABEL = {
     "eurostat": "Eurostat", "gacc": "GACC (China Customs)", "hmrc": "HMRC",
 }
-
-
-def _eur(n: Any) -> str:
-    try:
-        v = float(n)
-    except (TypeError, ValueError):
-        return "—"
-    if abs(v) >= 1e9:
-        return f"€{v / 1e9:,.1f}bn"
-    if abs(v) >= 1e6:
-        return f"€{v / 1e6:,.0f}M"
-    return f"€{v:,.0f}"
-
-
-def _pct(p: Any) -> str:
-    try:
-        return f"{float(p) * 100:+.1f}%"
-    except (TypeError, ValueError):
-        return "—"
 
 
 def _obs_sources(cur, observation_ids: list[int]) -> list[dict]:
@@ -134,20 +127,22 @@ def _arithmetic(subkind: str, detail: dict | None) -> list[str]:
         defi, per_day = roll.get("deficit_eur"), roll.get("deficit_per_day_eur")
         out = []
         if imp is not None and exp is not None:
-            out.append(f"Imports {_eur(imp)} − exports {_eur(exp)} = "
-                       f"{'deficit' if (defi or 0) >= 0 else 'surplus'} {_eur(abs(defi or 0))} "
+            out.append(f"Imports {_fmt_eur(imp)} − exports {_fmt_eur(exp)} = "
+                       f"{'deficit' if (defi or 0) >= 0 else 'surplus'} {_fmt_eur(abs(defi or 0))} "
                        f"(rolling 12 months).")
         if per_day is not None:
-            out.append(f"Over the window’s days ≈ {_eur(abs(per_day))}/day.")
+            # The card's own face format — the restated figure must match it.
+            out.append(f"Over the window’s days ≈ {_fmt_eur_m_per_day(abs(per_day))}.")
         if roll.get("yoy_pct") is not None:
-            out.append(f"Year on year: {_pct(roll['yoy_pct'])} vs the prior 12 months.")
+            out.append(f"Year on year: {_fmt_pct(roll['yoy_pct'])} vs the prior 12 months.")
         return out
     if subkind.startswith("china_all_goods_share"):
         roll = d.get("rolling_12mo") or {}
         num, den, share = roll.get("numerator_eur"), roll.get("denominator_eur"), roll.get("share")
         out = []
         if num is not None and den is not None and share is not None:
-            out.append(f"CN+HK+MO {_eur(num)} ÷ extra-EU {_eur(den)} = "
+            # Shares stay bare .1f — the donut centre's own face format.
+            out.append(f"CN+HK+MO {_fmt_eur(num)} ÷ extra-EU {_fmt_eur(den)} = "
                        f"{float(share) * 100:.1f}% (rolling 12 months, all goods).")
         if roll.get("share_cn_only") is not None:
             out.append(f"China-only comparator: {float(roll['share_cn_only']) * 100:.1f}%.")
@@ -157,10 +152,10 @@ def _arithmetic(subkind: str, detail: dict | None) -> list[str]:
         cur_, pri = t.get("current_12mo_eur"), t.get("prior_12mo_eur")
         out = []
         if cur_ is not None and pri is not None:
-            out.append(f"12 months {_eur(cur_)} vs {_eur(pri)} the prior 12 months "
-                       f"= {_pct(t.get('yoy_pct'))} by value.")
+            out.append(f"12 months {_fmt_eur(cur_)} vs {_fmt_eur(pri)} the prior 12 months "
+                       f"= {_fmt_pct(t.get('yoy_pct'))} by value.")
         if t.get("current_12mo_kg") is not None and t.get("prior_12mo_kg") is not None:
-            out.append(f"By volume: {_pct(t.get('yoy_pct_kg'))} "
+            out.append(f"By volume: {_fmt_pct(t.get('yoy_pct_kg'))} "
                        f"({t['current_12mo_kg']:,.0f} kg vs {t['prior_12mo_kg']:,.0f} kg).")
         if t.get("low_base"):
             out.append("Low base — quote the € amount, not the percentage.")
@@ -176,12 +171,14 @@ def _arithmetic(subkind: str, detail: dict | None) -> list[str]:
                           if (prod.get('denomination') or prod.get('label_short')) else "")
                        + ".")
         if cur_ is not None and pri is not None:
-            out.append(f"12 months {_eur(cur_)} vs {_eur(pri)} the prior 12 months "
-                       f"= {_pct(t.get('yoy_pct'))} by value.")
+            # _fmt_pct_kpi: the mover card's 0dp face — the restated % must
+            # match the card, not the 1dp bundle style.
+            out.append(f"12 months {_fmt_eur(cur_)} vs {_fmt_eur(pri)} the prior 12 months "
+                       f"= {_fmt_pct_kpi(t.get('yoy_pct'))} by value.")
         persist = (d.get("persistence") or {}).get("anchor_yoys") or []
         if persist:
             out.append("Held across the last "
-                       + ", ".join(_pct(y) for y in persist)
+                       + ", ".join(_fmt_pct(y) for y in persist)
                        + " (most recent first), and survives dropping its single "
                        "largest month — so it isn't one shipment.")
         groups = d.get("parent_groups") or []

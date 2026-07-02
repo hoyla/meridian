@@ -93,6 +93,26 @@ def _fmt_pct(v: Any) -> str:
     return f"{float(v) * 100:+.1f}%"
 
 
+def _fmt_eur_m_per_day(v: Any) -> str:
+    """KPI-card face for €/day levels ("€1,027M/day") — always M, 0dp,
+    however large. The deficit cards and their provenance drawers must show
+    the same value as the same string (2026-07-01 fresh review, F3), so the
+    face format is stated once here and used by both."""
+    if v is None:
+        return "—"
+    return f"€{float(v) / 1e6:,.0f}M/day"
+
+
+def _fmt_pct_kpi(v: Any) -> str:
+    """KPI-card face for a headline % ("+340%", "−12%"): whole number,
+    typographic minus. Shared with the provenance drawer for the same
+    reason as _fmt_eur_m_per_day (F3)."""
+    if v is None:
+        return "—"
+    n = float(v)
+    return f"{'+' if n >= 0 else '−'}{abs(n) * 100:.0f}%"
+
+
 def _fmt_kg(v: Any) -> str:
     if v is None:
         return "—"
