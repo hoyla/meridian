@@ -202,6 +202,43 @@ def test_message_includes_export_line_when_briefing_written(clean_db, stub_post)
     assert "exports/2026-06-16-0841/02_Findings.md" in msg
 
 
+def test_message_includes_gacc_page_line_and_export_ignores_gacc_rows(
+        clean_db, stub_post):
+    """When the GACC-track cycle acted this run, the alert carries the
+    tab-labelled GACC-only page line — and the gacc row must NOT masquerade
+    as a fresh briefing (the export enrichment is track-scoped to main)."""
+    routine_log.log_check("gacc", "new_data", notes="new period ingested")
+    import periodic_run_log
+    periodic_run_log.log_run(
+        action_taken=True,
+        reason="new GACC period 2026-06-01 recorded",
+        data_period=date(2026, 6, 1),
+        findings_path=None,
+        track="gacc",
+    )
+    notify.notify_new_data()
+    msg = stub_post.calls[0]
+    assert "GACC-only (Jun 2026)" in msg
+    assert "New GACC month" in msg
+    assert "fresh briefing" not in msg  # gacc row is not a main-track export
+
+
+def test_gacc_refresh_line_reads_quiet(clean_db, stub_post):
+    routine_log.log_check("gacc", "new_data", notes="second currency release")
+    import periodic_run_log
+    periodic_run_log.log_run(
+        action_taken=True,
+        reason="refreshed already-published GACC period 2026-06-01",
+        data_period=date(2026, 6, 1),
+        findings_path=None,
+        track="gacc",
+    )
+    notify.notify_new_data()
+    msg = stub_post.calls[0]
+    assert "quietly refreshed" in msg
+    assert "GACC-only (Jun 2026)" in msg
+
+
 def test_posts_on_newly_overdue_source(clean_db, stub_post):
     """A source that has just gone overdue (past its scheduled date, nothing
     seen) fires an alert even with no new data this run."""

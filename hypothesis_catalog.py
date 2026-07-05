@@ -204,6 +204,30 @@ CAUSAL_HYPOTHESES = [
         ],
     },
     {
+        # China-side (GACC-page) entry: the existing transshipment_reroute is
+        # framed around Eurostat partner-code effects; this one names the
+        # macro diversion signature the GACC page's world view can actually
+        # show (US↓ while EU/ASEAN↑ in China's own figures) — the page's
+        # purpose question made into a testable hypothesis
+        # (dev_notes/2026-07-05-gacc-update-page-design.md § Purpose).
+        "id": "us_tariff_diversion",
+        "label": "US-tariff diversion",
+        "description": (
+            "US tariff measures pushing Chinese exports toward other "
+            "markets: China's own figures show exports to the US falling "
+            "while exports to the EU and/or ASEAN rise in the same "
+            "period. An ASEAN rise alongside can also signal re-routing "
+            "toward the US via third countries rather than genuine "
+            "end-demand."
+        ),
+        "corroboration_steps": [
+            "Compare the US, EU and ASEAN lines in the same GACC month (the page's world table shows all three)",
+            "Check whether the affected flows fall under announced US tariff actions (Section 301 / IEEPA rounds) by category",
+            "Watch ASEAN transshipment economies (Vietnam, Malaysia) for matching export surges to the US in their own customs data",
+            "When Eurostat's mirror month lands (~5 weeks), test whether the EU-side import rise confirms China's export figure",
+        ],
+    },
+    {
         "id": "post_pandemic_normalisation",
         "label": "Post-pandemic normalisation",
         "description": (

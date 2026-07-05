@@ -683,7 +683,11 @@ _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 # editorial scaffolding, not facts to verify. Strip them before extraction
 # so a "rolling 12 months" reference doesn't fail verification.
 _TIME_PERIOD_RE = re.compile(
-    r"\b\d+(?:[-\s]+)(?:month|year|day|week|quarter|period|window)s?\b",
+    # Also matches the bare "12mo" shorthand (no separator) — the portal's
+    # own compact register, which the model echoes when shown it; without
+    # the strip the bare "12" reads as an unverifiable count (first hit:
+    # the GACC page's questions-take, 2026-07-05).
+    r"\b\d+(?:(?:[-\s]+)(?:month|year|day|week|quarter|period|window)s?|mo)\b",
     re.IGNORECASE,
 )
 # HS / CN8 code references: groups whose name embeds a customs code (e.g.

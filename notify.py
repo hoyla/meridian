@@ -230,7 +230,9 @@ def _newly_overdue(mark: datetime) -> list[OverdueRow]:
 def _latest_export_since(mark: datetime) -> tuple[date | None, str | None] | None:
     """If a `--periodic-run` cycle wrote a fresh export after `mark`, return
     (data_period, findings_path); else None. Best-effort — a missing/empty
-    periodic_run_log just means no export enrichment."""
+    periodic_run_log just means no export enrichment. Track-scoped to the
+    MAIN cycle: a gacc-track action row carries a GACC-month data_period and
+    no findings path, and must not masquerade as a fresh briefing."""
     try:
         with db.transaction() as conn, conn.cursor() as cur:
             cur.execute(
@@ -238,6 +240,7 @@ def _latest_export_since(mark: datetime) -> tuple[date | None, str | None] | Non
                 SELECT data_period, findings_path
                 FROM periodic_run_log
                 WHERE action_taken = TRUE AND invoked_at > %s
+                  AND track = 'main'
                 ORDER BY invoked_at DESC
                 LIMIT 1
                 """,
@@ -252,6 +255,33 @@ def _latest_export_since(mark: datetime) -> tuple[date | None, str | None] | Non
         return None
 
 
+def _latest_gacc_update_since(mark: datetime) -> tuple[date | None, bool] | None:
+    """If the GACC-track cycle acted after `mark`, return (data_period,
+    is_refresh); else None. The refresh flag distinguishes the dual-currency
+    second-release rebuild (quiet, mentioned but not headlined) from a new
+    GACC month. Best-effort, same posture as `_latest_export_since`."""
+    try:
+        with db.transaction() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT data_period, reason
+                FROM periodic_run_log
+                WHERE action_taken = TRUE AND invoked_at > %s
+                  AND track = 'gacc' AND error IS NULL
+                ORDER BY invoked_at DESC
+                LIMIT 1
+                """,
+                (mark,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return row[0], str(row[1] or "").startswith("refreshed")
+    except Exception:
+        log.exception("notify: failed to read periodic_run_log for gacc enrichment")
+        return None
+
+
 def _source_label(source: str) -> str:
     return {"eurostat": "Eurostat", "hmrc": "HMRC", "gacc": "GACC"}.get(
         source, source
@@ -262,12 +292,14 @@ def build_message(
     new_rows: list[NewDataRow],
     overdue_rows: list[OverdueRow],
     export: tuple[date | None, str | None] | None,
+    gacc_update: tuple[date | None, bool] | None = None,
 ) -> str:
     """Render the Google Chat text payload: a 'new data ingested' block (one
     bullet per source, notes verbatim, plus an export line when a briefing was
-    written this cycle) and/or a 'source overdue' block (a source past its
-    scheduled date with nothing seen). The caller only builds a message when at
-    least one block has content."""
+    written this cycle and a GACC-only-page line when that track acted) and/or
+    a 'source overdue' block (a source past its scheduled date with nothing
+    seen). The caller only builds a message when at least one block has
+    content."""
     lines: list[str] = []
 
     if new_rows:
@@ -290,6 +322,24 @@ def build_message(
             )
             if findings_path:
                 lines.append(f"Bundle: {findings_path}")
+
+        if gacc_update is not None:
+            # The label matches the portal tab ("GACC-only (Jun 2026)") so the
+            # ping→tab mapping is instant (design doc § tab labels).
+            gacc_period, is_refresh = gacc_update
+            tab = (f"GACC-only ({gacc_period:%b %Y})" if gacc_period
+                   else "GACC-only")
+            lines.append("")
+            if is_refresh:
+                lines.append(
+                    f"The *{tab}* page was quietly refreshed (further GACC "
+                    "release for the same month) — review & publish."
+                )
+            else:
+                lines.append(
+                    f"New GACC month: the *{tab}* page was rebuilt — review & "
+                    "publish (the portal is not auto-published)."
+                )
 
     if overdue_rows:
         if lines:
@@ -328,7 +378,8 @@ def notify_new_data(
         )
 
     export = _latest_export_since(mark) if new_rows else None
-    text = build_message(new_rows, overdue_rows, export)
+    gacc_update = _latest_gacc_update_since(mark) if new_rows else None
+    text = build_message(new_rows, overdue_rows, export, gacc_update)
 
     # Audit-note summary. New-data sources stay first and bare so the
     # new-data-only note is unchanged ("posted: Eurostat"); overdue is appended

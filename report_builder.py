@@ -2155,16 +2155,117 @@ _GACC_UNDERSTANDING_MD = (
 )
 
 
-def _build_gacc_page(cur) -> GaccPage | None:
+def _gacc_llm_facts(page: GaccPage, rows: list[_GaccRow], period: date) -> dict:
+    """The fact set for the page's LLM slots — display lines (the exact
+    formatting the model must cite verbatim), the numeric facts for
+    verify_numbers (fractions / EUR floats), and per-fact finding
+    provenance. Deterministic; the model sees nothing else."""
+    lines: list[str] = []
+    numbers: dict[str, float] = {}
+    prov: dict[str, int] = {}
+    strip_fids: list[int] = []
+
+    def add(key: str, val, fid) -> None:
+        if val is None:
+            return
+        numbers[key] = float(val)
+        if fid is not None:
+            prov[key] = fid
+
+    for key, kicker, display in _GACC_STRIP_SLOTS:
+        r = _strip_pick(rows, key)
+        if r is None:
+            continue
+        strip_fids.append(r.fid)
+        bits = []
+        if r.sm_yoy is not None:
+            bits.append(f"{_fmt_signed_pct(r.sm_yoy)} YoY (single month)")
+            add(f"{key}_sm", r.sm_yoy, r.fid)
+        if r.ytd_yoy is not None:
+            bits.append(f"YTD {_fmt_signed_pct(r.ytd_yoy)}")
+            add(f"{key}_ytd", r.ytd_yoy, r.fid)
+        if r.rolling_yoy is not None:
+            # "12-month", not the page's "12mo" shorthand: the model echoes
+            # the notation it is shown, and the verifier's time-period strip
+            # recognises the former (llm_framing._TIME_PERIOD_RE).
+            bits.append(f"12-month {_fmt_signed_pct(r.rolling_yoy)}")
+            add(f"{key}_12mo", r.rolling_yoy, r.fid)
+        lines.append(
+            f"China’s exports to {display}, {_fmt_month_abbr(period)}: "
+            + "; ".join(bits))
+    st = page.standout
+    if st is not None and st.metrics.get("pct") is not None:
+        flow_phrase = ("exports to" if st.subject.get("flow") == "export"
+                       else "imports from")
+        direction = st.metrics.get("direction") or "moved"
+        signed = (st.metrics["pct"] if direction != "fell"
+                  else -st.metrics["pct"])
+        lines.append(
+            f"Sharpest move: China’s {flow_phrase} "
+            f"{st.subject.get('group_name')} {direction} "
+            f"{abs(signed) * 100:.1f}% YoY")
+        add("standout_pct", signed,
+            st.provenance.finding_ids[0] if st.provenance.finding_ids else None)
+    for i, s in enumerate((page.since_last or {}).get("rows", [])[:3]):
+        flow_phrase = ("exports to" if s["flow"] == "export"
+                       else "imports from")
+        lines.append(
+            f"Swing since last month: China’s {flow_phrase} {s['label']} "
+            f"was {s['prev_yoy'] * 100:+.1f}%, now {s['cur_yoy'] * 100:+.1f}% "
+            f"({s['basis']})")
+        add(f"swing{i}_prev", s["prev_yoy"], s.get("finding_id"))
+        add(f"swing{i}_cur", s["cur_yoy"], s.get("finding_id"))
+    return {"lines": lines, "numbers": numbers, "prov": prov,
+            "strip_fids": strip_fids}
+
+
+def _generate_gacc_page_slots(page: GaccPage, rows: list[_GaccRow],
+                              period: date) -> None:
+    """Populate the page's LLM slots in place (paid backend calls — the
+    caller opts in per the cost discipline). Best-effort: any backend or
+    generation failure leaves the deterministic page standing alone, same
+    posture as every other LLM surface."""
+    import llm_gacc_page
+    facts = _gacc_llm_facts(page, rows, period)
+    if not facts["lines"]:
+        return
+    try:
+        from llm_framing import make_backend
+        backend = make_backend(role="takes")
+    except Exception:
+        log.exception("gacc page: no LLM backend; slots left empty")
+        return
+    try:
+        page.synthesis = llm_gacc_page.generate_synthesis(facts, backend)
+    except Exception:
+        log.exception("gacc page: synthesis generation failed; slot empty")
+    try:
+        qs = llm_gacc_page.generate_questions(facts, backend)
+        if qs:
+            page.questions = LLMSlot(
+                slot_type="general",
+                grounded_in=[f for f in facts["strip_fids"] if f is not None],
+                status="generated",
+                questions=qs,
+            )
+    except Exception:
+        log.exception("gacc page: questions generation failed; slot empty")
+
+
+def _build_gacc_page(cur, generate_takes: bool = False) -> GaccPage | None:
     """Assemble the GACC-only tab from live findings. None when no GACC
-    findings exist yet — the renderer then simply omits the tab."""
+    findings exist yet — the renderer then simply omits the tab.
+    `generate_takes` also runs the page's LLM slots (synthesis + questions)
+    via the configured backend — paid calls, so opt-in: the gacc-update
+    cycle passes True on new-period actions only; refreshes and main-track
+    rebuilds carry the slots forward via the reuse graft instead."""
     period = _gacc_latest_period(cur)
     if period is None:
         return None
     rows = _gacc_rows_at(cur, period)
     if not rows:
         return None
-    return GaccPage(
+    page = GaccPage(
         data_period=period,
         tab_label=f"GACC-only ({_fmt_month_abbr(period)})",
         identity=_gacc_identity(cur, period, rows),
@@ -2175,6 +2276,9 @@ def _build_gacc_page(cur) -> GaccPage | None:
         since_last=_gacc_since_last(cur, rows, period),
         understanding=_GACC_UNDERSTANDING_MD,
     )
+    if generate_takes:
+        _generate_gacc_page_slots(page, rows, period)
+    return page
 
 
 _GLOSSARY_PATH = pathlib.Path(__file__).resolve().parent / "docs" / "glossary.md"
@@ -2322,6 +2426,7 @@ def build_report(
     diff_baseline_brief_run_id: int | None = None,
     *,
     generate_takes: bool = False,
+    generate_gacc_takes: bool = False,
 ) -> Report:
     """Build the content model for one cycle. `source_trigger` selects the
     variant (Q1); defaults to 'eurostat' (every periodic export today is
@@ -2330,7 +2435,10 @@ def build_report(
     `generate_takes` (opt-in) runs the LLM per-finding take on the top movers
     (eurostat/hmrc only) via the configured backend — slow and backend-
     dependent, so it’s off by default. The deterministic report is complete
-    without it; a rejected or failed take just leaves a placeholder."""
+    without it; a rejected or failed take just leaves a placeholder.
+    `generate_gacc_takes` (opt-in, independently) runs the GACC page's LLM
+    slots — the gacc-update cycle passes it on new-period actions; every
+    other rebuild carries those slots forward via the reuse graft."""
     # Hard publication dependency: without the SITC/BEC lookups every group
     # collapses into "Other / unclassified". Fail loud rather than silently
     # ship that (see classifications.assert_classifications_available).
@@ -2416,7 +2524,7 @@ def build_report(
         # live findings on EVERY variant's rebuild so whichever cycle runs
         # carries the other track's tab forward (design doc § two-track
         # model). None (tab omitted) until GACC findings exist.
-        gacc_page = _build_gacc_page(cur)
+        gacc_page = _build_gacc_page(cur, generate_takes=generate_gacc_takes)
 
         # Per-source data vintage for the Briefing tab's identity strip (the
         # masthead no longer claims a single "Data to X" — see render).
