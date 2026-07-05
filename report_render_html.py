@@ -1537,6 +1537,80 @@ def _gacc_standout_html(item, payloads) -> str:
             f'{_take_block_html(item.take)}{prov}</li></ol>')
 
 
+def _gacc_since_last_dumbbell_svg(rows: list[dict]) -> str:
+    """Dumbbell chart for the since-last-read swings: one row per reading,
+    an open dot at last month's year-on-year figure, a filled dot at this
+    month's, a connecting bar, and the zero line marked so sign flips read
+    at a glance. Chart-honesty guard: rows are plotted only on the dominant
+    basis (mixing single-month and 12-month readings on one axis would be
+    quietly misleading); anything excluded is named in the caption, and the
+    table below always carries every row. Returns '' when fewer than two
+    rows share a basis — a one-dot dumbbell isn't a chart."""
+    if not rows:
+        return ""
+    by_basis: dict[str, list[dict]] = {}
+    for r in rows:
+        by_basis.setdefault(r["basis"], []).append(r)
+    basis = max(by_basis, key=lambda b: len(by_basis[b]))
+    plot = by_basis[basis]
+    excluded = len(rows) - len(plot)
+    if len(plot) < 2:
+        return ""
+
+    # Geometry: left gutter for the reading labels, plot area right of it.
+    x0, x1 = 215, 640
+    row_h, top, bottom = 27, 26, 10
+    h = top + row_h * len(plot) + bottom
+    vals = [v * 100 for r in plot for v in (r["prev_yoy"], r["cur_yoy"])]
+    lo, hi = min(vals + [0.0]), max(vals + [0.0])
+    pad = max((hi - lo) * 0.08, 1.0)
+    lo, hi = lo - pad, hi + pad
+
+    def x(v_pct: float) -> float:
+        return x0 + (v_pct - lo) / (hi - lo) * (x1 - x0)
+
+    parts = [f'<svg viewBox="0 0 660 {h}" role="img" '
+             f'aria-label="Year-on-year swings vs the previous GACC month">']
+    # Axis: zero line + end ticks, % labelled.
+    zx = x(0.0)
+    parts.append(f'<line x1="{zx:.1f}" y1="{top - 8}" x2="{zx:.1f}" '
+                 f'y2="{h - bottom}" stroke="#c9c4bb" stroke-width="1"/>')
+    for v, anchor in ((lo + pad, "start"), (0.0, "middle"), (hi - pad, "end")):
+        parts.append(f'<text x="{x(v):.1f}" y="{top - 12}" font-size="10.5" '
+                     f'fill="#8a8578" text-anchor="{anchor}">{v:+.0f}%</text>')
+    for i, r in enumerate(plot):
+        cy = top + i * row_h + row_h / 2
+        px, cx = x(r["prev_yoy"] * 100), x(r["cur_yoy"] * 100)
+        col = _UP if r["delta"] >= 0 else _DOWN
+        flow_lbl = ("exports to" if r["flow"] == "export" else "imports from")
+        label = f"China’s {flow_lbl} {r['label']}"
+        parts.append(f'<text x="205" y="{cy + 3.5:.1f}" font-size="11.5" '
+                     f'fill="#5c5749" text-anchor="end">{html.escape(label)}</text>')
+        parts.append(f'<line x1="{px:.1f}" y1="{cy:.1f}" x2="{cx:.1f}" '
+                     f'y2="{cy:.1f}" stroke="{col}" stroke-width="2.5" '
+                     'stroke-linecap="round" opacity="0.45"/>')
+        parts.append(f'<circle cx="{px:.1f}" cy="{cy:.1f}" r="4" fill="#fff" '
+                     'stroke="#8a8578" stroke-width="1.5"/>')
+        parts.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4.5" '
+                     f'fill="{col}"/>')
+        # The swing figure rides just past the current-month dot, on the
+        # side that has room.
+        at_right = cx >= px
+        tx = cx + (9 if at_right else -9)
+        anchor = "start" if at_right else "end"
+        parts.append(f'<text x="{tx:.1f}" y="{cy + 3.5:.1f}" font-size="11" '
+                     f'fill="{col}" text-anchor="{anchor}" '
+                     f'font-weight="600">{r["delta"] * 100:+.1f}pp</text>')
+    parts.append("</svg>")
+    caption = (f"○ previous month → ● this month, year-on-year change "
+               f"({html.escape(basis)} basis)")
+    if excluded:
+        caption += (f" · {excluded} reading{'s' if excluded > 1 else ''} on "
+                    "another basis shown in the table only")
+    return ('<div class="gdumbbell">' + "".join(parts)
+            + f'<p class="gchart-caption">{caption}</p></div>')
+
+
 def _gacc_since_last_html(gp) -> str:
     """The within-track delta: which readings swung most vs the previous
     GACC month. Small table; a one-liner when no comparable month exists."""
@@ -1559,6 +1633,7 @@ def _gacc_since_last_html(gp) -> str:
             f'vs the {html.escape(prev_lbl)} release.</p>')
     if not rows:
         return head + '<p class="note">No overlapping readings to compare.</p>'
+    head += _gacc_since_last_dumbbell_svg(rows)
     body = ["".join([
         "<tr>",
         f"<td>China’s {'exports to' if r['flow'] == 'export' else 'imports from'} "
@@ -1571,8 +1646,9 @@ def _gacc_since_last_html(gp) -> str:
         f'<td><span class="token">finding/{r["finding_id"]}</span></td>',
         "</tr>"]) for r in rows]
     return (head + '<div class="gtable-wrap"><table class="gtable">'
-            "<thead><tr><th>Reading</th><th>Basis</th><th>Was</th><th>Now</th>"
-            "<th>Swing</th><th>Finding</th></tr></thead>"
+            '<thead><tr><th>Reading</th><th>Basis</th>'
+            '<th class="num">Was</th><th class="num">Now</th>'
+            '<th class="num">Swing</th><th>Finding</th></tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table></div>')
 
 
@@ -1586,14 +1662,15 @@ def _gacc_world_html(section) -> str:
     if not rows:
         return "\n".join(out)
 
-    def cell(fl: dict | None, key: str, pct: bool = True) -> str:
+    def cell(fl: dict | None, key: str, pct: bool = True, grp: bool = False) -> str:
+        cls = "num grp" if grp else "num"
         v = (fl or {}).get(key)
         if v is None:
-            return '<td class="num">—</td>'
+            return f'<td class="{cls}">—</td>'
         if pct:
             col = _UP if v >= 0 else _DOWN
-            return f'<td class="num" style="color:{col}">{v * 100:+.1f}%</td>'
-        return f'<td class="num">{html.escape(_fmt_eur(v))}</td>'
+            return f'<td class="{cls}" style="color:{col}">{v * 100:+.1f}%</td>'
+        return f'<td class="{cls}">{html.escape(_fmt_eur(v))}</td>'
 
     body = []
     for e in rows:
@@ -1604,24 +1681,30 @@ def _gacc_world_html(section) -> str:
                       'Kong often precede re-export flows — an entrepôt '
                       'signal. Never summed into any China or EU figure.">'
                       "entrepôt signal ⓘ</span>")
+        # Finding tokens ride beneath the partner name (a whole column of
+        # tokens earned more width than it gave information).
         toks = " ".join(
             f'<span class="token">finding/{fl["finding_id"]}</span>'
             for fl in (ex, im) if fl and fl.get("finding_id"))
+        if toks:
+            label += f'<div class="gtable-toks">{toks}</div>'
         body.append(
             "<tr>"
             f"<td>{label}</td>"
             + cell(ex, "sm_yoy") + cell(ex, "ytd_yoy")
             + cell(ex, "rolling_eur", pct=False)
-            + cell(im, "sm_yoy") + cell(im, "ytd_yoy")
+            + cell(im, "sm_yoy", grp=True) + cell(im, "ytd_yoy")
             + cell(im, "rolling_eur", pct=False)
-            + f"<td>{toks}</td></tr>")
+            + "</tr>")
     out.append(
         '<div class="gtable-wrap"><table class="gtable">'
         "<thead><tr><th rowspan=2>Partner / bloc</th>"
-        '<th colspan=3>China’s exports</th>'
-        '<th colspan=3>China’s imports</th><th rowspan=2>Findings</th></tr>'
-        "<tr><th>Month YoY</th><th>YTD YoY</th><th>12mo value</th>"
-        "<th>Month YoY</th><th>YTD YoY</th><th>12mo value</th></tr></thead>"
+        '<th colspan=3 class="num">China’s exports</th>'
+        '<th colspan=3 class="num grp">China’s imports</th></tr>'
+        '<tr><th class="num">Month YoY</th><th class="num">YTD YoY</th>'
+        '<th class="num">12mo value</th>'
+        '<th class="num grp">Month YoY</th><th class="num">YTD YoY</th>'
+        '<th class="num">12mo value</th></tr></thead>'
         f'<tbody>{"".join(body)}</tbody></table></div>')
     return "\n".join(out)
 
@@ -1629,27 +1712,42 @@ def _gacc_world_html(section) -> str:
 def _gacc_page_html(gp, payloads) -> str:
     """The whole GACC-only tab panel, in the design's reading order:
     identity → context strip → standout → since-last → Europe up close →
-    world → understanding-these-figures expander."""
+    world → understanding-these-figures expander. Carries its own sticky
+    sub-nav, same pattern as the Briefing tab (the global scroll-spy scopes
+    itself to the visible panel — hidden sections never intersect)."""
     parts = [f"<section>{_gacc_identity_html(gp)}</section>"]
+    subnav: list[tuple[str, str]] = []
     if gp.strip:
         parts.append('<section class="kpis kpis-4">'
                       + "".join(_indicator_card(i, payloads) for i in gp.strip)
                       + "</section>")
     if gp.standout is not None:
-        parts.append("<section>" + _gacc_standout_html(gp.standout, payloads)
+        subnav.append(("gacc-standout", "Standout"))
+        parts.append('<section class="brief-sec" id="gacc-standout">'
+                      + _gacc_standout_html(gp.standout, payloads)
                       + "</section>")
-    parts.append("<section>" + _gacc_since_last_html(gp) + "</section>")
+    subnav.append(("gacc-sincelast", "Since last read"))
+    parts.append('<section class="brief-sec" id="gacc-sincelast">'
+                  + _gacc_since_last_html(gp) + "</section>")
     if gp.europe is not None:
         gp.europe.metrics.setdefault("order_note", "sharpest move first")
-        parts.append(f'<section id="{html.escape(gp.europe.id)}">'
+        subnav.append((gp.europe.id, "Europe"))
+        parts.append(f'<section class="brief-sec" id="{html.escape(gp.europe.id)}">'
                       + _gacc_bilateral_html(gp.europe) + "</section>")
     if gp.world is not None:
-        parts.append(f'<section id="{html.escape(gp.world.id)}">'
+        subnav.append((gp.world.id, "World"))
+        parts.append(f'<section class="brief-sec" id="{html.escape(gp.world.id)}">'
                       + _gacc_world_html(gp.world) + "</section>")
     if gp.understanding:
-        parts.append("<section><h2 class=\"lead\">Understanding these "
-                      "figures</h2>"
+        subnav.append(("gacc-understanding", "Understanding"))
+        parts.append('<section class="brief-sec" id="gacc-understanding">'
+                      "<h2 class=\"lead\">Understanding these figures</h2>"
                       + _more_about_html(gp.understanding) + "</section>")
+    if subnav:
+        links = '<a class="subnav-top" href="#top">↑&nbsp;Top</a>' + "".join(
+            f'<a href="#{a}" data-spy="{a}">{html.escape(lbl)}</a>'
+            for a, lbl in subnav)
+        parts.insert(0, f'<nav class="subnav" aria-label="On this page">{links}</nav>')
     return "".join(parts)
 
 
@@ -2235,12 +2333,18 @@ footer{padding:18px 28px 28px;border-top:1px solid var(--line);font-size:12px;co
 .idchip{border:1px solid var(--line);border-radius:999px;padding:3px 10px;color:var(--muted);white-space:nowrap}
 .idchip a{color:var(--masthead);text-decoration:none}
 .id-strip + details.more{margin-top:10px}
+.gdumbbell{max-width:680px;margin:6px 0 2px}
+.gdumbbell svg{width:100%;height:auto;display:block}
+.gchart-caption{margin:2px 0 0;font-family:var(--font-sans);font-size:11.5px;color:var(--muted)}
 .kpis-4{grid-template-columns:repeat(4,minmax(0,1fr))}
 .gtable-wrap{overflow-x:auto}
 .gtable{border-collapse:collapse;width:100%;font-family:var(--font-sans);font-size:13.5px}
 .gtable th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);border-bottom:1px solid var(--line);padding:6px 10px 6px 0}
+.gtable th.num{text-align:right}
 .gtable td{border-bottom:1px solid var(--line);padding:7px 10px 7px 0;vertical-align:top}
 .gtable td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.gtable .grp{border-left:1px solid var(--line);padding-left:12px}
+.gtable-toks{margin-top:3px}
 .hub-note{font-size:11.5px;color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:1px 7px;white-space:nowrap}
 @media(max-width:900px){.kpis-4{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:640px){.kpis-4{grid-template-columns:1fr}}
@@ -2634,7 +2738,10 @@ def render_html(report: Report) -> str:
     if src_parts:
         tabdefs.append(("sources", "Sources & coverage", "".join(src_parts)))
     if ref_sec is not None:
-        tabdefs.append(("methodology", "Methodology",
+        # "Method", not "Methodology" — with two period-labelled track tabs
+        # the nav row needs every character (Luke, 2026-07-05). The tab key
+        # (and so every #tab-methodology deep-link) is unchanged.
+        tabdefs.append(("methodology", "Method",
                         "<section>" + _reference_html(ref_sec) + "</section>"))
     if gloss_sec is not None and (gloss_sec.metrics or {}).get("groups"):
         tabdefs.append(("glossary", "Glossary",

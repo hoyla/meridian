@@ -166,6 +166,52 @@ def test_since_last_read_renders_swings_and_gap_case():
     assert "No directly comparable previous GACC month" in h2
 
 
+def _swing(label, flow, prev, cur, basis="single-month", fid=99):
+    return {"label": label, "flow": flow, "basis": basis, "prev_yoy": prev,
+            "cur_yoy": cur, "delta": cur - prev, "finding_id": fid}
+
+
+def test_since_last_dumbbell_renders_for_same_basis_rows():
+    """≥2 same-basis swings → the dumbbell chart renders above the table:
+    open prev-month dot, filled current-month dot, signed pp labels, and the
+    caption naming the basis."""
+    gp = _gacc_page(since_last={"prev_period": "2026-04-01", "rows": [
+        _swing("the EU", "export", 0.031, 0.124),
+        _swing("Canada", "import", 0.128, 0.924),
+        _swing("Brazil", "export", 0.05, -0.198),
+    ]})
+    h = render_html(_report(gacc_page=gp))
+    assert '<div class="gdumbbell">' in h
+    assert 'fill="#fff"' in h          # the open previous-month dot
+    assert "+9.3pp" in h and "+79.6pp" in h and "-24.8pp" in h
+    assert "single-month basis" in h
+    # Sign-flip row (Brazil +5% → −19.8%) crosses the marked zero line.
+    assert 'aria-label="Year-on-year swings' in h
+
+
+def test_since_last_dumbbell_plots_dominant_basis_only():
+    """Mixed bases must not share one axis: the chart keeps the dominant
+    basis and the caption names what it excluded (the table keeps all)."""
+    gp = _gacc_page(since_last={"prev_period": "2026-04-01", "rows": [
+        _swing("the EU", "export", 0.031, 0.124),
+        _swing("Canada", "import", 0.128, 0.924),
+        _swing("ASEAN", "export", 0.05, 0.08, basis="12-month"),
+    ]})
+    h = render_html(_report(gacc_page=gp))
+    assert "1 reading on another basis shown in the table only" in h
+    # The excluded 12-month row still appears in the table beneath.
+    assert ">12-month<" in h
+
+
+def test_since_last_dumbbell_absent_below_two_rows():
+    gp = _gacc_page()  # the base fixture carries a single swing row
+    h = render_html(_report(gacc_page=gp))
+    # The markup (not the stylesheet, which always carries the class) —
+    # a one-dot dumbbell isn't a chart.
+    assert '<div class="gdumbbell">' not in h
+    assert "Since the last read" in h  # the table/section still renders
+
+
 def test_strip_and_standout_render_with_drawer_hooks():
     h = render_html(_report(gacc_page=_gacc_page()))
     assert "CHINA → EU" in h and "+12.4%" in h
@@ -178,6 +224,45 @@ def test_understanding_expander_is_collapsed_disclosure():
     h = render_html(_report(gacc_page=_gacc_page()))
     assert "Understanding these figures" in h
     assert "Reading the direction." in h
+
+
+def test_gacc_tab_has_its_own_sticky_subnav():
+    """UI consistency with the Briefing tab (Luke, 2026-07-05): the GACC
+    panel carries the same sticky .subnav pattern, with data-spy anchors
+    for its sections. The global scroll-spy scopes itself to the visible
+    panel, so two subnavs coexist."""
+    h = render_html(_report(gacc_page=_gacc_page()))
+    panel = h[h.index('id="tab-gacc"'):h.index('id="tab-methodology"')
+              if 'id="tab-methodology"' in h else len(h)]
+    assert '<nav class="subnav"' in panel
+    for anchor in ("gacc-standout", "gacc-sincelast", "gacc-europe",
+                   "gacc-world", "gacc-understanding"):
+        assert f'data-spy="{anchor}"' in panel
+    # Sections use the shared brief-sec class (sticky-bar scroll offset).
+    assert 'class="brief-sec" id="gacc-standout"' in panel
+
+
+def test_world_table_headers_align_with_values_and_tokens_fold_in():
+    """The numeric column headers right-align with their values, the two
+    flow groups get a divider, and the finding tokens ride beneath the
+    partner name instead of costing a column."""
+    h = render_html(_report(gacc_page=_gacc_page()))
+    panel = h[h.index('id="gacc-world"'):]
+    assert '<th class="num">Month YoY</th>' in panel
+    assert '<th class="num grp">Month YoY</th>' in panel  # import group divider
+    assert '<div class="gtable-toks">' in panel
+    assert ">Findings</th>" not in panel  # the token column is gone
+
+
+def test_methodology_tab_renamed_method():
+    """'Method', not 'Methodology' — the nav row needs every character with
+    two period-labelled track tabs. The tab KEY stays 'methodology' so
+    existing #tab-methodology deep-links keep working."""
+    r = _report(gacc_page=_gacc_page())
+    r.sections = [rm.Section(id="ref", title="Methodology", kind="reference")]
+    h = render_html(r)
+    assert 'href="#tab-methodology">Method</a>' in h
+    assert ">Methodology</a>" not in h
 
 
 # ---------------------------------------------------------------------------
