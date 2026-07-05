@@ -101,7 +101,10 @@ def test_two_track_tab_labels_are_period_explicit():
 
 def test_no_gacc_page_means_no_gacc_tab():
     h = render_html(_report(gacc_page=None))
-    assert ">GACC-only" not in h and "#tab-gacc" not in h
+    # No tab, no period-labelled tab text, no cross-link target. (The
+    # About-this-site copy legitimately *mentions* the GACC-only tab by
+    # name, so the needles are the structural forms, not the bare phrase.)
+    assert "GACC-only (" not in h and 'href="#tab-gacc"' not in h
     assert ">Full briefing (Apr 2026)</a>" in h
 
 
@@ -126,13 +129,20 @@ def test_briefing_identity_strip_carries_source_vintages():
     assert 'href="#tab-gacc"' in h
 
 
-def test_gacc_identity_strip_dates_links_and_caveats():
+def test_gacc_identity_strip_dates_links_and_about_page():
     h = render_html(_report(gacc_page=_gacc_page()))
     assert "GACC · May 2026" in h
     assert "Published 9 Jun 2026" in h
     assert "European confirmation due ~15 Jul 2026" in h
     assert "中文" in h and "www.customs.gov.cn" in h
+    # The standing caveats live in a collapsed "About this page" disclosure
+    # (Luke, 2026-07-05) — present in the markup, but behind a summary, not
+    # always-visible bullets.
+    assert "About this page</summary>" in h
     assert "China’s own customs figures." in h
+    i_summary = h.index("About this page</summary>")
+    i_caveat = h.index("China’s own customs figures.")
+    assert i_summary < i_caveat  # caveat body sits inside the disclosure
 
 
 def test_world_table_orders_and_labels_the_entrepot_line():

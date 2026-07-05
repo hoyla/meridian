@@ -565,8 +565,9 @@ _ABOUT_SITE = (
     "**Meridian** surfaces findings from China–Europe trade data, drawn from "
     "three official sources: **GACC** (China’s customs administration), "
     "**Eurostat** (EU-27) and **HMRC** (UK). Each release is triggered when our "
-    "scraper finds fresh data from one of these — the source and the month it "
-    "covers are shown by the badge, top right.\n\n"
+    "scraper finds fresh data from one of these — every tab names the month "
+    "its lead figures cover, and the strip at the top of this tab shows each "
+    "source’s data vintage.\n\n"
     "**What’s in a briefing.** Which sections appear depends on the data "
     "release that triggered it; you may see:\n\n"
     "- **Standout moves** — the largest year-on-year shifts in the freshest "
@@ -584,6 +585,11 @@ _ABOUT_SITE = (
     "value, volume and predictability badges.\n"
     "- **China’s trade by country (GACC)** — China’s own reported trade with "
     "each of its ~24 named partner countries, both flows, rolling 12 months.\n\n"
+    "The **GACC-only tab** is the second release track: China’s own figures "
+    "for the month Europe hasn’t confirmed yet, published ~5 weeks ahead of "
+    "the Eurostat equivalent. It follows different conventions to this tab — "
+    "China-perspective, mainland customs territory only — and carries its own "
+    "“About this page” note.\n\n"
     "Unless a figure is labelled **China-only**, **“China” includes Hong "
     "Kong and Macao**: a large share of China’s exports route through Hong Kong, "
     "so the combined envelope reflects the trade flow more completely. Where a "
@@ -1500,8 +1506,15 @@ def _gacc_identity_html(gp) -> str:
     out = [f'<div class="id-strip">{"".join(chips)}</div>']
     caveats = ident.get("caveats") or []
     if caveats:
-        out.append('<ul class="id-caveats">' + "".join(
-            f"<li>{_inline_md(c)}</li>" for c in caveats) + "</ul>")
+        # The standing epistemic caveats live in a collapsed "About this
+        # page" disclosure (same page-level pattern as the Briefing's
+        # "About this site") rather than as always-visible bullets — the
+        # identity strip stays scannable, the full framing is one click.
+        out.append(
+            '<details class="more about-site"><summary>About this page'
+            '</summary><div class="more-body">'
+            + _md_blocks_to_html("\n\n".join(caveats))
+            + "</div></details>")
     return "".join(out)
 
 
@@ -2221,8 +2234,7 @@ footer{padding:18px 28px 28px;border-top:1px solid var(--line);font-size:12px;co
 .id-strip{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-family:var(--font-sans);font-size:13px}
 .idchip{border:1px solid var(--line);border-radius:999px;padding:3px 10px;color:var(--muted);white-space:nowrap}
 .idchip a{color:var(--masthead);text-decoration:none}
-.id-caveats{margin:10px 0 0;padding-left:18px;font-family:var(--font-sans);font-size:13px;color:var(--muted)}
-.id-caveats li{margin:3px 0}
+.id-strip + details.more{margin-top:10px}
 .kpis-4{grid-template-columns:repeat(4,minmax(0,1fr))}
 .gtable-wrap{overflow-x:auto}
 .gtable{border-collapse:collapse;width:100%;font-family:var(--font-sans);font-size:13.5px}
