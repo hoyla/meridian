@@ -239,6 +239,53 @@ Why reuse needs the bucket: the page reporters see is the **pre-rendered
 onto the report at build time (read from the live `latest/report.json`), not
 merged into the JSON at upload time.
 
+### The second track: the GACC-only page and its takes (2026-07-05)
+
+The portal carries **two release tracks** (see
+[`dev_notes/2026-07-05-gacc-update-page-design.md`](../dev_notes/2026-07-05-gacc-update-page-design.md)):
+the Full briefing (Eurostat+HMRC month) and the GACC-only tab (China's own
+figures, one month ahead). Each has its own LLM content — the briefing's
+takes above, plus the GACC page's *synthesis* and *questions* slots — and
+they advance on different months.
+
+**You never manage the GACC track's cycle by hand.** The daily
+`--periodic-run` chains it: a new GACC month fires the `gacc_update` track,
+which re-runs the GACC analysers, generates the page's two LLM slots (~2
+paid calls a month; `--skip-llm` opts out), grafts the briefing's takes
+forward from the live snapshot, and leaves a publish-ready bundle whose
+path the run summary (and the Chat ping) gives you. The dual-currency
+second release later the same month is a quiet refresh — no new LLM spend.
+
+**One invariant makes every rebuild predictable:**
+
+> Each track's LLM content survives a rebuild **unless its own month
+> advanced** — then, and only then, it is dropped for fresh generation.
+
+So the workflow you already know doesn't change:
+
+1. Eurostat+HMRC release published with takes (`--portal-takes`).
+2. Fix afterwards → `--portal-reuse-takes`, as ever. (The GACC slots carry
+   automatically — their graft is independent of the flag, gated on the
+   GACC month.)
+3. GACC release → automatic: fresh GACC slots + your existing briefing
+   takes grafted. Publish the bundle it names.
+4. Fix afterwards → `--portal-reuse-takes` again. One command preserves
+   both tracks.
+
+**Sequencing caveat:** the grafts read the **live published** snapshot,
+not local folders. If a GACC release has fired but you haven't published
+its bundle yet, publish it *before* running a fix rebuild — otherwise the
+fix build finds only the old GACC month live, the period gate rightly
+refuses to carry it onto the new-month page, and you get blank GACC slots.
+(Recovery is cheap: `--gacc-update-run --force` regenerates them.)
+
+**Environment:** the graft needs `PORTAL_BUCKET=meridian-500111-portal`
+and `GOOGLE_CLOUD_PROJECT=meridian-500111` at **build** time. Both live in
+the repo `.env` (added 2026-07-05, after the first live run built a bundle
+with empty briefing takes because neither was set — publishing it would
+have wiped the live takes). If a gacc-update summary ever reports a bundle
+whose briefing takes are empty, that's the symptom to check first.
+
 ## Warm at launch, cool to save money
 A report's first hours are ~90% of its lifetime traffic — reporters reading
 fresh material — and that's exactly when a scale-to-zero cold start (a few
