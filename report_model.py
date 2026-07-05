@@ -219,10 +219,12 @@ class GaccPage:
     territory only (no CN+HK+MO envelope — HK/MO appear as *partners*)."""
     data_period: Optional[date]
     tab_label: str  # period-explicit, e.g. "GACC-only (May 2026)"
-    # {published, confirmation_due, source_url, source_url_zh, caveats: [str]}
-    # — the identity header: when China published, when Europe's harmonised
-    # figures for the same month are due, links to both language versions of
-    # the release, and the standing epistemic caveats.
+    # {published, confirmation_due, source_url, source_url_zh} — the
+    # identity header: when China published, when Europe's harmonised
+    # figures for the same month are due, and links to both language
+    # versions of the release. (The epistemic caveats moved into
+    # `understanding` 2026-07-05 — one About-this-page disclosure, not two
+    # overlapping about-boxes.)
     identity: dict = field(default_factory=dict)
     # The context strip (doubles as this page's KPI row): China's exports to
     # EU · US · ASEAN · World, single-month YoY face — the "general surge or
@@ -236,7 +238,11 @@ class GaccPage:
     # {prev_period, basis_note, rows: [{label, flow, prev_yoy, cur_yoy,
     #  delta, basis}]} — the within-track delta vs the previous GACC month.
     since_last: dict = field(default_factory=dict)
-    understanding: Optional[str] = None  # collapsed "how to read this" copy
+    # The page's WHOLE epistemic framing (early-read status, direction
+    # mapping, mainland scope, no-product-detail, FX convention, the
+    # conditional Jan–Feb note) — rendered as the single collapsed "About
+    # this page" disclosure under the KPI strip.
+    understanding: Optional[str] = None
     # The page's LLM layer (V1, design doc § LLM layer). Both slots are built
     # on the llm_framing verify-or-reject contract and abstain to None:
     # `synthesis` = the release-synthesis lead-scaffold —

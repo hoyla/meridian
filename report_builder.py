@@ -2099,8 +2099,11 @@ def _gacc_since_last(cur, rows: list[_GaccRow], period: date) -> dict:
 
 def _gacc_identity(cur, period: date, rows: list[_GaccRow]) -> dict:
     """The identity header: when China published, when Europe's harmonised
-    figures for the same month are due (release_calendar), links to both
-    language versions of the release, and the standing epistemic caveats."""
+    figures for the same month are due (release_calendar), and links to
+    both language versions of the release. The page's epistemic framing
+    lives in ONE place — the "About this page" disclosure (`understanding`)
+    — not here: two about-boxes with overlapping content read as
+    functionally different when they weren't (Luke, 2026-07-05)."""
     cur.execute(
         """SELECT source_url, publication_date, first_seen_at
              FROM releases WHERE source = 'gacc' AND period = %s
@@ -2114,30 +2117,11 @@ def _gacc_identity(cur, period: date, rows: list[_GaccRow]) -> dict:
         published = row[1] or (row[2].date() if row[2] else None)
     due = release_calendar.expected_publish_date("eurostat", period)
     zh = _construct_chinese_source_url(url) if url else None
-    caveats = [
-        "China’s own customs figures (GACC) — the mainland customs "
-        "territory only. Goods routed via Hong Kong appear here as trade "
-        "with Hong Kong; the Full briefing’s Eurostat figures use the "
-        "wider China+Hong Kong+Macao envelope, so the two tabs’ "
-        "“China” differ by construction.",
-        "Levels historically read ~20% above the EU’s mirror figures; "
-        "year-on-year changes travel across the mirror far better than "
-        "levels do.",
-        "Values are EUR-equivalent at per-period exchange rates, so growth "
-        "rates will not exactly match GACC’s published CNY / USD "
-        "figures.",
-    ]
-    if any(r.totals.get("jan_feb_combined_years") for r in rows):
-        caveats.append(
-            "Some windows include GACC’s combined January–February "
-            "release (Chinese New Year); affected figures carry the "
-            "jan_feb_combined caveat in their drawers.")
     return {
         "published": published.isoformat() if published else None,
         "confirmation_due": due.isoformat() if due else None,
         "source_url": url,
         "source_url_zh": zh,
-        "caveats": caveats,
     }
 
 
@@ -2153,30 +2137,50 @@ _GACC_PAGE_ABOUT_EUROPE = (
     "~5 weeks."
 )
 
-_GACC_UNDERSTANDING_MD = (
-    "**Reading the direction.** “China’s exports to the EU” "
-    "≈ the EU’s imports from China, measured from the Chinese "
-    "side. This page speaks China-perspective throughout — GACC’s own "
-    "frame and the wire convention — where the Full briefing speaks "
-    "Europe-perspective.\n\n"
+# The single "About this page" disclosure (under the KPI strip, mirroring
+# the Briefing's "About this site"). The page's WHOLE epistemic framing,
+# consolidated 2026-07-05: it previously split across a caveat list here
+# and an "Understanding these figures" section at the bottom — with three
+# of five blocks duplicated between them and no functional difference.
+_GACC_ABOUT_PAGE_MD = (
+    "**An early read, not the confirmed record.** China’s own customs "
+    "figures (GACC), published ~5 weeks before Eurostat covers the same "
+    "month. Levels typically read ~20% above the EU’s mirror figures "
+    "(valuation, routing and scope differences — see Methodology); "
+    "year-on-year changes travel across the mirror far better than levels "
+    "do. Quote changes; attribute levels to “China’s customs "
+    "administration”.\n\n"
+    "**Reading the direction.** “China’s exports to the EU” ≈ the "
+    "EU’s imports from China, measured from the Chinese side. This page "
+    "speaks China-perspective throughout — GACC’s own frame and the wire "
+    "convention — where the Full briefing speaks Europe-perspective.\n\n"
     "**Scope.** “China” here means the mainland customs territory "
     "(GACC’s remit); goods routed via Hong Kong appear as trade with "
     "Hong Kong. The Full briefing’s Eurostat figures use the wider "
     "China+Hong Kong+Macao envelope, so the two tabs’ “China” "
     "differ by construction.\n\n"
-    "**Early read, not the confirmed record.** GACC publishes ~5 weeks "
-    "before Eurostat covers the same month. Levels typically read ~20% "
-    "above the EU mirror (valuation, routing and scope differences — see "
-    "Methodology); year-on-year changes are far more comparable than "
-    "levels. Quote changes, attribute levels to “China’s customs "
-    "administration”.\n\n"
     "**No product detail.** GACC’s country release is partner-level "
     "only. Product-level detail arrives with the European confirmation.\n\n"
-    "**Currency.** Values are converted to EUR at per-period rates, so "
-    "growth rates won’t exactly match GACC’s published CNY / USD "
-    "figures — the standing FX-convention note in Methodology applies "
-    "doubly on this page, which leads with growth rates."
+    "**Currency.** Values are converted to EUR at per-period exchange "
+    "rates, so growth rates won’t exactly match GACC’s published "
+    "CNY / USD figures — which matters doubly on a page that leads with "
+    "growth rates."
 )
+
+_GACC_ABOUT_JAN_FEB_MD = (
+    "**January–February windows.** Some windows include GACC’s combined "
+    "January–February release (Chinese New Year); affected figures carry "
+    "the jan_feb_combined caveat in their drawers."
+)
+
+
+def _gacc_about_page_md(rows: list[_GaccRow]) -> str:
+    """The consolidated About-this-page copy, with the Jan–Feb note
+    appended only when a shown window actually includes the combined
+    release."""
+    if any(r.totals.get("jan_feb_combined_years") for r in rows):
+        return _GACC_ABOUT_PAGE_MD + "\n\n" + _GACC_ABOUT_JAN_FEB_MD
+    return _GACC_ABOUT_PAGE_MD
 
 
 def _gacc_llm_facts(page: GaccPage, rows: list[_GaccRow], period: date) -> dict:
@@ -2298,7 +2302,7 @@ def _build_gacc_page(cur, generate_takes: bool = False) -> GaccPage | None:
         europe=_gacc_europe_section(rows, period),
         world=_gacc_world_section(rows, period),
         since_last=_gacc_since_last(cur, rows, period),
-        understanding=_GACC_UNDERSTANDING_MD,
+        understanding=_gacc_about_page_md(rows),
     )
     if generate_takes:
         _generate_gacc_page_slots(page, rows, period)

@@ -31,7 +31,6 @@ def _gacc_page(**over) -> rm.GaccPage:
             "confirmation_due": "2026-07-15",
             "source_url": "https://english.customs.gov.cn/Statics/x.html",
             "source_url_zh": "https://www.customs.gov.cn/Statics/x.html",
-            "caveats": ["China’s own customs figures.", "FX note."],
         },
         strip=[rm.Indicator(
             key="gacc_strip_eu", kicker="CHINA → EU",
@@ -90,7 +89,8 @@ def _gacc_page(**over) -> rm.GaccPage:
             {"label": "the EU", "flow": "export", "basis": "single-month",
              "prev_yoy": 0.031, "cur_yoy": 0.124, "delta": 0.093,
              "finding_id": 42}]},
-        understanding="**Reading the direction.** Test copy.",
+        understanding=("**An early read.** China’s own customs figures.\n\n"
+               "**Reading the direction.** Test copy."),
     )
     base.update(over)
     return rm.GaccPage(**base)
@@ -150,14 +150,15 @@ def test_gacc_identity_strip_dates_links_and_about_page():
     assert "Published 9 Jun 2026" in h
     assert "European confirmation due ~15 Jul 2026" in h
     assert "中文" in h and "www.customs.gov.cn" in h
-    # The standing caveats live in a collapsed "About this page" disclosure
-    # (Luke, 2026-07-05) — present in the markup, but behind a summary, not
-    # always-visible bullets.
+    # The page's whole epistemic framing lives in ONE collapsed "About
+    # this page" disclosure (consolidated 2026-07-05 — previously split
+    # across a caveat list and a bottom Understanding section with
+    # duplicated content).
     assert "About this page</summary>" in h
     assert "China’s own customs figures." in h
     i_summary = h.index("About this page</summary>")
     i_caveat = h.index("China’s own customs figures.")
-    assert i_summary < i_caveat  # caveat body sits inside the disclosure
+    assert i_summary < i_caveat  # the framing sits inside the disclosure
     # Placement mirrors the Briefing's About-this-site: under the KPI band,
     # above the Standout lead (Luke, 2026-07-05).
     panel = h[h.index('id="tab-gacc"'):]
@@ -277,10 +278,14 @@ def test_strip_and_standout_render_with_drawer_hooks():
     assert "sharpest move first" in h
 
 
-def test_understanding_expander_is_collapsed_disclosure():
+def test_no_separate_understanding_section():
+    """One about-box, not two (Luke, 2026-07-05): the bottom "Understanding
+    these figures" section is gone; its content lives in the top
+    About-this-page disclosure."""
     h = render_html(_report(gacc_page=_gacc_page()))
-    assert "Understanding these figures" in h
-    assert "Reading the direction." in h
+    assert "Understanding these figures" not in h
+    assert 'id="gacc-understanding"' not in h
+    assert "Reading the direction." in h  # inside About this page
 
 
 def test_gacc_tab_has_its_own_sticky_subnav():
@@ -293,8 +298,9 @@ def test_gacc_tab_has_its_own_sticky_subnav():
               if 'id="tab-methodology"' in h else len(h)]
     assert '<nav class="subnav"' in panel
     for anchor in ("gacc-standout", "gacc-sincelast", "gacc-europe",
-                   "gacc-world", "gacc-understanding"):
+                   "gacc-world"):
         assert f'data-spy="{anchor}"' in panel
+    assert 'data-spy="gacc-understanding"' not in panel  # consolidated away
     # Sections use the shared brief-sec class (sticky-bar scroll offset).
     assert 'class="brief-sec" id="gacc-standout"' in panel
 
@@ -550,4 +556,7 @@ def test_identity_reads_release_and_calendar(seeded, test_db_url):
         "eurostat", seeded["period"])
     assert ident["confirmation_due"] == (
         expected_due.isoformat() if expected_due else None)
-    assert any("mainland customs territory" in c for c in ident["caveats"])
+    # The epistemic framing consolidated onto `understanding` (2026-07-05);
+    # identity carries dates + links only.
+    assert "caveats" not in ident
+    assert "mainland customs territory" in gp.understanding
