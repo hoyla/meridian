@@ -523,6 +523,42 @@ def test_europe_includes_members_and_bloc_but_not_us_or_tiny(
     assert {f.metrics["flow"] for f in bloc.findings} == {"export", "import"}
 
 
+def test_eu_bloc_expander_defaults_open_everywhere(seeded, test_db_url):
+    """The EU bloc's twisty ships unfolded in BOTH bilateral surfaces
+    (Luke, 2026-07-05) — 'Europe up close' on the GACC page and 'China's
+    trade by country (GACC)' on the main Briefing — so one open profile
+    signals what every collapsed country row contains. Marker is the
+    structural eu_bloc kind, set at build time; member states stay
+    collapsed."""
+    import report_builder as rb
+
+    # GACC page: Europe up close.
+    gp = _build(test_db_url)
+    eu_sec = gp.europe.sections[0]
+    assert eu_sec.metrics.get("default_open") is True
+    assert all(not s.metrics.get("default_open")
+               for s in gp.europe.sections[1:])
+
+    # Main Briefing: China's trade by country.
+    conn = psycopg2.connect(test_db_url)
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        main_sec = rb._gacc_bilateral_section(cur, seeded["period"])
+    finally:
+        conn.close()
+    flags = {s.title: bool(s.metrics.get("default_open"))
+             for s in main_sec.sections}
+    assert sum(flags.values()) == 1  # exactly one open: the bloc
+    assert flags[eu_sec.title] is True
+
+    # And the renderer honours it: the open attribute lands on that
+    # details element only.
+    from report_render_html import _gacc_bilateral_html
+    h = _gacc_bilateral_html(main_sec)
+    assert '<details class="partner" open id=' in h
+    assert h.count('<details class="partner" open') == 1
+
+
 def test_world_rows_order_and_hub_flag(seeded, test_db_url):
     gp = _build(test_db_url)
     rows = gp.world.metrics["rows"]

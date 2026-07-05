@@ -1679,7 +1679,8 @@ def _gacc_bilateral_section(cur, period) -> Section:
     )
     by_partner: dict[str, dict] = {}
     for fid, subkind, detail in cur.fetchall():
-        partner = ((detail or {}).get("partner") or {}).get("raw_label") or "?"
+        pmeta = (detail or {}).get("partner") or {}
+        partner = pmeta.get("raw_label") or "?"
         is_export = not subkind.endswith("_import")
         tot = (detail or {}).get("totals", {})
         ctx = _bilateral_context(detail)
@@ -1695,7 +1696,15 @@ def _gacc_bilateral_section(cur, period) -> Section:
             provenance=Provenance(finding_ids=[fid], source="gacc", as_of=period),
         )
         p = by_partner.setdefault(partner, {"max_eur": 0.0, "findings": [],
-                                            "flows": {}})
+                                            "flows": {},
+                                            # The EU bloc's expander defaults
+                                            # OPEN (Luke, 2026-07-05): one
+                                            # unfolded profile signals what
+                                            # every collapsed row contains.
+                                            # Structural marker (kind), never
+                                            # the label spelling.
+                                            "default_open":
+                                                pmeta.get("kind") == "eu_bloc"})
         p["findings"].append(finding)
         p["max_eur"] = max(p["max_eur"], finding.metrics["current_eur"] or 0.0)
         # Stash the raw totals both flows need for a netted balance — the priors
@@ -1710,11 +1719,14 @@ def _gacc_bilateral_section(cur, period) -> Section:
         }
     for name, p in sorted(by_partner.items(), key=lambda kv: -kv[1]["max_eur"]):
         fs = sorted(p["findings"], key=lambda f: f.metrics["flow"])
+        metrics = _partner_balance(p["flows"])
+        if p.get("default_open"):
+            metrics["default_open"] = True
         root.sections.append(Section(
             id="gacc-" + _slugify_heading(name), title=name,
             kind="gacc_bilateral", findings=fs,
             facets=Facets(partner=[name]),
-            metrics=_partner_balance(p["flows"]),
+            metrics=metrics,
         ))
     return root
 
@@ -1924,10 +1936,13 @@ def _gacc_standout(rows: list[_GaccRow], period: date) -> HeadlineItem | None:
 
 
 def _gacc_partner_section(label: str, slug_prefix: str,
-                          flows_rows: list[_GaccRow], period: date) -> Section:
+                          flows_rows: list[_GaccRow], period: date,
+                          default_open: bool = False) -> Section:
     """One partner subsection in the _gacc_bilateral_section shape (same
     Finding metrics + netted-balance metrics), so the existing renderer
-    handles it unchanged."""
+    handles it unchanged. `default_open` renders the expander unfolded —
+    the EU bloc leads that way (Luke, 2026-07-05: one open profile signals
+    what every collapsed row contains)."""
     findings: list[Finding] = []
     flows: dict[str, dict] = {}
     for r in sorted(flows_rows, key=lambda r: r.flow):
@@ -1952,11 +1967,14 @@ def _gacc_partner_section(label: str, slug_prefix: str,
             "ytd_prior": _f(ytd.get("prior_eur")),
             "ytd_months": ytd.get("months_in_ytd"),
         }
+    metrics = _partner_balance(flows)
+    if default_open:
+        metrics["default_open"] = True
     return Section(
         id=slug_prefix + _slugify_heading(label), title=label,
         kind="gacc_bilateral", findings=findings,
         facets=Facets(partner=[label]),
-        metrics=_partner_balance(flows),
+        metrics=metrics,
     )
 
 
@@ -1988,7 +2006,8 @@ def _gacc_europe_section(rows: list[_GaccRow], period: date) -> Section | None:
     )
     if eu_bloc:
         root.sections.append(_gacc_partner_section(
-            eu_bloc[0].label, "gaccpage-", eu_bloc, period))
+            eu_bloc[0].label, "gaccpage-", eu_bloc, period,
+            default_open=True))
 
     def swing(pair: list[_GaccRow]) -> float:
         vals = [abs(r.sm_yoy if r.sm_yoy is not None else (r.rolling_yoy or 0.0))
