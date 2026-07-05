@@ -1646,8 +1646,9 @@ def _gacc_since_last_html(gp) -> str:
         f'<td><span class="token">finding/{r["finding_id"]}</span></td>',
         "</tr>"]) for r in rows]
     return (head + '<div class="gtable-wrap"><table class="gtable">'
-            "<thead><tr><th>Reading</th><th>Basis</th><th>Was</th><th>Now</th>"
-            "<th>Swing</th><th>Finding</th></tr></thead>"
+            '<thead><tr><th>Reading</th><th>Basis</th>'
+            '<th class="num">Was</th><th class="num">Now</th>'
+            '<th class="num">Swing</th><th>Finding</th></tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table></div>')
 
 
@@ -1661,14 +1662,15 @@ def _gacc_world_html(section) -> str:
     if not rows:
         return "\n".join(out)
 
-    def cell(fl: dict | None, key: str, pct: bool = True) -> str:
+    def cell(fl: dict | None, key: str, pct: bool = True, grp: bool = False) -> str:
+        cls = "num grp" if grp else "num"
         v = (fl or {}).get(key)
         if v is None:
-            return '<td class="num">—</td>'
+            return f'<td class="{cls}">—</td>'
         if pct:
             col = _UP if v >= 0 else _DOWN
-            return f'<td class="num" style="color:{col}">{v * 100:+.1f}%</td>'
-        return f'<td class="num">{html.escape(_fmt_eur(v))}</td>'
+            return f'<td class="{cls}" style="color:{col}">{v * 100:+.1f}%</td>'
+        return f'<td class="{cls}">{html.escape(_fmt_eur(v))}</td>'
 
     body = []
     for e in rows:
@@ -1679,24 +1681,30 @@ def _gacc_world_html(section) -> str:
                       'Kong often precede re-export flows — an entrepôt '
                       'signal. Never summed into any China or EU figure.">'
                       "entrepôt signal ⓘ</span>")
+        # Finding tokens ride beneath the partner name (a whole column of
+        # tokens earned more width than it gave information).
         toks = " ".join(
             f'<span class="token">finding/{fl["finding_id"]}</span>'
             for fl in (ex, im) if fl and fl.get("finding_id"))
+        if toks:
+            label += f'<div class="gtable-toks">{toks}</div>'
         body.append(
             "<tr>"
             f"<td>{label}</td>"
             + cell(ex, "sm_yoy") + cell(ex, "ytd_yoy")
             + cell(ex, "rolling_eur", pct=False)
-            + cell(im, "sm_yoy") + cell(im, "ytd_yoy")
+            + cell(im, "sm_yoy", grp=True) + cell(im, "ytd_yoy")
             + cell(im, "rolling_eur", pct=False)
-            + f"<td>{toks}</td></tr>")
+            + "</tr>")
     out.append(
         '<div class="gtable-wrap"><table class="gtable">'
         "<thead><tr><th rowspan=2>Partner / bloc</th>"
-        '<th colspan=3>China’s exports</th>'
-        '<th colspan=3>China’s imports</th><th rowspan=2>Findings</th></tr>'
-        "<tr><th>Month YoY</th><th>YTD YoY</th><th>12mo value</th>"
-        "<th>Month YoY</th><th>YTD YoY</th><th>12mo value</th></tr></thead>"
+        '<th colspan=3 class="num">China’s exports</th>'
+        '<th colspan=3 class="num grp">China’s imports</th></tr>'
+        '<tr><th class="num">Month YoY</th><th class="num">YTD YoY</th>'
+        '<th class="num">12mo value</th>'
+        '<th class="num grp">Month YoY</th><th class="num">YTD YoY</th>'
+        '<th class="num">12mo value</th></tr></thead>'
         f'<tbody>{"".join(body)}</tbody></table></div>')
     return "\n".join(out)
 
@@ -1704,27 +1712,42 @@ def _gacc_world_html(section) -> str:
 def _gacc_page_html(gp, payloads) -> str:
     """The whole GACC-only tab panel, in the design's reading order:
     identity → context strip → standout → since-last → Europe up close →
-    world → understanding-these-figures expander."""
+    world → understanding-these-figures expander. Carries its own sticky
+    sub-nav, same pattern as the Briefing tab (the global scroll-spy scopes
+    itself to the visible panel — hidden sections never intersect)."""
     parts = [f"<section>{_gacc_identity_html(gp)}</section>"]
+    subnav: list[tuple[str, str]] = []
     if gp.strip:
         parts.append('<section class="kpis kpis-4">'
                       + "".join(_indicator_card(i, payloads) for i in gp.strip)
                       + "</section>")
     if gp.standout is not None:
-        parts.append("<section>" + _gacc_standout_html(gp.standout, payloads)
+        subnav.append(("gacc-standout", "Standout"))
+        parts.append('<section class="brief-sec" id="gacc-standout">'
+                      + _gacc_standout_html(gp.standout, payloads)
                       + "</section>")
-    parts.append("<section>" + _gacc_since_last_html(gp) + "</section>")
+    subnav.append(("gacc-sincelast", "Since last read"))
+    parts.append('<section class="brief-sec" id="gacc-sincelast">'
+                  + _gacc_since_last_html(gp) + "</section>")
     if gp.europe is not None:
         gp.europe.metrics.setdefault("order_note", "sharpest move first")
-        parts.append(f'<section id="{html.escape(gp.europe.id)}">'
+        subnav.append((gp.europe.id, "Europe"))
+        parts.append(f'<section class="brief-sec" id="{html.escape(gp.europe.id)}">'
                       + _gacc_bilateral_html(gp.europe) + "</section>")
     if gp.world is not None:
-        parts.append(f'<section id="{html.escape(gp.world.id)}">'
+        subnav.append((gp.world.id, "World"))
+        parts.append(f'<section class="brief-sec" id="{html.escape(gp.world.id)}">'
                       + _gacc_world_html(gp.world) + "</section>")
     if gp.understanding:
-        parts.append("<section><h2 class=\"lead\">Understanding these "
-                      "figures</h2>"
+        subnav.append(("gacc-understanding", "Understanding"))
+        parts.append('<section class="brief-sec" id="gacc-understanding">'
+                      "<h2 class=\"lead\">Understanding these figures</h2>"
                       + _more_about_html(gp.understanding) + "</section>")
+    if subnav:
+        links = '<a class="subnav-top" href="#top">↑&nbsp;Top</a>' + "".join(
+            f'<a href="#{a}" data-spy="{a}">{html.escape(lbl)}</a>'
+            for a, lbl in subnav)
+        parts.insert(0, f'<nav class="subnav" aria-label="On this page">{links}</nav>')
     return "".join(parts)
 
 
@@ -2317,8 +2340,11 @@ footer{padding:18px 28px 28px;border-top:1px solid var(--line);font-size:12px;co
 .gtable-wrap{overflow-x:auto}
 .gtable{border-collapse:collapse;width:100%;font-family:var(--font-sans);font-size:13.5px}
 .gtable th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);border-bottom:1px solid var(--line);padding:6px 10px 6px 0}
+.gtable th.num{text-align:right}
 .gtable td{border-bottom:1px solid var(--line);padding:7px 10px 7px 0;vertical-align:top}
 .gtable td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.gtable .grp{border-left:1px solid var(--line);padding-left:12px}
+.gtable-toks{margin-top:3px}
 .hub-note{font-size:11.5px;color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:1px 7px;white-space:nowrap}
 @media(max-width:900px){.kpis-4{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:640px){.kpis-4{grid-template-columns:1fr}}
@@ -2712,7 +2738,10 @@ def render_html(report: Report) -> str:
     if src_parts:
         tabdefs.append(("sources", "Sources & coverage", "".join(src_parts)))
     if ref_sec is not None:
-        tabdefs.append(("methodology", "Methodology",
+        # "Method", not "Methodology" — with two period-labelled track tabs
+        # the nav row needs every character (Luke, 2026-07-05). The tab key
+        # (and so every #tab-methodology deep-link) is unchanged.
+        tabdefs.append(("methodology", "Method",
                         "<section>" + _reference_html(ref_sec) + "</section>"))
     if gloss_sec is not None and (gloss_sec.metrics or {}).get("groups"):
         tabdefs.append(("glossary", "Glossary",

@@ -226,6 +226,45 @@ def test_understanding_expander_is_collapsed_disclosure():
     assert "Reading the direction." in h
 
 
+def test_gacc_tab_has_its_own_sticky_subnav():
+    """UI consistency with the Briefing tab (Luke, 2026-07-05): the GACC
+    panel carries the same sticky .subnav pattern, with data-spy anchors
+    for its sections. The global scroll-spy scopes itself to the visible
+    panel, so two subnavs coexist."""
+    h = render_html(_report(gacc_page=_gacc_page()))
+    panel = h[h.index('id="tab-gacc"'):h.index('id="tab-methodology"')
+              if 'id="tab-methodology"' in h else len(h)]
+    assert '<nav class="subnav"' in panel
+    for anchor in ("gacc-standout", "gacc-sincelast", "gacc-europe",
+                   "gacc-world", "gacc-understanding"):
+        assert f'data-spy="{anchor}"' in panel
+    # Sections use the shared brief-sec class (sticky-bar scroll offset).
+    assert 'class="brief-sec" id="gacc-standout"' in panel
+
+
+def test_world_table_headers_align_with_values_and_tokens_fold_in():
+    """The numeric column headers right-align with their values, the two
+    flow groups get a divider, and the finding tokens ride beneath the
+    partner name instead of costing a column."""
+    h = render_html(_report(gacc_page=_gacc_page()))
+    panel = h[h.index('id="gacc-world"'):]
+    assert '<th class="num">Month YoY</th>' in panel
+    assert '<th class="num grp">Month YoY</th>' in panel  # import group divider
+    assert '<div class="gtable-toks">' in panel
+    assert ">Findings</th>" not in panel  # the token column is gone
+
+
+def test_methodology_tab_renamed_method():
+    """'Method', not 'Methodology' — the nav row needs every character with
+    two period-labelled track tabs. The tab KEY stays 'methodology' so
+    existing #tab-methodology deep-links keep working."""
+    r = _report(gacc_page=_gacc_page())
+    r.sections = [rm.Section(id="ref", title="Methodology", kind="reference")]
+    h = render_html(r)
+    assert 'href="#tab-methodology">Method</a>' in h
+    assert ">Methodology</a>" not in h
+
+
 # ---------------------------------------------------------------------------
 # DB-backed builder tests — seed real finding rows, build the page.
 # ---------------------------------------------------------------------------
