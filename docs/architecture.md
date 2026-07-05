@@ -252,6 +252,39 @@ Layer 2 (scheduler) is currently a Claude Code Routine
 the journalist) is currently manual. See
 `dev_notes/2026-05-11-periodic-runs-design.md`.
 
+### The GACC-update track (second release track, 2026-07-05)
+
+```bash
+scrape.py --gacc-update-run [--force] [--skip-llm]   # also chained inside every --periodic-run
+```
+
+GACC publishes ~8–10 days after its reference month — one month AHEAD of
+the Eurostat/HMRC pair that lands days later — so the portal runs **two
+release tracks that supersede independently**: the Full briefing
+(Eurostat+HMRC month) and the GACC-only tab (China's own figures for the
+month Europe hasn't confirmed yet). The rule: **supersession follows
+source-track + reference period, never calendar arrival** — a new GACC
+month replaces the previous GACC page; the Eurostat cycle never does
+(it covers an older month by construction). Design + the full rationale:
+`dev_notes/2026-07-05-gacc-update-page-design.md`.
+
+Mechanics mirror the main orchestrator: idempotent on the GACC reference
+*period* (not release — GACC publishes each month twice, CNY then USD;
+the second arrival is a quiet refresh), recording `brief_runs` rows under
+its own `trigger='gacc_update'` whose `data_period` is the **GACC month**
+— which is why every "since the last brief" baseline is trigger-scoped
+(`MAIN_TRACK_TRIGGERS` inclusion list; an unscoped MAX would let one
+track no-op the other). `periodic_run_log.track` keeps the two cycles'
+telemetry distinguishable.
+
+Both tracks rebuild the ONE portal snapshot (tabs are client-side panels
+of a single static blob): a GACC-triggered rebuild recomputes the
+briefing's deterministic content unchanged and grafts its LLM takes
+forward; a main-track rebuild carries the GACC page's LLM slots the same
+way, each graft gated on its own track's month. The operational
+takes-lifecycle is documented in `portal_service/README.md`
+§ "The second track".
+
 ### Export
 
 `briefing_pack.export()` writes a five-artefact bundle per call,

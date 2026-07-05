@@ -103,52 +103,39 @@ Smallest viable version: reuse the Eurostat section-builder with the UK scope
 foregrounded and the mirror-gap section dropped (or swapped for a China↔UK
 variant once that analyser exists).
 
-## Slim GACC-period update — picked up; design finalised (2026-07-05)
+## GACC-only page — SHIPPED 2026-07-05 (the second release track)
 
-**Update 2026-07-05:** design session with Luke finalised and expanded this —
-see [`2026-07-05-gacc-update-page-design.md`](2026-07-05-gacc-update-page-design.md)
-(purpose statement, report structure, scope rulings, LLM layer, build plan).
-The content decisions below stand. **One decision below is superseded:** the
-tab does NOT self-expire on the next Eurostat release — supersession is
-within-track (the next GACC period's page replaces it; the Eurostat cycle
-covers an older reference month and never supersedes it). Build aimed at the
-~8–10 Jul GACC June-data drop, ahead of the instruments batch and the
-iteration-4 calibration sprint.
+**Live.** Designed, built and deployed in one day: design doc + #119, the
+`gacc_update` trigger track + brief_runs scoping (#120), the page itself with
+period-explicit tabs and the masthead descent (#121–#124, incl. the live-review
+polish), and the LLM layer (#125 — synthesis lead-scaffold + questions-take
+with answerability tags). Full write-up:
+[`history.md`](history.md) § 2026-07-05; design + as-built addendum:
+[`2026-07-05-gacc-update-page-design.md`](2026-07-05-gacc-update-page-design.md);
+operations (takes lifecycle across the two tracks):
+`portal_service/README.md` § "The second track".
 
-GACC leads Eurostat by ~5 weeks (China Customs publishes ~8–10 days after the
-reference month; Eurostat ~46 days), so a fresh GACC release is an early read on
-the China↔EU numbers. Reporters asked whether we should auto-build a briefing for
-each new GACC release as well as each Eurostat one. We costed the repetition: a
-*full* briefing on a GACC release would be ~60–80% stale — the Eurostat-derived
-sections (HS-group movers, trajectories, the standing deficit, partner-share)
-don't change when only GACC arrives, so they'd repeat the prior Eurostat cycle
-verbatim. Only the GACC-fed sections move.
+Residuals, none scheduled (v1.1 candidates from the design session):
 
-Decision — a **slim, GACC-only update**, not a briefing clone:
-
-- **Content**: render only the fresh GACC-fed sections — `gacc_bilateral_aggregate_yoy`
-  (China↔EU + per-country) and `gacc_aggregate_yoy` (ASEAN / RCEP / Belt & Road /
-  Africa / LatAm / world). Drop the Eurostat HS-group / trajectory / trade-balance
-  sections — they'd be stale.
-- **Trigger on a new GACC *period*, not a new release.** GACC publishes dual-currency
-  (CNY + USD) for the same period, so release-triggering fires twice a month;
-  period-triggering is ~once.
-- **Exclude the mirror gap.** A GACC period lands ~5 weeks before the matching
-  Eurostat month, so the Eurostat side of the gap for that month doesn't exist yet —
-  it can't be computed. (It refreshes normally on the next Eurostat cycle.)
-- **Surface as its own distinct tab**, non-destructive to the main Briefing tab, that
-  **self-expires on the next Eurostat release** (the Eurostat cycle supersedes it).
-  Keeps the leading-indicator read visibly separate from the confirmed EU read, and
-  self-cleans.
-
-Cost note: each brief's LLM takes are paid calls, so the slim shape (few sections)
-plus `--portal-reuse-takes` for anything carried is the cost-sensible build, not a
-second full pack.
-
-Not scheduled — a thinking-question outcome from the same 2026-06-23 thread as the
-HMRC release-timing work (which is what got built: the combined-scope guard, the
-HMRC-lag disclosure, the overdue alert, the gap-scan). Pick up when reporters want
-the earlier cadence.
+- **Chinese-language release commentary** — fetch + translate GACC's
+  spokesperson framing, clearly attributed (principle-6 hands-on look at the
+  中文 pages first; new adapter + append-only snapshots).
+- **Takes-v2 events retrieval** — the curated, journalist-editable
+  tariff/export-control timeline feeding dated anchors into the synthesis
+  ("the US decline began the month after the April round").
+- **Computed track record** in the Understanding expander — recent early
+  reads vs their Eurostat confirmations (past months' mirror findings already
+  exist).
+- **Reconciliation note on the MAIN briefing** — score the previous GACC
+  early read when Eurostat confirms its month (design doc § cross-page).
+- **Streak/rank facts** — code-computed ("third consecutive month of US
+  decline") feeding the synthesis fact set.
+- **Publish guard** — `--upload-to-portal` warns when the bundle carries
+  fewer generated takes than the live snapshot (the 2026-07-05 near-miss:
+  a bundle built without bucket env had empty takes and would have wiped
+  the live ones).
+- **Archive / release feed** — period-labelled tabs invite "where's April's
+  GACC page?"; `periods/` copies exist, a reader-facing feed doesn't yet.
 
 ## docx → Drive pipeline — legacy; teardown deferred (2026-06-22)
 

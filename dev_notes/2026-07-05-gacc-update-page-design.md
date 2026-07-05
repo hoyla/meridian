@@ -309,3 +309,48 @@ Build-time checks:
   stand; the self-expiry rule is superseded by § Two-track model above.
 - Chat design session 2026-07-05 (this doc is its record): purpose
   statement, two-track rule, structure, scope rulings, LLM set, sequencing.
+
+## As-built addendum (2026-07-05, post-deploy)
+
+Everything above shipped same-day (#119–#125; full narrative in
+[`history.md`](history.md) § 2026-07-05). Deltas and decisions made during
+the build, recorded so this doc doesn't mislead a future reader:
+
+- **Composition resolved ONE-BLOB**, not the two-document option § Build
+  plan left open: tabs are client-side panels of a single static snapshot,
+  so the page ships as a first-class tab — zero portal_service /
+  portal_publish changes, labels always consistent, and PR 1's track
+  scoping already makes cross-track rebuilds correct. The two-blob +
+  manifest idea died on inspection of the render model.
+- **Tab labels as decided** ("Full briefing (Apr 2026)" / "GACC-only
+  (May 2026)") + the masthead descent per § masthead. "Methodology" tab
+  relabelled "Method" (nav width; the tab KEY is unchanged so deep-links
+  hold).
+- **Live-review additions** (same evening): the identity caveats collapsed
+  into an "About this page" disclosure placed under the KPI strip (the
+  Briefing's About-box slot); the since-last-read swings gained a
+  **dumbbell chart** (open dot = previous month, filled = current, zero
+  line marked; plots the dominant basis only — mixing single-month and
+  12-month readings on one axis would mislead — with exclusions named in
+  the caption); the page gained the Briefing-style sticky subnav; the
+  world table got th.num alignment + tokens folded under partner names.
+- **LLM layer as designed, plus the answerability enum**: the questions
+  take tags each question with where its answer lives (six fixed values —
+  our sections / drawers / Eurostat-confirmation / UN Comtrade / no-product-
+  detail); the render supplies the words and links per tag. Generation on
+  the new-period path only (~2 calls/month, `--skip-llm` opts out);
+  refreshes and main-track rebuilds carry the slots via
+  `portal_takes_reuse.graft_gacc_slots`, gated on the GACC page's OWN
+  data_period. Operational lifecycle (the "one command preserves both
+  tracks" invariant + the publish-order caveat):
+  `portal_service/README.md` § "The second track".
+- **Deploy-day lessons**: (1) the reuse graft needs
+  `PORTAL_BUCKET=meridian-500111-portal` +
+  `GOOGLE_CLOUD_PROJECT=meridian-500111` at build time — both now in
+  `.env`; the first Routine fire lacked them, built a bundle with empty
+  briefing takes, and publishing it would have wiped the live ones (a
+  `--upload-to-portal` takes-count guard is a roadmap residual). (2) The
+  verifier's `_TIME_PERIOD_RE` learned the bare "12mo" shorthand after a
+  live false positive — the model echoes the notation it is shown, so fact
+  lines say "12-month". (3) `notify`'s export enrichment needed the track
+  filter (a gacc row masqueraded as "a fresh briefing" otherwise).

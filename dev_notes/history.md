@@ -10,6 +10,75 @@ to understand how the project got here.
 
 ---
 
+## 2026-07-05 — GACC-only page: the second release track (LIVE)
+
+Designed, built, live-reviewed and deployed in a single day with Luke in the
+loop throughout. Picked up the parked "Slim GACC-period update" (2026-06-23):
+GACC publishes ~8–10 days after its reference month — one month AHEAD of the
+Eurostat/HMRC pair that lands days later — so a fresh GACC release is the
+earliest read on numbers Europe won't confirm for ~5 weeks. Purpose statement
+(Luke-endorsed): *our differentiation is the EU/UK per-country detail with
+provenance, placed in the world context — is the EU move part of a general
+Chinese export surge, or EU-specific re-routing after US tariffs?*
+
+**The one parked decision revised:** the page does NOT self-expire on the
+next Eurostat release. **Supersession follows source-track + reference
+period, never calendar arrival** — the next GACC month replaces the page;
+the Eurostat cycle (covering an older month by construction) never does.
+Design doc: `2026-07-05-gacc-update-page-design.md`.
+
+What shipped (#119 design; #120 track; #121–#124 page + polish; #125 LLM):
+
+- **The `gacc_update` track** (`periodic.run_gacc_update`, chained inside
+  every `--periodic-run` — the Routine needed no new step). Fires once per
+  GACC *period* (dual-currency second release = quiet refresh); records
+  `brief_runs` under `trigger='gacc_update'` with the GACC month as
+  data_period — so every since-last baseline became **trigger-scoped**
+  (`MAIN_TRACK_TRIGGERS` inclusion list; the unfiltered
+  `latest_recorded_data_period()` footgun was removed). `periodic_run_log`
+  gained `track` (migration applied live 2026-07-05).
+- **The page** — a first-class tab of the ONE snapshot (composition
+  resolved one-blob: tabs are client-side panels, so no portal_service
+  change and no cross-blob label staleness). Period-explicit tabs — **"Full
+  briefing (Apr 2026)" / "GACC-only (May 2026)"** (Luke's idea; the visible
+  month offset teaches the cadence) — and the **masthead descent**: the
+  global masthead keeps brand + "Updated …" only; source·vintage chips
+  moved into per-tab identity strips. Structure: identity header (incl. the
+  Eurostat confirmation-due date + EN/中文 release links) → EU·US·ASEAN·World
+  context strip → "About this page" disclosure → machine corner → standout
+  (size-floored, world-total excluded) → since-last-read (dumbbell chart +
+  table, dominant-basis-only plotting) → Europe up close (iso2-matched
+  EU members + UK, sharpest-first) → world table (HK as a labelled
+  entrepôt signal) → Understanding expander. China-perspective throughout;
+  mainland-customs scope (NO CN+HK+MO envelope — HK/MO are partners here);
+  no €/day-family analogue by design.
+- **The LLM layer** on the verify-or-reject contract: a release-**synthesis**
+  lead-scaffold (≤70-word paragraph answering the purpose question + ≤2
+  catalog hypotheses with number-cited rationales; steps attach
+  deterministically; new `us_tariff_diversion` entry) and a **questions**
+  take with a six-value **answerability enum** (the model tags where each
+  answer lives; the render supplies words/links — capability claims never
+  come from the model). Generation on new-period only (~2 calls/month);
+  refreshes and main rebuilds carry slots via `graft_gacc_slots`, gated on
+  the GACC page's OWN month — independent of the main takes graft because
+  the tracks advance a month apart. First live run vindicated the design:
+  the synthesis read the EU as the **laggard** (+4.5% vs world +15.6%) and
+  caught the US base-effect (+31.2% month vs −29.7% 12-month); the verifier
+  caught a real false-positive ("12mo" shorthand → `_TIME_PERIOD_RE` fix).
+- **Deploy day catches:** `notify`'s export enrichment had no track filter
+  (a gacc row could masquerade as "a fresh briefing"); fixed + the ping now
+  carries a tab-labelled GACC line. And the first Routine fire built a
+  bundle with EMPTY briefing takes — `PORTAL_BUCKET`/`GOOGLE_CLOUD_PROJECT`
+  weren't in the environment, so the reuse graft silently skipped;
+  publishing it would have wiped the live takes. Both now in `.env`; a
+  `--force` re-run produced the publish-complete May bundle. Ops doc:
+  `portal_service/README.md` § "The second track".
+
+Suite grew 627 → 667 across the arc, green throughout. Residual v1.1
+candidates in roadmap.md § "GACC-only page — SHIPPED".
+
+---
+
 ## 2026-06-24 — Self-verifying portal: per-number provenance drawers (iteration 3 MVP)
 
 Closed the journalist-usability arc's iteration 3 — but rescoped from
