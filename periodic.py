@@ -666,30 +666,54 @@ class GaccUpdateResult:
     refresh: bool = False
     """True when this run was the quiet-refresh path: the period was
     already published but a further GACC release for it arrived (the
-    dual-currency second release) — analysers re-ran and the page will
-    rebuild, but journalist-facing notification should stay silent."""
+    dual-currency second release) — analysers re-ran and the page was
+    rebuilt, but journalist-facing notification should stay silent."""
 
     analyser_counts: dict[str, Any] = dataclasses.field(default_factory=dict)
     """Per-analyser-step result dicts, keyed by step name."""
 
+    bundle_dir: str | None = None
+    """The snapshot bundle folder (hand to `--upload-to-portal`), else None."""
+
+    portal_dir: str | None = None
+    """Path to the rebuilt 04_Portal/ snapshot (report.json + index.html —
+    the whole portal incl. the refreshed GACC-only tab), or None when the
+    snapshot step failed (the run still records; publish from a later
+    rebuild)."""
+
     def summary(self) -> str:
         """Per-run report for the scheduling layer, mirroring
-        PeriodicRunResult.summary()'s shape."""
+        PeriodicRunResult.summary()'s shape (incl. the manual publish
+        command — we deliberately do NOT auto-publish; going live stays a
+        human action)."""
         if not self.action_taken:
             return f"GACC update: no action this cycle — {self.reason}"
         if self.refresh:
-            return (
+            lines = [
                 f"GACC update: refreshed period {self.data_period} "
                 "(further GACC release for an already-published month; "
                 "no new-period event)."
-            )
-        return (
-            f"GACC update: new GACC period {self.data_period} processed "
-            "and recorded on the gacc_update track."
-        )
+            ]
+        else:
+            lines = [
+                f"GACC update: new GACC period {self.data_period} processed "
+                "— portal snapshot rebuilt with the GACC-only tab at "
+                f"{self.data_period:%b %Y}."
+            ]
+        if self.portal_dir:
+            lines.append(f"  Portal snapshot: {self.portal_dir}")
+            lines.append("  To publish it, run:")
+            lines.append(
+                f"    python scrape.py --upload-to-portal {self.bundle_dir}")
+        elif self.action_taken:
+            lines.append("  Portal snapshot FAILED — see logs; the run is "
+                         "recorded and a later rebuild can publish.")
+        return "\n".join(lines)
 
 
-def run_gacc_update(*, force: bool = False) -> GaccUpdateResult:
+def run_gacc_update(
+    *, force: bool = False, out_dir: str | None = None,
+) -> GaccUpdateResult:
     """Run the GACC-track update cycle end-to-end.
 
     Sequence:
@@ -700,19 +724,24 @@ def run_gacc_update(*, force: bool = False) -> GaccUpdateResult:
          (CNY then USD), and the page must not fire twice a month.
       2. Quiet-refresh detection — same period but a GACC release row
          arrived after the last gacc_update run (the dual-currency second
-         release): re-run the GACC analysers and record a refresh row, so
-         the page rebuild picks up any superseded values, without a
-         new-period event.
+         release): re-run the GACC analysers and rebuild the snapshot, so
+         the page picks up any superseded values, without a new-period
+         event.
       3. Re-run the GACC analyser families (aggregate + bilateral, both
          flows). Idempotent at the per-finding level, same as the main
          cycle.
-      4. Record the run in brief_runs (trigger='gacc_update',
-         data_period=GACC reference month). output_path stays None until
-         the GACC page snapshot build lands (PR 2 of the design doc) —
-         the row still marks the period as processed.
+      4. Rebuild the portal snapshot (the ONE report — the Full-briefing
+         tab's deterministic content is unchanged by construction since no
+         Eurostat/HMRC data moved; its LLM takes are carried forward via
+         the reuse-graft when a portal bucket is configured). Best-effort:
+         a snapshot failure never sinks the run.
+      5. Record the run in brief_runs (trigger='gacc_update',
+         data_period=GACC reference month, output_path=the snapshot dir).
 
     Deliberately non-fetching, like run_periodic(): works against whatever
-    GACC data the routine's probe step already ingested.
+    GACC data the routine's probe step already ingested. Publishing to the
+    live bucket stays a human action (`--upload-to-portal`), same as the
+    main cycle.
 
     A crash anywhere still writes a periodic_run_log row (track='gacc',
     the exception in `error`) before propagating — the F4 contract, so
@@ -721,7 +750,8 @@ def run_gacc_update(*, force: bool = False) -> GaccUpdateResult:
     """
     started_monotonic = time.monotonic()
     try:
-        return _run_gacc_update_cycle(started_monotonic, force=force)
+        return _run_gacc_update_cycle(
+            started_monotonic, force=force, out_dir=out_dir)
     except Exception as exc:
         try:
             import periodic_run_log
@@ -745,7 +775,7 @@ def run_gacc_update(*, force: bool = False) -> GaccUpdateResult:
 
 
 def _run_gacc_update_cycle(
-    started_monotonic: float, *, force: bool,
+    started_monotonic: float, *, force: bool, out_dir: str | None = None,
 ) -> GaccUpdateResult:
     """Body of run_gacc_update — see its docstring."""
 
@@ -830,8 +860,29 @@ def _run_gacc_update_cycle(
             flow_label=flow_str, flow=flow_str,
         )
 
-    # PR 2 (design doc § Report structure) wires the GACC page snapshot
-    # build here; until then the run records with output_path=None.
+    # --- Rebuild the portal snapshot (the whole one-blob report: the GACC
+    # tab reflects the fresh period; the Full-briefing tab's deterministic
+    # content is unchanged by construction — no Eurostat/HMRC data moved —
+    # and its LLM takes are carried forward via the reuse-graft when a
+    # bucket is configured. Best-effort: a snapshot failure never sinks
+    # the run; the brief_runs row then records output_path=NULL.)
+    import os
+    from datetime import datetime as _dt
+    from pathlib import Path as _Path
+    bundle_dir = str(
+        _Path(out_dir or "exports") / f"{_dt.now():%Y-%m-%d-%H%M}-gacc-update"
+    )
+    bucket = os.environ.get("PORTAL_BUCKET")
+    portal_dir = write_portal_snapshot(
+        bundle_dir,
+        briefing_pack.latest_eurostat_period(),
+        generate_takes=False,
+        write_workbook=True,  # publish-ready: /data.xlsx must resolve
+        reuse_takes=bool(bucket),
+        portal_bucket=bucket,
+        publishing=False,  # publishing stays a human action (--upload-to-portal)
+    )
+
     if refresh:
         notes = (
             "refresh: further GACC release for an already-published period "
@@ -845,7 +896,7 @@ def _run_gacc_update_cycle(
         notes = None
         reason = f"new GACC period {latest_gacc} recorded"
     briefing_pack.record_gacc_update_run(
-        data_period=latest_gacc, output_path=None, notes=notes,
+        data_period=latest_gacc, output_path=portal_dir, notes=notes,
     )
 
     result = GaccUpdateResult(
@@ -854,6 +905,8 @@ def _run_gacc_update_cycle(
         data_period=latest_gacc,
         refresh=refresh,
         analyser_counts=counts,
+        bundle_dir=bundle_dir if portal_dir else None,
+        portal_dir=portal_dir,
     )
     _persist_log(result)
     return result

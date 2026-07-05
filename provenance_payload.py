@@ -160,6 +160,32 @@ def _arithmetic(subkind: str, detail: dict | None) -> list[str]:
         if t.get("low_base"):
             out.append("Low base — quote the € amount, not the percentage.")
         return out
+    if subkind.startswith(("gacc_aggregate_yoy", "gacc_bilateral_aggregate_yoy")):
+        # The GACC page's strip/standout figures: single-month face first
+        # (that's the card's own register), then YTD and the rolling window.
+        t = d.get("totals") or {}
+        out = []
+        sm = t.get("single_month") or {}
+        if sm.get("current_eur") is not None and sm.get("prior_eur") is not None:
+            out.append(f"Latest month {_fmt_eur(sm['current_eur'])} vs "
+                       f"{_fmt_eur(sm['prior_eur'])} the same month last year "
+                       f"= {_fmt_pct(sm.get('yoy_pct'))}.")
+        ytd = t.get("ytd_cumulative") or {}
+        if ytd.get("current_eur") is not None and ytd.get("prior_eur") is not None:
+            mo = (f" ({ytd['months_in_ytd']}-month cumulative)"
+                  if ytd.get("months_in_ytd") else "")
+            out.append(f"Year to date {_fmt_eur(ytd['current_eur'])} vs "
+                       f"{_fmt_eur(ytd['prior_eur'])} = "
+                       f"{_fmt_pct(ytd.get('yoy_pct'))}{mo}.")
+        cur_, pri = t.get("current_12mo_eur"), t.get("prior_12mo_eur")
+        if cur_ is not None and pri is not None:
+            out.append(f"Rolling 12 months {_fmt_eur(cur_)} vs {_fmt_eur(pri)} "
+                       f"= {_fmt_pct(t.get('yoy_pct'))}.")
+        if out:
+            out.append("China's own customs figures (GACC), EUR-equivalent at "
+                       "per-period rates — growth rates will not exactly match "
+                       "GACC's published CNY/USD figures.")
+        return out
     if subkind.startswith("cn8_yoy_mover"):
         t = d.get("totals") or {}
         prod = d.get("product") or {}

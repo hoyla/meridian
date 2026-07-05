@@ -235,6 +235,9 @@ def _sample_report() -> rm.Report:
     return rm.Report(meta=meta,
                      key_indicators=[deficit_ind, level_ind, donut_ind, mover_ind],
                      headline=headline, what_changed=what_changed,
+                     source_vintages={"eurostat": date(2026, 4, 1),
+                                      "hmrc": date(2026, 4, 1),
+                                      "gacc": date(2026, 5, 1)},
                      sections=[state, mirror, sector, structural, gacc_bi,
                                sources, data, reference, glossary],
                      provenance_payloads={
@@ -570,10 +573,13 @@ def test_new_findings_breakdown_lives_in_sources_not_what_changed():
     assert "**New this cycle**" in md and "44 new — year-on-year change" in md
 
 
-def test_masthead_carries_badge_period_and_first_sentence_tooltip():
-    """Period + source badge live in the masthead (no separate subbar); the
-    badge's tooltip is the note's first sentence and the boilerplate second
-    sentence is dropped."""
+def test_masthead_updated_stamp_and_briefing_identity_strip():
+    """The masthead descent (2026-07-05 design): the masthead makes only the
+    portal-wide claim (Updated …); the source badge — still carrying the
+    note-first-sentence + Received tooltip — and the per-source data
+    vintages moved down into the Briefing tab's identity strip, where they
+    are true per-tab (two tracks, two vintages). The old single "Data to X"
+    claim is gone everywhere, and the page <title> drops the period."""
     import dataclasses
     r = _sample_report()
     r = dataclasses.replace(r, headline=dataclasses.replace(
@@ -582,11 +588,16 @@ def test_masthead_carries_badge_period_and_first_sentence_tooltip():
     h = render_html(r)
     assert '<div class="subbar">' not in h and "note-line" not in h
     mast = h[h.index('class="masthead"'):h.index("</header>")]
-    assert "Data to April 2026" in mast
-    # tooltip = first sentence + when we received this source's latest data
-    # (sample appendix fetched 2026-06-01); boilerplate second sentence dropped
+    assert "Updated 2026-06-20 12:00" in mast
+    assert "Data to " not in h
+    assert "<title>Meridian — China–Europe trade</title>" in h
+    # The badge lives on the Briefing strip's Eurostat chip now — tooltip =
+    # first sentence + when we received this source's latest data (sample
+    # appendix fetched 2026-06-01); boilerplate second sentence dropped.
     assert ('class="tag" title="Triggered by new Eurostat data. '
-            'Received 1 Jun 2026.">eurostat</span>') in mast
+            'Received 1 Jun 2026.">Eurostat · to Apr 2026</span>') in h
+    assert "HMRC · to Apr 2026" in h
+    assert "GACC context · to May 2026" in h
     assert "Boilerplate second sentence" not in h
 
 

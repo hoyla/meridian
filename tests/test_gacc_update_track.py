@@ -27,10 +27,25 @@ import periodic
 
 
 @pytest.fixture
-def fresh_db(test_db_url, monkeypatch):
+def fresh_db(test_db_url, monkeypatch, tmp_path):
     """Truncate everything the gacc-update cycle could touch and point
-    DATABASE_URL at the test DB (db.py + briefing_pack read it at runtime)."""
+    DATABASE_URL at the test DB (db.py + briefing_pack read it at runtime).
+
+    Also stubs `periodic.write_portal_snapshot`: since PR 2 the cycle
+    rebuilds the whole portal snapshot on every action, which is a full
+    build_report — far too heavy for this unit loop, and it would write
+    export dirs into the working tree. The stub records the call and
+    returns a fake 04_Portal path; the snapshot build itself is covered by
+    test_gacc_page.py + test_portal.py."""
     monkeypatch.setenv("DATABASE_URL", test_db_url)
+    calls: list[dict] = []
+
+    def _stub_snapshot(bundle_dir, data_period, **kwargs):
+        calls.append({"bundle_dir": bundle_dir, "data_period": data_period,
+                      **kwargs})
+        return str(tmp_path / "04_Portal")
+
+    monkeypatch.setattr(periodic, "write_portal_snapshot", _stub_snapshot)
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
         cur.execute(
             "TRUNCATE TABLE findings, observations, eurostat_raw_rows, "
@@ -38,7 +53,7 @@ def fresh_db(test_db_url, monkeypatch):
             "source_snapshots, periodic_run_log, findings_emit_log "
             "RESTART IDENTITY CASCADE"
         )
-    yield
+    yield calls
 
 
 def _seed_gacc_release(
@@ -113,8 +128,13 @@ def test_new_period_fires_once_and_is_invisible_to_main_track(
     assert len(rows) == 1
     data_period, output_path, notes = rows[0]
     assert data_period == date(2026, 6, 1)
-    assert output_path is None  # page snapshot arrives with PR 2
+    assert output_path is not None and output_path.endswith("04_Portal")
     assert notes is None
+    # The snapshot step ran once, publish-ready but without fresh LLM spend.
+    assert len(fresh_db) == 1
+    assert fresh_db[0]["generate_takes"] is False
+    assert fresh_db[0]["write_workbook"] is True
+    assert result.portal_dir == output_path
 
     # Cross-track isolation: the GACC row (2026-06, a month ahead of any
     # Eurostat period) must not register on the main track.
