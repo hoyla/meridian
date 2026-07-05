@@ -2590,7 +2590,12 @@ _PORTAL_JS = """<script>
   var tabs=[].slice.call(document.querySelectorAll('.tab'));
   var panels=[].slice.call(document.querySelectorAll('.tabpanel'));
   var cur='tab-briefing';
-  function panelOf(el){while(el&&el.classList&&!el.classList.contains('tabpanel'))el=el.parentElement;return el;}
+  // Walk up to the containing tabpanel; null when the element sits in the
+  // shared chrome (masthead, tab bar) OUTSIDE any panel. The walk must not
+  // fall off the top of the DOM and return `document` — that truthy
+  // non-panel made nav() resolve an undefined id to tab-briefing, so the
+  // subnav's "Top" link on any other tab switched you to the Briefing.
+  function panelOf(el){while(el&&el.classList&&!el.classList.contains('tabpanel'))el=el.parentElement;return (el&&el.classList)?el:null;}
   function expandDetail(el){ // open a drilled-to sector’s collapsed charts/detail
     if(!el||(el.classList&&el.classList.contains('brief-sec')))return; // not whole-section jumps
     if(el.tagName==='DETAILS')el.open=true;
@@ -2644,7 +2649,15 @@ _PORTAL_JS = """<script>
     var a=e.target.closest?e.target.closest('a[href^="#"]'):null;
     if(!a||a.classList.contains('tab'))return;
     var id=a.getAttribute('href').slice(1);var el=document.getElementById(id);if(!el)return;
-    var p=el.classList.contains('tabpanel')?el:panelOf(el);if(!p)return;
+    var p=el.classList.contains('tabpanel')?el:panelOf(el);
+    if(!p){
+      // Anchor into the shared chrome (only #top today): scroll up but STAY
+      // on the current tab, and keep the hash on the tab id so no stateless
+      // #top entry pollutes back/forward.
+      e.preventDefault();window.scrollTo(0,0);mark(null);
+      if(hist)try{history.replaceState(Object.assign({},history.state||{},{y:0}),'','#'+cur);}catch(err){}
+      return;
+    }
     e.preventDefault();nav(p.id,el===p?null:el,id);
   });
   window.addEventListener('popstate',function(e){
