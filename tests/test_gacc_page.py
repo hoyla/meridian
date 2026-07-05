@@ -411,6 +411,7 @@ def seeded(fresh_db, test_db_url):
         asean = _alias(cur, kind="asean")
         world = _alias(cur, kind="world")
         us = _alias(cur, iso2="US")
+        ru = _alias(cur, iso2="RU")
         de = _alias(cur, iso2="DE")
         hk = _alias(cur, iso2="HK")
         seq = 0
@@ -428,6 +429,8 @@ def seeded(fresh_db, test_db_url):
                          _totals(0.045, 5.0e11))
         ids["us"] = seed("bilateral", us, "single_country", "export", period,
                          _totals(0.312, 4.0e11))
+        ids["ru"] = seed("bilateral", ru, "single_country", "export", period,
+                         _totals(0.06, 1.1e11))
         ids["de"] = seed("bilateral", de, "single_country", "export", period,
                          _totals(-0.08, 1.0e11))
         ids["hk"] = seed("bilateral", hk, "single_country", "export", period,
@@ -459,7 +462,7 @@ def seeded(fresh_db, test_db_url):
             (period, "https://english.customs.gov.cn/Statics/test-uuid.html",
              date(2026, 6, 10)),
         )
-    return {"period": period, "ids": ids, "us_label": us[1],
+    return {"period": period, "ids": ids, "us_label": us[1], "ru_label": ru[1],
             "de_label": de[1], "tiny_label": tiny[1]}
 
 
@@ -523,11 +526,16 @@ def test_world_rows_order_and_hub_flag(seeded, test_db_url):
     assert rows[-1]["is_hub"] is True
     assert "ASEAN" in " ".join(labels)
     # The majors join the world view (Luke, 2026-07-05): the EU bloc (a
-    # deliberate repeat of Europe-up-close) and the US; the ordinary EU
-    # member (Germany) does NOT — it stays in the Europe section only.
+    # deliberate repeat of Europe-up-close), the US and Russia; the
+    # ordinary EU member (Germany) does NOT — it stays in the Europe
+    # section only. (No Middle East entity is possible: GACC's release
+    # carries no such aggregate and names no Middle East partners.)
     kinds = {r["label"]: r["kind"] for r in rows}
     assert "eu_bloc" in kinds.values()
     assert seeded["us_label"] in labels
+    assert seeded["ru_label"] in labels
+    shorts = {r["label"]: r.get("short_label") for r in rows}
+    assert shorts[seeded["ru_label"]] == "Russia"
     assert seeded["de_label"] not in labels
 
 
