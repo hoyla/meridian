@@ -23,6 +23,7 @@ import psycopg2.extras
 import db
 from briefing_pack._helpers import (
     DEFAULT_TOP_N,
+    GACC_UPDATE_TRIGGER,
     _Section,
     _compute_predictability_per_group,
     _compute_top_movers,
@@ -114,49 +115,120 @@ def latest_eurostat_period() -> date | None:
         return row[0] if row else None
 
 
-def latest_recorded_data_period(trigger: str | None = None) -> date | None:
-    """Return the data_period of the most recently-recorded findings export,
-    optionally filtered to a specific trigger ('manual' or 'periodic_run').
-    Returns None if there are no recorded exports with a populated
-    data_period. Used by the periodic-run orchestrator for idempotency:
-    if the latest Eurostat data is no fresher than the most recent
-    periodic-run output, there is nothing new to publish."""
+def latest_gacc_period() -> date | None:
+    """Return the most recent GACC release period in the DB, or None if no
+    GACC data is ingested. The GACC-track analogue of
+    `latest_eurostat_period()`: the gacc-update orchestrator compares it
+    against `latest_recorded_data_period(trigger='gacc_update')` to decide
+    whether a new GACC reference month has arrived. Period-based, not
+    release-based: GACC publishes the same period twice (CNY then USD), and
+    the page must fire once per month, not twice (design doc § brief_runs
+    mechanics)."""
     with _conn() as conn, conn.cursor() as cur:
-        if trigger is None:
-            cur.execute(
-                "SELECT MAX(data_period) FROM brief_runs "
-                "WHERE data_period IS NOT NULL"
-            )
-        else:
-            cur.execute(
-                "SELECT MAX(data_period) FROM brief_runs "
-                "WHERE data_period IS NOT NULL AND trigger = %s",
-                (trigger,),
-            )
+        cur.execute(
+            "SELECT MAX(period) FROM releases WHERE source = 'gacc'"
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def latest_gacc_release_seen_at() -> datetime | None:
+    """When did the most recent GACC release row (any period, any currency)
+    first land in the DB? Compared against
+    `latest_gacc_update_run_at()` to detect the dual-currency second
+    release for an already-published period — the quiet-refresh case: same
+    reference month, fresher release, page rebuilt without a new-period
+    event."""
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT MAX(first_seen_at) FROM releases WHERE source = 'gacc'"
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def latest_gacc_update_run_at() -> datetime | None:
+    """generated_at of the most recent gacc_update brief_runs row, or None
+    if the GACC track has never run. The refresh-detection baseline."""
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT MAX(generated_at) FROM brief_runs WHERE trigger = %s",
+            (GACC_UPDATE_TRIGGER,),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def record_gacc_update_run(
+    data_period: date,
+    output_path: str | None = None,
+    notes: str | None = None,
+) -> None:
+    """Record a GACC-track run in brief_runs (trigger='gacc_update').
+
+    `data_period` is the GACC reference month — NOT Eurostat freshness;
+    the two tracks' data_period conventions differ by a month, which is
+    why every baseline read is trigger-scoped. `output_path` is the GACC
+    page snapshot dir once the page build exists (PR 2 of the design doc);
+    None until then — the row still marks "GACC track processed this
+    period" for idempotency and audit. `notes` marks refresh rows
+    (dual-currency second release) apart from new-period rows."""
+    _record_brief_run(
+        out_path=output_path,
+        top_n=None,
+        data_period=data_period,
+        trigger=GACC_UPDATE_TRIGGER,
+        notes=notes,
+    )
+
+
+def latest_recorded_data_period(trigger: str) -> date | None:
+    """Return the data_period of the most recently-recorded brief_runs row
+    for the given trigger ('manual', 'periodic_run', or 'gacc_update').
+    Returns None if there are no recorded rows with a populated data_period.
+    Used by the orchestrators for idempotency: if the latest source data is
+    no fresher than the most recent recorded run of the same track, there
+    is nothing new to publish.
+
+    `trigger` is deliberately REQUIRED. brief_runs now holds two tracks
+    whose data_period conventions differ by a month (main = Eurostat
+    freshness; gacc_update = GACC reference month, one month ahead), so an
+    unfiltered MAX(data_period) is meaningless — it would let a GACC-track
+    row convince the main track it had already published a month it hasn't
+    (dev_notes/2026-07-05-gacc-update-page-design.md § brief_runs
+    mechanics)."""
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT MAX(data_period) FROM brief_runs "
+            "WHERE data_period IS NOT NULL AND trigger = %s",
+            (trigger,),
+        )
         row = cur.fetchone()
         return row[0] if row else None
 
 
 def _record_brief_run(
     out_path: str | None,
-    top_n: int,
+    top_n: int | None,
     data_period: date | None = None,
     trigger: str = "manual",
+    notes: str | None = None,
 ) -> None:
     """Insert a row into brief_runs after a successful findings export.
     Called by export() — render() doesn't write since callers may render
     for non-archival purposes (preview, test).
 
     `data_period` stamps the export with the freshness of the underlying
-    Eurostat data; the periodic-run orchestrator uses it for idempotency
-    checks. `trigger` distinguishes manual ad-hoc renders from periodic-run
-    cycle outputs — only the latter advance the global subscriber cycle.
+    data — Eurostat's latest period on the main track, the GACC reference
+    month on the gacc_update track (one month ahead by construction; that
+    is why every baseline read is trigger-scoped). `trigger` names the
+    track: 'manual'/'periodic_run' (main) or 'gacc_update'.
     """
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO brief_runs (output_path, top_n, data_period, trigger) "
-            "VALUES (%s, %s, %s, %s)",
-            (out_path, top_n, data_period, trigger),
+            "INSERT INTO brief_runs (output_path, top_n, data_period, trigger, notes) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (out_path, top_n, data_period, trigger, notes),
         )
 
 

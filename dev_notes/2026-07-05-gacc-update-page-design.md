@@ -254,7 +254,7 @@ Build-time checks:
 - Verify the current GACC report-variant section list in report_builder
   before reshaping (this doc was written from analyser payloads + roadmap,
   not a report_builder read).
-- ~~Tab naming — open question~~ **Decided 2026-07-06 (Luke): tabs are
+- ~~Tab naming — open question~~ **Decided 2026-07-05 (Luke): tabs are
   period-explicit.** **"Full briefing (Apr 2026)"** and **"GACC-only
   (May 2026)"** — readers know the sources; the visible month offset makes
   the two-track cadence legible in the tab bar itself, and "-only" carries
@@ -278,7 +278,7 @@ Build-time checks:
     (reuse-takes discipline applies to content assembly, not just
     brief_runs); if separate documents, the shell reads each track's
     period from its own snapshot. Decide the composition model in PR 2.
-- **Masthead & chips (flagged by Luke 2026-07-06): claims descend to the
+- **Masthead & chips (flagged by Luke 2026-07-05): claims descend to the
   level where they're true.** Today's masthead (`report_render_html.py`,
   `mast-meta`) shows the snapshot variant as a chip ("Eurostat") and
   "Data to {period}" — both single-track claims that become false once two

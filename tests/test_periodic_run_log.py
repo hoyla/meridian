@@ -1,9 +1,11 @@
-"""Tests for periodic_run_log — Layer 1 audit table for `--periodic-run`."""
+"""Tests for periodic_run_log — Layer 1 audit table for `--periodic-run` /
+`--gacc-update-run`."""
 from __future__ import annotations
 
 from datetime import date
 
 import psycopg2
+import pytest
 
 import periodic_run_log
 
@@ -98,3 +100,54 @@ def test_render_cycles_handles_error(clean_db):
 
 def test_render_cycles_handles_empty(clean_db):
     assert "no periodic-run cycles" in periodic_run_log.render_cycles([])
+
+
+def test_log_run_track_round_trip_and_default(clean_db, test_db_url):
+    """track defaults to 'main' (back-labelling the pre-track era) and
+    round-trips 'gacc' through log_run → recent_cycles."""
+    rid_main = periodic_run_log.log_run(
+        action_taken=False, reason="no fresher Eurostat", data_period=None,
+        findings_path=None,
+    )
+    rid_gacc = periodic_run_log.log_run(
+        action_taken=True, reason="new GACC period 2026-06-01 recorded",
+        data_period=date(2026, 6, 1), findings_path=None, track="gacc",
+    )
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, track FROM periodic_run_log WHERE id IN (%s, %s) "
+            "ORDER BY id",
+            (rid_main, rid_gacc),
+        )
+        rows = dict(cur.fetchall())
+    assert rows[rid_main] == "main"
+    assert rows[rid_gacc] == "gacc"
+    by_id = {r.id: r for r in periodic_run_log.recent_cycles()}
+    assert by_id[rid_main].track == "main"
+    assert by_id[rid_gacc].track == "gacc"
+
+
+def test_log_run_rejects_unknown_track(clean_db):
+    """The write guard mirrors the DB CHECK — an unknown track is a coding
+    error, caught before it reaches the DB."""
+    with pytest.raises(ValueError, match="track must be one of"):
+        periodic_run_log.log_run(
+            action_taken=False, reason="x", data_period=None,
+            findings_path=None, track="bogus",
+        )
+
+
+def test_render_cycles_tags_gacc_track(clean_db):
+    """gacc-track rows carry a [gacc] tag in --periodic-history output;
+    main-track rows stay untagged (no noise on the common case)."""
+    periodic_run_log.log_run(
+        action_taken=True, reason="wrote export", data_period=date(2026, 5, 1),
+        findings_path="/exports/X/02_Findings.md",
+    )
+    periodic_run_log.log_run(
+        action_taken=True, reason="new GACC period 2026-06-01 recorded",
+        data_period=date(2026, 6, 1), findings_path=None, track="gacc",
+    )
+    out = periodic_run_log.render_cycles(periodic_run_log.recent_cycles())
+    assert "[gacc]" in out
+    assert "[main]" not in out

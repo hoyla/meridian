@@ -53,10 +53,18 @@ from briefing_pack._helpers import (
     _threshold_fragility_annotation,
     is_threshold_fragile,
 )
+from briefing_pack._helpers import (
+    GACC_UPDATE_TRIGGER,
+    MAIN_TRACK_TRIGGERS,
+)
 from briefing_pack.render import (
     export,
     latest_eurostat_period,
+    latest_gacc_period,
+    latest_gacc_release_seen_at,
+    latest_gacc_update_run_at,
     latest_recorded_data_period,
+    record_gacc_update_run,
     render,
     render_leads,
 )
@@ -71,11 +79,17 @@ from briefing_pack.render import (
 __all__ = [
     # Public API
     "DEFAULT_TOP_N",
+    "GACC_UPDATE_TRIGGER",
+    "MAIN_TRACK_TRIGGERS",
     "PERMALINK_BASE_ENV",
     "export",
     "is_threshold_fragile",
     "latest_eurostat_period",
+    "latest_gacc_period",
+    "latest_gacc_release_seen_at",
+    "latest_gacc_update_run_at",
     "latest_recorded_data_period",
+    "record_gacc_update_run",
     "render",
     "render_leads",
     # Internals reached for by sheets_export.py and tests. Underscored to

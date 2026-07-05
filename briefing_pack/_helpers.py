@@ -562,6 +562,27 @@ def _prev_export_ref(prev_at, prev_folder: str | None) -> str:
     return f"Previous findings export generated {ts}"
 
 
+# ---------------------------------------------------------------------------
+# Release tracks
+# ---------------------------------------------------------------------------
+# brief_runs rows belong to one of two tracks that supersede independently
+# (design: dev_notes/2026-07-05-gacc-update-page-design.md § Two-track model):
+#
+#   main  — the Full-briefing cycle (Eurostat-freshness data_period).
+#           trigger IN ('manual', 'periodic_run').
+#   gacc  — the GACC-only update page (GACC-reference-month data_period,
+#           one month AHEAD of the main track's). trigger = 'gacc_update'.
+#
+# Every "since the last brief" baseline below MUST scope to the main track:
+# an unscoped MAX(generated_at)/LIMIT 1 would baseline against a GACC-track
+# row and silently corrupt the main briefing's diff/new-data framing.
+# Inclusion list, not `<> 'gacc_update'` — the exclusion form silently
+# absorbs any future third track (the A2 reporter-scope lesson,
+# dev_notes/2026-06-25-adversarial-correctness-review.md).
+MAIN_TRACK_TRIGGERS: tuple[str, ...] = ("manual", "periodic_run")
+GACC_UPDATE_TRIGGER: str = "gacc_update"
+
+
 def _source_data_sentence(new_releases_phrase: str) -> str:
     """One-sentence framing of *why* this export exists. Either names
     the new source releases that triggered it, or — when nothing new has
@@ -580,18 +601,22 @@ def _source_data_sentence(new_releases_phrase: str) -> str:
 
 def _new_data_phrase_since_last_brief() -> str:
     """One-line phrase naming the source releases (GACC / Eurostat / HMRC)
-    first seen since the most recent brief_runs row — e.g. 'GACC March 2026
-    (preliminary); Eurostat March 2026'. '' when nothing new arrived (or no
-    prior brief exists). Opens its own connection; call it BEFORE recording
-    the current run's brief_runs row, so the latest row is still the
-    previous cycle. Mirrors the release detection in
-    `_why_this_export_paragraph`."""
+    first seen since the most recent MAIN-track brief_runs row — e.g. 'GACC
+    March 2026 (preliminary); Eurostat March 2026'. '' when nothing new
+    arrived (or no prior brief exists). Opens its own connection; call it
+    BEFORE recording the current run's brief_runs row, so the latest row is
+    still the previous cycle. Mirrors the release detection in
+    `_why_this_export_paragraph`. Track-scoped: GACC-update rows are not
+    briefs — baselining on one would wrongly drop from this phrase any
+    release that arrived between the last real brief and the GACC run."""
     with _conn() as conn, conn.cursor(
         cursor_factory=psycopg2.extras.DictCursor,
     ) as cur:
         cur.execute(
             "SELECT generated_at FROM brief_runs "
-            "ORDER BY generated_at DESC LIMIT 1"
+            "WHERE trigger = ANY(%s) "
+            "ORDER BY generated_at DESC LIMIT 1",
+            (list(MAIN_TRACK_TRIGGERS),),
         )
         row = cur.fetchone()
         if not row or row[0] is None:
@@ -605,10 +630,13 @@ def _why_this_export_paragraph(cur) -> str:
     an italicised markdown paragraph, or '' if there is no previous brief
     to compare against. Phrasing is kept consistent with the findings
     doc's Tier 1 lead-in so the two surfaces don't disagree about what
-    triggered the cycle."""
+    triggered the cycle. Track-scoped to the main track — a GACC-update
+    row is not a previous export."""
     cur.execute(
         "SELECT generated_at, output_path FROM brief_runs "
-        "ORDER BY generated_at DESC LIMIT 1"
+        "WHERE trigger = ANY(%s) "
+        "ORDER BY generated_at DESC LIMIT 1",
+        (list(MAIN_TRACK_TRIGGERS),),
     )
     row = cur.fetchone()
     if row is None or row[0] is None:
