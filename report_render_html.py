@@ -1503,19 +1503,22 @@ def _gacc_identity_html(gp) -> str:
         links.append(f'<a href="{html.escape(ident["source_url_zh"])}">中文</a>')
     if links:
         chips.append(f'<span class="idchip">{" · ".join(links)}</span>')
-    out = [f'<div class="id-strip">{"".join(chips)}</div>']
-    caveats = ident.get("caveats") or []
-    if caveats:
-        # The standing epistemic caveats live in a collapsed "About this
-        # page" disclosure (same page-level pattern as the Briefing's
-        # "About this site") rather than as always-visible bullets — the
-        # identity strip stays scannable, the full framing is one click.
-        out.append(
-            '<details class="more about-site"><summary>About this page'
-            '</summary><div class="more-body">'
-            + _md_blocks_to_html("\n\n".join(caveats))
-            + "</div></details>")
-    return "".join(out)
+    return f'<div class="id-strip">{"".join(chips)}</div>'
+
+
+def _gacc_about_page_html(gp) -> str:
+    """The standing epistemic caveats as a collapsed "About this page"
+    disclosure — same page-level pattern as the Briefing's "About this
+    site", and the same position: under the KPI band, above the lead
+    (Luke, 2026-07-05)."""
+    caveats = (gp.identity or {}).get("caveats") or []
+    if not caveats:
+        return ""
+    return (
+        '<details class="more about-site"><summary>About this page'
+        '</summary><div class="more-body">'
+        + _md_blocks_to_html("\n\n".join(caveats))
+        + "</div></details>")
 
 
 def _gacc_standout_html(item, payloads) -> str:
@@ -1721,6 +1724,9 @@ def _gacc_page_html(gp, payloads) -> str:
         parts.append('<section class="kpis kpis-4">'
                       + "".join(_indicator_card(i, payloads) for i in gp.strip)
                       + "</section>")
+    about = _gacc_about_page_html(gp)
+    if about:
+        parts.append(f"<section>{about}</section>")
     if gp.standout is not None:
         subnav.append(("gacc-standout", "Standout"))
         parts.append('<section class="brief-sec" id="gacc-standout">'
