@@ -2003,13 +2003,22 @@ def _gacc_europe_section(rows: list[_GaccRow], period: date) -> Section | None:
 def _gacc_world_section(rows: list[_GaccRow], period: date) -> Section | None:
     """China and the world: the named blocs + the world total, both flows —
     the interpretive context around the Europe read (re-routing shows up
-    here). Hong Kong rides along as a labelled entrepôt signal: mainland
-    exports *to* HK often precede re-export flows, and on this page HK is a
-    partner, never part of “China”."""
+    here) — plus the EU, UK and US lines so the scale view is complete
+    (Luke, 2026-07-05: deliberate repetition of the Europe section's data;
+    a world view without China's biggest counterparts gives no sense of
+    proportion). Hong Kong rides along as a labelled entrepôt signal:
+    mainland exports *to* HK often precede re-export flows, and on this
+    page HK is a partner, never part of “China”."""
     ents: dict[str, dict] = {}
     for r in rows:
         is_hub = r.family == "bilateral" and r.iso2 == "HK"
-        if r.family != "aggregate" and not is_hub:
+        # The named majors join the world view alongside the blocs: the EU
+        # bloc + UK (repeated from Europe-up-close, deliberately) and the
+        # US (already on the context strip; indispensable to the
+        # re-routing frame this section exists to serve).
+        is_major = (r.family == "bilateral"
+                    and (r.kind == "eu_bloc" or r.iso2 in ("GB", "US")))
+        if r.family != "aggregate" and not is_hub and not is_major:
             continue
         e = ents.setdefault(r.label, {
             "label": r.label, "kind": r.kind, "is_hub": is_hub,
@@ -2024,7 +2033,7 @@ def _gacc_world_section(rows: list[_GaccRow], period: date) -> Section | None:
         return None
 
     def order(e: dict):
-        # World total first, blocs by size, the HK hub line last.
+        # World total first, then blocs + majors by size, the HK hub last.
         exp = (e["flows"].get("export") or {}).get("rolling_eur") or 0.0
         return (0 if e["kind"] == "world" else (2 if e["is_hub"] else 1), -exp)
 
@@ -2033,8 +2042,10 @@ def _gacc_world_section(rows: list[_GaccRow], period: date) -> Section | None:
         kind="gacc_world",
         intro="The context that makes the Europe numbers readable: is an EU "
               "move part of a general surge in China’s trade, or "
-              "specific to Europe? Hong Kong appears as a partner — an "
-              "entrepôt signal, never summed into any China or EU figure.",
+              "specific to Europe? The EU and UK lines repeat the section "
+              "above deliberately, so the comparison sits in one place. "
+              "Hong Kong appears as a partner — an entrepôt signal, never "
+              "summed into any China or EU figure.",
     )
     root.metrics["rows"] = sorted(ents.values(), key=order)
     root.metrics["period"] = period.isoformat()

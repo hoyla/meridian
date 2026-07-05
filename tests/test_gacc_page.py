@@ -59,11 +59,26 @@ def _gacc_page(**over) -> rm.GaccPage:
                                   "sm_yoy": 0.04, "ytd_yoy": 0.05,
                                   "rolling_yoy": 0.06, "rolling_eur": 3.1e12,
                                   "finding_id": 44}}},
+                             {"label": "European Union", "kind": "eu_bloc",
+                              "is_hub": False,
+                              "flows": {"export": {
+                                  "sm_yoy": 0.045, "ytd_yoy": 0.062,
+                                  "rolling_yoy": 0.074, "rolling_eur": 5.0e11,
+                                  "finding_id": 42},
+                                  "import": {
+                                  "sm_yoy": -0.02, "ytd_yoy": -0.01,
+                                  "rolling_yoy": -0.03, "rolling_eur": 2.5e11,
+                                  "finding_id": 47}}},
                              {"label": "ASEAN", "kind": "asean", "is_hub": False,
                               "flows": {"export": {
                                   "sm_yoy": 0.21, "ytd_yoy": 0.15,
                                   "rolling_yoy": 0.12, "rolling_eur": 6.5e11,
                                   "finding_id": 46}}},
+                             {"label": "RCEP", "kind": "rcep", "is_hub": False,
+                              "flows": {"export": {
+                                  "sm_yoy": 0.18, "ytd_yoy": 0.12,
+                                  "rolling_yoy": 0.10, "rolling_eur": 9.0e11,
+                                  "finding_id": 48}}},
                              {"label": "Hong Kong, China", "kind": "single_country",
                               "is_hub": True,
                               "flows": {"export": {
@@ -161,6 +176,34 @@ def test_world_table_orders_and_labels_the_entrepot_line():
     assert i_total < i_asean < i_hk
     # A missing operator renders an em-dash cell, never a fabricated figure.
     assert '<td class="num">—</td>' in h
+
+
+def test_world_scale_glyphs_render_with_honest_exclusions():
+    """The semicircle scale view under the change table (Luke, 2026-07-05):
+    left half = exports, right half = imports, area ∝ 12-month value. The
+    world TOTAL (the sum of its own components) and overlapping blocs
+    (RCEP ⊃ ASEAN) stay table-only so the visual field can't double-count;
+    the hub glyph carries its dashed outline; tooltips repeat the table's
+    figures."""
+    h = render_html(_report(gacc_page=_gacc_page()))
+    bub = h[h.index('class="gtable-wrap gworld-bubbles"'):]
+    assert "China’s exports to European Union: €500.00B" in bub
+    assert "China’s imports from European Union: €250.00B" in bub
+    assert "12 months to May 2026" in bub
+    # Honest exclusions: no Total, no RCEP glyph — but both stay in the table.
+    assert "exports to Total" not in bub and "exports to RCEP" not in bub
+    assert ">RCEP<" in h  # the table row survives
+    # Hub styling + legend.
+    assert 'stroke-dasharray="4 3"' in bub
+    assert "left-heavy = China’s surplus" in bub
+
+
+def test_world_scale_glyphs_absent_below_two_entities():
+    gp = _gacc_page()
+    gp.world.metrics["rows"] = [r for r in gp.world.metrics["rows"]
+                                if r["label"] in ("Total", "ASEAN")]
+    h = render_html(_report(gacc_page=gp))
+    assert "gworld-bubbles" not in h[h.index('id="tab-gacc"'):]
 
 
 def test_since_last_read_renders_swings_and_gap_case():
@@ -468,10 +511,17 @@ def test_world_rows_order_and_hub_flag(seeded, test_db_url):
     gp = _build(test_db_url)
     rows = gp.world.metrics["rows"]
     labels = [r["label"] for r in rows]
-    # World total first, then blocs, HK hub last.
+    # World total first, then blocs + the named majors, HK hub last.
     assert rows[0]["kind"] == "world"
     assert rows[-1]["is_hub"] is True
     assert "ASEAN" in " ".join(labels)
+    # The majors join the world view (Luke, 2026-07-05): the EU bloc (a
+    # deliberate repeat of Europe-up-close) and the US; the ordinary EU
+    # member (Germany) does NOT — it stays in the Europe section only.
+    kinds = {r["label"]: r["kind"] for r in rows}
+    assert "eu_bloc" in kinds.values()
+    assert seeded["us_label"] in labels
+    assert seeded["de_label"] not in labels
 
 
 def test_since_last_computes_single_month_swing(seeded, test_db_url):

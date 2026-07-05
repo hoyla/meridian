@@ -1709,7 +1709,109 @@ def _gacc_world_html(section) -> str:
         '<th class="num grp">Month YoY</th><th class="num">YTD YoY</th>'
         '<th class="num">12mo value</th></tr></thead>'
         f'<tbody>{"".join(body)}</tbody></table></div>')
+    out.append(_gacc_world_bubbles_svg(
+        rows, (section.metrics or {}).get("period")))
     return "\n".join(out)
+
+
+# Flow colours for the scale glyphs — a neutral pair (NOT the up/down
+# green/red, which mean change everywhere else on the portal).
+_FLOW_EXPORT = "#33608c"   # China's exports (left half) — steel blue
+_FLOW_IMPORT = "#b8863b"   # China's imports (right half) — muted amber
+
+
+def _gacc_world_bubbles_svg(rows: list[dict], period_iso: str | None) -> str:
+    """The scale view under the change table (Luke, 2026-07-05): one glyph
+    per partner/bloc, two ABUTTING SEMICIRCLES on a shared vertical
+    diameter — left half China's exports, right half China's imports, each
+    half's AREA proportional to its 12-month value (r ∝ √value, one scale
+    across the whole strip). A lopsided glyph is the imbalance made
+    visible: left-heavy = China's surplus with that partner.
+
+    Deliberate exclusions, named in the caption: the world TOTAL (it is
+    the sum — it would dwarf its own components) and the overlapping blocs
+    (RCEP, Belt & Road, which contain ASEAN) — both stay in the table,
+    where labelled rows can't visually double-count. Exact figures live in
+    the table above (with their finding tokens); the glyph tooltips repeat
+    them."""
+    ents = []
+    for e in rows:
+        if e.get("kind") in ("world", "rcep", "belt_road"):
+            continue
+        exp = (e["flows"].get("export") or {}).get("rolling_eur")
+        imp = (e["flows"].get("import") or {}).get("rolling_eur")
+        if exp is None and imp is None:
+            continue
+        ents.append((e, float(exp or 0.0), float(imp or 0.0)))
+    if len(ents) < 2:
+        return ""
+    vmax = max(max(exp, imp) for _e, exp, imp in ents)
+    if vmax <= 0:
+        return ""
+    R_MAX, GAP, LABEL_BAND = 64.0, 30.0, 26.0
+
+    def radius(v: float) -> float:
+        return R_MAX * (v / vmax) ** 0.5
+
+    yc = R_MAX + 6
+    height = int(yc + R_MAX + LABEL_BAND)
+    x = GAP
+    glyphs: list[str] = []
+    when = ""
+    if period_iso:
+        try:
+            from datetime import date as _d
+            when = f", 12 months to {_fmt_month(_d.fromisoformat(period_iso))}"
+        except (ValueError, TypeError):
+            pass
+    for e, exp, imp in ents:
+        r_e, r_i = radius(exp), radius(imp)
+        cx = x + max(r_e, 4.0)
+        label = e["label"]
+        hub_stroke = (' stroke="#8a8578" stroke-dasharray="4 3" stroke-width="1.5"'
+                      if e.get("is_hub") else "")
+        if r_e > 0:
+            glyphs.append(
+                f'<path d="M {cx:.1f} {yc - r_e:.1f} '
+                f'A {r_e:.1f} {r_e:.1f} 0 0 0 {cx:.1f} {yc + r_e:.1f} Z" '
+                f'fill="{_FLOW_EXPORT}" fill-opacity="0.85"{hub_stroke}>'
+                f"<title>China’s exports to {html.escape(label)}: "
+                f"{html.escape(_fmt_eur(exp))}{html.escape(when)}</title></path>")
+        if r_i > 0:
+            glyphs.append(
+                f'<path d="M {cx:.1f} {yc - r_i:.1f} '
+                f'A {r_i:.1f} {r_i:.1f} 0 0 1 {cx:.1f} {yc + r_i:.1f} Z" '
+                f'fill="{_FLOW_IMPORT}" fill-opacity="0.85"{hub_stroke}>'
+                f"<title>China’s imports from {html.escape(label)}: "
+                f"{html.escape(_fmt_eur(imp))}{html.escape(when)}</title></path>")
+        # The shared diameter, so tiny halves still read as half a glyph.
+        seam = max(r_e, r_i)
+        glyphs.append(f'<line x1="{cx:.1f}" y1="{yc - seam:.1f}" '
+                      f'x2="{cx:.1f}" y2="{yc + seam:.1f}" '
+                      'stroke="#fff" stroke-width="1"/>')
+        lbl = html.escape(label)
+        if e.get("is_hub"):
+            lbl += " (entrepôt)"
+        glyphs.append(
+            f'<text x="{cx:.1f}" y="{yc + R_MAX + 18:.1f}" font-size="11.5" '
+            f'fill="#5c5749" text-anchor="middle">{lbl}</text>')
+        x = cx + max(r_i, 4.0) + GAP
+    width = int(x)
+    legend = (
+        f'<span style="color:{_FLOW_EXPORT}">◖</span> China’s exports · '
+        f'<span style="color:{_FLOW_IMPORT}">◗</span> China’s imports — '
+        "area ∝ 12-month value (the table’s figures; hover a half for the "
+        "number). A lopsided glyph is the imbalance: left-heavy = China’s "
+        "surplus with that partner. The world total and the overlapping "
+        "blocs (RCEP, Belt &amp; Road) appear in the table only."
+    )
+    return (
+        '<div class="gtable-wrap gworld-bubbles">'
+        f'<svg viewBox="0 0 {width} {height}" role="img" '
+        f'aria-label="Scale of China’s trade by partner and bloc" '
+        f'style="min-width:{min(width, 660)}px">'
+        + "".join(glyphs) + "</svg></div>"
+        f'<p class="gchart-caption">{legend}</p>')
 
 
 # Reader-facing copy per answerability tag (llm_gacc_page.ANSWERABLE_TAGS).
@@ -2453,6 +2555,8 @@ footer{padding:18px 28px 28px;border-top:1px solid var(--line);font-size:12px;co
 .take-hyp details.gdetail>summary{color:#7a5c00}
 .take-ans{font-size:12px;color:var(--muted);white-space:normal}
 .take-ans a{color:var(--masthead)}
+.gworld-bubbles{margin-top:14px}
+.gworld-bubbles svg{display:block;height:auto}
 .hub-note{font-size:11.5px;color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:1px 7px;white-space:nowrap}
 @media(max-width:900px){.kpis-4{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:640px){.kpis-4{grid-template-columns:1fr}}
