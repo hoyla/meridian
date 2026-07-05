@@ -1365,7 +1365,11 @@ def _gacc_bilateral_html(section) -> str:
                         f'{abs(yoy) * 100:.1f}%</span></span>')
             else:
                 summ = f'<span class="pp-fig">{lab} {val}</span>'
-        out.append(f'<details class="partner" id="{html.escape(p.id)}">')
+        # The EU bloc's expander ships unfolded (builder-set default_open —
+        # Luke, 2026-07-05): one open profile signals what every collapsed
+        # country row contains. A reader can still twist it shut.
+        open_attr = " open" if (p.metrics or {}).get("default_open") else ""
+        out.append(f'<details class="partner"{open_attr} id="{html.escape(p.id)}">')
         out.append(f'<summary><span class="pp-name">{html.escape(p.title)}</span>'
                    f'{summ}</summary><div class="pp-body">')
         # Window orientation, once per partner (same period for both flows).
