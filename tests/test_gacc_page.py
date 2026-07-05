@@ -166,6 +166,52 @@ def test_since_last_read_renders_swings_and_gap_case():
     assert "No directly comparable previous GACC month" in h2
 
 
+def _swing(label, flow, prev, cur, basis="single-month", fid=99):
+    return {"label": label, "flow": flow, "basis": basis, "prev_yoy": prev,
+            "cur_yoy": cur, "delta": cur - prev, "finding_id": fid}
+
+
+def test_since_last_dumbbell_renders_for_same_basis_rows():
+    """≥2 same-basis swings → the dumbbell chart renders above the table:
+    open prev-month dot, filled current-month dot, signed pp labels, and the
+    caption naming the basis."""
+    gp = _gacc_page(since_last={"prev_period": "2026-04-01", "rows": [
+        _swing("the EU", "export", 0.031, 0.124),
+        _swing("Canada", "import", 0.128, 0.924),
+        _swing("Brazil", "export", 0.05, -0.198),
+    ]})
+    h = render_html(_report(gacc_page=gp))
+    assert '<div class="gdumbbell">' in h
+    assert 'fill="#fff"' in h          # the open previous-month dot
+    assert "+9.3pp" in h and "+79.6pp" in h and "-24.8pp" in h
+    assert "single-month basis" in h
+    # Sign-flip row (Brazil +5% → −19.8%) crosses the marked zero line.
+    assert 'aria-label="Year-on-year swings' in h
+
+
+def test_since_last_dumbbell_plots_dominant_basis_only():
+    """Mixed bases must not share one axis: the chart keeps the dominant
+    basis and the caption names what it excluded (the table keeps all)."""
+    gp = _gacc_page(since_last={"prev_period": "2026-04-01", "rows": [
+        _swing("the EU", "export", 0.031, 0.124),
+        _swing("Canada", "import", 0.128, 0.924),
+        _swing("ASEAN", "export", 0.05, 0.08, basis="12-month"),
+    ]})
+    h = render_html(_report(gacc_page=gp))
+    assert "1 reading on another basis shown in the table only" in h
+    # The excluded 12-month row still appears in the table beneath.
+    assert ">12-month<" in h
+
+
+def test_since_last_dumbbell_absent_below_two_rows():
+    gp = _gacc_page()  # the base fixture carries a single swing row
+    h = render_html(_report(gacc_page=gp))
+    # The markup (not the stylesheet, which always carries the class) —
+    # a one-dot dumbbell isn't a chart.
+    assert '<div class="gdumbbell">' not in h
+    assert "Since the last read" in h  # the table/section still renders
+
+
 def test_strip_and_standout_render_with_drawer_hooks():
     h = render_html(_report(gacc_page=_gacc_page()))
     assert "CHINA → EU" in h and "+12.4%" in h
