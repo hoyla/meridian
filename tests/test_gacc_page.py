@@ -143,6 +143,13 @@ def test_gacc_identity_strip_dates_links_and_about_page():
     i_summary = h.index("About this page</summary>")
     i_caveat = h.index("China’s own customs figures.")
     assert i_summary < i_caveat  # caveat body sits inside the disclosure
+    # Placement mirrors the Briefing's About-this-site: under the KPI band,
+    # above the Standout lead (Luke, 2026-07-05).
+    panel = h[h.index('id="tab-gacc"'):]
+    i_kpis = panel.index('class="kpis kpis-4"')
+    i_about = panel.index("About this page</summary>")
+    i_standout = panel.index('id="gacc-standout"')
+    assert i_kpis < i_about < i_standout
 
 
 def test_world_table_orders_and_labels_the_entrepot_line():
