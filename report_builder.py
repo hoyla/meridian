@@ -2000,24 +2000,37 @@ def _gacc_europe_section(rows: list[_GaccRow], period: date) -> Section | None:
     return root
 
 
+# The single-country majors shown in the world view alongside the blocs:
+# UK (repeated from Europe-up-close, deliberately), US (indispensable to
+# the re-routing frame the section serves) and Russia (sanctions-era
+# China–Russia trade is a standing story). iso2 → compact glyph label;
+# extend here when another major earns a line. NB: no Middle East entry
+# is POSSIBLE from this source — GACC's preliminary release carries no
+# such aggregate and names no Middle East partners; that trade sits
+# unseparated inside Belt & Road and the world Total (the "more partner
+# countries" breadth item on the roadmap is the route to it).
+_GACC_WORLD_MAJORS: dict[str, str] = {
+    "GB": "UK",
+    "US": "US",
+    "RU": "Russia",
+}
+
+
 def _gacc_world_section(rows: list[_GaccRow], period: date) -> Section | None:
     """China and the world: the named blocs + the world total, both flows —
     the interpretive context around the Europe read (re-routing shows up
-    here) — plus the EU, UK and US lines so the scale view is complete
-    (Luke, 2026-07-05: deliberate repetition of the Europe section's data;
-    a world view without China's biggest counterparts gives no sense of
-    proportion). Hong Kong rides along as a labelled entrepôt signal:
-    mainland exports *to* HK often precede re-export flows, and on this
-    page HK is a partner, never part of “China”."""
+    here) — plus the EU bloc and the named majors (_GACC_WORLD_MAJORS) so
+    the scale view is complete (Luke, 2026-07-05: deliberate repetition of
+    the Europe section's data; a world view without China's biggest
+    counterparts gives no sense of proportion). Hong Kong rides along as a
+    labelled entrepôt signal: mainland exports *to* HK often precede
+    re-export flows, and on this page HK is a partner, never part of
+    “China”."""
     ents: dict[str, dict] = {}
     for r in rows:
         is_hub = r.family == "bilateral" and r.iso2 == "HK"
-        # The named majors join the world view alongside the blocs: the EU
-        # bloc + UK (repeated from Europe-up-close, deliberately) and the
-        # US (already on the context strip; indispensable to the
-        # re-routing frame this section exists to serve).
         is_major = (r.family == "bilateral"
-                    and (r.kind == "eu_bloc" or r.iso2 in ("GB", "US")))
+                    and (r.kind == "eu_bloc" or r.iso2 in _GACC_WORLD_MAJORS))
         if r.family != "aggregate" and not is_hub and not is_major:
             continue
         # Compact label for the scale glyphs (the table keeps the full
@@ -2025,10 +2038,8 @@ def _gacc_world_section(rows: list[_GaccRow], period: date) -> Section | None:
         # kind, never GACC's label spellings.
         if r.kind == "eu_bloc":
             short = "EU"
-        elif r.iso2 == "GB":
-            short = "UK"
-        elif r.iso2 == "US":
-            short = "US"
+        elif r.iso2 in _GACC_WORLD_MAJORS:
+            short = _GACC_WORLD_MAJORS[r.iso2]
         elif is_hub:
             short = "HK"
         else:
