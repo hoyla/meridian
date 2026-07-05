@@ -1712,12 +1712,105 @@ def _gacc_world_html(section) -> str:
     return "\n".join(out)
 
 
+# Reader-facing copy per answerability tag (llm_gacc_page.ANSWERABLE_TAGS).
+# The model picks the tag; this map supplies the words and links — capability
+# claims never come from the model. eurostat_confirmation appends the due
+# date from the page identity when available.
+_GACC_ANSWERABLE_COPY: dict[str, tuple[str, str | None]] = {
+    "world_table": ("answer in", "#gacc-world"),
+    "europe_section": ("answer in", "#gacc-europe"),
+    "drawers": ("check the cited figure’s drawer", None),
+    "eurostat_confirmation": ("answerable when Eurostat confirms this month", None),
+    "un_comtrade": ("needs UN Comtrade — third-country data we don’t hold", None),
+    "gacc_no_product_detail": (
+        "needs product detail GACC doesn’t publish — arrives with the "
+        "European confirmation", None),
+}
+
+_GACC_ANSWERABLE_LINK_LABEL = {
+    "world_table": "China and the world",
+    "europe_section": "Europe up close",
+}
+
+
+def _gacc_answerable_suffix(tag: str, gp) -> str:
+    entry = _GACC_ANSWERABLE_COPY.get(tag)
+    if entry is None:
+        return ""
+    text, href = entry
+    if href:
+        label = _GACC_ANSWERABLE_LINK_LABEL.get(tag, "this page")
+        inner = f'{html.escape(text)} <a href="{href}">{html.escape(label)}</a>'
+    else:
+        inner = html.escape(text)
+        if tag == "eurostat_confirmation":
+            due = _fmt_day_month((gp.identity or {}).get("confirmation_due"))
+            if due:
+                inner += html.escape(f" (due ~{due})")
+    return f' <span class="take-ans">→ {inner}</span>'
+
+
+def _gacc_synthesis_html(gp) -> str:
+    """The release-synthesis lead-scaffold + the page-level questions-take —
+    the page's machine corner, visually segregated in the house LLM style.
+    Every number in either box round-tripped to the page's own facts at
+    generation time; hypotheses come from the curated catalog with their
+    corroboration steps attached deterministically. Renders nothing when
+    both slots are empty (abstention / rejection / not yet generated)."""
+    s = gp.synthesis
+    q = gp.questions
+    has_q = q is not None and q.status == "generated" and q.questions
+    if not s and not has_q:
+        return ""
+    out = ['<h2 class="lead">The story of this release</h2>',
+           '<p class="kicker">Machine-drafted from the figures above — '
+           'every number verified against them, hypotheses from the '
+           'curated catalog. Leads to investigate, not conclusions.</p>']
+    if s:
+        cites = " ".join(
+            f'<span class="token">finding/{int(fid)}</span>'
+            for fid in (s.get("citations") or []))
+        hyps = []
+        for hyp in s.get("hypotheses") or []:
+            steps = "".join(f"<li>{html.escape(st)}</li>"
+                            for st in hyp.get("steps") or [])
+            steps_html = (
+                '<details class="gdetail"><summary>How to corroborate'
+                f"</summary><ul class=\"take-qs\">{steps}</ul></details>"
+                if steps else "")
+            hyps.append(
+                f'<div class="take-hyp"><strong>{html.escape(hyp.get("label", ""))}'
+                f".</strong> {html.escape(hyp.get('rationale', ''))}"
+                f"{steps_html}</div>")
+        out.append(
+            '<div class="take">'
+            '<div class="take-tag">◆ Machine synthesis — connects only the '
+            'cited figures; not a finding</div>'
+            f'<p class="take-prose">{html.escape(s.get("summary", ""))}</p>'
+            + "".join(hyps)
+            + (f'<p class="take-cite">{cites}</p>' if cites else "")
+            + "</div>")
+    if has_q:
+        qs = "".join(
+            f"<li>{html.escape(item.get('q', ''))}"
+            f"{_gacc_answerable_suffix(item.get('answerable', ''), gp)}</li>"
+            for item in q.questions)
+        out.append(
+            '<div class="take">'
+            '<div class="take-tag">◆ Questions this release raises — '
+            'unverified leads, each tagged with where its answer lives</div>'
+            f'<ul class="take-qs">{qs}</ul>'
+            "</div>")
+    return "".join(out)
+
+
 def _gacc_page_html(gp, payloads) -> str:
     """The whole GACC-only tab panel, in the design's reading order:
-    identity → context strip → standout → since-last → Europe up close →
-    world → understanding-these-figures expander. Carries its own sticky
-    sub-nav, same pattern as the Briefing tab (the global scroll-spy scopes
-    itself to the visible panel — hidden sections never intersect)."""
+    identity → context strip → synthesis (the machine corner) → standout →
+    since-last → Europe up close → world → understanding-these-figures
+    expander. Carries its own sticky sub-nav, same pattern as the Briefing
+    tab (the global scroll-spy scopes itself to the visible panel — hidden
+    sections never intersect)."""
     parts = [f"<section>{_gacc_identity_html(gp)}</section>"]
     subnav: list[tuple[str, str]] = []
     if gp.strip:
@@ -1727,6 +1820,11 @@ def _gacc_page_html(gp, payloads) -> str:
     about = _gacc_about_page_html(gp)
     if about:
         parts.append(f"<section>{about}</section>")
+    synth = _gacc_synthesis_html(gp)
+    if synth:
+        subnav.append(("gacc-synthesis", "Story"))
+        parts.append('<section class="brief-sec" id="gacc-synthesis">'
+                      + synth + "</section>")
     if gp.standout is not None:
         subnav.append(("gacc-standout", "Standout"))
         parts.append('<section class="brief-sec" id="gacc-standout">'
@@ -2351,6 +2449,10 @@ footer{padding:18px 28px 28px;border-top:1px solid var(--line);font-size:12px;co
 .gtable td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .gtable .grp{border-left:1px solid var(--line);padding-left:12px}
 .gtable-toks{margin-top:3px}
+.take-hyp{font-family:var(--font-sans);font-size:14px;line-height:1.45;color:#7a5c00;margin:8px 0 0}
+.take-hyp details.gdetail>summary{color:#7a5c00}
+.take-ans{font-size:12px;color:var(--muted);white-space:normal}
+.take-ans a{color:var(--masthead)}
 .hub-note{font-size:11.5px;color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:1px 7px;white-space:nowrap}
 @media(max-width:900px){.kpis-4{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:640px){.kpis-4{grid-template-columns:1fr}}

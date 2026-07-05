@@ -801,8 +801,10 @@ def main() -> None:
     )
     p.add_argument(
         "--skip-llm", action="store_true",
-        help="With --periodic-run: skip the llm-framing step. Useful "
-             "when Ollama is unavailable or for fast iterations.",
+        help="With --periodic-run: skip the llm-framing step. With "
+             "--gacc-update-run (and the chained gacc step): skip generating "
+             "the GACC page's synthesis/questions slots. Useful when no "
+             "backend is available or for fast iterations.",
     )
     p.add_argument(
         "--portal-takes", action="store_true",
@@ -1291,7 +1293,8 @@ def main() -> None:
         # (use --gacc-update-run --force for that).
         try:
             gacc_result = periodic.run_gacc_update(
-                force=False, out_dir=args.export_dir)
+                force=False, out_dir=args.export_dir,
+                skip_llm=args.skip_llm)
             log.info("gacc-update: %s", gacc_result.reason)
             gacc_summary = gacc_result.summary()
         except Exception as exc:
@@ -1311,7 +1314,8 @@ def main() -> None:
 
     if args.gacc_update_run:
         gacc_result = periodic.run_gacc_update(
-            force=args.force, out_dir=args.export_dir)
+            force=args.force, out_dir=args.export_dir,
+            skip_llm=args.skip_llm)
         log.info("gacc-update: %s", gacc_result.reason)
         print(gacc_result.summary())
         return

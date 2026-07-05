@@ -120,3 +120,45 @@ def graft_prior_takes(report: Report, prior: dict) -> int:
             grafted += 1
 
     return grafted
+
+
+def graft_gacc_slots(report: Report, prior: dict) -> int:
+    """Carry the GACC page's LLM slots (synthesis + questions) forward from a
+    prior snapshot, in place. Returns the number of slots grafted.
+
+    Deliberately SEPARATE from graft_prior_takes and gated on the GACC
+    page's OWN data_period, not the report's: the two tracks advance a month
+    apart, so a main-track rebuild (meta.data_period moved, GACC month
+    unchanged) must still carry the GACC slots, and a GACC-track new-period
+    rebuild (GACC month moved) must drop them for fresh generation even
+    though meta.data_period is unchanged. Freshly-generated slots are never
+    clobbered."""
+    gp = report.gacc_page
+    prior_gp = prior.get("gacc_page") or {}
+    if gp is None or gp.data_period is None or not prior_gp:
+        return 0
+    new_period = (gp.data_period.isoformat()
+                  if hasattr(gp.data_period, "isoformat")
+                  else str(gp.data_period))
+    if prior_gp.get("data_period") != new_period:
+        log.info(
+            "reuse-takes: prior gacc_page data_period %r != %r; not grafting "
+            "(fresh gacc slots expected on a new GACC month)",
+            prior_gp.get("data_period"), new_period,
+        )
+        return 0
+    grafted = 0
+    if gp.synthesis is None and prior_gp.get("synthesis"):
+        gp.synthesis = prior_gp["synthesis"]
+        grafted += 1
+    prior_q = prior_gp.get("questions") or {}
+    if (gp.questions is None and prior_q.get("status") == "generated"
+            and prior_q.get("questions")):
+        gp.questions = LLMSlot(
+            slot_type="general",
+            grounded_in=prior_q.get("grounded_in") or [],
+            status="generated",
+            questions=prior_q["questions"],
+        )
+        grafted += 1
+    return grafted

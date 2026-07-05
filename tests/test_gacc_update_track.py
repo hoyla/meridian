@@ -130,9 +130,12 @@ def test_new_period_fires_once_and_is_invisible_to_main_track(
     assert data_period == date(2026, 6, 1)
     assert output_path is not None and output_path.endswith("04_Portal")
     assert notes is None
-    # The snapshot step ran once, publish-ready but without fresh LLM spend.
+    # The snapshot step ran once, publish-ready; MAIN takes stay ungented
+    # (grafted instead), the GACC page's own slots generate on the
+    # new-period path (~2 paid calls a month — Luke-blessed).
     assert len(fresh_db) == 1
     assert fresh_db[0]["generate_takes"] is False
+    assert fresh_db[0]["generate_gacc_takes"] is True
     assert fresh_db[0]["write_workbook"] is True
     assert result.portal_dir == output_path
 
@@ -164,6 +167,9 @@ def test_second_currency_release_takes_quiet_refresh_path(
     assert second.action_taken is True
     assert second.refresh is True
     assert second.data_period == date(2026, 6, 1)
+    # The quiet-refresh path re-grafts the page's LLM slots rather than
+    # re-paying for generation (same GACC month).
+    assert fresh_db[-1]["generate_gacc_takes"] is False
 
     rows = _gacc_brief_rows(test_db_url)
     assert len(rows) == 2

@@ -42,7 +42,8 @@ ChartType = Literal[
     "bignumber", "bignumber_delta", "sparkline", "donut", "line", "bar"
 ]
 
-SCHEMA_VERSION = "0.2.0"  # 0.2.0: + Report.gacc_page (the GACC-only tab) + Report.source_vintages
+SCHEMA_VERSION = "0.3.0"  # 0.3.0: + GaccPage.synthesis / .questions (the page's LLM slots)
+# 0.2.0: + Report.gacc_page (the GACC-only tab) + Report.source_vintages
 
 
 @dataclass
@@ -236,6 +237,17 @@ class GaccPage:
     #  delta, basis}]} — the within-track delta vs the previous GACC month.
     since_last: dict = field(default_factory=dict)
     understanding: Optional[str] = None  # collapsed "how to read this" copy
+    # The page's LLM layer (V1, design doc § LLM layer). Both slots are built
+    # on the llm_framing verify-or-reject contract and abstain to None:
+    # `synthesis` = the release-synthesis lead-scaffold —
+    #   {summary, citations: [finding ids], hypotheses: [{id, label,
+    #    rationale, steps: [...]}]} — summary + rationales fact-verified,
+    #   hypothesis ids catalog-validated, corroboration steps deterministic.
+    # `questions` = the page-level questions-take (interrogative, per the
+    #   takes safety contract) with an `answerable` tag per question naming
+    #   where the answer lives (our sections / drawers / external sources).
+    synthesis: Optional[dict] = None
+    questions: Optional[LLMSlot] = None
 
 
 @dataclass

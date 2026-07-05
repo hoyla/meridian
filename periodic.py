@@ -168,6 +168,7 @@ def _next_releases_forecast(limit: int | None = 2) -> list[tuple[str, date]]:
 
 def write_portal_snapshot(
     bundle_dir: str, data_period, *, generate_takes: bool,
+    generate_gacc_takes: bool = False,
     write_workbook: bool = False,
     reuse_takes: bool = False, portal_bucket: str | None = None,
     prior_report: dict | None = None, publishing: bool = False,
@@ -204,7 +205,16 @@ def write_portal_snapshot(
     takes, so we refuse to publish a takes-less portal while reporting success.
     With `publishing=False` (preview, or the periodic-run path) reuse stays
     best-effort: any failure leaves empty takes and never sinks the snapshot.
-    The graft itself is always best-effort either way."""
+    The graft itself is always best-effort either way.
+
+    `generate_gacc_takes=True` additionally generates the GACC page's LLM
+    slots (synthesis + questions — the gacc-update cycle's new-period path).
+    When NOT generating them, the GACC slots are carried forward from the
+    prior snapshot whenever one is readable — independent of `reuse_takes`,
+    because the two tracks advance a month apart: a mid-month main rebuild
+    must not wipe the GACC page's takes just because the MAIN takes are
+    being regenerated (the graft is gated on the GACC page's own
+    data_period; see portal_takes_reuse.graft_gacc_slots)."""
     try:
         from pathlib import Path
         import report_model
@@ -213,19 +223,27 @@ def write_portal_snapshot(
         report = build_report(
             source_trigger="eurostat", data_period=data_period,
             generate_takes=generate_takes,
+            generate_gacc_takes=generate_gacc_takes,
         )
-        # Sticky takes: carry prior LLM takes onto this LLM-less rebuild. Only
-        # when reuse is asked for AND we didn't just generate fresh ones.
-        if reuse_takes and not generate_takes:
+        # Sticky takes: carry prior LLM content onto LLM-less slots. The main
+        # takes graft is opt-in (reuse_takes, and only when not freshly
+        # generated); the GACC-slot graft runs whenever a prior is readable
+        # and the slots weren't freshly generated (its own period gate makes
+        # a stale carry impossible).
+        want_main_graft = reuse_takes and not generate_takes
+        want_gacc_graft = not generate_gacc_takes
+        prior = prior_report
+        if prior is None and (want_main_graft or want_gacc_graft):
+            # Read the prior snapshot STRICTLY only for the publishing
+            # reuse-takes path: a genuine read error must not be read as "no
+            # prior" and silently empty the MAIN takes on a publish.
+            # PriorSnapshotUnreadable propagates (caught below + re-raised
+            # past the best-effort wrapper) so the publish is refused, not
+            # faked. The gacc-graft-only read stays best-effort.
+            prior = portal_publish.read_latest_report(
+                portal_bucket, required=(publishing and want_main_graft))
+        if want_main_graft:
             import portal_takes_reuse
-            # Read the prior snapshot STRICTLY when publishing: a genuine read
-            # error must not be read as "no prior" and silently empty the takes.
-            # PriorSnapshotUnreadable propagates (caught below + re-raised past
-            # the best-effort wrapper) so the publish is refused, not faked.
-            prior = prior_report
-            if prior is None:
-                prior = portal_publish.read_latest_report(
-                    portal_bucket, required=publishing)
             if prior is None:
                 log.warning(
                     "portal snapshot: --portal-reuse-takes set but no prior "
@@ -242,6 +260,16 @@ def write_portal_snapshot(
                 except Exception:
                     log.exception("portal snapshot: take graft failed; "
                                   "continuing with empty takes")
+        if want_gacc_graft and prior is not None:
+            import portal_takes_reuse
+            try:
+                n = portal_takes_reuse.graft_gacc_slots(report, prior)
+                if n:
+                    log.info("portal snapshot: grafted %d gacc-page slot(s) "
+                             "(reuse — no LLM spend)", n)
+            except Exception:
+                log.exception("portal snapshot: gacc-slot graft failed; "
+                              "continuing with empty gacc slots")
         pdir = Path(bundle_dir) / "04_Portal"
         pdir.mkdir(parents=True, exist_ok=True)
         (pdir / "report.json").write_text(report_model.to_json(report))
@@ -713,6 +741,7 @@ class GaccUpdateResult:
 
 def run_gacc_update(
     *, force: bool = False, out_dir: str | None = None,
+    skip_llm: bool = False,
 ) -> GaccUpdateResult:
     """Run the GACC-track update cycle end-to-end.
 
@@ -733,8 +762,12 @@ def run_gacc_update(
       4. Rebuild the portal snapshot (the ONE report — the Full-briefing
          tab's deterministic content is unchanged by construction since no
          Eurostat/HMRC data moved; its LLM takes are carried forward via
-         the reuse-graft when a portal bucket is configured). Best-effort:
-         a snapshot failure never sinks the run.
+         the reuse-graft when a portal bucket is configured). On the
+         NEW-PERIOD path (and --force) this also generates the GACC page's
+         own LLM slots — synthesis + questions, ~2 paid calls a month —
+         unless `skip_llm`; the quiet-refresh path re-grafts the existing
+         slots instead (same GACC month, no fresh spend). Best-effort: a
+         snapshot failure never sinks the run.
       5. Record the run in brief_runs (trigger='gacc_update',
          data_period=GACC reference month, output_path=the snapshot dir).
 
@@ -751,7 +784,8 @@ def run_gacc_update(
     started_monotonic = time.monotonic()
     try:
         return _run_gacc_update_cycle(
-            started_monotonic, force=force, out_dir=out_dir)
+            started_monotonic, force=force, out_dir=out_dir,
+            skip_llm=skip_llm)
     except Exception as exc:
         try:
             import periodic_run_log
@@ -776,6 +810,7 @@ def run_gacc_update(
 
 def _run_gacc_update_cycle(
     started_monotonic: float, *, force: bool, out_dir: str | None = None,
+    skip_llm: bool = False,
 ) -> GaccUpdateResult:
     """Body of run_gacc_update — see its docstring."""
 
@@ -873,10 +908,15 @@ def _run_gacc_update_cycle(
         _Path(out_dir or "exports") / f"{_dt.now():%Y-%m-%d-%H%M}-gacc-update"
     )
     bucket = os.environ.get("PORTAL_BUCKET")
+    # The page's own LLM slots (synthesis + questions) generate on the
+    # NEW-PERIOD path only (~2 paid calls a month) — a quiet refresh keeps
+    # the existing slots via the gacc graft (same GACC month, no fresh
+    # spend), and skip_llm turns generation off entirely.
     portal_dir = write_portal_snapshot(
         bundle_dir,
         briefing_pack.latest_eurostat_period(),
         generate_takes=False,
+        generate_gacc_takes=(new_period or force) and not skip_llm,
         write_workbook=True,  # publish-ready: /data.xlsx must resolve
         reuse_takes=bool(bucket),
         portal_bucket=bucket,
