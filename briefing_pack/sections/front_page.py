@@ -136,6 +136,12 @@ def _since_last_pack_lines(
                 f"{s['old_yoy']*100:+.1f}% to {s['new_yoy']*100:+.1f}%"
             )
         bits.append("Sharpest: " + "; ".join(highlights) + ".")
+    if diff.restated_count:
+        bits.append(
+            f"{diff.restated_count:,} older-window findings "
+            f"({diff.restated_range}) were re-stated by a source "
+            "correction — historic values, not this cycle's news."
+        )
     if diff.total_new:
         bits.append(f"{diff.total_new:,} findings are new this cycle.")
     bits.append("The full list is in Tier 1 below.")
