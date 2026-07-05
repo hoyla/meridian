@@ -1748,7 +1748,7 @@ def _gacc_world_bubbles_svg(rows: list[dict], period_iso: str | None) -> str:
     vmax = max(max(exp, imp) for _e, exp, imp in ents)
     if vmax <= 0:
         return ""
-    R_MAX, GAP, LABEL_BAND = 64.0, 30.0, 26.0
+    R_MAX, GAP, LABEL_BAND = 64.0, 30.0, 38.0
 
     def radius(v: float) -> float:
         return R_MAX * (v / vmax) ** 0.5
@@ -1766,8 +1766,15 @@ def _gacc_world_bubbles_svg(rows: list[dict], period_iso: str | None) -> str:
             pass
     for e, exp, imp in ents:
         r_e, r_i = radius(exp), radius(imp)
-        cx = x + max(r_e, 4.0)
         label = e["label"]
+        # Under-glyph labels are the compact form ("EU", "UK", "HK" — Luke,
+        # 2026-07-05: the full names overlapped on small glyphs); tooltips
+        # keep the full name. Hub tag rides on its own second line.
+        short = e.get("short_label") or label
+        # Pad placement by the label's footprint on BOTH sides so labels
+        # can never collide, however small the glyph (~6.6px/char at 11.5px).
+        label_w = max(len(short), len("(entrepôt)") if e.get("is_hub") else 0) * 6.6
+        cx = x + max(r_e, label_w / 2, 4.0)
         hub_stroke = (' stroke="#8a8578" stroke-dasharray="4 3" stroke-width="1.5"'
                       if e.get("is_hub") else "")
         if r_e > 0:
@@ -1789,13 +1796,14 @@ def _gacc_world_bubbles_svg(rows: list[dict], period_iso: str | None) -> str:
         glyphs.append(f'<line x1="{cx:.1f}" y1="{yc - seam:.1f}" '
                       f'x2="{cx:.1f}" y2="{yc + seam:.1f}" '
                       'stroke="#fff" stroke-width="1"/>')
-        lbl = html.escape(label)
-        if e.get("is_hub"):
-            lbl += " (entrepôt)"
         glyphs.append(
             f'<text x="{cx:.1f}" y="{yc + R_MAX + 18:.1f}" font-size="11.5" '
-            f'fill="#5c5749" text-anchor="middle">{lbl}</text>')
-        x = cx + max(r_i, 4.0) + GAP
+            f'fill="#5c5749" text-anchor="middle">{html.escape(short)}</text>')
+        if e.get("is_hub"):
+            glyphs.append(
+                f'<text x="{cx:.1f}" y="{yc + R_MAX + 31:.1f}" font-size="10" '
+                f'fill="#8a8578" text-anchor="middle">(entrepôt)</text>')
+        x = max(cx + max(r_i, 4.0), cx + label_w / 2) + GAP
     width = int(x)
     legend = (
         f'<span style="color:{_FLOW_EXPORT}">◖</span> China’s exports · '

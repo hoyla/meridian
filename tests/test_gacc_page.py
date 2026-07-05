@@ -54,12 +54,12 @@ def _gacc_page(**over) -> rm.GaccPage:
                           metrics={"order_note": "sharpest move first"}),
         world=rm.Section(id="gacc-world", title="China and the world",
                          kind="gacc_world", intro="Context.", metrics={"rows": [
-                             {"label": "Total", "kind": "world", "is_hub": False,
+                             {"label": "Total", "short_label": "Total", "kind": "world", "is_hub": False,
                               "flows": {"export": {
                                   "sm_yoy": 0.04, "ytd_yoy": 0.05,
                                   "rolling_yoy": 0.06, "rolling_eur": 3.1e12,
                                   "finding_id": 44}}},
-                             {"label": "European Union", "kind": "eu_bloc",
+                             {"label": "European Union", "short_label": "EU", "kind": "eu_bloc",
                               "is_hub": False,
                               "flows": {"export": {
                                   "sm_yoy": 0.045, "ytd_yoy": 0.062,
@@ -69,17 +69,17 @@ def _gacc_page(**over) -> rm.GaccPage:
                                   "sm_yoy": -0.02, "ytd_yoy": -0.01,
                                   "rolling_yoy": -0.03, "rolling_eur": 2.5e11,
                                   "finding_id": 47}}},
-                             {"label": "ASEAN", "kind": "asean", "is_hub": False,
+                             {"label": "ASEAN", "short_label": "ASEAN", "kind": "asean", "is_hub": False,
                               "flows": {"export": {
                                   "sm_yoy": 0.21, "ytd_yoy": 0.15,
                                   "rolling_yoy": 0.12, "rolling_eur": 6.5e11,
                                   "finding_id": 46}}},
-                             {"label": "RCEP", "kind": "rcep", "is_hub": False,
+                             {"label": "RCEP", "short_label": "RCEP", "kind": "rcep", "is_hub": False,
                               "flows": {"export": {
                                   "sm_yoy": 0.18, "ytd_yoy": 0.12,
                                   "rolling_yoy": 0.10, "rolling_eur": 9.0e11,
                                   "finding_id": 48}}},
-                             {"label": "Hong Kong, China", "kind": "single_country",
+                             {"label": "Hong Kong, China", "short_label": "HK", "kind": "single_country",
                               "is_hub": True,
                               "flows": {"export": {
                                   "sm_yoy": 0.11, "ytd_yoy": None,
@@ -196,6 +196,13 @@ def test_world_scale_glyphs_render_with_honest_exclusions():
     # Hub styling + legend.
     assert 'stroke-dasharray="4 3"' in bub
     assert "left-heavy = China’s surplus" in bub
+    # Under-glyph labels are the compact form (full names overlapped on
+    # small glyphs — Luke, 2026-07-05); tooltips keep the full names, and
+    # the hub tag rides its own second line.
+    assert ">EU</text>" in bub and ">HK</text>" in bub
+    assert ">(entrepôt)</text>" in bub
+    assert ">European Union</text>" not in bub
+    assert ">Hong Kong, China</text>" not in bub
 
 
 def test_world_scale_glyphs_absent_below_two_entities():
