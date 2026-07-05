@@ -1319,11 +1319,16 @@ def _mirror_gap_html(section) -> str:
 def _gacc_bilateral_html(section) -> str:
     """Progressive disclosure: one collapsed button per partner (name + a
     headline figure), expanding on click to that partner’s flows. Keeps ~24
-    partners compact while offering full per-country granularity on demand."""
+    partners compact while offering full per-country granularity on demand.
+    The ordering phrase defaults to the main tab's size sort; a section can
+    override it via metrics['order_note'] (the GACC page's Europe section
+    sorts by sharpest single-month move instead)."""
+    order_note = ((getattr(section, "metrics", None) or {})
+                  .get("order_note") or "biggest first")
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
         out.append(f'<p class="kicker">{_inline_md(section.intro)} '
-                   f'{len(section.sections)} partners, biggest first — '
+                   f'{len(section.sections)} partners, {html.escape(order_note)} — '
                    "click a partner to expand.</p>")
     out.append(_more_about(section))
     # Three annual per-region trend charts (exports / imports / balance) above
@@ -1452,6 +1457,187 @@ def _bilateral_balance_row(p) -> str:
         ctx = f"YTD{mo} {ylabel}: {ypart}{_fmt_eur(abs(ye))}"
         row += f'<div class="pp-ctx">{html.escape(ctx)}</div>'
     return row
+
+
+# ---------------------------------------------------------------------------
+# The GACC-only tab (dev_notes/2026-07-05-gacc-update-page-design.md)
+# ---------------------------------------------------------------------------
+
+def _fmt_day_month(iso: str | None) -> str | None:
+    """'9 Jun 2026' from an ISO date string; None passes through."""
+    if not iso:
+        return None
+    try:
+        from datetime import date as _d
+        d = _d.fromisoformat(iso)
+    except (ValueError, TypeError):
+        return iso
+    return f"{d.day} {d:%b %Y}"
+
+
+def _gacc_identity_html(gp) -> str:
+    """The identity strip: source·period chip, publish date, the Eurostat
+    confirmation-due date (teaches the two-track rhythm), links to both
+    language versions of the release, then the standing caveats."""
+    ident = gp.identity or {}
+    chips = [f'<span class="tag">GACC · '
+             f'{html.escape(_fmt_month(gp.data_period))}</span>']
+    pub = _fmt_day_month(ident.get("published"))
+    if pub:
+        chips.append(f'<span class="idchip">Published {html.escape(pub)}</span>')
+    due = _fmt_day_month(ident.get("confirmation_due"))
+    if due:
+        chips.append(f'<span class="idchip">European confirmation due '
+                     f'~{html.escape(due)}</span>')
+    links = []
+    if ident.get("source_url"):
+        links.append(f'<a href="{html.escape(ident["source_url"])}">'
+                     "Source release</a>")
+    if ident.get("source_url_zh"):
+        links.append(f'<a href="{html.escape(ident["source_url_zh"])}">中文</a>')
+    if links:
+        chips.append(f'<span class="idchip">{" · ".join(links)}</span>')
+    out = [f'<div class="id-strip">{"".join(chips)}</div>']
+    caveats = ident.get("caveats") or []
+    if caveats:
+        out.append('<ul class="id-caveats">' + "".join(
+            f"<li>{_inline_md(c)}</li>" for c in caveats) + "</ul>")
+    return "".join(out)
+
+
+def _gacc_standout_html(item, payloads) -> str:
+    """The partner-agnostic standout — the _headline mover pattern (prose,
+    trailing token folded into the click-to-verify drawer) for one item."""
+    fid = item.provenance.finding_ids[0] if item.provenance.finding_ids else None
+    prov = _prov_details(
+        (payloads or {}).get(str(fid)) if fid is not None else None,
+        f'<span class="token">finding/{fid}</span>' if fid is not None else "source",
+        summary_class="mover-prov")
+    prose = item.prose
+    if prov and fid is not None:
+        prose = re.sub(
+            rf"\s*(?:`finding/{fid}`|\[finding/{fid}\]\([^)]*\))\s*$", "", prose)
+    return ('<h2 class="lead">Standout move</h2>'
+            '<p class="kicker">The sharpest single-month shift anywhere in '
+            'this release — wherever it is, EU or not.</p>'
+            f'<ol class="movers"><li>{_inline_md(prose)}'
+            f'{_take_block_html(item.take)}{prov}</li></ol>')
+
+
+def _gacc_since_last_html(gp) -> str:
+    """The within-track delta: which readings swung most vs the previous
+    GACC month. Small table; a one-liner when no comparable month exists."""
+    sl = gp.since_last or {}
+    rows = sl.get("rows") or []
+    if not sl.get("prev_period"):
+        return ('<h2 class="lead">Since the last read</h2>'
+                '<p class="note">No directly comparable previous GACC month '
+                'in the data (for example across GACC’s combined '
+                'January–February release).</p>')
+    prev_lbl = _fmt_day_month(sl["prev_period"]) or sl["prev_period"]
+    # prev_period is a month anchor; show it month-style.
+    try:
+        from datetime import date as _d
+        prev_lbl = _fmt_month(_d.fromisoformat(sl["prev_period"]))
+    except (ValueError, TypeError):
+        pass
+    head = (f'<h2 class="lead">Since the last read</h2>'
+            f'<p class="kicker">The biggest swings in year-on-year readings '
+            f'vs the {html.escape(prev_lbl)} release.</p>')
+    if not rows:
+        return head + '<p class="note">No overlapping readings to compare.</p>'
+    body = ["".join([
+        "<tr>",
+        f"<td>China’s {'exports to' if r['flow'] == 'export' else 'imports from'} "
+        f"{html.escape(r['label'])}</td>",
+        f"<td>{html.escape(r['basis'])}</td>",
+        f'<td class="num">{r["prev_yoy"] * 100:+.1f}%</td>',
+        f'<td class="num">{r["cur_yoy"] * 100:+.1f}%</td>',
+        f'<td class="num" style="color:{_UP if r["delta"] >= 0 else _DOWN}">'
+        f'{r["delta"] * 100:+.1f}pp</td>',
+        f'<td><span class="token">finding/{r["finding_id"]}</span></td>',
+        "</tr>"]) for r in rows]
+    return (head + '<div class="gtable-wrap"><table class="gtable">'
+            "<thead><tr><th>Reading</th><th>Basis</th><th>Was</th><th>Now</th>"
+            "<th>Swing</th><th>Finding</th></tr></thead>"
+            f'<tbody>{"".join(body)}</tbody></table></div>')
+
+
+def _gacc_world_html(section) -> str:
+    """China and the world: blocs + world total, both flows, one row each —
+    plus the Hong Kong entrepôt line, visibly labelled as a routing signal."""
+    out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
+    if section.intro:
+        out.append(f'<p class="kicker">{_inline_md(section.intro)}</p>')
+    rows = (section.metrics or {}).get("rows") or []
+    if not rows:
+        return "\n".join(out)
+
+    def cell(fl: dict | None, key: str, pct: bool = True) -> str:
+        v = (fl or {}).get(key)
+        if v is None:
+            return '<td class="num">—</td>'
+        if pct:
+            col = _UP if v >= 0 else _DOWN
+            return f'<td class="num" style="color:{col}">{v * 100:+.1f}%</td>'
+        return f'<td class="num">{html.escape(_fmt_eur(v))}</td>'
+
+    body = []
+    for e in rows:
+        ex, im = e["flows"].get("export"), e["flows"].get("import")
+        label = html.escape(e["label"])
+        if e.get("is_hub"):
+            label += (' <span class="hub-note" title="Mainland exports to Hong '
+                      'Kong often precede re-export flows — an entrepôt '
+                      'signal. Never summed into any China or EU figure.">'
+                      "entrepôt signal ⓘ</span>")
+        toks = " ".join(
+            f'<span class="token">finding/{fl["finding_id"]}</span>'
+            for fl in (ex, im) if fl and fl.get("finding_id"))
+        body.append(
+            "<tr>"
+            f"<td>{label}</td>"
+            + cell(ex, "sm_yoy") + cell(ex, "ytd_yoy")
+            + cell(ex, "rolling_eur", pct=False)
+            + cell(im, "sm_yoy") + cell(im, "ytd_yoy")
+            + cell(im, "rolling_eur", pct=False)
+            + f"<td>{toks}</td></tr>")
+    out.append(
+        '<div class="gtable-wrap"><table class="gtable">'
+        "<thead><tr><th rowspan=2>Partner / bloc</th>"
+        '<th colspan=3>China’s exports</th>'
+        '<th colspan=3>China’s imports</th><th rowspan=2>Findings</th></tr>'
+        "<tr><th>Month YoY</th><th>YTD YoY</th><th>12mo value</th>"
+        "<th>Month YoY</th><th>YTD YoY</th><th>12mo value</th></tr></thead>"
+        f'<tbody>{"".join(body)}</tbody></table></div>')
+    return "\n".join(out)
+
+
+def _gacc_page_html(gp, payloads) -> str:
+    """The whole GACC-only tab panel, in the design's reading order:
+    identity → context strip → standout → since-last → Europe up close →
+    world → understanding-these-figures expander."""
+    parts = [f"<section>{_gacc_identity_html(gp)}</section>"]
+    if gp.strip:
+        parts.append('<section class="kpis kpis-4">'
+                      + "".join(_indicator_card(i, payloads) for i in gp.strip)
+                      + "</section>")
+    if gp.standout is not None:
+        parts.append("<section>" + _gacc_standout_html(gp.standout, payloads)
+                      + "</section>")
+    parts.append("<section>" + _gacc_since_last_html(gp) + "</section>")
+    if gp.europe is not None:
+        gp.europe.metrics.setdefault("order_note", "sharpest move first")
+        parts.append(f'<section id="{html.escape(gp.europe.id)}">'
+                      + _gacc_bilateral_html(gp.europe) + "</section>")
+    if gp.world is not None:
+        parts.append(f'<section id="{html.escape(gp.world.id)}">'
+                      + _gacc_world_html(gp.world) + "</section>")
+    if gp.understanding:
+        parts.append("<section><h2 class=\"lead\">Understanding these "
+                      "figures</h2>"
+                      + _more_about_html(gp.understanding) + "</section>")
+    return "".join(parts)
 
 
 def _structural_section_html(section) -> str:
@@ -2031,6 +2217,21 @@ table.dtable td{padding:6px 10px;border-bottom:1px solid var(--line);color:var(-
 table.dtable tbody tr:hover{background:var(--surface-alt)}
 .data-more{margin-top:18px}
 footer{padding:18px 28px 28px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);line-height:1.6}
+/* GACC-only tab + per-tab identity strips (2026-07-05 design) */
+.id-strip{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-family:var(--font-sans);font-size:13px}
+.idchip{border:1px solid var(--line);border-radius:999px;padding:3px 10px;color:var(--muted);white-space:nowrap}
+.idchip a{color:var(--masthead);text-decoration:none}
+.id-caveats{margin:10px 0 0;padding-left:18px;font-family:var(--font-sans);font-size:13px;color:var(--muted)}
+.id-caveats li{margin:3px 0}
+.kpis-4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.gtable-wrap{overflow-x:auto}
+.gtable{border-collapse:collapse;width:100%;font-family:var(--font-sans);font-size:13.5px}
+.gtable th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);border-bottom:1px solid var(--line);padding:6px 10px 6px 0}
+.gtable td{border-bottom:1px solid var(--line);padding:7px 10px 7px 0;vertical-align:top}
+.gtable td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.hub-note{font-size:11.5px;color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:1px 7px;white-space:nowrap}
+@media(max-width:900px){.kpis-4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:640px){.kpis-4{grid-template-columns:1fr}}
 @media(max-width:560px){.mast{font-size:27px}.sub{font-size:16px}section{padding:14px 18px}.masthead{padding:16px 18px}.tabs{padding:0 10px}.tab{padding:10px 11px;font-size:14px}.subnav{padding:8px 18px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}}
 """
 
@@ -2287,10 +2488,45 @@ def render_html(report: Report) -> str:
         tip = f"{tip} Received {recv}.".strip()
     tip_attr = f' title="{html.escape(tip)}"' if tip else ""
 
-    # --- Briefing panel: indicators, headline, general take, what-changed, then
-    # the main-page sections (everything that isn't a tab of its own).
+    # --- Briefing panel: identity strip, indicators, headline, general take,
+    # what-changed, then the main-page sections (everything that isn't a tab
+    # of its own).
     brief: list[str] = []
     subnav: list[tuple[str, str]] = []   # (anchor id, short label) for the sub-nav
+    # Per-tab identity strip (design doc § masthead: claims descend to the
+    # level where they're true). The old masthead badge + "Data to X" land
+    # here, per source — including the GACC-context chip, which runs a month
+    # AHEAD of the Eurostat core and pre-empts "why does the GACC section
+    # show a later month?".
+    vin = report.source_vintages or {}
+
+    def _vin_lbl(v) -> str | None:
+        if v is None:
+            return None
+        if hasattr(v, "strftime"):
+            return f"{v:%b %Y}"
+        try:
+            from datetime import date as _d
+            return f"{_d.fromisoformat(str(v)):%b %Y}"
+        except (ValueError, TypeError):
+            return str(v)
+
+    strip_chips = []
+    eu_lbl = _vin_lbl(vin.get("eurostat"))
+    if eu_lbl:
+        strip_chips.append(f'<span class="tag"{tip_attr}>Eurostat · to {eu_lbl}</span>')
+    hm_lbl = _vin_lbl(vin.get("hmrc"))
+    if hm_lbl:
+        strip_chips.append(f'<span class="idchip">HMRC · to {hm_lbl}</span>')
+    ga_lbl = _vin_lbl(vin.get("gacc"))
+    if ga_lbl:
+        target = (' — <a href="#tab-gacc">see the GACC-only tab</a>'
+                  if report.gacc_page is not None else "")
+        strip_chips.append(f'<span class="idchip">GACC context · to {ga_lbl}'
+                           f"{target}</span>")
+    if strip_chips:
+        brief.append(f'<section><div class="id-strip">{"".join(strip_chips)}'
+                     "</div></section>")
     if report.key_indicators:
         brief.append('<section class="kpis">'
                      + "".join(_indicator_card(i, report.provenance_payloads)
@@ -2361,10 +2597,18 @@ def render_html(report: Report) -> str:
         brief.insert(0, f'<nav class="subnav" aria-label="On this page">{links}</nav>')
 
     # --- tabs: (key, label, panel-html). Only built when they have content, so a
-    # GACC variant with no data tab simply shows fewer tabs.
+    # GACC variant with no data tab simply shows fewer tabs. The two release
+    # tracks' tabs are period-explicit (design doc: the visible month offset
+    # makes the two-track cadence legible in the tab bar itself).
+    brief_label = (f"Full briefing ({period:%b %Y})"
+                   if hasattr(period, "strftime") else "Full briefing")
     tabdefs: list[tuple[str, str, str]] = [
-        ("briefing", "Briefing", "".join(brief)),
+        ("briefing", brief_label, "".join(brief)),
     ]
+    if report.gacc_page is not None:
+        tabdefs.append(("gacc", report.gacc_page.tab_label,
+                        _gacc_page_html(report.gacc_page,
+                                        report.provenance_payloads)))
     if data_sec is not None and (data_sec.metrics or {}).get("tables"):
         tabdefs.append(("tables", "Tables",
                         "<section>" + _data_tables_html(data_sec) + "</section>"))
@@ -2409,7 +2653,7 @@ def render_html(report: Report) -> str:
     parts = [
         "<!doctype html><html lang=en><head><meta charset=utf-8>",
         '<meta name=viewport content="width=device-width,initial-scale=1">',
-        f"<title>Meridian — China–Europe trade, {html.escape(period_str)}</title>",
+        "<title>Meridian — China–Europe trade</title>",
         '<link rel=preconnect href="https://fonts.googleapis.com">',
         '<link rel=preconnect href="https://fonts.gstatic.com" crossorigin>',
         '<link rel=stylesheet href="https://fonts.googleapis.com/css2?'
@@ -2421,9 +2665,13 @@ def render_html(report: Report) -> str:
         '<div class="mast">Meridian</div>',
         '<div class="sub">China–Europe trade</div>',
         "</div>",
+        # The masthead makes only the one claim true portal-wide: when this
+        # snapshot was generated. Source + data-vintage claims moved down
+        # into each tab's identity strip (two tracks, two vintages — a
+        # single "Data to X" would be false; design doc § masthead).
         '<div class="mast-meta">',
-        f'<span class="tag"{tip_attr}>{html.escape(m.variant)}</span>',
-        f'<span class="mast-period">Data to {html.escape(period_str)}</span>',
+        (f'<span class="mast-period">Updated {html.escape(gen_str)}</span>'
+         if gen_str else ""),
         "</div>",
         "</header>",
         nav,

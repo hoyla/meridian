@@ -42,7 +42,7 @@ ChartType = Literal[
     "bignumber", "bignumber_delta", "sparkline", "donut", "line", "bar"
 ]
 
-SCHEMA_VERSION = "0.1.0"
+SCHEMA_VERSION = "0.2.0"  # 0.2.0: + Report.gacc_page (the GACC-only tab) + Report.source_vintages
 
 
 @dataclass
@@ -206,6 +206,39 @@ class Section:
 
 
 @dataclass
+class GaccPage:
+    """The GACC-only update page — the second release track's tab
+    (dev_notes/2026-07-05-gacc-update-page-design.md).
+
+    `data_period` is the GACC reference month, one month AHEAD of
+    `ReportMeta.data_period` (Eurostat freshness) by construction — the two
+    tracks supersede independently, and this page is rebuilt by whichever
+    track's cycle runs (the content derives from live findings either way).
+    Everything on it is GACC-side: China-perspective, mainland customs
+    territory only (no CN+HK+MO envelope — HK/MO appear as *partners*)."""
+    data_period: Optional[date]
+    tab_label: str  # period-explicit, e.g. "GACC-only (May 2026)"
+    # {published, confirmation_due, source_url, source_url_zh, caveats: [str]}
+    # — the identity header: when China published, when Europe's harmonised
+    # figures for the same month are due, links to both language versions of
+    # the release, and the standing epistemic caveats.
+    identity: dict = field(default_factory=dict)
+    # The context strip (doubles as this page's KPI row): China's exports to
+    # EU · US · ASEAN · World, single-month YoY face — the "general surge or
+    # EU-specific re-routing?" instrument.
+    strip: list[Indicator] = field(default_factory=list)
+    # Partner-agnostic standout: the sharpest single-month move anywhere in
+    # the release (world Total excluded — that's the wire headline).
+    standout: Optional[HeadlineItem] = None
+    europe: Optional[Section] = None  # EU bloc + member states + UK, both flows
+    world: Optional[Section] = None   # blocs + world total + HK entrepôt line
+    # {prev_period, basis_note, rows: [{label, flow, prev_yoy, cur_yoy,
+    #  delta, basis}]} — the within-track delta vs the previous GACC month.
+    since_last: dict = field(default_factory=dict)
+    understanding: Optional[str] = None  # collapsed "how to read this" copy
+
+
+@dataclass
 class ReportMeta:
     data_period: Optional[date]
     variant: Variant
@@ -226,10 +259,22 @@ class Report:
     sections: list[Section] = field(default_factory=list)
     # Per-finding provenance drawers (iteration 3 — the self-verifying portal),
     # keyed by str(finding_id). Baked in at build time for the Quotability-gated
-    # set (KPIs + headline movers) so the static portal can show "where this
-    # number came from" — source-URL trail, arithmetic, caveats, replay-SQL —
-    # with no database access. See provenance_payload.build_payloads_for.
+    # set (KPIs + headline movers + the GACC page's strip and standout) so the
+    # static portal can show "where this number came from" — source-URL trail,
+    # arithmetic, caveats, replay-SQL — with no database access. See
+    # provenance_payload.build_payloads_for.
     provenance_payloads: dict[str, dict] = field(default_factory=dict)
+    # The GACC-only tab (None until GACC findings exist). Both cycles rebuild
+    # it — the content is deterministic over live findings, so a main-track
+    # rebuild carries the GACC tab forward and vice versa; only the LLM takes
+    # need the reuse-graft.
+    gacc_page: Optional[GaccPage] = None
+    # Per-source data vintage for the Briefing tab's identity strip —
+    # {'eurostat': ISO-month, 'hmrc': ISO-month, 'gacc': ISO-month} (values
+    # None when a source has no data). The masthead no longer claims a single
+    # "Data to X": with two tracks the claim descends to the tab where it is
+    # true (design doc § masthead).
+    source_vintages: dict = field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------

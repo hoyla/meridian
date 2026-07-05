@@ -41,6 +41,7 @@ from briefing_pack._helpers import (
     _compute_predictability_per_group,
     _compute_top_movers,
     _conn,
+    _construct_chinese_source_url,
     _fmt_eur,
     _fmt_eur_per_day,
     _fmt_month,
@@ -58,11 +59,14 @@ from anomalies import (
 )
 import classifications
 import db
+import eurostat
 import labels
+import release_calendar
 from report_model import (
     ChartData,
     Facets,
     Finding,
+    GaccPage,
     Headline,
     HeadlineItem,
     Indicator,
@@ -1715,6 +1719,464 @@ def _gacc_bilateral_section(cur, period) -> Section:
     return root
 
 
+# =============================================================================
+# The GACC-only update page (dev_notes/2026-07-05-gacc-update-page-design.md)
+# =============================================================================
+# The second release track's tab. Everything below derives from live GACC
+# findings, so BOTH cycles rebuild it identically — a main-track rebuild
+# carries the GACC tab forward and vice versa; only LLM takes need the
+# reuse-graft. China-perspective throughout; change-shaped (single-month YoY
+# leads); mainland-customs-territory scope (no CN+HK+MO envelope — HK/MO are
+# partners here).
+
+
+def _fmt_month_abbr(d: date | None) -> str:
+    """'May 2026' — the portal's abbreviated month convention, used for the
+    period-explicit tab labels. Year always present (Dec/Jan ambiguity)."""
+    return f"{d:%b %Y}" if d is not None else ""
+
+
+def _fmt_signed_pct(yoy: float | None) -> str:
+    return f"{yoy * 100:+.1f}%" if yoy is not None else "—"
+
+
+class _GaccRow:
+    """One live GACC finding at the page's anchor, flattened for selection."""
+    __slots__ = ("fid", "family", "label", "kind", "iso2", "flow", "detail",
+                 "totals", "monthly_series", "caveat_codes")
+
+    def __init__(self, fid, family, label, kind, iso2, flow, detail):
+        self.fid = fid
+        self.family = family        # 'aggregate' | 'bilateral'
+        self.label = label          # partner / bloc raw_label
+        self.kind = kind            # eu_bloc | single_country | asean | ... | world
+        self.iso2 = iso2            # single-country partners only
+        self.flow = flow            # 'export' | 'import'
+        self.detail = detail or {}  # full finding detail (windows etc.)
+        self.totals = (detail or {}).get("totals", {}) or {}
+        self.monthly_series = (detail or {}).get("monthly_series")
+        self.caveat_codes = (detail or {}).get("caveat_codes") or []
+
+    @property
+    def sm_yoy(self) -> float | None:
+        sm = self.totals.get("single_month") or {}
+        return _f(sm.get("yoy_pct"))
+
+    @property
+    def sm_eur(self) -> float | None:
+        sm = self.totals.get("single_month") or {}
+        return _f(sm.get("current_eur"))
+
+    @property
+    def ytd_yoy(self) -> float | None:
+        ytd = self.totals.get("ytd_cumulative") or {}
+        return _f(ytd.get("yoy_pct"))
+
+    @property
+    def rolling_yoy(self) -> float | None:
+        return _f(self.totals.get("yoy_pct"))
+
+    @property
+    def rolling_eur(self) -> float | None:
+        return _f(self.totals.get("current_12mo_eur"))
+
+
+_GACC_PAGE_SUBKINDS = (
+    "gacc_aggregate_yoy", "gacc_aggregate_yoy_import",
+    "gacc_bilateral_aggregate_yoy", "gacc_bilateral_aggregate_yoy_import",
+)
+
+
+def _gacc_rows_at(cur, period: date) -> list[_GaccRow]:
+    """Every live GACC finding anchored at `period`, with the partner's iso2
+    joined in (single-country bilaterals only — how the page tells EU members
+    and the US/UK/HK apart without hardcoding GACC's label spellings)."""
+    cur.execute(
+        """SELECT f.id, f.subkind, f.detail, ca.iso2
+             FROM findings f
+        LEFT JOIN country_aliases ca
+               ON ca.id = COALESCE(f.detail->'partner'->>'alias_id',
+                                   f.detail->'aggregate'->>'alias_id')::bigint
+            WHERE f.superseded_at IS NULL
+              AND f.subkind = ANY(%s)
+              AND (f.detail->'windows'->>'current_end')::date = %s""",
+        (list(_GACC_PAGE_SUBKINDS), period),
+    )
+    rows: list[_GaccRow] = []
+    for fid, subkind, detail, iso2 in cur.fetchall():
+        detail = detail or {}
+        family = "bilateral" if subkind.startswith("gacc_bilateral") else "aggregate"
+        ent = detail.get("partner") if family == "bilateral" else detail.get("aggregate")
+        ent = ent or {}
+        rows.append(_GaccRow(
+            fid=fid, family=family,
+            label=ent.get("raw_label") or "?",
+            kind=ent.get("kind") or "single_country",
+            iso2=iso2,
+            flow="import" if subkind.endswith("_import") else "export",
+            detail=detail,
+        ))
+    return rows
+
+
+# The context strip: China's exports to EU · US · ASEAN · World — the
+# "general surge or EU-specific re-routing?" instrument (the page's endorsed
+# framing made into furniture). Selection is structural (kind/iso2), never by
+# GACC's label spellings.
+_GACC_STRIP_SLOTS: list[tuple[str, str, str]] = [
+    # (key, kicker, display name used in the label line)
+    ("gacc_strip_eu", "CHINA → EU", "the EU"),
+    ("gacc_strip_us", "CHINA → US", "the US"),
+    ("gacc_strip_asean", "CHINA → ASEAN", "ASEAN"),
+    ("gacc_strip_world", "CHINA → WORLD", "the world"),
+]
+
+
+def _strip_pick(rows: list[_GaccRow], slot_key: str) -> _GaccRow | None:
+    exports = [r for r in rows if r.flow == "export"]
+    if slot_key == "gacc_strip_eu":
+        cands = [r for r in exports if r.family == "bilateral" and r.kind == "eu_bloc"]
+    elif slot_key == "gacc_strip_us":
+        cands = [r for r in exports if r.family == "bilateral" and r.iso2 == "US"]
+    elif slot_key == "gacc_strip_asean":
+        cands = [r for r in exports if r.family == "aggregate" and r.kind == "asean"]
+    else:  # world
+        cands = [r for r in exports if r.family == "aggregate" and r.kind == "world"]
+    return cands[0] if cands else None
+
+
+def _gacc_strip_cards(rows: list[_GaccRow], period: date) -> list[Indicator]:
+    cards: list[Indicator] = []
+    for key, kicker, display in _GACC_STRIP_SLOTS:
+        r = _strip_pick(rows, key)
+        if r is None:
+            continue
+        # Single-month YoY is the face (this page is about the fresh month);
+        # fall back to the rolling figure — clearly labelled — when the
+        # comparable prior month is missing (GACC's Jan–Feb combined gap).
+        face = r.sm_yoy if r.sm_yoy is not None else r.rolling_yoy
+        if face is None:
+            continue
+        basis_note = (
+            f"{_fmt_month_abbr(period)} vs same month last year"
+            if r.sm_yoy is not None else
+            "12-month basis (no comparable single month)"
+        )
+        detail_bits = []
+        if r.sm_eur is not None:
+            detail_bits.append(f"{_fmt_eur(r.sm_eur)} in the month")
+        if r.ytd_yoy is not None:
+            detail_bits.append(f"YTD {_fmt_signed_pct(r.ytd_yoy)}")
+        if r.rolling_yoy is not None:
+            detail_bits.append(f"12mo {_fmt_signed_pct(r.rolling_yoy)}")
+        cards.append(Indicator(
+            key=key, kicker=kicker,
+            label=f"China’s exports to {display}",
+            value=face, unit="yoy_pct",
+            formatted=_fmt_signed_pct(face),
+            note=" · ".join([basis_note] + detail_bits) or None,
+            chart="bignumber",
+            provenance=Provenance(finding_ids=[r.fid], source="gacc", as_of=period),
+        ))
+    return cards
+
+
+def _gacc_standout(rows: list[_GaccRow], period: date) -> HeadlineItem | None:
+    """The sharpest single-month move anywhere in the release — partner-
+    agnostic (anti-fixation), but the world Total is excluded (that's the
+    wire headline, not our differentiation) and small bilateral partners are
+    size-floored so a tiny denominator can't take the standout slot."""
+    SIZE_FLOOR_EUR = 10e9  # 12-month value; keeps micro-partners out
+    cands = [
+        r for r in rows
+        if r.kind != "world"
+        and (r.family == "aggregate"
+             or (r.rolling_eur is not None and r.rolling_eur >= SIZE_FLOOR_EUR))
+    ]
+    with_sm = [r for r in cands if r.sm_yoy is not None]
+    pool = with_sm or [r for r in cands if r.rolling_yoy is not None]
+    if not pool:
+        return None
+    best = max(pool, key=lambda r: abs(r.sm_yoy if r.sm_yoy is not None
+                                       else r.rolling_yoy))
+    yoy = best.sm_yoy if best.sm_yoy is not None else best.rolling_yoy
+    basis = ("in " + _fmt_month(period) if best.sm_yoy is not None
+             else f"in the 12 months to {_fmt_month(period)}")
+    direction = "rose" if yoy > 0 else "fell"
+    flow_phrase = ("exports to" if best.flow == "export" else "imports from")
+    prose = (
+        f"**China’s {flow_phrase} {best.label}** {direction} "
+        f"{abs(yoy) * 100:.1f}% year-on-year {basis} — the sharpest move in "
+        f"this GACC release."
+    )
+    if best.sm_yoy is not None and best.rolling_yoy is not None:
+        prose += f" 12-month trend: {_fmt_signed_pct(best.rolling_yoy)}."
+    prose += f" `finding/{best.fid}`"
+    return HeadlineItem(
+        subject={"scope": "china", "flow": best.flow, "group_name": best.label},
+        metrics={"direction": direction, "pct": abs(yoy),
+                 "value_eur": best.sm_eur if best.sm_yoy is not None else best.rolling_eur},
+        stability={"badge": None, "hedge_phrase": None},
+        prose=prose,
+        provenance=Provenance(finding_ids=[best.fid], source="gacc", as_of=period),
+        facets=Facets(partner=[best.label]),
+    )
+
+
+def _gacc_partner_section(label: str, slug_prefix: str,
+                          flows_rows: list[_GaccRow], period: date) -> Section:
+    """One partner subsection in the _gacc_bilateral_section shape (same
+    Finding metrics + netted-balance metrics), so the existing renderer
+    handles it unchanged."""
+    findings: list[Finding] = []
+    flows: dict[str, dict] = {}
+    for r in sorted(flows_rows, key=lambda r: r.flow):
+        ytd = r.totals.get("ytd_cumulative") or {}
+        findings.append(Finding(
+            finding_id=r.fid, subkind=f"gacc_bilateral_aggregate_yoy"
+                                      f"{'' if r.flow == 'export' else '_import'}",
+            title=(f"China {'exports to' if r.flow == 'export' else 'imports from'} "
+                   f"{label}"),
+            metrics={"scope": "China", "flow": r.flow,
+                     "yoy_pct": r.rolling_yoy,
+                     "current_eur": r.rolling_eur,
+                     "caveats": _visible_caveats(r.caveat_codes),
+                     **_bilateral_context(r.detail)},
+            chart_data=_series_chart(r.monthly_series),
+            provenance=Provenance(finding_ids=[r.fid], source="gacc", as_of=period),
+        ))
+        flows[r.flow] = {
+            "cur12": r.rolling_eur,
+            "prior12": _f(r.totals.get("prior_12mo_eur")),
+            "ytd_cur": _f(ytd.get("current_eur")),
+            "ytd_prior": _f(ytd.get("prior_eur")),
+            "ytd_months": ytd.get("months_in_ytd"),
+        }
+    return Section(
+        id=slug_prefix + _slugify_heading(label), title=label,
+        kind="gacc_bilateral", findings=findings,
+        facets=Facets(partner=[label]),
+        metrics=_partner_balance(flows),
+    )
+
+
+def _gacc_europe_section(rows: list[_GaccRow], period: date) -> Section | None:
+    """Europe up close: GACC's EU aggregate first (both flows), then every
+    EU member state GACC releases plus the UK — the China-side read on the
+    numbers Europe will confirm in ~5 weeks. Sorted by the size of the
+    single-month move (fall back 12-month), sharpest first."""
+    eu_iso = eurostat.EU27_PARTNER_CODES | {"GB"}
+    by_label: dict[str, list[_GaccRow]] = {}
+    eu_bloc: list[_GaccRow] = []
+    for r in rows:
+        if r.family != "bilateral":
+            continue
+        if r.kind == "eu_bloc":
+            eu_bloc.append(r)
+        elif r.iso2 in eu_iso:
+            by_label.setdefault(r.label, []).append(r)
+    if not eu_bloc and not by_label:
+        return None
+    root = Section(
+        id="gacc-europe", title="Europe up close",
+        kind="gacc_bilateral",
+        intro="China’s own reported trade with the EU and with each "
+              "member state it names, plus the UK — both directions. "
+              "“Imports from” here is the China-side read on "
+              "European exporters’ China demand.",
+        about=_GACC_PAGE_ABOUT_EUROPE,
+    )
+    if eu_bloc:
+        root.sections.append(_gacc_partner_section(
+            eu_bloc[0].label, "gaccpage-", eu_bloc, period))
+
+    def swing(pair: list[_GaccRow]) -> float:
+        vals = [abs(r.sm_yoy if r.sm_yoy is not None else (r.rolling_yoy or 0.0))
+                for r in pair]
+        return max(vals) if vals else 0.0
+
+    for label, pair in sorted(by_label.items(), key=lambda kv: -swing(kv[1])):
+        root.sections.append(_gacc_partner_section(label, "gaccpage-", pair, period))
+    return root
+
+
+def _gacc_world_section(rows: list[_GaccRow], period: date) -> Section | None:
+    """China and the world: the named blocs + the world total, both flows —
+    the interpretive context around the Europe read (re-routing shows up
+    here). Hong Kong rides along as a labelled entrepôt signal: mainland
+    exports *to* HK often precede re-export flows, and on this page HK is a
+    partner, never part of “China”."""
+    ents: dict[str, dict] = {}
+    for r in rows:
+        is_hub = r.family == "bilateral" and r.iso2 == "HK"
+        if r.family != "aggregate" and not is_hub:
+            continue
+        e = ents.setdefault(r.label, {
+            "label": r.label, "kind": r.kind, "is_hub": is_hub,
+            "flows": {},
+        })
+        e["flows"][r.flow] = {
+            "sm_yoy": r.sm_yoy, "ytd_yoy": r.ytd_yoy,
+            "rolling_yoy": r.rolling_yoy, "rolling_eur": r.rolling_eur,
+            "finding_id": r.fid,
+        }
+    if not ents:
+        return None
+
+    def order(e: dict):
+        # World total first, blocs by size, the HK hub line last.
+        exp = (e["flows"].get("export") or {}).get("rolling_eur") or 0.0
+        return (0 if e["kind"] == "world" else (2 if e["is_hub"] else 1), -exp)
+
+    root = Section(
+        id="gacc-world", title="China and the world",
+        kind="gacc_world",
+        intro="The context that makes the Europe numbers readable: is an EU "
+              "move part of a general surge in China’s trade, or "
+              "specific to Europe? Hong Kong appears as a partner — an "
+              "entrepôt signal, never summed into any China or EU figure.",
+    )
+    root.metrics["rows"] = sorted(ents.values(), key=order)
+    root.metrics["period"] = period.isoformat()
+    return root
+
+
+def _gacc_since_last(cur, rows: list[_GaccRow], period: date) -> dict:
+    """The within-track delta: which year-on-year readings swung most vs the
+    previous GACC month. Single-month basis where both months carry it,
+    12-month basis otherwise. Empty rows (with prev_period=None) when the
+    previous anchor has no findings — e.g. across GACC’s Jan–Feb gap."""
+    prev_period = _months_back(period, 1)
+    prev = {(r.label, r.flow): r for r in _gacc_rows_at(cur, prev_period)}
+    if not prev:
+        return {"prev_period": None, "rows": []}
+    swings = []
+    for r in rows:
+        p = prev.get((r.label, r.flow))
+        if p is None:
+            continue
+        if r.sm_yoy is not None and p.sm_yoy is not None:
+            delta, basis, cur_v, prev_v = (
+                r.sm_yoy - p.sm_yoy, "single-month", r.sm_yoy, p.sm_yoy)
+        elif r.rolling_yoy is not None and p.rolling_yoy is not None:
+            delta, basis, cur_v, prev_v = (
+                r.rolling_yoy - p.rolling_yoy, "12-month",
+                r.rolling_yoy, p.rolling_yoy)
+        else:
+            continue
+        swings.append({
+            "label": r.label, "flow": r.flow, "basis": basis,
+            "prev_yoy": prev_v, "cur_yoy": cur_v, "delta": delta,
+            "finding_id": r.fid,
+        })
+    swings.sort(key=lambda s: -abs(s["delta"]))
+    return {"prev_period": prev_period.isoformat(), "rows": swings[:6]}
+
+
+def _gacc_identity(cur, period: date, rows: list[_GaccRow]) -> dict:
+    """The identity header: when China published, when Europe's harmonised
+    figures for the same month are due (release_calendar), links to both
+    language versions of the release, and the standing epistemic caveats."""
+    cur.execute(
+        """SELECT source_url, publication_date, first_seen_at
+             FROM releases WHERE source = 'gacc' AND period = %s
+         ORDER BY (currency = 'CNY') DESC, first_seen_at ASC LIMIT 1""",
+        (period,),
+    )
+    row = cur.fetchone()
+    url = row[0] if row else None
+    published = None
+    if row:
+        published = row[1] or (row[2].date() if row[2] else None)
+    due = release_calendar.expected_publish_date("eurostat", period)
+    zh = _construct_chinese_source_url(url) if url else None
+    caveats = [
+        "China’s own customs figures (GACC) — the mainland customs "
+        "territory only. Goods routed via Hong Kong appear here as trade "
+        "with Hong Kong; the Full briefing’s Eurostat figures use the "
+        "wider China+Hong Kong+Macao envelope, so the two tabs’ "
+        "“China” differ by construction.",
+        "Levels historically read ~20% above the EU’s mirror figures; "
+        "year-on-year changes travel across the mirror far better than "
+        "levels do.",
+        "Values are EUR-equivalent at per-period exchange rates, so growth "
+        "rates will not exactly match GACC’s published CNY / USD "
+        "figures.",
+    ]
+    if any(r.totals.get("jan_feb_combined_years") for r in rows):
+        caveats.append(
+            "Some windows include GACC’s combined January–February "
+            "release (Chinese New Year); affected figures carry the "
+            "jan_feb_combined caveat in their drawers.")
+    return {
+        "published": published.isoformat() if published else None,
+        "confirmation_due": due.isoformat() if due else None,
+        "source_url": url,
+        "source_url_zh": zh,
+        "caveats": caveats,
+    }
+
+
+_GACC_PAGE_ABOUT_EUROPE = (
+    "**Which countries appear.** GACC’s preliminary country/region "
+    "table names its major partners, so smaller EU member states may be "
+    "absent — this is China’s reporting choice, not a data gap on our "
+    "side. Partners are matched to EU membership by ISO code, never by "
+    "label spelling.\n\n"
+    "**No product detail.** The GACC country release has no commodity "
+    "dimension — this page is partners-only by data availability. "
+    "Product-level detail arrives with the European confirmation in "
+    "~5 weeks."
+)
+
+_GACC_UNDERSTANDING_MD = (
+    "**Reading the direction.** “China’s exports to the EU” "
+    "≈ the EU’s imports from China, measured from the Chinese "
+    "side. This page speaks China-perspective throughout — GACC’s own "
+    "frame and the wire convention — where the Full briefing speaks "
+    "Europe-perspective.\n\n"
+    "**Scope.** “China” here means the mainland customs territory "
+    "(GACC’s remit); goods routed via Hong Kong appear as trade with "
+    "Hong Kong. The Full briefing’s Eurostat figures use the wider "
+    "China+Hong Kong+Macao envelope, so the two tabs’ “China” "
+    "differ by construction.\n\n"
+    "**Early read, not the confirmed record.** GACC publishes ~5 weeks "
+    "before Eurostat covers the same month. Levels typically read ~20% "
+    "above the EU mirror (valuation, routing and scope differences — see "
+    "Methodology); year-on-year changes are far more comparable than "
+    "levels. Quote changes, attribute levels to “China’s customs "
+    "administration”.\n\n"
+    "**No product detail.** GACC’s country release is partner-level "
+    "only. Product-level detail arrives with the European confirmation.\n\n"
+    "**Currency.** Values are converted to EUR at per-period rates, so "
+    "growth rates won’t exactly match GACC’s published CNY / USD "
+    "figures — the standing FX-convention note in Methodology applies "
+    "doubly on this page, which leads with growth rates."
+)
+
+
+def _build_gacc_page(cur) -> GaccPage | None:
+    """Assemble the GACC-only tab from live findings. None when no GACC
+    findings exist yet — the renderer then simply omits the tab."""
+    period = _gacc_latest_period(cur)
+    if period is None:
+        return None
+    rows = _gacc_rows_at(cur, period)
+    if not rows:
+        return None
+    return GaccPage(
+        data_period=period,
+        tab_label=f"GACC-only ({_fmt_month_abbr(period)})",
+        identity=_gacc_identity(cur, period, rows),
+        strip=_gacc_strip_cards(rows, period),
+        standout=_gacc_standout(rows, period),
+        europe=_gacc_europe_section(rows, period),
+        world=_gacc_world_section(rows, period),
+        since_last=_gacc_since_last(cur, rows, period),
+        understanding=_GACC_UNDERSTANDING_MD,
+    )
+
+
 _GLOSSARY_PATH = pathlib.Path(__file__).resolve().parent / "docs" / "glossary.md"
 
 
@@ -1950,14 +2412,38 @@ def build_report(
                             _reference_section(cur),
                             _glossary_section()]
 
+        # The GACC-only tab — the second release track's page, built from
+        # live findings on EVERY variant's rebuild so whichever cycle runs
+        # carries the other track's tab forward (design doc § two-track
+        # model). None (tab omitted) until GACC findings exist.
+        gacc_page = _build_gacc_page(cur)
+
+        # Per-source data vintage for the Briefing tab's identity strip (the
+        # masthead no longer claims a single "Data to X" — see render).
+        cur.execute(
+            "SELECT source, MAX(period) FROM releases GROUP BY source")
+        _latest_by_source = dict(cur.fetchall())
+        source_vintages = {
+            "eurostat": _latest_by_source.get("eurostat"),
+            "hmrc": _latest_by_source.get("hmrc"),
+            "gacc": gacc_page.data_period if gacc_page else
+                    _latest_by_source.get("gacc"),
+        }
+
         # Iteration 3 — bake provenance drawers for the Quotability-gated set:
-        # the KPI standing levels + the headline movers, i.e. the numbers a
-        # reporter actually quotes. Built here (with DB access) and carried in
-        # the snapshot so the static portal can show "where this came from" with
-        # no database. Source-trail-first; best-effort per finding.
+        # the KPI standing levels + the headline movers + the GACC page's
+        # strip and standout, i.e. the numbers a reporter actually quotes.
+        # Built here (with DB access) and carried in the snapshot so the
+        # static portal can show "where this came from" with no database.
+        # Source-trail-first; best-effort per finding.
         import provenance_payload
         _gated = {f for ind in indicators for f in ind.provenance.finding_ids}
         _gated |= {f for it in items for f in it.provenance.finding_ids}
+        if gacc_page is not None:
+            _gated |= {f for ind in gacc_page.strip
+                       for f in ind.provenance.finding_ids}
+            if gacc_page.standout is not None:
+                _gated |= set(gacc_page.standout.provenance.finding_ids)
         prov_payloads = provenance_payload.build_payloads_for(cur, _gated)
 
     month = _fmt_month(data_period)
@@ -1990,6 +2476,8 @@ def build_report(
         what_changed=_what_changed(diff, disp),
         sections=sections,  # the navigable content tree (Eurostat variant)
         provenance_payloads=prov_payloads,
+        gacc_page=gacc_page,
+        source_vintages=source_vintages,
     )
     # Across-release 'general' take — "One other thing worth a look". It selects
     # from a shortlist of NON-headline findings, so it needs the finished report

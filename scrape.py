@@ -1290,7 +1290,8 @@ def main() -> None:
         # --force: forcing a main rerun shouldn't churn the GACC page
         # (use --gacc-update-run --force for that).
         try:
-            gacc_result = periodic.run_gacc_update(force=False)
+            gacc_result = periodic.run_gacc_update(
+                force=False, out_dir=args.export_dir)
             log.info("gacc-update: %s", gacc_result.reason)
             gacc_summary = gacc_result.summary()
         except Exception as exc:
@@ -1309,7 +1310,8 @@ def main() -> None:
         return
 
     if args.gacc_update_run:
-        gacc_result = periodic.run_gacc_update(force=args.force)
+        gacc_result = periodic.run_gacc_update(
+            force=args.force, out_dir=args.export_dir)
         log.info("gacc-update: %s", gacc_result.reason)
         print(gacc_result.summary())
         return
