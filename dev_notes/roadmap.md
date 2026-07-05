@@ -25,6 +25,15 @@ alerting suite). What's left:
   CSS-clamp the inline `label_short` (truncate with an ellipsis) and let the
   existing hover tooltip carry the full self-explanatory text. Cosmetic only; the
   full text is always reachable on hover.
+- **Favicon** (Luke, 2026-07-05). The portal serves none — every page load
+  404s on `/favicon.ico` via the GCS proxy, and the browser tab shows the
+  generic globe. House-consistent implementation: a `data:` URI
+  `<link rel="icon">` in `render_html`'s head (an inline SVG — the snapshot
+  stays one self-contained blob; no portal_service route, no bucket object,
+  works in the local preview too). Candidate mark: the two-tone ◐ semicircle
+  glyph from the world scale chart — on-brand since 2026-07-05 — in the
+  masthead blue/amber. One `<link>` line + the SVG string; a render test
+  asserting the head carries it.
 
 ## Analyser de-duplication / shared windowing primitive (E1) — flagged 2026-06-25
 
