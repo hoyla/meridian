@@ -2020,9 +2020,22 @@ def _gacc_world_section(rows: list[_GaccRow], period: date) -> Section | None:
                     and (r.kind == "eu_bloc" or r.iso2 in ("GB", "US")))
         if r.family != "aggregate" and not is_hub and not is_major:
             continue
+        # Compact label for the scale glyphs (the table keeps the full
+        # name; the glyph tooltips too). Mapped structurally — iso2 /
+        # kind, never GACC's label spellings.
+        if r.kind == "eu_bloc":
+            short = "EU"
+        elif r.iso2 == "GB":
+            short = "UK"
+        elif r.iso2 == "US":
+            short = "US"
+        elif is_hub:
+            short = "HK"
+        else:
+            short = r.label
         e = ents.setdefault(r.label, {
-            "label": r.label, "kind": r.kind, "is_hub": is_hub,
-            "flows": {},
+            "label": r.label, "short_label": short, "kind": r.kind,
+            "is_hub": is_hub, "flows": {},
         })
         e["flows"][r.flow] = {
             "sm_yoy": r.sm_yoy, "ytd_yoy": r.ytd_yoy,
