@@ -78,26 +78,34 @@ def test_latest_eurostat_period_returns_max(fresh_db, test_db_url, monkeypatch):
     assert briefing_pack.latest_eurostat_period() == date(2026, 2, 1)
 
 
-def test_latest_recorded_data_period_filters_by_trigger(
+def test_latest_recorded_data_period_is_trigger_scoped(
     fresh_db, test_db_url, monkeypatch,
 ):
-    """Manual renders set trigger='manual'; periodic-run cycles set
-    trigger='periodic_run'. The idempotency check filters on the latter
-    so that on-demand manual renders for a new joiner don't block the
-    next cycle (or, in reverse, get counted as cycle outputs)."""
+    """Each trigger sees only its own rows. Manual renders don't block the
+    periodic cycle; and gacc_update rows — whose data_period is the GACC
+    reference month, one month AHEAD of the main track's Eurostat
+    convention — are invisible to both main triggers, so a GACC-track run
+    can never convince the main cycle it already published a month it
+    hasn't. The unfiltered form was removed for exactly that reason
+    (design doc § brief_runs mechanics): `trigger` is now required."""
     monkeypatch.setenv("DATABASE_URL", test_db_url)
-    assert briefing_pack.latest_recorded_data_period() is None
 
     _seed_brief_run(test_db_url, date(2026, 1, 1), trigger="manual")
     _seed_brief_run(test_db_url, date(2026, 2, 1), trigger="manual")
     # No periodic_run rows yet — the filtered query should return None.
     assert briefing_pack.latest_recorded_data_period(trigger="periodic_run") is None
-    # The unfiltered query sees both manual rows.
-    assert briefing_pack.latest_recorded_data_period() == date(2026, 2, 1)
+    assert briefing_pack.latest_recorded_data_period(trigger="manual") == date(2026, 2, 1)
 
     _seed_brief_run(test_db_url, date(2026, 1, 1), trigger="periodic_run")
-    # Now the periodic_run filter sees the periodic row.
     assert briefing_pack.latest_recorded_data_period(trigger="periodic_run") == date(2026, 1, 1)
+
+    # A gacc_update row a month AHEAD leaves both main triggers untouched.
+    _seed_brief_run(test_db_url, date(2026, 3, 1), trigger="gacc_update")
+    assert briefing_pack.latest_recorded_data_period(trigger="periodic_run") == date(2026, 1, 1)
+    assert briefing_pack.latest_recorded_data_period(trigger="manual") == date(2026, 2, 1)
+    assert briefing_pack.latest_recorded_data_period(
+        trigger=briefing_pack.GACC_UPDATE_TRIGGER
+    ) == date(2026, 3, 1)
 
 
 def test_format_next_releases_renders_line():

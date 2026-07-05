@@ -779,10 +779,25 @@ def main() -> None:
         ),
     )
     p.add_argument(
+        "--gacc-update-run", action="store_true",
+        help=(
+            "Run the GACC-track update cycle: fire on a new GACC reference "
+            "month (or quietly refresh when the dual-currency second release "
+            "for an already-published month arrives), re-run the GACC "
+            "analyser families, and record the run on the gacc_update track. "
+            "Independent of the Eurostat-gated --periodic-run cycle "
+            "(supersedes within-track only — see "
+            "dev_notes/2026-07-05-gacc-update-page-design.md); also chained "
+            "automatically at the end of every --periodic-run invocation, so "
+            "the daily Routine needs no extra step. Pass --force to re-run "
+            "an already-published period."
+        ),
+    )
+    p.add_argument(
         "--force", action="store_true",
-        help="With --periodic-run: skip the idempotency check and re-run "
-             "regardless of whether the current Eurostat period has "
-             "already been published.",
+        help="With --periodic-run / --gacc-update-run: skip the idempotency "
+             "check and re-run regardless of whether the current period has "
+             "already been published on that track.",
     )
     p.add_argument(
         "--skip-llm", action="store_true",
@@ -1266,13 +1281,37 @@ def main() -> None:
             generate_takes=args.portal_takes,
         )
         log.info("periodic-run: %s", result.reason)
+        # The GACC track piggybacks on the same daily invocation so the
+        # Routine needs no new step: a fresh GACC period (or the
+        # dual-currency second release for the current one) is picked up
+        # here. Guarded — a gacc-track failure must not sink the main
+        # cycle's output; its crash already wrote a periodic_run_log row
+        # (track='gacc') for --periodic-history. Deliberately NOT forced by
+        # --force: forcing a main rerun shouldn't churn the GACC page
+        # (use --gacc-update-run --force for that).
+        try:
+            gacc_result = periodic.run_gacc_update(force=False)
+            log.info("gacc-update: %s", gacc_result.reason)
+            gacc_summary = gacc_result.summary()
+        except Exception as exc:
+            gacc_summary = (
+                f"GACC update: cycle FAILED — {exc} "
+                "(see `python scrape.py --periodic-history`)"
+            )
         # Human-readable per-run report for the scheduling layer (the
         # Routine agent) to surface — and, when a briefing was generated,
         # the exact manual `--upload-to-drive` command (we don't auto-publish).
         print(result.summary())
+        print(gacc_summary)
         # Then the findings path on its own final line, so a brittle wrapper
         # can still capture it (empty string on a no-op).
         print(result.findings_path or "")
+        return
+
+    if args.gacc_update_run:
+        gacc_result = periodic.run_gacc_update(force=args.force)
+        log.info("gacc-update: %s", gacc_result.reason)
+        print(gacc_result.summary())
         return
 
     if args.analyse == "mirror-trade":

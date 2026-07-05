@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from briefing_pack._helpers import (
+    MAIN_TRACK_TRIGGERS,
     _Section,
     _fmt_month,
     _format_new_releases_phrase,
@@ -71,7 +72,13 @@ def _compute_diff(cur, baseline_brief_run_id: int | None = None) -> _DiffData:
     *re-issue* — regenerating a withdrawn pack so its Tier 1 reads against
     the pack *before* the withdrawn one (e.g. re-issuing the 16 Jun pack
     against the 21 May baseline), without deleting the withdrawn pack's
-    audit row from `brief_runs`."""
+    audit row from `brief_runs`.
+
+    The default (most-recent) baseline is scoped to the MAIN track: a
+    GACC-update row landing between two briefing cycles must not become
+    Tier 1's baseline, or every finding created before it would silently
+    vanish from "new since the last brief". The explicit-id path is left
+    unscoped on purpose — a re-issue names its baseline row directly."""
     if baseline_brief_run_id is not None:
         cur.execute(
             "SELECT generated_at, output_path FROM brief_runs WHERE id = %s",
@@ -80,7 +87,9 @@ def _compute_diff(cur, baseline_brief_run_id: int | None = None) -> _DiffData:
     else:
         cur.execute(
             "SELECT generated_at, output_path FROM brief_runs "
-            "ORDER BY generated_at DESC LIMIT 1"
+            "WHERE trigger = ANY(%s) "
+            "ORDER BY generated_at DESC LIMIT 1",
+            (list(MAIN_TRACK_TRIGGERS),),
         )
     row = cur.fetchone()
     prev_at = row[0] if row else None

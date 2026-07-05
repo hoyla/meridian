@@ -956,9 +956,12 @@ CREATE INDEX idx_llm_rejection_log_rejected_at
 CREATE INDEX idx_llm_rejection_log_cluster
     ON llm_rejection_log (cluster_name);
 
--- Periodic-run cycle log: one row per `--periodic-run` invocation,
--- regardless of whether it wrote a new export or no-op'd. brief_runs
--- only has rows for cycles that wrote — this captures the no-ops too.
+-- Periodic-run cycle log: one row per orchestrator invocation
+-- (`--periodic-run` on the main track, `--gacc-update-run` on the gacc
+-- track), regardless of whether it acted or no-op'd. brief_runs only has
+-- rows for cycles that wrote — this captures the no-ops too. `track`
+-- vocabulary mirrors periodic_run_log.VALID_TRACKS (write guard); see
+-- migrations/2026-07-05-periodic-run-log-track.sql.
 CREATE TABLE periodic_run_log (
     id              BIGSERIAL PRIMARY KEY,
     invoked_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -970,7 +973,9 @@ CREATE TABLE periodic_run_log (
     duration_ms     INT,
     forced          BOOLEAN NOT NULL DEFAULT FALSE,
     skip_llm        BOOLEAN NOT NULL DEFAULT FALSE,
-    error           TEXT
+    error           TEXT,
+    track           TEXT NOT NULL DEFAULT 'main'
+                    CHECK (track IN ('main', 'gacc'))
 );
 CREATE INDEX idx_periodic_run_log_invoked_at
     ON periodic_run_log (invoked_at DESC);

@@ -281,6 +281,46 @@ def write_portal_snapshot(
         return None
 
 
+def _run_analyser_logged(
+    key: str, subkind: str, fn, *,
+    scope: str | None = None, flow_label: int | str | None = None,
+    **kwargs,
+) -> dict[str, Any]:
+    """Invoke an analyser, time it, and persist a findings_emit_log row.
+    `flow_label` is the value to record in findings_emit_log.flow (the
+    analyser's own flow kwarg is in **kwargs, which may be int or str).
+    Best-effort: log failures don't escalate. Shared by both orchestrators
+    (main periodic cycle and the GACC-track update)."""
+    log.info("periodic-run: running %s", key)
+    t_start = time.monotonic()
+    result = fn(**kwargs)
+    duration_ms = int((time.monotonic() - t_start) * 1000)
+    try:
+        import findings_emit_log
+        # Coerce flow_label: schema column is INT, but the gacc-aggregate
+        # analysers take flow='export'/'import'. Map those to 2/1 for
+        # storage so the column stays numeric-comparable.
+        flow_int: int | None
+        if flow_label is None:
+            flow_int = None
+        elif isinstance(flow_label, int):
+            flow_int = flow_label
+        else:
+            flow_int = 2 if flow_label == "export" else 1
+        findings_emit_log.log_run(
+            scrape_run_id=None,
+            analyser_method=subkind,
+            subkind=subkind,
+            comparison_scope=scope,
+            flow=flow_int,
+            counts=dict(result) if isinstance(result, dict) else {"raw": str(result)},
+            duration_ms=duration_ms,
+        )
+    except Exception:
+        log.exception("Failed to write findings_emit_log row for %s", key)
+    return result
+
+
 def run_periodic(
     *,
     force: bool = False,
@@ -430,44 +470,7 @@ def _run_periodic_cycle(
 
     # --- Step 2: run all analyser kinds across all scope/flow combos. ---
     counts: dict[str, Any] = {}
-
-    def _run_analyser(
-        key: str, subkind: str, fn, *,
-        scope: str | None = None, flow_label: int | str | None = None,
-        **kwargs,
-    ) -> dict[str, Any]:
-        """Invoke an analyser, time it, and persist a findings_emit_log row.
-        `flow_label` is the value to record in findings_emit_log.flow (the
-        analyser's own flow kwarg is in **kwargs, which may be int or str).
-        Best-effort: log failures don't escalate."""
-        log.info("periodic-run: running %s", key)
-        t_start = time.monotonic()
-        result = fn(**kwargs)
-        duration_ms = int((time.monotonic() - t_start) * 1000)
-        try:
-            import findings_emit_log
-            # Coerce flow_label: schema column is INT, but the gacc-aggregate
-            # analysers take flow='export'/'import'. Map those to 2/1 for
-            # storage so the column stays numeric-comparable.
-            flow_int: int | None
-            if flow_label is None:
-                flow_int = None
-            elif isinstance(flow_label, int):
-                flow_int = flow_label
-            else:
-                flow_int = 2 if flow_label == "export" else 1
-            findings_emit_log.log_run(
-                scrape_run_id=None,
-                analyser_method=subkind,
-                subkind=subkind,
-                comparison_scope=scope,
-                flow=flow_int,
-                counts=dict(result) if isinstance(result, dict) else {"raw": str(result)},
-                duration_ms=duration_ms,
-            )
-        except Exception:
-            log.exception("Failed to write findings_emit_log row for %s", key)
-        return result
+    _run_analyser = _run_analyser_logged
 
     counts["mirror_trade"] = _run_analyser(
         "mirror_trade", "mirror_gap", anomalies.detect_mirror_trade_gaps,
@@ -627,6 +630,230 @@ def _run_periodic_cycle(
         new_data=new_data_phrase,
         portal_dir=portal_dir,
         next_releases=next_releases,
+    )
+    _persist_log(result)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# GACC-track update cycle
+# ---------------------------------------------------------------------------
+# The second release track (dev_notes/2026-07-05-gacc-update-page-design.md):
+# GACC publishes ~8-10 days after the reference month — one month AHEAD of
+# the Eurostat/HMRC pair that lands days later — so the GACC-only update page
+# runs on its own cycle, superseding within-track only. This orchestrator is
+# the GACC analogue of run_periodic(): idempotent on the GACC reference
+# month, with a quiet-refresh path for the dual-currency second release.
+
+
+@dataclasses.dataclass
+class GaccUpdateResult:
+    """Return value of run_gacc_update() — the GACC-track analogue of
+    PeriodicRunResult, slimmer because the track has no findings bundle."""
+
+    action_taken: bool
+    """True if the GACC track processed a new period (or refreshed an
+    already-published one); False on a clean no-op."""
+
+    reason: str
+    """Human-readable explanation, printable by the routine wrapper."""
+
+    data_period: date | None
+    """The GACC reference month this run reflects (latest GACC period in
+    the DB). None if no GACC data is ingested. NB: one month ahead of the
+    main track's Eurostat-freshness data_period by construction."""
+
+    refresh: bool = False
+    """True when this run was the quiet-refresh path: the period was
+    already published but a further GACC release for it arrived (the
+    dual-currency second release) — analysers re-ran and the page will
+    rebuild, but journalist-facing notification should stay silent."""
+
+    analyser_counts: dict[str, Any] = dataclasses.field(default_factory=dict)
+    """Per-analyser-step result dicts, keyed by step name."""
+
+    def summary(self) -> str:
+        """Per-run report for the scheduling layer, mirroring
+        PeriodicRunResult.summary()'s shape."""
+        if not self.action_taken:
+            return f"GACC update: no action this cycle — {self.reason}"
+        if self.refresh:
+            return (
+                f"GACC update: refreshed period {self.data_period} "
+                "(further GACC release for an already-published month; "
+                "no new-period event)."
+            )
+        return (
+            f"GACC update: new GACC period {self.data_period} processed "
+            "and recorded on the gacc_update track."
+        )
+
+
+def run_gacc_update(*, force: bool = False) -> GaccUpdateResult:
+    """Run the GACC-track update cycle end-to-end.
+
+    Sequence:
+      1. Idempotency check — no-op unless the latest GACC period in the DB
+         is newer than what the gacc_update track last recorded
+         (`latest_recorded_data_period(trigger='gacc_update')`). Fires on a
+         new *period*, not a new *release*: GACC publishes each month twice
+         (CNY then USD), and the page must not fire twice a month.
+      2. Quiet-refresh detection — same period but a GACC release row
+         arrived after the last gacc_update run (the dual-currency second
+         release): re-run the GACC analysers and record a refresh row, so
+         the page rebuild picks up any superseded values, without a
+         new-period event.
+      3. Re-run the GACC analyser families (aggregate + bilateral, both
+         flows). Idempotent at the per-finding level, same as the main
+         cycle.
+      4. Record the run in brief_runs (trigger='gacc_update',
+         data_period=GACC reference month). output_path stays None until
+         the GACC page snapshot build lands (PR 2 of the design doc) —
+         the row still marks the period as processed.
+
+    Deliberately non-fetching, like run_periodic(): works against whatever
+    GACC data the routine's probe step already ingested.
+
+    A crash anywhere still writes a periodic_run_log row (track='gacc',
+    the exception in `error`) before propagating — the F4 contract, so
+    `--periodic-history` can distinguish "the gacc cycle broke" from
+    "it never ran".
+    """
+    started_monotonic = time.monotonic()
+    try:
+        return _run_gacc_update_cycle(started_monotonic, force=force)
+    except Exception as exc:
+        try:
+            import periodic_run_log
+            periodic_run_log.log_run(
+                action_taken=False,
+                reason=f"gacc-update cycle crashed: {type(exc).__name__}",
+                data_period=None,
+                findings_path=None,
+                analyser_counts=None,
+                duration_ms=int((time.monotonic() - started_monotonic) * 1000),
+                forced=force,
+                skip_llm=False,
+                error=str(exc) or type(exc).__name__,
+                track="gacc",
+            )
+        except Exception:
+            log.exception(
+                "Failed to write periodic_run_log row for crashed gacc-update cycle"
+            )
+        raise
+
+
+def _run_gacc_update_cycle(
+    started_monotonic: float, *, force: bool,
+) -> GaccUpdateResult:
+    """Body of run_gacc_update — see its docstring."""
+
+    def _persist_log(result: GaccUpdateResult, error: str | None = None) -> None:
+        """Best-effort persistence to periodic_run_log (track='gacc')."""
+        try:
+            import periodic_run_log
+            periodic_run_log.log_run(
+                action_taken=result.action_taken,
+                reason=result.reason,
+                data_period=result.data_period,
+                findings_path=None,
+                analyser_counts=result.analyser_counts or None,
+                duration_ms=int((time.monotonic() - started_monotonic) * 1000),
+                forced=force,
+                skip_llm=False,
+                error=error,
+                track="gacc",
+            )
+        except Exception:
+            log.exception("Failed to write periodic_run_log row (gacc track)")
+
+    latest_gacc = briefing_pack.latest_gacc_period()
+    published = briefing_pack.latest_recorded_data_period(
+        trigger=briefing_pack.GACC_UPDATE_TRIGGER
+    )
+
+    log.info(
+        "gacc-update: latest_gacc=%s latest_published_gacc=%s force=%s",
+        latest_gacc, published, force,
+    )
+
+    if latest_gacc is None:
+        result = GaccUpdateResult(
+            action_taken=False,
+            reason="no GACC data ingested yet; ingest a release first",
+            data_period=None,
+        )
+        _persist_log(result)
+        return result
+
+    new_period = published is None or latest_gacc > published
+    refresh = False
+    if not new_period and not force:
+        # Same period — but did a further GACC release for it arrive since
+        # the last gacc_update run? (CNY lands first, USD days later; the
+        # analysers' supersede chains may shift when the second release's
+        # rows land, so the page should quietly rebuild.)
+        last_run_at = briefing_pack.latest_gacc_update_run_at()
+        last_release_at = briefing_pack.latest_gacc_release_seen_at()
+        if (
+            last_run_at is not None
+            and last_release_at is not None
+            and last_release_at > last_run_at
+        ):
+            refresh = True
+        else:
+            result = GaccUpdateResult(
+                action_taken=False,
+                reason=(
+                    f"GACC period {latest_gacc} already published on the "
+                    f"gacc_update track and no further GACC release has "
+                    f"arrived since; pass --force to re-run anyway"
+                ),
+                data_period=latest_gacc,
+            )
+            _persist_log(result)
+            return result
+
+    # --- Re-run the GACC analyser families (idempotent per-finding). ---
+    counts: dict[str, Any] = {}
+    for flow_str in ("export", "import"):
+        key = f"gacc_aggregate_yoy_{flow_str}"
+        counts[key] = _run_analyser_logged(
+            key, "gacc_aggregate_yoy", anomalies.detect_gacc_aggregate_yoy,
+            flow_label=flow_str, flow=flow_str,
+        )
+        bkey = f"gacc_bilateral_aggregate_yoy_{flow_str}"
+        counts[bkey] = _run_analyser_logged(
+            bkey, "gacc_bilateral_aggregate_yoy",
+            anomalies.detect_gacc_bilateral_aggregate_yoy,
+            flow_label=flow_str, flow=flow_str,
+        )
+
+    # PR 2 (design doc § Report structure) wires the GACC page snapshot
+    # build here; until then the run records with output_path=None.
+    if refresh:
+        notes = (
+            "refresh: further GACC release for an already-published period "
+            "(dual-currency second release)"
+        )
+        reason = f"refreshed already-published GACC period {latest_gacc}"
+    elif not new_period:  # force-rerun of an already-published period
+        notes = "forced rerun"
+        reason = f"forced re-run for GACC period {latest_gacc}"
+    else:
+        notes = None
+        reason = f"new GACC period {latest_gacc} recorded"
+    briefing_pack.record_gacc_update_run(
+        data_period=latest_gacc, output_path=None, notes=notes,
+    )
+
+    result = GaccUpdateResult(
+        action_taken=True,
+        reason=reason,
+        data_period=latest_gacc,
+        refresh=refresh,
+        analyser_counts=counts,
     )
     _persist_log(result)
     return result
