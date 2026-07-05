@@ -649,6 +649,8 @@ def _what_changed(diff, disp: dict[str, str]) -> WhatChanged:
         summary=summary,
         significant=significant,
         new_count=diff.total_new,
+        restated_count=diff.restated_count,
+        restated_range=diff.restated_range or None,
     )
 
 

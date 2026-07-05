@@ -162,6 +162,13 @@ class WhatChanged:
     # The per-type breakdown of new findings (the Findings-doc Tier-1 "N new —
     # <type>" list) is bookkeeping, not substance, so it lives in the Sources &
     # coverage section's metrics, not here. `new_count` (the headline total) stays.
+    # Historic-window corrections, collapsed (2026-07-05): a backfill can
+    # materially re-state hundreds of OLD-window findings in one supersede
+    # pass; those are preserved revisions but not this cycle's news, so they
+    # render as one counted line, never as line items. `significant` holds
+    # recent-window shifts only.
+    restated_count: int = 0
+    restated_range: Optional[str] = None  # e.g. "Jul 2019 – Dec 2025"
 
 
 @dataclass

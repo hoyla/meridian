@@ -36,6 +36,10 @@ from briefing_pack._helpers import (
 # the reader explicitly that what they're seeing is plumbing, not news.
 _METHOD_BUMP_YOY_TOLERANCE = 1e-4   # 0.01 pp; same scale as `value_signature` rounding
 _METHOD_BUMP_RATIO_THRESHOLD = 0.95  # >=95% of supersede pairs unchanged → call it a bump
+# A material shift is a Tier 1 LINE ITEM only when its window ends within
+# this many months of the supersede batch's newest window; older shifts are
+# a correction ripple and collapse into one counted line (see _DiffData).
+_RESTATED_RECENCY_MONTHS = 3
 
 
 @dataclass
@@ -56,6 +60,16 @@ class _DiffData:
     n_pairs: int = 0
     n_value_identical: int = 0
     method_transitions: set = field(default_factory=set)
+    # Historic-window corrections, collapsed (2026-07-05): a source
+    # backfill/correction can materially re-state hundreds of OLD-window
+    # findings in one supersede pass (first hit: the Jan–Feb 2020 GACC
+    # backfill rippling through 720 findings on the analysers' next run).
+    # Those are real, preserved revisions — but they are not this cycle's
+    # news, so Tier 1 counts and explains them in one line instead of
+    # listing them. `significant` holds only recent-window shifts.
+    restated_count: int = 0
+    restated_range: str = ""      # e.g. "Jul 2019 – Dec 2025"
+    restated_max_pp: float = 0.0  # sharpest collapsed correction, for the line
 
 
 def _compute_diff(cur, baseline_brief_run_id: int | None = None) -> _DiffData:
@@ -153,7 +167,7 @@ def _compute_diff(cur, baseline_brief_run_id: int | None = None) -> _DiffData:
     )
     pairs = cur.fetchall()
 
-    significant: list[dict] = []
+    material: list[dict] = []
     n_value_identical = 0
     method_transitions: set[tuple[str, str]] = set()
     for r in pairs:
@@ -164,7 +178,7 @@ def _compute_diff(cur, baseline_brief_run_id: int | None = None) -> _DiffData:
         if r["old_method"] != r["new_method"]:
             method_transitions.add((r["old_method"], r["new_method"]))
         if abs(new_yoy - old_yoy) > 0.05:  # > 5pp shift = material
-            significant.append({
+            material.append({
                 "subkind": r["subkind"],
                 "group_name": r["group_name"],
                 "window_end": r["window_end"],
@@ -174,20 +188,58 @@ def _compute_diff(cur, baseline_brief_run_id: int | None = None) -> _DiffData:
                 "shift_pp": (new_yoy - old_yoy) * 100,
                 "new_finding_id": r["new_id"],
             })
+
+    # Recency split: material shifts on RECENT windows are this cycle's
+    # news and stay as Tier 1 line items; shifts on historic windows are a
+    # correction ripple (a backfill/re-ingest propagating through the
+    # supersede chain) and collapse into one counted, explained line. The
+    # cutoff hangs off the newest window in the whole supersede batch, so
+    # a normal cycle (all pairs at current anchors) is entirely unaffected.
+    def _window_date(w) -> date | None:
+        try:
+            return date.fromisoformat(str(w))
+        except (TypeError, ValueError):
+            return None
+
+    all_ends = [d for r in pairs
+                if (d := _window_date(r["window_end"])) is not None]
+    cutoff: date | None = None
+    if all_ends:
+        latest = max(all_ends)
+        m = latest.month - _RESTATED_RECENCY_MONTHS
+        cutoff = latest.replace(
+            year=latest.year + (m - 1) // 12, month=(m - 1) % 12 + 1)
+    significant, restated = [], []
+    for s in material:
+        d = _window_date(s["window_end"])
+        if cutoff is not None and d is not None and d < cutoff:
+            restated.append(s)
+        else:
+            significant.append(s)
     significant.sort(
         key=lambda s: (-int(s["direction_flipped"]), -abs(s["shift_pp"])),
     )
+    restated_range = ""
+    restated_max_pp = 0.0
+    if restated:
+        r_ends = sorted(d for s in restated
+                        if (d := _window_date(s["window_end"])) is not None)
+        if r_ends:
+            restated_range = (f"{_fmt_window_end(r_ends[0].isoformat())} – "
+                              f"{_fmt_window_end(r_ends[-1].isoformat())}")
+        restated_max_pp = max(abs(s["shift_pp"]) for s in restated)
 
     n_pairs = len(pairs)
     is_method_bump_churn = (
         n_pairs > 0
         and not significant
+        and not restated
         and (n_value_identical / n_pairs) >= _METHOD_BUMP_RATIO_THRESHOLD
         and bool(method_transitions)
     )
     if is_method_bump_churn:
         regime = "method_bump"
-    elif not new_by_subkind and not significant:
+    elif not new_by_subkind and not significant and not restated:
         regime = "no_change"
     else:
         regime = "movement"
@@ -210,6 +262,9 @@ def _compute_diff(cur, baseline_brief_run_id: int | None = None) -> _DiffData:
         n_pairs=n_pairs,
         n_value_identical=n_value_identical,
         method_transitions=method_transitions,
+        restated_count=len(restated),
+        restated_range=restated_range,
+        restated_max_pp=restated_max_pp,
     )
 
 
@@ -328,6 +383,17 @@ def _section_diff_since_last_brief(
                 f"*…and {len(diff.significant) - 30} more material shifts; "
                 f"query the supersede chain for the full set.*"
             )
+        lines.append("")
+
+    if diff.restated_count:
+        lines.append(
+            f"*A further **{diff.restated_count:,} older-window findings** "
+            f"(windows to {diff.restated_range}, sharpest correction "
+            f"{diff.restated_max_pp:+.1f}pp) were re-stated in one pass — a "
+            f"source backfill or data correction propagating through the "
+            f"supersede chain, not this cycle's news. Every prior value is "
+            f"preserved; query the supersede chain for the full set.*"
+        )
         lines.append("")
 
     if diff.new_by_subkind:

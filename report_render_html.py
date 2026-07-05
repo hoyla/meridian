@@ -2236,6 +2236,19 @@ def _what_changed(wc: WhatChanged) -> str:
     section with the shift list when something moved; a slim, honest one-liner
     when nothing did, so an empty cycle never claims an H2's weight."""
     shifts = wc.significant or []
+    # Historic-window corrections render as ONE muted, explained line —
+    # a backfill re-stating hundreds of old windows is a preserved
+    # revision ripple, not this cycle's news (2026-07-05: the Jan–Feb
+    # 2020 GACC backfill would otherwise have listed 720 items here).
+    restated = ""
+    if wc.restated_count:
+        rng = f" ({html.escape(wc.restated_range)})" if wc.restated_range else ""
+        restated = (
+            f'<p class="quiet-change">A further '
+            f"<strong>{wc.restated_count:,} older-window findings</strong>"
+            f"{rng} were re-stated by a source data correction — historic "
+            "values only, every prior value preserved in the supersede "
+            "chain.</p>")
     if not shifts:
         if wc.regime == "method_bump":
             msg = ("a methodology update re-stamped findings without changing "
@@ -2243,12 +2256,14 @@ def _what_changed(wc: WhatChanged) -> str:
         elif wc.regime == "first_export":
             msg = ("this is the first pack from the database — everything below "
                    "is a baseline, not a change.")
+        elif wc.restated_count:
+            msg = ("no current-window figure moved materially this cycle.")
         else:
             msg = ("nothing moved materially — no finding’s 12-month change "
                    "shifted by more than 5 percentage points, and nothing "
                    "flipped direction.")
         return (f'<p class="quiet-change"><strong>Since the last briefing:</strong> '
-                f'{html.escape(msg)}</p>')
+                f'{html.escape(msg)}</p>' + restated)
     flips = sum(1 for s in shifts if s.direction_flipped)
     lead = (f"{len(shifts)} finding{'s' if len(shifts) != 1 else ''} moved "
             "materially (12-month change shifted by more than 5 percentage "
@@ -2263,6 +2278,7 @@ def _what_changed(wc: WhatChanged) -> str:
         f'{html.escape(lead)}</p>'
         + _more_about_html(_WHAT_CHANGED_ABOUT)
         + f'<ul class="changed">{rows}</ul>'
+        + restated
     )
 
 
