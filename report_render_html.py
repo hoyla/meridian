@@ -1507,17 +1507,18 @@ def _gacc_identity_html(gp) -> str:
 
 
 def _gacc_about_page_html(gp) -> str:
-    """The standing epistemic caveats as a collapsed "About this page"
-    disclosure — same page-level pattern as the Briefing's "About this
-    site", and the same position: under the KPI band, above the lead
-    (Luke, 2026-07-05)."""
-    caveats = (gp.identity or {}).get("caveats") or []
-    if not caveats:
+    """The page's WHOLE epistemic framing as ONE collapsed "About this
+    page" disclosure — same page-level pattern and position as the
+    Briefing's "About this site" (under the KPI band, above the lead).
+    Consolidated 2026-07-05 (Luke): this previously split across a caveat
+    list here and an "Understanding these figures" section at the bottom,
+    with duplicated content and no functional difference between them."""
+    if not gp.understanding:
         return ""
     return (
         '<details class="more about-site"><summary>About this page'
         '</summary><div class="more-body">'
-        + _md_blocks_to_html("\n\n".join(caveats))
+        + _md_blocks_to_html(gp.understanding)
         + "</div></details>")
 
 
@@ -1952,11 +1953,10 @@ def _gacc_page_html(gp, payloads) -> str:
         subnav.append((gp.world.id, "World"))
         parts.append(f'<section class="brief-sec" id="{html.escape(gp.world.id)}">'
                       + _gacc_world_html(gp.world) + "</section>")
-    if gp.understanding:
-        subnav.append(("gacc-understanding", "Understanding"))
-        parts.append('<section class="brief-sec" id="gacc-understanding">'
-                      "<h2 class=\"lead\">Understanding these figures</h2>"
-                      + _more_about_html(gp.understanding) + "</section>")
+    # No bottom "Understanding these figures" section: the page's whole
+    # epistemic framing lives in the single About-this-page disclosure
+    # above (consolidated 2026-07-05 — two about-boxes with overlapping
+    # content read as functionally different when they weren't).
     if subnav:
         links = '<a class="subnav-top" href="#top">↑&nbsp;Top</a>' + "".join(
             f'<a href="#{a}" data-spy="{a}">{html.escape(lbl)}</a>'
