@@ -103,7 +103,17 @@ Smallest viable version: reuse the Eurostat section-builder with the UK scope
 foregrounded and the mirror-gap section dropped (or swapped for a China↔UK
 variant once that analyser exists).
 
-## Slim GACC-period update — its own self-expiring tab; design parked (2026-06-23)
+## Slim GACC-period update — picked up; design finalised (2026-07-05)
+
+**Update 2026-07-05:** design session with Luke finalised and expanded this —
+see [`2026-07-05-gacc-update-page-design.md`](2026-07-05-gacc-update-page-design.md)
+(purpose statement, report structure, scope rulings, LLM layer, build plan).
+The content decisions below stand. **One decision below is superseded:** the
+tab does NOT self-expire on the next Eurostat release — supersession is
+within-track (the next GACC period's page replaces it; the Eurostat cycle
+covers an older reference month and never supersedes it). Build aimed at the
+~8–10 Jul GACC June-data drop, ahead of the instruments batch and the
+iteration-4 calibration sprint.
 
 GACC leads Eurostat by ~5 weeks (China Customs publishes ~8–10 days after the
 reference month; Eurostat ~46 days), so a fresh GACC release is an early read on
