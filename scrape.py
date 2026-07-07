@@ -19,7 +19,7 @@ import argparse
 import dataclasses
 import logging
 import os
-from datetime import date
+from datetime import date, datetime, timezone
 
 from dotenv import load_dotenv
 
@@ -493,6 +493,29 @@ def _count_gacc_releases() -> int:
         return cur.fetchone()[0]
 
 
+def _failed_gacc_runs_since(since: datetime) -> list[str]:
+    """error_message of every GACC scrape_run that ended 'failed' at/after
+    `since`. These are the per-release failures the index walk swallows: a
+    parse-floor rejection or an ingest exception writes scrape_runs.status
+    ='failed' and returns, so run_scrape never raises and the release count is
+    flat. 'no_parser' (sections we deliberately don't ingest) is excluded — that
+    is expected, not a failure. Scoped to GACC by source_url host so the shared
+    scrape_runs table's Eurostat rows don't leak in."""
+    with db.transaction() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT error_message
+            FROM scrape_runs
+            WHERE status = 'failed'
+              AND started_at >= %s
+              AND source_url LIKE '%%customs.gov.cn%%'
+            ORDER BY started_at
+            """,
+            (since,),
+        )
+        return [r[0] for r in cur.fetchall() if r[0]]
+
+
 def _outcome_to_result(
     candidate: date, outcome: "IngestOutcome",
 ) -> tuple[str, str | None, str | None]:
@@ -552,13 +575,28 @@ def probe_source(source: str, today: date | None = None) -> str:
             if candidate else None
         )
         before = _count_gacc_releases()
+        walk_started = datetime.now(timezone.utc)
         try:
             run_scrape(urls=None, dry_run=False, force_refetch=False)
             added = _count_gacc_releases() - before
-            result = "new_data" if added > 0 else "no_change"
-            notes = (f"fetched {added} new releases" if added > 0
-                     else "walked indexes, no new releases")
-            error = None
+            failures = _failed_gacc_runs_since(walk_started)
+            if failures:
+                # A parse-floor rejection or ingest exception is swallowed by
+                # scrape_release (writes scrape_runs 'failed', returns), so the
+                # walk doesn't raise and the count is flat. Surface it as 'error'
+                # — not the silent 'no_change' it would otherwise read as, which
+                # would mislead both --source-status and the chat notifier into
+                # treating a held-back release as a quiet day.
+                result = "error"
+                notes = (f"held back {len(failures)} release(s) this walk"
+                         + (f"; +{added} ingested" if added > 0 else ""))
+                error = " | ".join(failures)
+            elif added > 0:
+                result, notes, error = ("new_data",
+                                        f"fetched {added} new releases", None)
+            else:
+                result, notes, error = ("no_change",
+                                        "walked indexes, no new releases", None)
         except Exception as e:
             log.exception("GACC walk failed")
             result, notes, error = "error", None, str(e)
