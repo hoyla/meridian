@@ -303,6 +303,22 @@ def test_html_renders_all_sections_and_is_self_contained():
     assert "EV supply chain" in h         # theme pill/chip
 
 
+def test_head_carries_inline_favicon():
+    # The portal serves no /favicon.ico (the GCS proxy 404s it), so the mark is
+    # inlined as a data: URI in the head — one self-contained blob that also
+    # works in the local preview. It's the two-tone ◐ scale-glyph in the flow
+    # colours (roadmap "Favicon", 2026-07-05).
+    import base64
+    from report_render_html import _FLOW_EXPORT, _FLOW_IMPORT
+
+    h = render_html(_sample_report())
+    assert '<link rel="icon" href="data:image/svg+xml;base64,' in h
+    b64 = h.split('href="data:image/svg+xml;base64,')[1].split('"')[0]
+    svg = base64.b64decode(b64).decode("utf-8")
+    assert svg.startswith("<svg") and svg.endswith("</svg>")
+    assert _FLOW_EXPORT in svg and _FLOW_IMPORT in svg  # on-brand two-tone mark
+
+
 def test_inline_md_handles_link_nested_in_bold():
     # the bug: a [link](#x) inside **bold** must not strand the link text
     out = _inline_md("**EU exports of [Cars](#cars) to China** `finding/2`")

@@ -24,6 +24,7 @@ structured emphasis, this converter goes away.
 
 from __future__ import annotations
 
+import base64
 import html
 import re
 
@@ -1724,6 +1725,22 @@ def _gacc_world_html(section) -> str:
 _FLOW_EXPORT = "#33608c"   # China's exports (left half) — steel blue
 _FLOW_IMPORT = "#b8863b"   # China's imports (right half) — muted amber
 
+# Favicon: the same two-tone ◐ semicircle mark as the world-scale glyphs (left
+# half = China's exports / steel blue, right half = imports / amber), inlined as
+# a data: URI so the snapshot stays one self-contained blob — no /favicon.ico
+# route, no bucket object, and it works in the local preview too.
+# (Roadmap: "Favicon", 2026-07-05.)
+_FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+    f'<circle cx="16" cy="16" r="15" fill="{_FLOW_IMPORT}"/>'
+    f'<path d="M16 1a15 15 0 0 0 0 30z" fill="{_FLOW_EXPORT}"/>'
+    "</svg>"
+)
+_FAVICON_DATA_URI = (
+    "data:image/svg+xml;base64,"
+    + base64.b64encode(_FAVICON_SVG.encode("utf-8")).decode("ascii")
+)
+
 
 def _gacc_world_bubbles_svg(rows: list[dict], period_iso: str | None) -> str:
     """The scale view under the change table (Luke, 2026-07-05): one glyph
@@ -3026,6 +3043,7 @@ def render_html(report: Report) -> str:
         "<!doctype html><html lang=en><head><meta charset=utf-8>",
         '<meta name=viewport content="width=device-width,initial-scale=1">',
         "<title>Meridian — China–Europe trade</title>",
+        f'<link rel="icon" href="{_FAVICON_DATA_URI}">',
         '<link rel=preconnect href="https://fonts.googleapis.com">',
         '<link rel=preconnect href="https://fonts.gstatic.com" crossorigin>',
         '<link rel=stylesheet href="https://fonts.googleapis.com/css2?'
