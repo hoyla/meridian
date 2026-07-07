@@ -9,8 +9,8 @@ overdue-release alert reads as "new data" and a silently-missing month for the
 YoY analysers.
 
 The guard: zero observations → record the run `failed` and create NO release
-row, matching the Eurostat/HMRC contract. The happy path (>=1 observation) is
-unchanged.
+row, matching the Eurostat/HMRC contract. The happy path (a parse that clears
+the plausibility floor — see test_gacc_parse_floor.py, finding F5) is unchanged.
 """
 from __future__ import annotations
 
@@ -78,19 +78,21 @@ def test_empty_parse_creates_no_release_and_marks_failed(
 def test_nonempty_parse_still_takes_the_success_path(
     clean_db, test_db_url, monkeypatch,
 ):
-    # Control: the guard is scoped to the empty case only. With at least one
-    # observation, scrape_release must still create the release and finish
-    # 'success'. Persistence is spied so the assertion targets the guard's
-    # branch logic, not upsert_observations' obs-dict contract (covered
-    # elsewhere).
+    # Control: the guard rejects only implausible parses. A parse that clears
+    # the plausibility floor (>= the top-level-partner count) must still create
+    # the release and finish 'success'. Persistence is spied so the assertion
+    # targets the guard's branch logic, not upsert_observations' obs-dict
+    # contract (covered elsewhere).
+    plausible = [
+        {"section_number": 4, "partner_country": f"Partner {i}", "flow": "export",
+         "partner_is_subset": False, "period_kind": "monthly", "value": 100.0}
+        for i in range(25)
+    ]
     calls: dict[str, object] = {}
     monkeypatch.setattr(api_client, "fetch", _fake_fetch)
     monkeypatch.setattr(
         parse, "parse_response",
-        lambda *a, **k: parse.ParseResult(
-            metadata=_meta(),
-            observations=[{"partner_country": "United States", "flow": "export"}],
-        ),
+        lambda *a, **k: parse.ParseResult(metadata=_meta(), observations=plausible),
     )
     monkeypatch.setattr(
         db, "find_or_create_gacc_release",
@@ -108,5 +110,5 @@ def test_nonempty_parse_still_takes_the_success_path(
 
     scrape.scrape_release(_URL, force_refetch=True)
 
-    assert calls.get("upserted") == 1, "the non-empty path must reach upsert"
+    assert calls.get("upserted") == 25, "the plausible path must reach upsert"
     assert calls.get("status") == "success"

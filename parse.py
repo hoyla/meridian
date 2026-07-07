@@ -477,3 +477,71 @@ def _parse_section_4_by_country(soup: BeautifulSoup, meta: ReleaseMetadata) -> l
                     )
                 )
     return out
+
+
+# Reject a section-4 parse below this many top-level partners. A healthy
+# 'by Country/Region' release lists ~26 top-level partner/bloc rows — the major
+# economies plus regional aggregates (EU, ASEAN, US, Japan, Belt & Road, …) —
+# a set stable month to month (mar2026 & janfeb2025 fixtures: 26 each). Floor
+# well below that so a legitimate release never trips it, yet well above a
+# broken/partial parse.
+_SECTION4_MIN_PARTNERS = 20
+
+
+def section4_floor_check(
+    observations: list[ParsedObservation], meta: ReleaseMetadata
+) -> str | None:
+    """Plausibility floor for a section-4 parse — the count/magnitude guard the
+    A1 empty-parse guard left open (finding F5).
+
+    The empty-parse guard in scrape.py rejects a parse that yields ZERO
+    observations (a whole-table layout drift zeroes the structural row detector).
+    But a *partial* parse — some rows dropped by drift over part of the table, or
+    a truncated preliminary listing — yields >0 observations and an
+    incomplete/garbled partner set, which the empty check waves through and the
+    YoY analysers then read as a complete month under a green 'success'. Two
+    cheap, layout-independent invariants catch it (both hold on the mar2026
+    monthly and janfeb2025 cumulative fixtures):
+
+      count     — far fewer than the ~26 stable top-level partners means rows
+                  were silently dropped.
+      magnitude — where the 'Total' grand-total row parsed, it must carry the
+                  largest value (the grand total dominates any single
+                  partner/bloc); a partner out-valuing it means the value columns
+                  were misread by a same-width column shift the row detector
+                  cannot see. Conditional on the Total row being present: it is
+                  not consumed by the per-partner analysers, so a mere label
+                  change must not block an otherwise-complete release.
+
+    Returns a human-readable reason to reject, or None if the parse is plausible.
+    Scoped to section 4 — the only section that yields observations today.
+    """
+    if meta.section_number != 4:
+        return None
+
+    partners = {
+        o.get("partner_country")
+        for o in observations
+        if o.get("partner_country") and not o.get("partner_is_subset")
+    }
+    if len(partners) < _SECTION4_MIN_PARTNERS:
+        return (
+            f"only {len(partners)} top-level partners parsed (floor "
+            f"{_SECTION4_MIN_PARTNERS}; a healthy section-4 release lists ~26) — "
+            f"likely a partial parse from column-layout drift or a truncated table"
+        )
+
+    total_values = [
+        o["value"]
+        for o in observations
+        if (o.get("partner_country") or "").strip().lower() == "total"
+        and o.get("value") is not None
+    ]
+    if total_values:
+        all_values = [o["value"] for o in observations if o.get("value") is not None]
+        if max(total_values) < max(all_values):
+            return (
+                "a partner out-values the 'Total' grand-total row — the value "
+                "columns were likely misread (column-layout drift)"
+            )
+    return None
