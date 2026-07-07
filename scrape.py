@@ -134,6 +134,23 @@ def scrape_release(
             if not dry_run:
                 db.finish_run(run_id, status="failed", error_message=msg)
             return
+        floor_reason = parse.section4_floor_check(result.observations, meta)
+        if floor_reason:
+            # A parse can clear the empty guard yet still be *partial* — some
+            # rows dropped by column-layout drift, or a truncated preliminary
+            # table — which the YoY analysers would read as a complete month
+            # under a green "success". Same contract as the empty case above:
+            # record failed, create NO release row, let the next walk retry
+            # (gacc_release_url_already_processed skips 'failed').
+            msg = (
+                f"GACC section {meta.section_number} parse failed the plausibility "
+                f"floor ({meta.currency}, {meta.period.isoformat()}): {floor_reason}. "
+                f"Recording failed, no release row created."
+            )
+            log.error(msg)
+            if not dry_run:
+                db.finish_run(run_id, status="failed", error_message=msg)
+            return
         if not dry_run:
             # Combined Jan+Feb cumulative releases get their own
             # release_kind so the natural-key on `releases`
