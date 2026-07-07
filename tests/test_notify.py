@@ -284,3 +284,36 @@ def test_late_arrival_reports_as_new_data_not_overdue(clean_db, stub_post):
     assert "new trade data" in msg
     assert "ingested 38935" in msg
     assert "source release overdue" not in msg
+
+
+def test_posts_on_newly_errored_source(clean_db, stub_post):
+    """A source whose probe has just entered an error state (a release held back
+    by a failed ingest) fires an alert even with no new data this run — the
+    error message is surfaced verbatim so the reason is visible in chat."""
+    routine_log.log_check("gacc", "no_change", notes="walked indexes, no new releases")
+    routine_log.log_check(
+        "gacc", "error", candidate_period=date(2026, 6, 1),
+        notes="held back 1 release(s) this walk",
+        error="GACC section 4 parse failed the plausibility floor "
+              "(CNY, 2026-06-01): only 3 top-level partners parsed",
+    )
+    res = notify.notify_new_data()
+    assert res.posted is True
+    msg = stub_post.calls[0]
+    assert "held back" in msg.lower()
+    assert "GACC" in msg
+    assert "plausibility floor" in msg
+    assert "2026-06" in msg
+
+
+def test_error_does_not_refire_while_still_erroring(clean_db, stub_post):
+    """One alert per error spell: a later probe still erroring must not re-post
+    (mirrors the overdue-spell behaviour)."""
+    routine_log.log_check("gacc", "no_change")
+    routine_log.log_check("gacc", "error", notes="held back 1 release(s) this walk")
+    assert notify.notify_new_data().posted is True
+    # Another run, still failing — must not re-alert.
+    routine_log.log_check("gacc", "error", notes="held back 1 release(s) this walk")
+    second = notify.notify_new_data()
+    assert second.posted is False
+    assert len(stub_post.calls) == 1

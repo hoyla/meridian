@@ -4,8 +4,10 @@ The daily Routine (`.claude/scheduled-tasks/meridian-daily-periodic-run/`)
 probes Eurostat / HMRC / GACC, writing one `routine_check_log` row per source
 with `result ∈ {new_data, no_change, error}`. After the probes + the
 `--periodic-run` orchestrator, the Routine calls `scrape.py --notify-chat`,
-which posts to the Space *only when a source ingested new data this run* —
-the faithful "new data acquired from any source" signal Luke asked for.
+which posts to the Space when a source ingests new data, a source newly slips
+past its scheduled date (overdue), or a release is held back by a failed ingest
+(a parse-floor rejection surfaces here) — the "something a human should see"
+signal.
 
 Why anchor on `routine_check_log` and not `PeriodicRunResult.new_data`:
 only Eurostat advances the export cycle, so the export-side signal is silent
@@ -72,6 +74,15 @@ class OverdueRow:
     source: str
     candidate_period: date | None
     scheduled: date | None  # the scheduled publication date that has passed
+    checked_at: datetime
+
+
+@dataclasses.dataclass(frozen=True)
+class ErrorRow:
+    source: str
+    candidate_period: date | None
+    notes: str | None
+    error: str | None
     checked_at: datetime
 
 
@@ -227,6 +238,46 @@ def _newly_overdue(mark: datetime) -> list[OverdueRow]:
     return out
 
 
+def _newly_errored(mark: datetime) -> list[ErrorRow]:
+    """Trigger sources whose probe has *just* entered an error state: the most
+    recent probe is result='error', the one before it was not, and the
+    transition is newer than the last notification. One alert per error spell —
+    a release that keeps failing each run does not re-fire daily — mirroring
+    `_newly_overdue`. This is where a held-back release surfaces: the source
+    probe logs result='error' when the index walk swallowed a per-release ingest
+    failure (a parse-floor rejection or a crash)."""
+    out: list[ErrorRow] = []
+    with db.transaction() as conn, conn.cursor() as cur:
+        for source in TRIGGER_SOURCES:
+            cur.execute(
+                """
+                SELECT result, candidate_period, notes, error, checked_at
+                FROM routine_check_log
+                WHERE source = %s
+                ORDER BY checked_at DESC
+                LIMIT 2
+                """,
+                (source,),
+            )
+            rows = cur.fetchall()
+            if not rows:
+                continue
+            result, candidate, notes, error, checked_at = rows[0]
+            if result != "error":
+                continue
+            if checked_at <= mark:
+                continue
+            if len(rows) > 1 and rows[1][0] == "error":
+                continue  # already alerted at the start of this error spell
+            out.append(ErrorRow(
+                source=source, candidate_period=candidate,
+                notes=notes, error=error, checked_at=checked_at,
+            ))
+    order = {s: i for i, s in enumerate(TRIGGER_SOURCES)}
+    out.sort(key=lambda r: order.get(r.source, 99))
+    return out
+
+
 def _latest_export_since(mark: datetime) -> tuple[date | None, str | None] | None:
     """If a `--periodic-run` cycle wrote a fresh export after `mark`, return
     (data_period, findings_path); else None. Best-effort — a missing/empty
@@ -293,6 +344,7 @@ def build_message(
     overdue_rows: list[OverdueRow],
     export: tuple[date | None, str | None] | None,
     gacc_update: tuple[date | None, bool] | None = None,
+    error_rows: list[ErrorRow] | None = None,
 ) -> str:
     """Render the Google Chat text payload: a 'new data ingested' block (one
     bullet per source, notes verbatim, plus an export line when a briefing was
@@ -302,7 +354,23 @@ def build_message(
     content."""
     lines: list[str] = []
 
+    if error_rows:
+        lines.append("*Meridian — ingest problem: a release was held back*")
+        for row in error_rows:
+            label = _source_label(row.source)
+            period = (
+                f" ({row.candidate_period:%Y-%m})" if row.candidate_period else ""
+            )
+            reason = row.error or row.notes or "ingest failed"
+            lines.append(f"• {label}{period} — {reason}")
+        lines.append(
+            "_No release row was written; the next scheduled run retries. "
+            "Check `--source-status` / logs._"
+        )
+
     if new_rows:
+        if lines:
+            lines.append("")
         lines.append("*Meridian — new trade data ingested*")
         for row in new_rows:
             label = _source_label(row.source)
@@ -371,15 +439,16 @@ def notify_new_data(
     mark = _resolve_mark()
     new_rows = _new_data_since(mark)
     overdue_rows = _newly_overdue(mark)
-    if not new_rows and not overdue_rows:
+    error_rows = _newly_errored(mark)
+    if not new_rows and not overdue_rows and not error_rows:
         return NotifyResult(
             posted=False,
-            reason=f"no new data or new overdue from any source since {mark:%Y-%m-%d %H:%M}",
+            reason=f"no new data, overdue or ingest error from any source since {mark:%Y-%m-%d %H:%M}",
         )
 
     export = _latest_export_since(mark) if new_rows else None
     gacc_update = _latest_gacc_update_since(mark) if new_rows else None
-    text = build_message(new_rows, overdue_rows, export, gacc_update)
+    text = build_message(new_rows, overdue_rows, export, gacc_update, error_rows)
 
     # Audit-note summary. New-data sources stay first and bare so the
     # new-data-only note is unchanged ("posted: Eurostat"); overdue is appended
@@ -390,6 +459,10 @@ def notify_new_data(
     if overdue_rows:
         note_parts.append(
             "overdue: " + ", ".join(_source_label(r.source) for r in overdue_rows)
+        )
+    if error_rows:
+        note_parts.append(
+            "held back: " + ", ".join(_source_label(r.source) for r in error_rows)
         )
     summary = "; ".join(note_parts)
 

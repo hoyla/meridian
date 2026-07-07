@@ -223,3 +223,49 @@ def test_no_prior_releases_logs_no_change(clean_db, test_db_url, monkeypatch):
     assert row["result"] == "no_change"
     assert row["expectation"] is None
     assert called is False  # never attempted a fetch without an anchor
+
+
+def test_gacc_held_back_release_logs_error(clean_db, test_db_url, monkeypatch):
+    # A parse-floor rejection during the walk writes scrape_runs 'failed' and
+    # returns (run_scrape never raises, no releases row). The probe must read
+    # that as 'error' — not the 'no_change' a flat release-count would imply,
+    # which would let a held-back release read as a quiet day (F5, 2026-07-07).
+    _seed_release(test_db_url, "gacc", date(2026, 5, 1))  # candidate → 2026-06
+
+    def _walk_holds_one_back(*a, **k):
+        with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO scrape_runs (source_url, status, error_message) "
+                "VALUES (%s, 'failed', %s)",
+                ("http://english.customs.gov.cn/Statics/held-back.html",
+                 "GACC section 4 parse failed the plausibility floor "
+                 "(CNY, 2026-06-01): only 3 top-level partners parsed"),
+            )
+            conn.commit()
+
+    monkeypatch.setattr(scrape, "run_scrape", _walk_holds_one_back)
+    scrape.probe_source("gacc", today=date(2026, 7, 8))
+
+    row = _last_row(test_db_url, "gacc")
+    assert row["result"] == "error"
+    assert "held back" in (row["notes"] or "")
+    assert "plausibility floor" in (row["error"] or "")
+    assert row["candidate_period"] == date(2026, 6, 1)
+
+
+def test_gacc_clean_walk_with_new_release_still_logs_new_data(
+    clean_db, test_db_url, monkeypatch,
+):
+    # Control: a walk that ingests a release with no failures still reads
+    # new_data — the failure-detection must not disturb the happy path.
+    _seed_release(test_db_url, "gacc", date(2026, 5, 1))
+
+    def _walk_ingests_one(*a, **k):
+        _seed_release(test_db_url, "gacc", date(2026, 6, 1))
+
+    monkeypatch.setattr(scrape, "run_scrape", _walk_ingests_one)
+    scrape.probe_source("gacc", today=date(2026, 7, 8))
+
+    row = _last_row(test_db_url, "gacc")
+    assert row["result"] == "new_data"
+    assert "fetched 1 new releases" in (row["notes"] or "")
