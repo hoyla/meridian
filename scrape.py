@@ -166,9 +166,27 @@ def scrape_release(
             log.info("Persisted: %s", counts)
             db.finish_run(run_id, status="success", http_status=response.status_code)
     except NotImplementedError as e:
-        log.warning("No parser yet for %s: %s", url, e)
+        # Includes parse.UnparseableReleasePage (unrecognised title / a section-4
+        # page with no table) — pages we have no parser for. Terminal 'no_parser'
+        # so the walk stops retrying and the held-back alert stays quiet.
+        log.warning("No parser for %s: %s", url, e)
         if run_id is not None:
             db.finish_run(run_id, status="no_parser", error_message=str(e))
+    except parse.CurrencyUnitMismatch as e:
+        # The release-184 currency/unit floor fired. If a live release already
+        # covers this cell, the bad page is a duplicate superseded by its
+        # canonical sibling — retire it 'no_parser' (terminal, not re-alerted)
+        # rather than 'failed'. Only a mismatch with NO live sibling is a
+        # genuine held-back release worth surfacing as 'failed'.
+        superseded = db.gacc_release_exists(e.section, e.period, e.currency)
+        status = "no_parser" if superseded else "failed"
+        log.warning(
+            "GACC currency/unit mismatch for %s (%s): recording %s — %s",
+            url, "superseded by canonical sibling" if superseded
+            else "no live sibling, genuine held-back release", status, e,
+        )
+        if run_id is not None:
+            db.finish_run(run_id, status=status, error_message=str(e))
     except Exception as e:
         log.exception("Scrape failed for %s", url)
         if run_id is not None:
@@ -495,12 +513,19 @@ def _count_gacc_releases() -> int:
 
 def _failed_gacc_runs_since(since: datetime) -> list[str]:
     """error_message of every GACC scrape_run that ended 'failed' at/after
-    `since`. These are the per-release failures the index walk swallows: a
-    parse-floor rejection or an ingest exception writes scrape_runs.status
-    ='failed' and returns, so run_scrape never raises and the release count is
-    flat. 'no_parser' (sections we deliberately don't ingest) is excluded — that
-    is expected, not a failure. Scoped to GACC by source_url host so the shared
-    scrape_runs table's Eurostat rows don't leak in."""
+    `since`. These are the per-release failures the index walk swallows: an
+    empty/partial parse, a plausibility-floor rejection, or an ingest exception
+    on a *real current* section-4 table writes scrape_runs.status='failed' and
+    returns, so run_scrape never raises and the release count is flat.
+
+    'no_parser' is excluded — that is expected, not a failure. It now covers
+    three retire-terminally cases that used to churn as 'failed' every walk:
+    pages we have no parser for (non-section-4 / unrecognised-title / no-table
+    historical shapes → parse.UnparseableReleasePage), and currency/unit-floor
+    rejects already superseded by a live canonical sibling (see scrape_release).
+    What remains here is a genuinely held-back current release. Scoped to GACC
+    by source_url host so the shared scrape_runs table's Eurostat rows don't
+    leak in."""
     with db.transaction() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -581,12 +606,17 @@ def probe_source(source: str, today: date | None = None) -> str:
             added = _count_gacc_releases() - before
             failures = _failed_gacc_runs_since(walk_started)
             if failures:
-                # A parse-floor rejection or ingest exception is swallowed by
-                # scrape_release (writes scrape_runs 'failed', returns), so the
-                # walk doesn't raise and the count is flat. Surface it as 'error'
-                # — not the silent 'no_change' it would otherwise read as, which
-                # would mislead both --source-status and the chat notifier into
-                # treating a held-back release as a quiet day.
+                # A held-back current release: an empty/partial parse, a
+                # plausibility-floor rejection, or an ingest exception on a real
+                # section-4 table is swallowed by scrape_release (writes
+                # scrape_runs 'failed', returns), so the walk doesn't raise and
+                # the count is flat. Surface it as 'error' — not the silent
+                # 'no_change' it would otherwise read as, which would mislead
+                # both --source-status and the chat notifier into treating a
+                # held-back release as a quiet day. Historical dead-ends
+                # (unparseable pages, floor-rejects superseded by a live
+                # sibling) land 'no_parser', not 'failed', so they don't light
+                # this up — see _failed_gacc_runs_since.
                 result = "error"
                 notes = (f"held back {len(failures)} release(s) this walk"
                          + (f"; +{added} ingested" if added > 0 else ""))
