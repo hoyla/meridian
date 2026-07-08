@@ -3,6 +3,7 @@
 from datetime import date
 from pathlib import Path
 
+import pytest
 from bs4 import BeautifulSoup
 
 from parse import extract_metadata, parse_html
@@ -357,3 +358,127 @@ def test_observation_count_is_consistent():
     #  Canada + NZ + Latin America + Brazil + Africa + South Africa + RCEP +
     #  Belt and Road) — 30 actually.
     assert len(obs) == 30 * 6
+
+
+# --- currency/unit floor scoping (2026-07-08 false-positive fix) ------------
+# The `_CANONICAL_GACC_UNIT` floor in extract_metadata guards section 4 — the
+# only section we ingest. Section-1 "Total Values" pages legitimately carry
+# `Unit: USD 100 Million` (亿美元), which agrees with the title on currency but
+# differs on scale. Before the fix they tripped the floor's "self-inconsistent"
+# ValueError; now they fall through to the no_parser path unchanged. See
+# dev_notes/2026-07-08-gacc-section1-usd-floor-false-positive.md.
+
+_SECTION1_USD_HTML = """
+<html><body>
+  <div class="atcl-ttl">(1) China's Total Export &amp; Import Values, May 2026 (in USD)</div>
+  <div class="atcl-date">2026/06/11</div>
+  <table><tr><td><span>Unit: USD 100 Million</span></td></tr></table>
+</body></html>
+"""
+
+
+def test_section1_usd_100_million_metadata_is_not_floored():
+    """The real d7718500 shape: a section-1 USD headline-totals page whose Unit
+    row reads 'USD 100 Million'. The floor must NOT fire — title and Unit agree
+    on currency (only the scale differs), and section 1 is never ingested. The
+    raw unit passes through untouched (no canonical coercion off section 4)."""
+    meta = extract_metadata(
+        BeautifulSoup(_SECTION1_USD_HTML, "lxml"),
+        "http://english.customs.gov.cn/Statics/d7718500-x.html",
+    )
+    assert meta.section_number == 1
+    assert meta.currency == "USD"
+    assert meta.unit == "USD 100 Million"  # left as-is, not coerced to 'USD1 Million'
+
+
+def test_section1_usd_page_lands_no_parser_not_floor_error():
+    """End-to-end: the page must reach the section-dispatch NotImplementedError
+    (recorded as status='no_parser', terminal) rather than a floor ValueError
+    (status='failed', retried every walk — the twice-daily false alarm)."""
+    with pytest.raises(NotImplementedError):
+        parse_html(
+            _SECTION1_USD_HTML.encode(),
+            "http://english.customs.gov.cn/Statics/d7718500-x.html",
+        )
+
+
+def test_section4_currency_unit_mismatch_still_raises():
+    """Release-184 protection preserved: a section-4 by-country page whose title
+    declares CNY but whose Unit row reads 'USD1 Million' is a genuine
+    currency/scale disagreement on data we DO ingest — the floor must still
+    raise so the URL lands status='failed' with no observations inserted."""
+    html = """
+    <html><body>
+      <div class="atcl-ttl">(4) China's Total Export &amp; Import Values by Country/Region, May 2026 (in CNY)</div>
+      <div class="atcl-date">2026/06/11</div>
+      <table><tr><td><span>Unit: USD1 Million</span></td></tr></table>
+    </body></html>
+    """
+    with pytest.raises(ValueError, match="self-inconsistent"):
+        extract_metadata(
+            BeautifulSoup(html, "lxml"),
+            "http://english.customs.gov.cn/Statics/synthetic-184.html",
+        )
+
+
+def test_section4_currency_unit_mismatch_carries_period_and_currency():
+    """CurrencyUnitMismatch must carry the resolved (section, period, currency)
+    so scrape_release can check for a superseding live sibling. It stays a
+    ValueError subclass for callers matching on that."""
+    from parse import CurrencyUnitMismatch
+
+    html = """
+    <html><body>
+      <div class="atcl-ttl">(4) China's Total Export &amp; Import Values by Country/Region, June 2025 (in CNY)</div>
+      <div class="atcl-date">2025/07/14</div>
+      <table><tr><td><span>Unit: USD1 Million</span></td></tr></table>
+    </body></html>
+    """
+    with pytest.raises(CurrencyUnitMismatch) as ei:
+        extract_metadata(BeautifulSoup(html, "lxml"), "http://x/184.html")
+    assert isinstance(ei.value, ValueError)
+    assert ei.value.section == 4
+    assert ei.value.period == date(2025, 6, 1)
+    assert ei.value.currency == "CNY"
+
+
+# --- unparseable pages land no_parser, not retried 'failed' (2026-07-08) -----
+# The held-back GACC alarm fired on a standing backlog of ~32 historical pages
+# that re-failed every walk. Pages we can never ingest — a title none of our
+# shapes match, or a section-4 page with no HTML table (the 2018 by-country
+# shape) — must raise UnparseableReleasePage (a NotImplementedError) so
+# scrape_release retires them terminal 'no_parser' rather than 'failed'.
+
+
+def test_unrecognised_title_raises_unparseable_not_plain_valueerror():
+    from parse import UnparseableReleasePage
+
+    # A 2018 annual-totals title (not by-country) matched by none of the shapes.
+    html = (
+        '<html><body><div class="atcl-ttl">'
+        "China's Total Value of Imports and Exports, 2018 (RMB)"
+        "</div></body></html>"
+    )
+    with pytest.raises(UnparseableReleasePage) as ei:
+        # expected_period supplied so we get past the no-date guard to the
+        # genuine title-unrecognised branch.
+        extract_metadata(
+            BeautifulSoup(html, "lxml"), "http://x/annual2018.html",
+            expected_period=date(2018, 12, 1), expected_currency="CNY",
+        )
+    assert isinstance(ei.value, NotImplementedError)
+
+
+def test_section4_page_with_no_table_raises_unparseable():
+    from parse import UnparseableReleasePage
+
+    # A section-4 by-country title whose content div carries no table (the
+    # 2018 English pages) must be no_parser, not a retried failure.
+    html = """
+    <html><body>
+      <div class="atcl-ttl">(4) China's Total Export &amp; Import Values by Country/Region, June 2018 (in USD)</div>
+      <div class="atcl-cnt"><p>No table here.</p></div>
+    </body></html>
+    """
+    with pytest.raises(UnparseableReleasePage):
+        parse_html(html.encode(), "http://english.customs.gov.cn/Statics/notable2018.html")

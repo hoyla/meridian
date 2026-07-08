@@ -135,6 +135,29 @@ def gacc_release_url_already_processed(url: str) -> str | None:
         return row[0] if row else None
 
 
+def gacc_release_exists(section_number: int, period: "date", currency: str) -> bool:
+    """True if a live GACC release row already covers this (section, period,
+    currency) cell — regardless of release_kind.
+
+    Used to tell a genuinely held-back release from a page superseded by its
+    canonical sibling: when a section-4 page trips the currency/unit floor
+    (the release-184 shape) but a live release for the same cell already
+    exists, the data is safe and the bad page is a duplicate to retire as
+    'no_parser', not a 'failed' to re-alert every walk. See
+    parse.CurrencyUnitMismatch and scrape.scrape_release."""
+    with transaction() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1 FROM releases
+             WHERE source = 'gacc' AND section_number = %s
+               AND period = %s AND currency = %s
+             LIMIT 1
+            """,
+            (section_number, period, currency),
+        )
+        return cur.fetchone() is not None
+
+
 def save_snapshot(run_id: int, response: FetchResult) -> int:
     with transaction() as conn, conn.cursor() as cur:
         cur.execute(

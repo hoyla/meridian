@@ -18,6 +18,39 @@ from api_client import FetchResult
 log = logging.getLogger(__name__)
 
 
+class UnparseableReleasePage(NotImplementedError):
+    """The page is not an ingestable section-4 release table in a format we
+    parse: an unrecognised title (a non-section-4 / historical page shape we
+    never ingest) or a section-4 page carrying no HTML table at all.
+
+    Subclasses NotImplementedError so scrape_release records it as terminal
+    'no_parser' — the same disposition as any section we deliberately don't
+    ingest — rather than a retried-and-alerted 'failed'. This is distinct from
+    a genuine ingest failure on a real current table (column-layout drift, an
+    empty/partial parse), which stays a ValueError → 'failed' → retried, so a
+    live release that regresses is still surfaced. Relies on GACC's invariant
+    (see the empty-parse guard in scrape.scrape_release) that a modern
+    section-4 release page always carries its table once published; the pages
+    that trip this are historical 2018 shapes with no inline table."""
+
+
+class CurrencyUnitMismatch(ValueError):
+    """A section-4 page whose title currency disagrees with its Unit-row scale
+    — the release-184 shape (title '(in CNY)' + Unit 'USD1 Million'). Carries
+    the resolved (section, period, currency) so scrape_release can distinguish
+    a genuine held-back release (no live sibling yet → 'failed', surfaced) from
+    a page already superseded by its canonical sibling (a live release for the
+    same cell already exists → terminal 'no_parser', not re-alerted every
+    walk). Kept a ValueError subclass so callers matching on ValueError /
+    'self-inconsistent' still catch it."""
+
+    def __init__(self, message: str, *, section: int, period: date, currency: str):
+        super().__init__(message)
+        self.section = section
+        self.period = period
+        self.currency = currency
+
+
 _MONTH_ABBREVS = {
     "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
     "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
@@ -211,7 +244,13 @@ def extract_metadata(
         # reuse the bulletin title verbatim with no date appended).
         m = _RELEASE_TITLE_NODATE_RE.match(title)
         if not m:
-            raise ValueError(f"Unrecognised release title: {title!r}")
+            # A title none of the recognised shapes match is a page we have no
+            # parser for (historical annual-totals / by-trade-mode / commodity
+            # pages, and 2018 wordings we don't ingest). Record it terminal
+            # 'no_parser', not a retried-and-alerted 'failed' — see
+            # UnparseableReleasePage and
+            # dev_notes/2026-07-08-gacc-section1-usd-floor-false-positive.md.
+            raise UnparseableReleasePage(f"Unrecognised release title: {title!r}")
         if expected_period is None:
             raise ValueError(
                 f"Release title {title!r} omits date and caller "
@@ -302,20 +341,33 @@ def extract_metadata(
     # the canonical sibling URL (whose title and Unit row agree) supplies
     # the period. Older releases that omit the Unit row entirely fall
     # through unchanged.
-    _CANONICAL_GACC_UNIT = {"CNY": "CNY 100 Million", "USD": "USD1 Million"}
-    canonical_unit = _CANONICAL_GACC_UNIT.get(currency)
-    if canonical_unit is not None:
-        if unit is not None and unit != canonical_unit:
-            raise ValueError(
-                f"GACC page {url} self-inconsistent: title declares "
-                f"currency {currency!r} but the page's Unit: row reads "
-                f"{unit!r}. Refusing to ingest cell values that don't "
-                f"match the title's currency; the table values are likely "
-                f"in {unit!r}, not in the canonical {canonical_unit!r} "
-                f"for {currency}. See migrations/2026-05-14- and "
-                f"migrations/2026-05-19- for the incident history."
-            )
-        unit = canonical_unit
+    #
+    # Scope the floor to section 4 — the ONLY section whose cell values reach
+    # `observations`. Section-1 "Total Values" pages legitimately denominate
+    # USD headline totals in "USD 100 Million" (亿美元), not the by-country
+    # "USD1 Million"; applying section 4's canonical unit to them mis-fired a
+    # "self-inconsistent" currency conflict (the title and Unit row actually
+    # AGREE on currency — only the scale differs) on a page we never ingest.
+    # Sections 1/2/3 fall through to the NotImplementedError no_parser path in
+    # parse_html exactly as they did before the floor was added (2026-05-19),
+    # so a scale mislabel on an un-ingested section cannot corrupt anything.
+    # See dev_notes/2026-07-08-gacc-section1-usd-floor-false-positive.md.
+    if section == 4:
+        _CANONICAL_GACC_UNIT = {"CNY": "CNY 100 Million", "USD": "USD1 Million"}
+        canonical_unit = _CANONICAL_GACC_UNIT.get(currency)
+        if canonical_unit is not None:
+            if unit is not None and unit != canonical_unit:
+                raise CurrencyUnitMismatch(
+                    f"GACC page {url} self-inconsistent: title declares "
+                    f"currency {currency!r} but the page's Unit: row reads "
+                    f"{unit!r}. Refusing to ingest cell values that don't "
+                    f"match the title's currency; the table values are likely "
+                    f"in {unit!r}, not in the canonical {canonical_unit!r} "
+                    f"for {currency}. See migrations/2026-05-14- and "
+                    f"migrations/2026-05-19- for the incident history.",
+                    section=section, period=period, currency=currency,
+                )
+            unit = canonical_unit
 
     return ReleaseMetadata(
         section_number=section,
@@ -367,10 +419,13 @@ def _parse_section_4_by_country(soup: BeautifulSoup, meta: ReleaseMetadata) -> l
     """
     container = soup.find("div", class_="atcl-cnt")
     if container is None:
-        raise ValueError(f"Section 4 page {meta.source_url} missing .atcl-cnt")
+        # No content container / no table = not an ingestable section-4 data
+        # table (historical 2018 by-country pages carry no inline table).
+        # Terminal 'no_parser', not retried 'failed' — see UnparseableReleasePage.
+        raise UnparseableReleasePage(f"Section 4 page {meta.source_url} missing .atcl-cnt")
     table = container.find("table")
     if table is None:
-        raise ValueError(f"Section 4 page {meta.source_url} has no table inside .atcl-cnt")
+        raise UnparseableReleasePage(f"Section 4 page {meta.source_url} has no table inside .atcl-cnt")
 
     period_iso = meta.period.isoformat()  # e.g. '2026-03-01' for both monthly & YTD anchor
     out: list[ParsedObservation] = []
