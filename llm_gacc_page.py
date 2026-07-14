@@ -32,7 +32,7 @@ import logging
 
 import hypothesis_catalog
 import llm_rejection_log
-from llm_framing import make_backend, verify_numbers
+from llm_framing import make_backend, matched_fact_paths, verify_numbers
 
 log = logging.getLogger(__name__)
 
@@ -281,17 +281,18 @@ def _log_reject(cluster: str, stage: str, reason: str, raw: str,
 
 def _cited_finding_ids(text: str, facts: dict) -> list[int]:
     """The distinct source findings behind the numbers actually cited —
-    conservative: any fact key whose value's magnitude appears in the text
-    contributes its finding id. Falls back to every strip finding when
-    nothing matches (the summary always leans on the strip)."""
-    import re as _re
-    digits = _re.sub(r"[^0-9]", " ", text)
+    resolved by the verifier's OWN matcher (llm_framing.matched_fact_paths:
+    same extraction, same tolerances), so a finding is cited iff one of its
+    numbers is genuinely the one the text used. The previous substring
+    heuristic over-cited catastrophically on the commodity take's ~200-fact
+    input (65 citations for a four-number summary — 2026-07-14 debut run).
+    Falls back to every strip finding when nothing matches (the summary
+    always leans on the strip)."""
     fids: list[int] = []
-    for key, val in (facts.get("numbers") or {}).items():
-        fid = (facts.get("prov") or {}).get(key)
-        if fid is None or fid in fids or not isinstance(val, (int, float)):
-            continue
-        if f"{abs(val) * 100:.0f}" in digits or f"{abs(val):.0f}" in digits:
+    prov = facts.get("prov") or {}
+    for path in matched_fact_paths(text, facts.get("numbers") or {}):
+        fid = prov.get(path)
+        if fid is not None and fid not in fids:
             fids.append(fid)
     if not fids:
         fids = [f for f in (facts.get("strip_fids") or []) if f is not None]

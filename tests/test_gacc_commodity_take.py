@@ -60,7 +60,8 @@ CFACTS = {
         "cm2_milestone_month_units": 1.06e6,
         "cm2_milestone_month_units_disp": 1.06,
     },
-    "prov": {"cm1_smval": 71, "cm2_smval": 72},
+    "prov": {"cm1_smval": 71, "cm1_smqty": 71, "cm2_smval": 72,
+             "cm2_smqty": 72},
     "strip_fids": [72],
 }
 
@@ -136,6 +137,34 @@ def test_commodity_take_abstention_is_silent(_capture_rejections):
     fake = FakeBackend('{"summary": null}')
     assert llm_gacc_page.generate_commodity_take(CFACTS, backend=fake) is None
     assert not _capture_rejections
+
+
+def test_citations_are_tight_on_a_large_fact_set(_capture_rejections):
+    """Regression for the 2026-07-14 debut over-citation: with ~200 facts,
+    the old substring heuristic cited 65 findings for a four-number summary
+    (short numerals like '2' matched everything). Citations now come from
+    the verifier's own matcher: only findings whose numbers the text
+    actually used."""
+    # A commodity-scale fact pool: the two discussed rows plus 60 bystander
+    # rows with distinctive rates and small integer-ish values that the old
+    # heuristic would have swept in.
+    numbers = dict(CFACTS["numbers"])
+    prov = dict(CFACTS["prov"])
+    for i in range(60):
+        numbers[f"bg{i}_smval"] = 0.01 + i * 0.013   # +1.0% … +77.7%
+        numbers[f"bg{i}_eur"] = 1e8 * (i + 1)
+        prov[f"bg{i}_smval"] = 1000 + i
+        prov[f"bg{i}_eur"] = 1000 + i
+    facts = dict(CFACTS, numbers=numbers, prov=prov)
+    fake = FakeBackend(
+        '{"summary": "China\'s exports of rare earths fell 34.0% by value '
+        'while China\'s exports of motor vehicles rose 71.2% by volume.", '
+        '"hypotheses": []}'
+    )
+    out = llm_gacc_page.generate_commodity_take(facts, backend=fake)
+    assert out is not None, _capture_rejections
+    # exactly the two discussed findings — none of the 60 bystanders
+    assert sorted(out["citations"]) == [71, 72]
 
 
 # ---------------------------------------------------------------------------
