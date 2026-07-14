@@ -2310,45 +2310,30 @@ def _gacc_commodity_facts(cur, r: _GaccCommodityRow, period: date) -> dict:
     return facts
 
 
-# Selection floors. Headline movers must be big lines (a €1bn month keeps
-# textile-yarn-sized noise out of the lead slots); the watchlist tier exists
-# because editorially-loaded small lines (rare earths under export controls,
-# ~€55M months) must still surface on a large swing — LOW_BASE_THRESHOLD_EUR
-# is that tier's floor, consistent with the F2 register.
-_COMMODITY_HEADLINE_FLOOR_EUR = 1e9
-_COMMODITY_WATCHLIST_MIN_ABS_YOY = 0.30
-_COMMODITY_HEADLINE_N = 5
-_COMMODITY_WATCHLIST_N = 3
+# The KPI-card floor: cards are genuinely scarce space (2 per flow), so a
+# selection criterion earns its keep there — biggest single-month movers
+# among big lines (a €1bn month keeps small-line volatility off the cards;
+# small lines are fully visible in the tables below).
+_COMMODITY_CARD_FLOOR_EUR = 1e9
+_COMMODITY_CARDS_PER_FLOW = 2
 
 
 def _gacc_commodities_section(cur, period: date) -> Section | None:
-    """The commodity-highlights block. Leaf rows only (the three starred
-    catalogue aggregates are context, not movers — their membership is not
-    adjacency and they'd double-count their members); ranked by
-    |single-month value YoY| (CNY basis, the analyser's cross-checked
-    operator); exports and imports interleaved with the flow named per row."""
+    """The commodity block — the FULL catalogue (Luke, 2026-07-14: GACC
+    already curated it to ~30 lines per flow; re-curating a curation hid
+    cars at +33% because five lines beat it on percentage). Two per-flow
+    tables, every leaf line, sorted by |single-month value YoY| so the
+    block still reads movers-first; the three starred aggregates ride at
+    the foot of each table as a set-off context group (never summed —
+    non-adjacency membership). Rows whose single-month operator is
+    unavailable (fresh catalogue lines, post-Jan-Feb anchors) sort after
+    the rated rows rather than vanishing."""
     rows = _gacc_commodity_rows_at(cur, period)
-    leaves = [r for r in rows
-              if not r.is_aggregate and r.sm_val_yoy is not None]
-    if not leaves:
+    if not rows:
         return None
 
-    big = [r for r in leaves
-           if r.eur_month is not None
-           and r.eur_month >= _COMMODITY_HEADLINE_FLOOR_EUR]
-    headline = sorted(big, key=lambda r: -abs(r.sm_val_yoy))[:_COMMODITY_HEADLINE_N]
-    shown = {r.fid for r in headline}
-    watch = sorted(
-        (r for r in leaves
-         if r.fid not in shown
-         and r.eur_month is not None
-         and r.eur_month >= anomalies.LOW_BASE_THRESHOLD_EUR
-         and abs(r.sm_val_yoy) >= _COMMODITY_WATCHLIST_MIN_ABS_YOY),
-        key=lambda r: -abs(r.sm_val_yoy),
-    )[:_COMMODITY_WATCHLIST_N]
-
-    if not headline and not watch:
-        return None
+    def sort_key(r: _GaccCommodityRow):
+        return (0, -abs(r.sm_val_yoy)) if r.sm_val_yoy is not None else (1, 0.0)
 
     def row_payload(r: _GaccCommodityRow) -> dict:
         facts = _gacc_commodity_facts(cur, r, period)
@@ -2380,17 +2365,63 @@ def _gacc_commodities_section(cur, period: date) -> Section | None:
         id="gacc-commodities",
         title="What’s moving — GACC’s headline commodities",
         kind="gacc_commodities",
-        intro="China’s trade by product, from GACC’s own ~30-line headline "
-              "catalogue — world totals in both directions, with no country "
+        intro="China’s trade by product — GACC’s own headline catalogue, "
+              "complete: every line it publishes, world totals, no country "
               "split (the EU-specific product read stays on the Full "
               "briefing). Sharpest single-month moves first; growth rates "
               "in CNY terms, GACC’s own comparison basis.",
         about=_GACC_COMMODITIES_ABOUT_MD,
     )
-    root.metrics["rows"] = [row_payload(r) for r in headline]
-    root.metrics["watchlist"] = [row_payload(r) for r in watch]
+    for flow in ("export", "import"):
+        leaves = sorted((r for r in rows
+                         if r.flow == flow and not r.is_aggregate),
+                        key=sort_key)
+        aggs = sorted((r for r in rows if r.flow == flow and r.is_aggregate),
+                      key=sort_key)
+        root.metrics[f"{flow}_rows"] = [row_payload(r) for r in leaves]
+        root.metrics[f"{flow}_aggregates"] = [row_payload(r) for r in aggs]
     root.metrics["period"] = period.isoformat()
+    if not (root.metrics["export_rows"] or root.metrics["import_rows"]):
+        return None
     return root
+
+
+def _gacc_commodity_strip(cur, period: date) -> list[Indicator]:
+    """The commodity KPI row (Luke, 2026-07-14): two key exports + two key
+    imports as cards under the partner strip. Cards are scarce space, so
+    the selection criterion the full-catalogue tables dropped earns its
+    keep here: sharpest |single-month value YoY| among LEAF lines with a
+    ≥€1bn month (small-line volatility stays in the tables, where nothing
+    is hidden). Card face = the CNY-basis rate (marked); note carries the
+    EUR level and the volume rate."""
+    rows = _gacc_commodity_rows_at(cur, period)
+    cards: list[Indicator] = []
+    for flow in ("export", "import"):
+        picks = sorted(
+            (r for r in rows
+             if r.flow == flow and not r.is_aggregate
+             and r.sm_val_yoy is not None
+             and r.eur_month is not None
+             and r.eur_month >= _COMMODITY_CARD_FLOOR_EUR),
+            key=lambda r: -abs(r.sm_val_yoy),
+        )[:_COMMODITY_CARDS_PER_FLOW]
+        for r in picks:
+            note_bits = [f"{_fmt_month_abbr(period)}, CNY terms",
+                         f"{_fmt_eur(r.eur_month)} in the month"]
+            if r.sm_qty_yoy is not None:
+                note_bits.append(f"{_fmt_signed_pct(r.sm_qty_yoy)} by volume")
+            cards.append(Indicator(
+                key=f"gacc_commodity_{flow}_{_slugify_heading(r.label)}",
+                kicker=("EXPORT MOVER" if flow == "export" else "IMPORT MOVER"),
+                label=r.label,
+                value=r.sm_val_yoy, unit="yoy_pct",
+                formatted=_fmt_signed_pct(r.sm_val_yoy),
+                note=" · ".join(note_bits),
+                chart="bignumber",
+                provenance=Provenance(finding_ids=[r.fid], source="gacc",
+                                      as_of=period),
+            ))
+    return cards
 
 
 _GACC_COMMODITIES_ABOUT_MD = (
@@ -2634,6 +2665,7 @@ def _build_gacc_page(cur, generate_takes: bool = False) -> GaccPage | None:
         world=_gacc_world_section(rows, period),
         since_last=_gacc_since_last(cur, rows, period),
         commodities=_gacc_commodities_section(cur, period),
+        commodity_strip=_gacc_commodity_strip(cur, period),
         understanding=_gacc_about_page_md(rows),
     )
     if generate_takes:
@@ -2912,10 +2944,14 @@ def build_report(
                        for f in ind.provenance.finding_ids}
             if gacc_page.standout is not None:
                 _gated |= set(gacc_page.standout.provenance.finding_ids)
+            _gated |= {f for ind in gacc_page.commodity_strip
+                       for f in ind.provenance.finding_ids}
             if gacc_page.commodities is not None:
                 cm = gacc_page.commodities.metrics
                 _gated |= {row["finding_id"]
-                           for row in (cm.get("rows", []) + cm.get("watchlist", []))
+                           for key in ("export_rows", "import_rows",
+                                       "export_aggregates", "import_aggregates")
+                           for row in cm.get(key, [])
                            if row.get("finding_id")}
         prov_payloads = provenance_payload.build_payloads_for(cur, _gated)
 

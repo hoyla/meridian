@@ -237,6 +237,11 @@ class GaccPage:
     # EU · US · ASEAN · World, single-month YoY face — the "general surge or
     # EU-specific re-routing?" instrument.
     strip: list[Indicator] = field(default_factory=list)
+    # Second KPI row (Luke, 2026-07-14): two key exports + two key imports
+    # from the commodity catalogue — sharpest big-line movers (≥€1bn month),
+    # CNY-basis face. The tables below show the complete catalogue; these
+    # cards are the only place commodity selection still exists.
+    commodity_strip: list[Indicator] = field(default_factory=list)
     # Partner-agnostic standout: the sharpest single-month move anywhere in
     # the release (world Total excluded — that's the wire headline).
     standout: Optional[HeadlineItem] = None

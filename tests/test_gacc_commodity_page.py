@@ -59,7 +59,7 @@ def _commodities_section(**over) -> rm.Section:
     )
     sec.metrics = {
         "period": "2026-05-01",
-        "rows": [{
+        "export_rows": [{
             "label": "Motor vehicles", "flow": "export", "finding_id": 91,
             "sm_value_yoy": 0.331, "sm_quantity_yoy": 0.426,
             "eur_month": 1.45e10, "quantity_unit": "10,000 Autos",
@@ -71,14 +71,28 @@ def _commodities_section(**over) -> rm.Section:
                         "(catalogue line tracked from 2019)",
                 "threshold_units": 1e6, "month_units": 1.06e6,
                 "method": "round-number crossing"}},
-        }],
-        "watchlist": [{
+        }, {
             "label": "Rare-earth ore, metals, compounds", "flow": "export",
             "finding_id": 92, "sm_value_yoy": -0.34, "sm_quantity_yoy": None,
             "eur_month": 5.4e7, "quantity_unit": "Ton",
             "ytd_value_yoy": -0.064, "published_ytd_yoy_pct": -6.4,
             "caveats": ["low_base_effect"],
         }],
+        "export_aggregates": [{
+            "label": "Mechanical and electrical products", "flow": "export",
+            "finding_id": 93, "sm_value_yoy": 0.19, "sm_quantity_yoy": None,
+            "eur_month": 2.1e11, "quantity_unit": None,
+            "ytd_value_yoy": 0.224, "published_ytd_yoy_pct": 22.4,
+            "caveats": ["catalogue_aggregate"],
+        }],
+        "import_rows": [{
+            "label": "Iron ore and concentrates", "flow": "import",
+            "finding_id": 94, "sm_value_yoy": -0.12, "sm_quantity_yoy": 0.03,
+            "eur_month": 9.8e9, "quantity_unit": "10,000 Tons",
+            "ytd_value_yoy": -0.09, "published_ytd_yoy_pct": -9.0,
+            "caveats": [],
+        }],
+        "import_aggregates": [],
     }
     for k, v in over.items():
         setattr(sec, k, v)
@@ -124,13 +138,40 @@ def test_commodities_renders_between_since_last_and_europe():
         < html.index('data-spy="gacc-europe"')
 
 
-def test_commodities_surface_carries_basis_facts_and_tiers():
+def test_commodities_surface_full_catalogue_shape():
     html = _render(_minimal_gacc_page(commodities=_commodities_section()))
     assert "CNY&nbsp;terms" in html           # basis named in the header
     assert "First month above 1.0mn autos" in html   # milestone chip
-    assert "Also notable — smaller lines, big swings" in html  # watchlist tier
+    # one table per flow, both headed
+    assert "China’s exports by product" in html
+    assert "China’s imports by product" in html
+    # aggregates pinned as a set-off group, never mixed into the leaf rows
+    assert "Catalogue aggregates — include lines above" in html
+    exp_table = html[html.index("China’s exports by product"):
+                     html.index("China’s imports by product")]
+    assert exp_table.index("Rare-earth ore") \
+        < exp_table.index("Catalogue aggregates") \
+        < exp_table.index("Mechanical and electrical products")
     assert "+42.6%" in html                    # volume rate beside value rate
-    assert "finding/91" in html and "finding/92" in html
+    for fid in (91, 92, 93, 94):
+        assert f"finding/{fid}" in html
+
+
+def test_commodity_kpi_row_renders_after_partner_strip():
+    page = _minimal_gacc_page(commodities=_commodities_section())
+    page.commodity_strip = [rm.Indicator(
+        key="gacc_commodity_export_ics", kicker="EXPORT MOVER",
+        label="Electronic integrated circuits",
+        value=1.007, unit="yoy_pct", formatted="+100.7%",
+        note="May 2026, CNY terms · €30.48B in the month · +2.1% by volume",
+        chart="bignumber",
+        provenance=rm.Provenance(finding_ids=[95], source="gacc",
+                                 as_of=date(2026, 5, 1)))]
+    html = _render(page)
+    assert "EXPORT MOVER" in html
+    assert "+100.7%" in html
+    # the commodity cards sit above the synthesis/standout/since-last run
+    assert html.index("EXPORT MOVER") < html.index('id="gacc-sincelast"')
 
 
 def test_no_commodities_section_no_render():
@@ -218,35 +259,62 @@ def _emit_commodity_finding(cur, label, *, is_aggregate=False, flow="export",
     )
 
 
-def test_selection_floors_tiers_and_aggregate_exclusion(
+def test_full_catalogue_every_line_shown_and_sorted(
         empty_op_tables, test_db_url):
+    """No selection in the tables (Luke, 2026-07-14): every leaf line
+    appears in its flow's table, movers-first; aggregates ride in their own
+    set-off group; nothing is dropped however small."""
     period = date(2026, 5, 1)
     with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
-        # Headline candidates (≥ €1bn month):
         _emit_commodity_finding(cur, "Big mover", sm_yoy=0.80, eur_month=5e9)
         _emit_commodity_finding(cur, "Big steady", sm_yoy=0.02, eur_month=8e9)
-        # Aggregate — must never appear however big it moves:
         _emit_commodity_finding(cur, "Mech & elec", is_aggregate=True,
                                 sm_yoy=2.0, eur_month=9e10)
-        # Watchlist: small line, big swing (the rare-earths register):
         _emit_commodity_finding(cur, "Rare earths", sm_yoy=-0.45, eur_month=6e7)
-        # Below even the watchlist floor:
         _emit_commodity_finding(cur, "Tiny line", sm_yoy=0.90, eur_month=1e7)
+        _emit_commodity_finding(cur, "Import line", flow="import",
+                                sm_yoy=0.10, eur_month=2e9)
         conn.commit()
         sec = rb._gacc_commodities_section(cur, period)
 
     assert sec is not None
-    labels = [r["label"] for r in sec.metrics["rows"]]
-    watch_labels = [r["label"] for r in sec.metrics["watchlist"]]
-    assert "Big mover" in labels and "Big steady" in labels
-    assert "Mech & elec" not in labels + watch_labels
-    assert watch_labels == ["Rare earths"]
-    assert "Tiny line" not in labels + watch_labels
-    # sharpest first
-    assert labels[0] == "Big mover"
+    exp = [r["label"] for r in sec.metrics["export_rows"]]
+    # every export leaf present — including the tiny one — sorted by |yoy|
+    assert exp == ["Tiny line", "Big mover", "Rare earths", "Big steady"]
+    # aggregates in their own group, never in the leaf rows
+    assert [r["label"] for r in sec.metrics["export_aggregates"]] == ["Mech & elec"]
+    assert [r["label"] for r in sec.metrics["import_rows"]] == ["Import line"]
     # the family-universal caveat is stripped from row chips (header carries it)
-    assert all("cny_denominated" not in r["caveats"]
-               for r in sec.metrics["rows"] + sec.metrics["watchlist"])
+    all_rows = (sec.metrics["export_rows"] + sec.metrics["import_rows"]
+                + sec.metrics["export_aggregates"])
+    assert all("cny_denominated" not in r["caveats"] for r in all_rows)
+
+
+def test_commodity_strip_selects_big_line_movers_per_flow(
+        empty_op_tables, test_db_url):
+    """The KPI cards are the one place selection survives: top 2 per flow by
+    |single-month value YoY| among leaves with a ≥€1bn month. Small lines
+    and aggregates never take a card, whatever they do."""
+    period = date(2026, 5, 1)
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        _emit_commodity_finding(cur, "ICs", sm_yoy=1.007, eur_month=3e10)
+        _emit_commodity_finding(cur, "Cars", sm_yoy=0.33, eur_month=1.4e10)
+        _emit_commodity_finding(cur, "Big steady", sm_yoy=0.02, eur_month=8e9)
+        _emit_commodity_finding(cur, "Tiny volatile", sm_yoy=3.0, eur_month=1e8)
+        _emit_commodity_finding(cur, "Mech & elec", is_aggregate=True,
+                                sm_yoy=2.0, eur_month=9e10)
+        _emit_commodity_finding(cur, "Iron ore", flow="import",
+                                sm_yoy=-0.12, eur_month=9e9)
+        conn.commit()
+        cards = rb._gacc_commodity_strip(cur, period)
+
+    labels = [c.label for c in cards]
+    assert labels == ["ICs", "Cars", "Iron ore"]  # 2 exports + the 1 import
+    assert {c.kicker for c in cards} == {"EXPORT MOVER", "IMPORT MOVER"}
+    ics = cards[0]
+    assert ics.formatted == "+100.7%"
+    assert "CNY terms" in ics.note and "in the month" in ics.note
+    assert ics.provenance.finding_ids  # drawer hook present
 
 
 def _seed_quantity_history(cur, label, months, *, flow="export",
