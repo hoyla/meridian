@@ -36,18 +36,37 @@ _ALL_UNIVERSAL_CAVEATS: frozenset[str] = frozenset(
 )
 
 
+# GACC's English and Chinese sites use unrelated CMS path schemes: English
+# release tables live at `english.customs.gov.cn/Statics/<UUID>.html`, while the
+# Chinese site files each table under
+# `www.customs.gov.cn/customs/<yyyy-mm>/<dd>/article_<id>.html`. The English
+# UUID has no counterpart on the Chinese host, so the old `english.→www.` host
+# swap always 404'd (the UUID path simply doesn't exist there). There is also no
+# single "the release" page on the Chinese side — each month is ~7 separate
+# table-articles. The stable, release-independent analogue of the English
+# `preliminary.html` index is the Chinese "统计快讯" (Statistics Express)
+# category listing: its numeric path segments are fixed category keys (new
+# months are appended; the URL never changes), it always resolves in a real
+# browser, and it carries the current month's tables at the top.
+GACC_CN_STATS_INDEX_URL = (
+    "http://www.customs.gov.cn/customs/302249/zfxxgk/fdzdgknr/302274/302275/index.html"
+)
+
+
 def _construct_chinese_source_url(english_url: str | None) -> str | None:
-    """Construct the Chinese-language equivalent of a GACC English release URL.
-    GACC keeps the same Statics/<UUID>.html path on both hosts; only the
-    subdomain changes. Returns None if the URL doesn't match the expected
-    GACC English pattern (so callers can skip the link cleanly)."""
+    """The Chinese-language destination for a GACC English release URL.
+
+    Returns the stable Chinese "统计快讯" (Statistics Express) index rather than
+    a per-release page: GACC's Chinese site has no URL matching the English
+    `Statics/<UUID>.html` release (a different CMS path scheme entirely), so a
+    host swap 404s. The index always resolves and lists the current month at
+    the top. Returns None for non-GACC or empty URLs so callers can skip the
+    link cleanly."""
     if not english_url:
         return None
-    en_host = "english.customs.gov.cn"
-    cn_host = "www.customs.gov.cn"
-    if en_host not in english_url:
+    if "english.customs.gov.cn" not in english_url:
         return None
-    return english_url.replace(en_host, cn_host)
+    return GACC_CN_STATS_INDEX_URL
 
 
 @dataclass

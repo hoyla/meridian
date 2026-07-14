@@ -905,10 +905,33 @@ member-country flows. Pick up if a non-EU-bloc story emerges.
 
 ### Chinese-language source URL backfill on `releases`
 
-Most GACC releases have a Chinese-language equivalent at
-`www.customs.gov.cn` (vs the English `english.customs.gov.cn`).
-The brief constructs the link via `_construct_chinese_source_url`
-but we don't store it. Backfill if useful for downstream consumers.
+GACC's Chinese site (`www.customs.gov.cn`) carries the same tables as
+the English one (`english.customs.gov.cn`), but there is **no
+per-release URL derivable from the English one**: the two sites use
+unrelated CMS path schemes (Chinese =
+`www.customs.gov.cn/customs/<yyyy-mm>/<dd>/article_<id>.html`, English =
+`Statics/<UUID>.html`), so the old `english.→www.` host swap 404'd.
+`_construct_chinese_source_url` now returns the stable Chinese *统计快讯*
+(Statistics Express) **index** instead (2026-07-14 fix). A true
+per-release Chinese URL backfill would require scraping + title-matching
+the Chinese index — folded into the "Chinese site as earlier trigger"
+investigation below.
+
+### Chinese site as an earlier ingest trigger (investigation)
+
+Observed 2026-07-14: the Chinese 统计快讯 index published the June
+by-country + commodity tables (dated 14 Jul) while the English
+`preliminary.html` index still topped out at May. We currently poll
+**only** the English index, so we may be leaving ~a day (and, at the
+quarter-end-late drops, potentially a full month) of lead time on the
+table. Before acting, verify we'd be comparing like with like:
+- Are the Chinese tables the *same* preliminary release, or an earlier
+  partial cut that later gets revised? Compare values once English lands.
+- Quantify the lead reliably across several months (not one drop).
+- Cost: Chinese partner/commodity labels need a different ISO/label
+  match path, and the site fronts a JS anti-bot wall that blocks
+  headless `curl` (our scraper's fetch path). Assess feasibility.
+Keep append-only + provenance discipline (principles 3/4/7) if built.
 
 ## Future-platform items
 

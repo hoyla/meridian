@@ -30,7 +30,10 @@ def _gacc_page(**over) -> rm.GaccPage:
             "published": "2026-06-09",
             "confirmation_due": "2026-07-15",
             "source_url": "https://english.customs.gov.cn/Statics/x.html",
-            "source_url_zh": "https://www.customs.gov.cn/Statics/x.html",
+            "source_url_zh": (
+                "http://www.customs.gov.cn/customs/302249/zfxxgk/fdzdgknr/"
+                "302274/302275/index.html"
+            ),
         },
         strip=[rm.Indicator(
             key="gacc_strip_eu", kicker="CHINA → EU",
@@ -594,8 +597,8 @@ def test_identity_reads_release_and_calendar(seeded, test_db_url):
     gp = _build(test_db_url)
     ident = gp.identity
     assert ident["published"] == "2026-06-10"
-    assert ident["source_url_zh"].endswith(
-        "www.customs.gov.cn/Statics/test-uuid.html")
+    from briefing_pack._helpers import GACC_CN_STATS_INDEX_URL
+    assert ident["source_url_zh"] == GACC_CN_STATS_INDEX_URL
     expected_due = release_calendar.expected_publish_date(
         "eurostat", seeded["period"])
     assert ident["confirmation_due"] == (

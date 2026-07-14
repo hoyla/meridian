@@ -1642,15 +1642,20 @@ def test_cif_fob_baseline_per_finding_renders_in_mirror_gap(
 
 
 def test_construct_chinese_source_url():
-    """The Chinese-language equivalent is constructed by host substitution
-    (`english.customs.gov.cn` → `www.customs.gov.cn`); the Statics/<UUID>.html
-    path is identical on both. Returns None for non-GACC URLs so callers can
-    skip the link cleanly."""
+    """A GACC English release URL maps to the stable Chinese 统计快讯
+    (Statistics Express) index — GACC's Chinese site has no per-release page
+    matching the English `Statics/<UUID>.html` URL, so the old host swap 404'd.
+    Returns None for non-GACC / empty URLs so callers can skip the link
+    cleanly."""
     from briefing_pack import _construct_chinese_source_url
+    from briefing_pack._helpers import GACC_CN_STATS_INDEX_URL
 
     en = "http://english.customs.gov.cn/Statics/2e61c8a1-17b2-4074-b909-c039ccf8c8fb.html"
-    cn = _construct_chinese_source_url(en)
-    assert cn == "http://www.customs.gov.cn/Statics/2e61c8a1-17b2-4074-b909-c039ccf8c8fb.html"
+    assert _construct_chinese_source_url(en) == GACC_CN_STATS_INDEX_URL
+    # Any GACC English URL resolves to the same stable index.
+    assert _construct_chinese_source_url(
+        "https://english.customs.gov.cn/Statics/other.html"
+    ) == GACC_CN_STATS_INDEX_URL
 
     assert _construct_chinese_source_url("https://ec.europa.eu/foo.html") is None
     assert _construct_chinese_source_url("") is None
