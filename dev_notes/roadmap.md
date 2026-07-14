@@ -917,21 +917,45 @@ per-release Chinese URL backfill would require scraping + title-matching
 the Chinese index — folded into the "Chinese site as earlier trigger"
 investigation below.
 
-### Chinese site as an earlier ingest trigger (investigation)
+### Chinese site as the primary GACC trigger — investigated, GO pending spike
 
-Observed 2026-07-14: the Chinese 统计快讯 index published the June
-by-country + commodity tables (dated 14 Jul) while the English
-`preliminary.html` index still topped out at May. We currently poll
-**only** the English index, so we may be leaving ~a day (and, at the
-quarter-end-late drops, potentially a full month) of lead time on the
-table. Before acting, verify we'd be comparing like with like:
-- Are the Chinese tables the *same* preliminary release, or an earlier
-  partial cut that later gets revised? Compare values once English lands.
-- Quantify the lead reliably across several months (not one drop).
-- Cost: Chinese partner/commodity labels need a different ISO/label
-  match path, and the site fronts a JS anti-bot wall that blocks
-  headless `curl` (our scraper's fetch path). Assess feasibility.
-Keep append-only + provenance discipline (principles 3/4/7) if built.
+Investigation done same day (2026-07-14), twice corrected same evening:
+[`2026-07-14-gacc-chinese-source-investigation.md`](2026-07-14-gacc-chinese-source-investigation.md).
+The apples-to-apples questions resolved favourably: values are
+**identical** to our English-parsed data everywhere compared (Express
+by-country May-2025 30/30 rows × 6 values; Bulletin-vs-prelim May-2026
+26/26; commodity spot rows); observed drop-day lead 14+ hours (CN 02:28
+UK, EN still absent at 16:50). Decision (Luke): the lead is editorially
+material — *"very strong argument to use the Chinese."*
+
+Key structure (per GACC's own Release Calendar, English site, WAF-free —
+`statistics/Statistics?ColumnId=4`): **Preliminary Release** 7th–9th of
+M+1 (12th–14th after quarter-ends) vs **Monthly Bulletin** — the
+*verified* vintage, revisable until the Yearbook — always the 18th, both
+languages, with per-year archives on both sites (the English Bulletin at
+`statics/report/monthly.html` is WAF-free). The two are different GACC
+products: never silently interchangeable; same-vintage recovery for a
+missed prelim drop = the English preliminary archive.
+
+Two separable build tracks (dev-note build sketch):
+- **Track 1 — the hours** (needs the WAF spike, the one real unknown):
+  poll the CN Express index for the drop-day trigger; xls attachments are
+  WAF-free once discovered. First: **run the pre-registered June-2026
+  diff** (30-row CSV in the dev note) when the English June release lands.
+- **Track 2 — the crosses** (no WAF at all): ingest the **English Monthly
+  Bulletin** — (2) all-country + (15)/(16) partner × HS-division
+  cross-tables, verified figures ~4 weeks ahead of Eurostat's same-month
+  coverage — as a new vintage-labelled source. Bigger analytical prize,
+  pure known-technology work.
+- Also: ingest the official Release Calendar to drive `release_calendar.py`
+  from GACC's own schedule (it corroborates PR #139's empirical
+  quarter-end override). Caveat: calendars publish **Jan–Mar of the year
+  they cover** (2026's = CN-only 公告2025年第240号, posted 2026-03-11;
+  no English edition), so the empirical override remains the Jan–Feb
+  fallback each year.
+
+Append-only + provenance discipline throughout (principles 3/4/7); the
+per-release Chinese URL backfill (above) falls out of Track 1 for free.
 
 ## Future-platform items
 
