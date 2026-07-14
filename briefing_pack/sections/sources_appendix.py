@@ -76,8 +76,8 @@ def _section_sources_appendix(cur, release_ids: set[int]) -> _Section:
         lines.append(
             "*Page bytes preserved in `source_snapshots`. The `fetched_at` "
             "timestamp is when we last successfully read the page; the EN "
-            "link below points to the live page. The CN link is the "
-            "constructed Chinese-language equivalent (see note below).*"
+            "link below points to the live page. The CN link is GACC's "
+            "Chinese-language statistics index (see note below).*"
         )
         lines.append("")
         for r in by_source['gacc']:
@@ -99,15 +99,20 @@ def _section_sources_appendix(cur, release_ids: set[int]) -> _Section:
     lines.append("### Known gaps in source coverage")
     lines.append("")
     lines.append(
-        "- The `CN:` Chinese-language URLs above are *constructed* from the "
-        "English URL by host substitution (`english.customs.gov.cn` → "
-        "`www.customs.gov.cn`); GACC keeps the same `Statics/<UUID>.html` "
-        "path on both. We don't verify these links automatically — the "
-        "Chinese site fronts a JavaScript anti-bot challenge that blocks "
-        "headless `curl` — but a journalist clicking through in a real "
-        "browser will land on the Chinese-language version of the same "
-        "release. Useful for in-language verification or when the English "
-        "translation drops a nuance."
+        "- The `CN:` link points to GACC's Chinese-language *统计快讯* "
+        "(Statistics Express) index — not a per-release page. GACC's Chinese "
+        "and English sites use unrelated CMS path schemes (Chinese tables live "
+        "at `www.customs.gov.cn/customs/<yyyy-mm>/<dd>/article_<id>.html`, with "
+        "no equivalent of the English `Statics/<UUID>.html` URL), so a "
+        "per-release link can't be derived by host substitution. The index is "
+        "the stable Chinese analogue of the English `preliminary.html` listing "
+        "and carries the current month at the top. A journalist clicking "
+        "through in a real browser lands on the Chinese-language tables for the "
+        "same release — useful for in-language verification or when the English "
+        "translation drops a nuance. (The Chinese site fronts a JavaScript "
+        "anti-bot challenge that blocks headless `curl`, so we don't verify the "
+        "link automatically; it resolves in a normal browser.) Note the Chinese "
+        "index frequently publishes a given month *ahead* of the English site."
     )
     lines.append(
         "- Caveat codes referenced inline (e.g. `cif_fob`, `low_base_effect`) "
