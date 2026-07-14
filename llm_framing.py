@@ -827,6 +827,28 @@ def verify_numbers(
     return (not failures, failures)
 
 
+def matched_fact_paths(text: str, facts: dict[str, Any]) -> list[str]:
+    """The fact paths that the numbers in `text` actually matched, in text
+    order, deduplicated — the citation-side companion to verify_numbers
+    (same extraction, same tolerances, same closest-fact resolution).
+
+    Added 2026-07-14 for the GACC-page takes' citation lines: the previous
+    substring heuristic ("does this fact's rounded magnitude appear anywhere
+    in the text's digits?") over-cited catastrophically once the fact set
+    grew to the full commodity catalogue — short numerals like "2" matched
+    ~everything, and the commodity take's debut cited 65 findings for a
+    four-number summary. Tying citations to the verifier's own matcher means
+    a finding is cited iff one of its numbers is genuinely the one the text
+    used."""
+    fact_numbers = _collect_facts_numeric(facts)
+    out: list[str] = []
+    for _raw, val, kind in _extract_numbers_from_text(text):
+        match, path, _ = _find_closest_fact(val, kind, fact_numbers)
+        if match and path is not None and path not in out:
+            out.append(path)
+    return out
+
+
 def _find_closest_fact(
     value: float, kind: str, facts: list[tuple[str, float]],
 ) -> tuple[bool, str | None, float | None]:
