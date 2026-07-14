@@ -2129,6 +2129,299 @@ def _gacc_since_last(cur, rows: list[_GaccRow], period: date) -> dict:
     return {"prev_period": prev_period.isoformat(), "rows": swings[:6]}
 
 
+# --- The commodity-highlights block (sections 5/6 catalogue) ----------------
+# dev_notes/2026-07-14-gacc-commodity-highlights.md. China↔world totals from
+# GACC's own ~30-commodity headline catalogue — the sector lens this page
+# lacked (its country table has none). Positioned between "Since the last
+# read" and "Europe up close" (Luke, 2026-07-14): the movers are part of the
+# month's momentum and set up the Europe-specific read that follows.
+
+
+class _GaccCommodityRow:
+    """One live gacc_commodity_yoy finding at the page anchor, flattened."""
+    __slots__ = ("fid", "label", "is_aggregate", "flow", "detail",
+                 "sm", "ytd", "eur_month", "quantity_unit", "caveat_codes",
+                 "monthly_series")
+
+    def __init__(self, fid, subkind, detail):
+        self.fid = fid
+        self.detail = detail or {}
+        com = self.detail.get("commodity") or {}
+        totals = self.detail.get("totals") or {}
+        self.label = com.get("label") or "?"
+        self.is_aggregate = bool(com.get("is_aggregate"))
+        self.flow = "import" if subkind.endswith("_import") else "export"
+        self.sm = totals.get("single_month") or {}
+        self.ytd = totals.get("ytd_cumulative") or {}
+        self.eur_month = _f(totals.get("eur_month"))
+        self.quantity_unit = com.get("quantity_unit")
+        self.caveat_codes = self.detail.get("caveat_codes") or []
+        self.monthly_series = self.detail.get("monthly_series")
+
+    @property
+    def sm_val_yoy(self) -> float | None:
+        return _f(self.sm.get("value_yoy_pct"))
+
+    @property
+    def sm_qty_yoy(self) -> float | None:
+        return _f(self.sm.get("quantity_yoy_pct"))
+
+
+def _gacc_commodity_rows_at(cur, period: date) -> list[_GaccCommodityRow]:
+    cur.execute(
+        """SELECT id, subkind, detail FROM findings
+            WHERE superseded_at IS NULL
+              AND subkind IN ('gacc_commodity_yoy', 'gacc_commodity_yoy_import')
+              AND (detail->'windows'->>'current_end')::date = %s""",
+        (period,),
+    )
+    return [_GaccCommodityRow(fid, subkind, detail)
+            for fid, subkind, detail in cur.fetchall()]
+
+
+# Quantity units on the commodity pages carry their scale in the label
+# ("10,000 Autos", "100 Million PCS"); absolute unit counts need it parsed
+# out. Unmatched units scale 1 (Ton, Set, Ship, …).
+_QTY_UNIT_SCALE_RE = re.compile(r"^\s*(?P<scale>10,000|100 Million)\s+(?P<noun>.+)$")
+_QTY_UNIT_SCALES = {"10,000": 1e4, "100 Million": 1e8}
+
+
+def _qty_units_absolute(qty: float, unit: str | None) -> tuple[float, str]:
+    """(absolute unit count, noun) — e.g. (988_000, 'Autos') from
+    (98.8, '10,000 Autos')."""
+    if not unit:
+        return qty, ""
+    m = _QTY_UNIT_SCALE_RE.match(unit)
+    if not m:
+        return qty, unit
+    return qty * _QTY_UNIT_SCALES[m.group("scale")], m.group("noun")
+
+
+def _fmt_units(n: float) -> str:
+    if n >= 1e9:
+        return f"{n / 1e9:,.1f}bn"
+    if n >= 1e6:
+        return f"{n / 1e6:,.2f}mn"
+    if n >= 1e3:
+        return f"{n / 1e3:,.0f}k"
+    return f"{n:,.0f}"
+
+
+# The round-number ladder for milestone detection, in ABSOLUTE units:
+# 1/2/5 × 10^k. A milestone fires when the anchor month crosses a rung no
+# earlier month of the same catalogue line reached.
+def _milestone_rungs(value: float):
+    rungs = []
+    k = 1.0
+    while k <= value * 10:
+        for m in (1.0, 2.0, 5.0):
+            if m * k <= value:
+                rungs.append(m * k)
+        k *= 10
+    return rungs
+
+
+def _gacc_commodity_quantity_series(cur, flow: str, label: str,
+                                    is_aggregate: bool) -> list[tuple[date, float]]:
+    """Monthly quantity history for one catalogue line (canonical CNY,
+    same label + aggregate flag — era-local by construction, so a milestone
+    reads 'first in our records for this line', not 'first ever')."""
+    section = 5 if flow == "export" else 6
+    cur.execute(
+        """SELECT r.period, o.quantity FROM observations o
+             JOIN releases r ON r.id = o.release_id
+            WHERE r.source='gacc' AND r.section_number=%s AND r.currency='CNY'
+              AND o.flow=%s AND o.period_kind='monthly'
+              AND o.commodity_label=%s AND o.quantity IS NOT NULL
+              AND COALESCE((o.source_row->>'is_aggregate')::boolean, false) = %s
+         ORDER BY r.period""",
+        (section, flow, label, is_aggregate),
+    )
+    return [(p, float(q)) for p, q in cur.fetchall()]
+
+
+def _gacc_commodity_facts(cur, r: _GaccCommodityRow, period: date) -> dict:
+    """Code-computed milestone + run-rate facts for one shown commodity row —
+    the deterministic layer of the 'takes' Luke asked for (2026-07-14): the
+    1mn-cars-a-month class of milestone and the on-pace-for-10mn class of
+    projection are arithmetic, so they are computed, never LLM-asserted.
+    Returns {} when nothing fires; every fact carries its method note."""
+    facts: dict = {}
+    cur_qty = _f(r.sm.get("current_quantity"))
+    if cur_qty is None or not r.quantity_unit:
+        return facts
+    series = _gacc_commodity_quantity_series(cur, r.flow, r.label,
+                                             r.is_aggregate)
+    prior = [q for p, q in series if p < period]
+    # A "first month above N" claim needs a record worth being first in:
+    # require ≥24 prior months of this catalogue line. Guards against
+    # newly-added / recently-renamed lines (era-local series) where a
+    # "milestone" would really mean "the line is four months old".
+    if len(prior) >= 24:
+        abs_cur, noun = _qty_units_absolute(cur_qty, r.quantity_unit)
+        abs_prior_max = _qty_units_absolute(max(prior), r.quantity_unit)[0]
+        crossed = [g for g in _milestone_rungs(abs_cur) if g > abs_prior_max]
+        if crossed:
+            rung = max(crossed)
+            facts["milestone"] = {
+                "text": (f"First month above {_fmt_units(rung)} "
+                         f"{noun.lower() or 'units'} in our records "
+                         f"(catalogue line tracked from "
+                         f"{series[0][0].year})"),
+                "threshold_units": rung,
+                "month_units": abs_cur,
+                "method": "round-number crossing vs all prior months of "
+                          "this catalogue line (same label), monthly "
+                          "quantity, canonical CNY releases",
+            }
+    # Run-rate: YTD × 12/m vs the prior year's full-year (Dec cumulative).
+    # Month ≥ 3 only — a Jan/Feb-based extrapolation is noise.
+    ytd_qty = _f(r.ytd.get("current_quantity"))
+    if ytd_qty is not None and period.month >= 3:
+        cur.execute(
+            """SELECT o.quantity FROM observations o
+                 JOIN releases r2 ON r2.id = o.release_id
+                WHERE r2.source='gacc' AND r2.section_number=%s
+                  AND r2.currency='CNY' AND r2.period=%s
+                  AND o.flow=%s AND o.period_kind='ytd'
+                  AND o.commodity_label=%s AND o.quantity IS NOT NULL""",
+            (5 if r.flow == "export" else 6, date(period.year - 1, 12, 1),
+             r.flow, r.label),
+        )
+        row = cur.fetchone()
+        if row and row[0]:
+            pace = ytd_qty * 12.0 / period.month
+            abs_pace, noun = _qty_units_absolute(pace, r.quantity_unit)
+            abs_full, _ = _qty_units_absolute(float(row[0]), r.quantity_unit)
+            # Only a story when the pace is meaningfully different from
+            # last year's total (±5% — inside that it's "flat").
+            if abs_full > 0 and abs(abs_pace / abs_full - 1) >= 0.05:
+                facts["run_rate"] = {
+                    "text": (f"On pace for ~{_fmt_units(abs_pace)} "
+                             f"{noun.lower() or 'units'} in {period.year} "
+                             f"vs {_fmt_units(abs_full)} in "
+                             f"{period.year - 1}"),
+                    "pace_units": abs_pace,
+                    "prior_full_year_units": abs_full,
+                    "method": (f"linear run-rate: Jan–{period:%b} cumulative "
+                               f"× 12/{period.month}, vs the prior year's "
+                               f"December cumulative (same catalogue line)"),
+                }
+    return facts
+
+
+# Selection floors. Headline movers must be big lines (a €1bn month keeps
+# textile-yarn-sized noise out of the lead slots); the watchlist tier exists
+# because editorially-loaded small lines (rare earths under export controls,
+# ~€55M months) must still surface on a large swing — LOW_BASE_THRESHOLD_EUR
+# is that tier's floor, consistent with the F2 register.
+_COMMODITY_HEADLINE_FLOOR_EUR = 1e9
+_COMMODITY_WATCHLIST_MIN_ABS_YOY = 0.30
+_COMMODITY_HEADLINE_N = 5
+_COMMODITY_WATCHLIST_N = 3
+
+
+def _gacc_commodities_section(cur, period: date) -> Section | None:
+    """The commodity-highlights block. Leaf rows only (the three starred
+    catalogue aggregates are context, not movers — their membership is not
+    adjacency and they'd double-count their members); ranked by
+    |single-month value YoY| (CNY basis, the analyser's cross-checked
+    operator); exports and imports interleaved with the flow named per row."""
+    rows = _gacc_commodity_rows_at(cur, period)
+    leaves = [r for r in rows
+              if not r.is_aggregate and r.sm_val_yoy is not None]
+    if not leaves:
+        return None
+
+    big = [r for r in leaves
+           if r.eur_month is not None
+           and r.eur_month >= _COMMODITY_HEADLINE_FLOOR_EUR]
+    headline = sorted(big, key=lambda r: -abs(r.sm_val_yoy))[:_COMMODITY_HEADLINE_N]
+    shown = {r.fid for r in headline}
+    watch = sorted(
+        (r for r in leaves
+         if r.fid not in shown
+         and r.eur_month is not None
+         and r.eur_month >= anomalies.LOW_BASE_THRESHOLD_EUR
+         and abs(r.sm_val_yoy) >= _COMMODITY_WATCHLIST_MIN_ABS_YOY),
+        key=lambda r: -abs(r.sm_val_yoy),
+    )[:_COMMODITY_WATCHLIST_N]
+
+    if not headline and not watch:
+        return None
+
+    def row_payload(r: _GaccCommodityRow) -> dict:
+        facts = _gacc_commodity_facts(cur, r, period)
+        out = {
+            "label": r.label,
+            "flow": r.flow,
+            "finding_id": r.fid,
+            "sm_value_yoy": r.sm_val_yoy,
+            "sm_quantity_yoy": r.sm_qty_yoy,
+            "eur_month": r.eur_month,
+            "quantity_unit": r.quantity_unit,
+            "ytd_value_yoy": _f(r.ytd.get("value_yoy_pct")),
+            "published_ytd_yoy_pct": r.ytd.get("published_yoy_value_pct"),
+            # cny_denominated is family-universal here — the table header
+            # ("CNY terms") and the about-box carry it; repeating it as a
+            # per-row chip is noise. Row chips are for row-varying caveats.
+            "caveats": [c for c in _visible_caveats(r.caveat_codes)
+                        if c != "cny_denominated"],
+        }
+        qty = _f(r.sm.get("current_quantity"))
+        if qty is not None and r.quantity_unit:
+            abs_qty, noun = _qty_units_absolute(qty, r.quantity_unit)
+            out["quantity_display"] = f"{_fmt_units(abs_qty)} {noun.lower()}".strip()
+        if facts:
+            out["facts"] = facts
+        return out
+
+    root = Section(
+        id="gacc-commodities",
+        title="What’s moving — GACC’s headline commodities",
+        kind="gacc_commodities",
+        intro="China’s trade by product, from GACC’s own ~30-line headline "
+              "catalogue — world totals in both directions, with no country "
+              "split (the EU-specific product read stays on the Full "
+              "briefing). Sharpest single-month moves first; growth rates "
+              "in CNY terms, GACC’s own comparison basis.",
+        about=_GACC_COMMODITIES_ABOUT_MD,
+    )
+    root.metrics["rows"] = [row_payload(r) for r in headline]
+    root.metrics["watchlist"] = [row_payload(r) for r in watch]
+    root.metrics["period"] = period.isoformat()
+    return root
+
+
+_GACC_COMMODITIES_ABOUT_MD = (
+    "**What this is.** GACC’s preliminary release includes two "
+    "commodity tables — “Major Exports/Imports by Quantity and Value” — "
+    "a curated catalogue of ~30 headline lines (cars, integrated "
+    "circuits, rare earths, steel …) with physical quantities as well as "
+    "values. These are China↔world totals: there is no commodity-by-"
+    "country breakdown in the preliminary release, so this section and "
+    "the country sections cannot be cross-filtered.\n\n"
+    "**Two sector lenses, two pages.** The Full briefing’s product "
+    "sections are EU↔China specific, built from Europe’s CN8 detail with "
+    "journalist-curated groups. This section is China’s own world-market "
+    "cut — broader scope, coarser grain, five weeks earlier.\n\n"
+    "**Growth rates are CNY-denominated** — computed in yuan, matching "
+    "GACC’s own published comparisons, and every cumulative rate is "
+    "cross-checked against the percentage GACC printed on the page "
+    "(figures that fail that check are withheld). This differs from the "
+    "EUR-denominated rates elsewhere on this page — the drawers carry "
+    "both bases.\n\n"
+    "**Quantities are the quotable half.** “+71% by volume to 1.06mn "
+    "cars” survives every currency argument; where GACC publishes "
+    "physical units this section shows the volume rate beside the value "
+    "rate.\n\n"
+    "**Milestones and pace lines are computed, not editorialised** — "
+    "round-number crossings against every prior month of the same "
+    "catalogue line, and linear year-pace vs last year’s total. Each "
+    "carries its method in the drawer."
+)
+
+
 def _gacc_identity(cur, period: date, rows: list[_GaccRow]) -> dict:
     """The identity header: when China published, when Europe's harmonised
     figures for the same month are due (release_calendar), and links to
@@ -2163,10 +2456,11 @@ _GACC_PAGE_ABOUT_EUROPE = (
     "absent — this is China’s reporting choice, not a data gap on our "
     "side. Partners are matched to EU membership by ISO code, never by "
     "label spelling.\n\n"
-    "**No product detail.** The GACC country release has no commodity "
-    "dimension — this page is partners-only by data availability. "
-    "Product-level detail arrives with the European confirmation in "
-    "~5 weeks."
+    "**No product detail here.** The GACC country table has no commodity "
+    "dimension — these country sections are partners-only by data "
+    "availability. GACC’s product view (world totals, no country split) is "
+    "the commodities section above; the EU-specific product detail arrives "
+    "with the European confirmation in ~5 weeks."
 )
 
 # The single "About this page" disclosure (under the KPI strip, mirroring
@@ -2191,12 +2485,17 @@ _GACC_ABOUT_PAGE_MD = (
     "Hong Kong. The Full briefing’s Eurostat figures use the wider "
     "China+Hong Kong+Macao envelope, so the two tabs’ “China” "
     "differ by construction.\n\n"
-    "**No product detail.** GACC’s country release is partner-level "
-    "only. Product-level detail arrives with the European confirmation.\n\n"
-    "**Currency.** Values are converted to EUR at per-period exchange "
-    "rates, so growth rates won’t exactly match GACC’s published "
-    "CNY / USD figures — which matters doubly on a page that leads with "
-    "growth rates."
+    "**Products and countries don’t cross.** GACC’s country table is "
+    "partner-level only; its commodity tables (the “What’s moving” "
+    "section) are world-level only. The two dimensions can’t be combined "
+    "from this source — EU-specific product detail arrives with the "
+    "European confirmation.\n\n"
+    "**Currency.** Partner figures are converted to EUR at per-period "
+    "exchange rates, so their growth rates won’t exactly match GACC’s "
+    "published CNY / USD figures — which matters doubly on a page that "
+    "leads with growth rates. The commodity section is the exception: its "
+    "rates are computed in CNY on GACC’s own basis, cross-checked against "
+    "the page’s printed percentages."
 )
 
 _GACC_ABOUT_JAN_FEB_MD = (
@@ -2334,6 +2633,7 @@ def _build_gacc_page(cur, generate_takes: bool = False) -> GaccPage | None:
         europe=_gacc_europe_section(rows, period),
         world=_gacc_world_section(rows, period),
         since_last=_gacc_since_last(cur, rows, period),
+        commodities=_gacc_commodities_section(cur, period),
         understanding=_gacc_about_page_md(rows),
     )
     if generate_takes:
@@ -2612,6 +2912,11 @@ def build_report(
                        for f in ind.provenance.finding_ids}
             if gacc_page.standout is not None:
                 _gated |= set(gacc_page.standout.provenance.finding_ids)
+            if gacc_page.commodities is not None:
+                cm = gacc_page.commodities.metrics
+                _gated |= {row["finding_id"]
+                           for row in (cm.get("rows", []) + cm.get("watchlist", []))
+                           if row.get("finding_id")}
         prov_payloads = provenance_payload.build_payloads_for(cur, _gated)
 
     month = _fmt_month(data_period)

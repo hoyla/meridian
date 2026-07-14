@@ -125,8 +125,11 @@ supersede-on-change like the other GACC families:
 
 ### Page block (report_builder.py GACC-only page)
 
-New section under the world-context strip: **"What's moving — GACC's
-headline commodities (China ↔ world, {Mon YYYY})"**.
+New section **between "Since the last read" and "Europe up close"** (Luke,
+2026-07-14 — supersedes this note's original "under the world-context
+strip" placement): **"What's moving — GACC's headline commodities"**. The
+movers are part of the month's momentum and set up the Europe-specific
+read that follows.
 
 - Selection: leaf rows only (starred aggregates excluded), ranked by
   |single-month value YoY|, value floor (low-base guard), top ~5 movers +
@@ -144,8 +147,23 @@ headline commodities (China ↔ world, {Mon YYYY})"**.
 - The on-page "no commodity dimension" copy is corrected to "the by-country
   table has no commodity dimension; headline commodities are world-total
   only" — the two-lens explanation moves into the about box.
-- LLM: v1 does NOT add commodity facts to the synthesis prompt (keeps this
-  change LLM-cost-neutral and shippable today); noted as the obvious v1.1.
+- "Takes" for the section (Luke, 2026-07-14) split by defensibility:
+  - **Computed, never LLM-asserted (in PR C):** round-number milestone
+    crossings on the quantity series ("first month above 1mn autos" — the
+    June 2026 cars case fires the day the data lands) and linear run-rate
+    pace lines ("on pace for ~10mn in 2026 vs 7.1mn in 2025"; month ≥ 3
+    only, ±5% dead-band vs prior full-year). Both era-local (same catalogue
+    label), both carrying method notes. The pipeline spots; the LLM only
+    narrates — an LLM "spotting" a milestone is a hope, code is a
+    guarantee.
+  - **LLM commodity-take slot (PR D, +1 paid call/month, opt-in per the
+    cost discipline):** the causal/contextual layer — rare-earths ↓ in the
+    export-controls/tech-race frame, the car-export pivot against the
+    domestic EV-subsidy-phaseout backdrop. Fed the movers + computed facts
+    + hypothesis catalog; verify-numbers round-trip as everywhere. Pure
+    external-context claims (domestic sales) get attributed-context
+    framing — and are the strongest argument yet for the V1.1 curated
+    policy-events file.
 
 ### Sequencing (time-sensitive)
 

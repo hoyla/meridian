@@ -1661,6 +1661,79 @@ def _gacc_since_last_html(gp) -> str:
             f'<tbody>{"".join(body)}</tbody></table></div>')
 
 
+def _gacc_commodities_html(section, payloads) -> str:
+    """What's moving — GACC's headline commodities (sections 5/6 catalogue,
+    dev_notes/2026-07-14-gacc-commodity-highlights.md). One gtable: headline
+    movers (big lines, sharpest single-month CNY-basis moves) then the
+    watchlist tier (smaller lines on big swings — the rare-earths register)
+    under a labelled divider row. Value rates are CNY-basis (marked in the
+    header), volume rates unitless; computed milestone / pace facts render
+    as chips under the commodity name; each row's finding token opens its
+    pre-baked provenance drawer."""
+    m = section.metrics or {}
+    rows, watch = m.get("rows") or [], m.get("watchlist") or []
+    if not rows and not watch:
+        return ""
+    out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
+    if section.intro:
+        out.append(f'<p class="kicker">{_inline_md(section.intro)}</p>')
+    out.append(_more_about(section))
+
+    def tr(r: dict) -> str:
+        fid = r.get("finding_id")
+        token = (f'<span class="token">finding/{fid}</span>'
+                 if fid is not None else "")
+        prov = _prov_details(
+            (payloads or {}).get(str(fid)) if fid is not None else None,
+            token, summary_class="mover-prov") or token
+        name = html.escape(r["label"])
+        chips = []
+        facts = r.get("facts") or {}
+        if facts.get("milestone"):
+            chips.append(f'<span class="note">◆ '
+                         f'{html.escape(facts["milestone"]["text"])}</span>')
+        if facts.get("run_rate"):
+            chips.append(f'<span class="note">▸ '
+                         f'{html.escape(facts["run_rate"]["text"])}</span>')
+        if r.get("caveats"):
+            chips.append(f'<span class="note">{html.escape(", ".join(r["caveats"]))}</span>')
+        chip_html = (f'<br>{" · ".join(chips)}' if chips else "")
+        sm = r.get("sm_value_yoy")
+        qy = r.get("sm_quantity_yoy")
+        qty_cell = "—"
+        if qy is not None:
+            qty_cell = f'{qy * 100:+.1f}%'
+            if r.get("quantity_display"):
+                qty_cell += f' <span class="note">({html.escape(r["quantity_display"])})</span>'
+        eur = r.get("eur_month")
+        return "".join([
+            "<tr>",
+            f"<td>{name}{chip_html}</td>",
+            f"<td>{'China exports' if r['flow'] == 'export' else 'China imports'}</td>",
+            (f'<td class="num" style="color:{_UP if sm >= 0 else _DOWN}">'
+             f'{sm * 100:+.1f}%</td>' if sm is not None
+             else '<td class="num">—</td>'),
+            f'<td class="num">{qty_cell}</td>',
+            f'<td class="num">{html.escape(_fmt_eur(eur)) if eur is not None else "—"}</td>',
+            f"<td>{prov}</td>",
+            "</tr>"])
+
+    body = [tr(r) for r in rows]
+    if watch:
+        body.append('<tr class="tier"><td colspan="6"><span class="note">'
+                    'Also notable — smaller lines, big swings'
+                    '</span></td></tr>')
+        body.extend(tr(r) for r in watch)
+    out.append(
+        '<div class="gtable-wrap"><table class="gtable">'
+        '<thead><tr><th>Commodity (world total)</th><th>Direction</th>'
+        '<th class="num">Month YoY (CNY&nbsp;terms)</th>'
+        '<th class="num">By volume</th>'
+        '<th class="num">Month value</th><th>Finding</th></tr></thead>'
+        f'<tbody>{"".join(body)}</tbody></table></div>')
+    return "".join(out)
+
+
 def _gacc_world_html(section) -> str:
     """China and the world: blocs + world total, both flows, one row each —
     plus the Hong Kong entrepôt line, visibly labelled as a routing signal."""
@@ -1939,8 +2012,8 @@ def _gacc_synthesis_html(gp) -> str:
 def _gacc_page_html(gp, payloads) -> str:
     """The whole GACC-only tab panel, in the design's reading order:
     identity → context strip → synthesis (the machine corner) → standout →
-    since-last → Europe up close → world → understanding-these-figures
-    expander. Carries its own sticky sub-nav, same pattern as the Briefing
+    since-last → commodities (what's moving, world scope) → Europe up close
+    → world → understanding-these-figures expander. Carries its own sticky sub-nav, same pattern as the Briefing
     tab (the global scroll-spy scopes itself to the visible panel — hidden
     sections never intersect)."""
     parts = [f"<section>{_gacc_identity_html(gp)}</section>"]
@@ -1965,6 +2038,16 @@ def _gacc_page_html(gp, payloads) -> str:
     subnav.append(("gacc-sincelast", "Since last read"))
     parts.append('<section class="brief-sec" id="gacc-sincelast">'
                   + _gacc_since_last_html(gp) + "</section>")
+    if gp.commodities is not None:
+        # Between since-last and Europe (Luke, 2026-07-14): the commodity
+        # movers are part of the month's momentum and set up the
+        # Europe-specific read that follows.
+        commod = _gacc_commodities_html(gp.commodities, payloads)
+        if commod:
+            subnav.append((gp.commodities.id, "Commodities"))
+            parts.append(
+                f'<section class="brief-sec" id="{html.escape(gp.commodities.id)}">'
+                + commod + "</section>")
     if gp.europe is not None:
         gp.europe.metrics.setdefault("order_note", "sharpest move first")
         subnav.append((gp.europe.id, "Europe"))
