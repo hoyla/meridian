@@ -134,7 +134,10 @@ def scrape_release(
             if not dry_run:
                 db.finish_run(run_id, status="failed", error_message=msg)
             return
-        floor_reason = parse.section4_floor_check(result.observations, meta)
+        floor_reason = (
+            parse.section4_floor_check(result.observations, meta)
+            or parse.section56_floor_check(result.observations, meta)
+        )
         if floor_reason:
             # A parse can clear the empty guard yet still be *partial* — some
             # rows dropped by column-layout drift, or a truncated preliminary
@@ -191,6 +194,134 @@ def scrape_release(
         log.exception("Scrape failed for %s", url)
         if run_id is not None:
             db.finish_run(run_id, status="failed", error_message=str(e))
+
+
+def replay_gacc_snapshots(dry_run: bool = False) -> dict[str, int]:
+    """Re-parse stored GACC snapshots for URLs whose latest terminal run is
+    'no_parser', persisting releases + observations for any page a
+    newly-shipped parser now understands. Zero requests to GACC — the bytes
+    come from `source_snapshots` (newest snapshot per URL). Built for the
+    section-5/6 commodity parser backfill
+    (dev_notes/2026-07-14-gacc-commodity-highlights.md), but generic: any
+    future parser addition can reuse it instead of --force-refetch's
+    thousands of live re-fetches.
+
+    Contract: writes DB rows ONLY on a fully-successful parse (release +
+    observations + a fresh 'success' scrape_run for provenance; its
+    http_status stays NULL, marking it a replay). Pages that still raise
+    UnparseableReleasePage/NotImplementedError are skipped silently — the
+    existing terminal 'no_parser' row remains authoritative, so the walker's
+    skip-guard behaviour is unchanged. Pages that now parse but trip the
+    plausibility floor (or yield zero observations) are logged + counted but
+    NOT recorded as 'failed': flipping a stable terminal state would put the
+    URL back on the live walker's retry path every walk, churning fetches
+    against a static page. Floor-fails in the summary are an investigate-by-
+    hand signal. Idempotent: replayed successes are terminal, so a re-run
+    skips them (same guard as the walker)."""
+    counts = {
+        "urls_considered": 0, "parsed": 0, "persisted": 0,
+        "still_no_parser": 0, "skipped_missing_title_fields": 0,
+        "floor_failed": 0, "empty_parse": 0, "errored": 0,
+    }
+    import psycopg2
+    with psycopg2.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
+        # Newest snapshot per URL, restricted to URLs whose most recent
+        # terminal disposition is 'no_parser' (mirrors
+        # gacc_release_url_already_processed: 'success' wins over an older
+        # 'no_parser'; 'failed' URLs stay the live walker's business).
+        cur.execute(
+            """
+            WITH terminal AS (
+                SELECT DISTINCT ON (source_url) source_url, status
+                  FROM scrape_runs
+                 WHERE source_url LIKE '%%english.customs.gov.cn/Statics/%%'
+                   AND status IN ('success', 'no_parser')
+              ORDER BY source_url, started_at DESC
+            ),
+            latest_snap AS (
+                SELECT DISTINCT ON (s.url) s.url, s.id, s.content_bytes
+                  FROM source_snapshots s
+              ORDER BY s.url, s.fetched_at DESC
+            )
+            SELECT ls.url, ls.id, ls.content_bytes
+              FROM terminal t
+              JOIN latest_snap ls ON ls.url = t.source_url
+             WHERE t.status = 'no_parser'
+          ORDER BY ls.url
+            """
+        )
+        rows = cur.fetchall()
+    counts["urls_considered"] = len(rows)
+    log.info("Replay: %d no_parser GACC URLs with stored snapshots", len(rows))
+
+    for url, snapshot_id, content in rows:
+        try:
+            result = parse.parse_html(bytes(content), url)
+        except NotImplementedError:
+            # Still no parser for this page (sections 1/2/3, historical
+            # shapes) — the existing no_parser row stays authoritative.
+            counts["still_no_parser"] += 1
+            continue
+        except ValueError as e:
+            # 2018-era / annual-cumulative titles that omit the date or
+            # currency: the live walker fills those from the parent index's
+            # bulletin row (expected_currency/expected_period), context a
+            # snapshot replay doesn't have. Verified 2026-07-14: all 183 such
+            # pages are shapes we never ingest (by-trade-mode, January-December
+            # annuals, Jan-2018 currency-less) — skipping loses nothing the
+            # walker didn't already terminally skip.
+            log.info("Replay: title lacks date/currency for %s (snapshot %d): %s",
+                     url, snapshot_id, e)
+            counts["skipped_missing_title_fields"] += 1
+            continue
+        except Exception as e:
+            log.warning("Replay parse errored for %s (snapshot %d): %s",
+                        url, snapshot_id, e)
+            counts["errored"] += 1
+            continue
+
+        meta = result.metadata
+        counts["parsed"] += 1
+        if not result.observations:
+            log.warning("Replay: 0 observations for %s (section %d, %s, %s) — "
+                        "not persisting", url, meta.section_number,
+                        meta.currency, meta.period.isoformat())
+            counts["empty_parse"] += 1
+            continue
+        floor_reason = (
+            parse.section4_floor_check(result.observations, meta)
+            or parse.section56_floor_check(result.observations, meta)
+        )
+        if floor_reason:
+            log.warning("Replay: floor rejected %s (section %d, %s, %s): %s — "
+                        "not persisting", url, meta.section_number,
+                        meta.currency, meta.period.isoformat(), floor_reason)
+            counts["floor_failed"] += 1
+            continue
+
+        log.info("Replay: parsed %d observations from %s (section %d, %s, %s)",
+                 len(result.observations), url, meta.section_number,
+                 meta.currency, meta.period.isoformat())
+        if dry_run:
+            counts["persisted"] += 1  # would-persist under --dry-run
+            continue
+        run_id = db.start_run(url)
+        try:
+            effective_kind = (
+                "preliminary_jan_feb" if meta.is_jan_feb_combined
+                else "preliminary"
+            )
+            release_id = db.find_or_create_gacc_release(
+                meta, release_kind=effective_kind)
+            db.upsert_observations(run_id, release_id, result.observations)
+            db.finish_run(run_id, status="success")
+            counts["persisted"] += 1
+        except Exception as e:
+            log.exception("Replay persist failed for %s", url)
+            db.finish_run(run_id, status="failed", error_message=str(e))
+            counts["errored"] += 1
+    log.info("Replay summary: %s", counts)
+    return counts
 
 
 @dataclasses.dataclass(frozen=True)
@@ -850,6 +981,17 @@ def main() -> None:
             "URL the index pages enumerate, even ones already terminally "
             "processed (success / no_parser). Use after shipping a new HTML "
             "parser to convert prior 'no_parser' URLs into 'success'."
+        ),
+    )
+    p.add_argument(
+        "--gacc-replay-snapshots", action="store_true",
+        help=(
+            "Re-parse stored GACC snapshots for URLs whose latest terminal "
+            "run is 'no_parser', persisting any page a newly-shipped parser "
+            "now understands (e.g. the section-5/6 commodity backfill). Zero "
+            "requests to GACC. Writes only on full success; pages still "
+            "lacking a parser keep their terminal no_parser state. Honours "
+            "--dry-run."
         ),
     )
     p.add_argument(
@@ -1589,6 +1731,11 @@ def main() -> None:
 
     if args.hmrc_period:
         scrape_hmrc(args.hmrc_period, dry_run=args.dry_run)
+        return
+
+    if args.gacc_replay_snapshots:
+        counts = replay_gacc_snapshots(dry_run=args.dry_run)
+        print(f"Replay summary: {counts}")
         return
 
     run_scrape(

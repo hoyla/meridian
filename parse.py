@@ -127,6 +127,10 @@ def _infer_section_from_description(description: str) -> int:
         return 4
     if "by trade mode" in d:
         return 2
+    if "major exports" in d:
+        return 5
+    if "major imports" in d:
+        return 6
     return 1
 
 
@@ -201,6 +205,10 @@ def parse_html(
     )
     if meta.section_number == 4:
         return ParseResult(metadata=meta, observations=_parse_section_4_by_country(soup, meta))
+    if meta.section_number in (5, 6):
+        return ParseResult(
+            metadata=meta, observations=_parse_section_5_6_commodities(soup, meta)
+        )
     raise NotImplementedError(
         f"HTML parser for section {meta.section_number} ({meta.description!r}) not implemented yet"
     )
@@ -342,17 +350,21 @@ def extract_metadata(
     # the period. Older releases that omit the Unit row entirely fall
     # through unchanged.
     #
-    # Scope the floor to section 4 — the ONLY section whose cell values reach
-    # `observations`. Section-1 "Total Values" pages legitimately denominate
-    # USD headline totals in "USD 100 Million" (亿美元), not the by-country
-    # "USD1 Million"; applying section 4's canonical unit to them mis-fired a
-    # "self-inconsistent" currency conflict (the title and Unit row actually
-    # AGREE on currency — only the scale differs) on a page we never ingest.
-    # Sections 1/2/3 fall through to the NotImplementedError no_parser path in
-    # parse_html exactly as they did before the floor was added (2026-05-19),
-    # so a scale mislabel on an un-ingested section cannot corrupt anything.
+    # Scope the floor to the sections whose cell values reach `observations`:
+    # 4 (by country), and — since the commodity-highlights build
+    # (dev_notes/2026-07-14-gacc-commodity-highlights.md) — 5/6 (major
+    # exports/imports by quantity and value), which share section 4's
+    # canonical units exactly ("CNY 100 Million" / "USD1 Million", verified
+    # across the 2019–2026 fixtures). Section-1 "Total Values" pages
+    # legitimately denominate USD headline totals in "USD 100 Million"
+    # (亿美元), not "USD1 Million"; applying the canonical unit to them
+    # mis-fired a "self-inconsistent" currency conflict (the title and Unit
+    # row actually AGREE on currency — only the scale differs) on a page we
+    # never ingest. Sections 1/2/3 fall through to the NotImplementedError
+    # no_parser path in parse_html, so a scale mislabel on an un-ingested
+    # section cannot corrupt anything.
     # See dev_notes/2026-07-08-gacc-section1-usd-floor-false-positive.md.
-    if section == 4:
+    if section in (4, 5, 6):
         _CANONICAL_GACC_UNIT = {"CNY": "CNY 100 Million", "USD": "USD1 Million"}
         canonical_unit = _CANONICAL_GACC_UNIT.get(currency)
         if canonical_unit is not None:
@@ -599,4 +611,187 @@ def section4_floor_check(
                 "a partner out-values the 'Total' grand-total row — the value "
                 "columns were likely misread (column-layout drift)"
             )
+    return None
+
+
+def _normalise_commodity_label(raw: str) -> tuple[str, int, bool]:
+    """Returns (label, indent_level, is_aggregate) for a section-5/6 commodity
+    cell. Same nbsp-indent convention as the section-4 partner column (reuses
+    the indent-counting approach of `_normalise_partner_label`), plus the
+    commodity pages' own aggregate marker: a trailing '*' flags the three
+    catalogue aggregates ("Agriculture products*", "Mechanical and electrical
+    products*", "Hi-tech products*") whose membership is NOT adjacency — the
+    page footnote says they "include relevant products listed in the table",
+    and Hi-tech overlaps Mech&elec (ICs sit in both). Downstream must never
+    sum rows; the flag exists so selection logic can exclude aggregates."""
+    stripped = raw.strip(" \t\n\r\f\v")
+    indent = len(stripped) - len(stripped.lstrip("\xa0"))
+    label = stripped.replace("\xa0", " ")
+    label = re.sub(r"\s+", " ", label).strip()
+    is_aggregate = label.endswith("*")
+    if is_aggregate:
+        label = label[:-1].strip()
+    return label, indent, is_aggregate
+
+
+def _parse_section_5_6_commodities(
+    soup: BeautifulSoup, meta: ReleaseMetadata
+) -> list[ParsedObservation]:
+    """Sections 5/6: 'China's Major Exports/Imports by Quantity and Value' —
+    GACC's curated ~30-commodity headline catalogue (no HS codes), China↔world.
+    See dev_notes/2026-07-14-gacc-commodity-highlights.md.
+
+    Column layout (10 cells per regular data row, stable 2019–2026 fixtures):
+      0: commodity label (nbsp-indented; '*' suffix on the three aggregates)
+      1: quantity unit ('10,000 Tons', 'Ton', 'Ship', …; '—'/'-' for
+         value-only commodities)
+      2,3:  month        — Quantity, Value
+      4,5:  1-N YTD      — Quantity, Value
+      6,7:  prior-year 1-N YTD — Quantity, Value (GACC's own comparison basis)
+      8,9:  published YoY% (cumulative) — Quantity, Value
+
+    Combined Jan+Feb releases drop the month pair → 8 cells:
+      0: label  1: unit  2,3: Jan+Feb cumulative Q,V
+      4,5: prior-year Jan+Feb Q,V  6,7: published YoY% Q,V
+
+    Emits one observation per (row, period_kind): 'monthly' + 'ytd' for
+    regular releases, 'cumulative_jan_feb' for combined ones. The prior-year
+    cumulative columns and GACC's published YoY% are stored in source_row
+    ONLY, not as observations — emitting them would create a second
+    provenance path to numbers the prior year's own release already carries.
+    (They matter downstream: the analyser derives single-month prior-year
+    values as adjacent-page prior-YTD differences, label-consistent within an
+    era, and cross-checks our cumulative YoY against GACC's published one.)
+    Quantity units vary per row and are stored verbatim, never normalised."""
+    container = soup.find("div", class_="atcl-cnt")
+    if container is None:
+        raise UnparseableReleasePage(
+            f"Section {meta.section_number} page {meta.source_url} missing .atcl-cnt"
+        )
+    table = container.find("table")
+    if table is None:
+        raise UnparseableReleasePage(
+            f"Section {meta.section_number} page {meta.source_url} has no table "
+            f"inside .atcl-cnt"
+        )
+
+    period_iso = meta.period.isoformat()
+    flow = "export" if meta.section_number == 5 else "import"
+    out: list[ParsedObservation] = []
+
+    if meta.is_jan_feb_combined:
+        expected_cells = 8
+    else:
+        expected_cells = 10
+
+    for tr in table.find_all("tr"):
+        cells = tr.find_all("td")
+        if len(cells) != expected_cells:
+            continue
+        if any(c.get("colspan") for c in cells):
+            continue
+
+        raw_label = cells[0].get_text()
+        label, indent, is_aggregate = _normalise_commodity_label(raw_label)
+        if not label:
+            continue
+
+        unit_raw = cells[1].get_text().replace("\xa0", " ").strip()
+        quantity_unit = None if unit_raw in ("", "-", "—") else unit_raw
+
+        try:
+            nums = [_parse_number(cells[i].get_text()) for i in range(2, expected_cells)]
+        except ValueError:
+            # Header row whose numeric cells aren't numeric — skip.
+            continue
+
+        if meta.is_jan_feb_combined:
+            cum_qty, cum_val, prior_qty, prior_val, yoy_qty, yoy_val = nums
+            source_row = {
+                "raw_label": raw_label,
+                "is_aggregate": is_aggregate,
+                "quantity_unit": quantity_unit,
+                "cumulative_quantity": cum_qty,
+                "cumulative_value": cum_val,
+                "prior_year_cumulative_quantity": prior_qty,
+                "prior_year_cumulative_value": prior_val,
+                "published_yoy_quantity_pct": yoy_qty,
+                "published_yoy_value_pct": yoy_val,
+            }
+            kinds = [("cumulative_jan_feb", cum_qty, cum_val)]
+        else:
+            (m_qty, m_val, ytd_qty, ytd_val,
+             prior_qty, prior_val, yoy_qty, yoy_val) = nums
+            source_row = {
+                "raw_label": raw_label,
+                "is_aggregate": is_aggregate,
+                "quantity_unit": quantity_unit,
+                "monthly_quantity": m_qty,
+                "monthly_value": m_val,
+                "ytd_quantity": ytd_qty,
+                "ytd_value": ytd_val,
+                "prior_year_ytd_quantity": prior_qty,
+                "prior_year_ytd_value": prior_val,
+                "published_yoy_quantity_pct": yoy_qty,
+                "published_yoy_value_pct": yoy_val,
+            }
+            kinds = [("monthly", m_qty, m_val), ("ytd", ytd_qty, ytd_val)]
+
+        for kind, qty, val in kinds:
+            if val is None and qty is None:
+                continue
+            out.append(
+                ParsedObservation(
+                    section_number=meta.section_number,
+                    period=period_iso,
+                    period_kind=kind,
+                    currency=meta.currency,
+                    unit=meta.unit,
+                    flow=flow,
+                    commodity_label=label,
+                    partner_label_raw=raw_label,
+                    partner_indent=indent,
+                    value=val,
+                    quantity=qty,
+                    quantity_unit=quantity_unit,
+                    source_row=source_row,
+                )
+            )
+    return out
+
+
+# Reject a section-5/6 parse below this many distinct commodities. The
+# catalogue is ~30 rows and stable across 2019–2026 fixtures (may2019: 32,
+# janfeb2025: 31, may2026 exports: 31, may2026 imports: 34). Floor well below
+# that so a legitimate release never trips, well above a broken/partial parse.
+_SECTION56_MIN_COMMODITIES = 20
+
+
+def section56_floor_check(
+    observations: list[ParsedObservation], meta: ReleaseMetadata
+) -> str | None:
+    """Plausibility floor for a section-5/6 parse — the commodity-catalogue
+    analogue of `section4_floor_check` (same reject ⇒ 'failed' ⇒ no release
+    row ⇒ walk-retry contract in scrape.py).
+
+    Count invariant only: these pages have no 'Total' grand-total row, and the
+    starred aggregates' membership is not adjacency (Hi-tech overlaps
+    Mech&elec), so no arithmetic identity is available as a magnitude check —
+    by design we never reconstruct their sums.
+
+    Returns a human-readable reason to reject, or None if plausible.
+    Scoped to sections 5/6; returns None for anything else."""
+    if meta.section_number not in (5, 6):
+        return None
+
+    commodities = {
+        o.get("commodity_label") for o in observations if o.get("commodity_label")
+    }
+    if len(commodities) < _SECTION56_MIN_COMMODITIES:
+        return (
+            f"only {len(commodities)} commodities parsed (floor "
+            f"{_SECTION56_MIN_COMMODITIES}; a healthy section-"
+            f"{meta.section_number} release lists ~30) — likely a partial "
+            f"parse from column-layout drift or a truncated table"
+        )
     return None
