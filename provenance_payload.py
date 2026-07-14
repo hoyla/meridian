@@ -186,6 +186,55 @@ def _arithmetic(subkind: str, detail: dict | None) -> list[str]:
                        "per-period rates — growth rates will not exactly match "
                        "GACC's published CNY/USD figures.")
         return out
+    if subkind.startswith("gacc_commodity_yoy"):
+        # The commodities block: CNY-basis arithmetic (GACC's own comparison
+        # basis) with the derived-prior method spelled out, the volume rate,
+        # and GACC's published cumulative pct beside ours — the defensible
+        # published figure always one click away.
+        t = d.get("totals") or {}
+        sm = t.get("single_month") or {}
+        ytd = t.get("ytd_cumulative") or {}
+        com = d.get("commodity") or {}
+        out = []
+        if sm.get("current_value_cny") is not None and sm.get("prior_value_cny") is not None:
+            out.append(
+                f"Latest month CNY {sm['current_value_cny']:,.1f} (100M) vs a "
+                f"derived CNY {sm['prior_value_cny']:,.1f} for the same month "
+                f"last year = {_fmt_pct(sm.get('value_yoy_pct'))} by value "
+                f"(CNY terms)."
+            )
+            if sm.get("prior_derivation") == "prior_ytd_adjacent_page_difference":
+                out.append(
+                    "The prior-year month is the difference of two prior-year "
+                    "cumulative columns printed on this month's and last "
+                    "month's release pages — GACC's own (revised) comparison "
+                    "basis; typically ~0.3% from the originally-published "
+                    "month."
+                )
+        if sm.get("quantity_yoy_pct") is not None and sm.get("current_quantity") is not None:
+            unit = com.get("quantity_unit") or sm.get("quantity_unit") or ""
+            out.append(
+                f"By volume: {_fmt_pct(sm['quantity_yoy_pct'])} "
+                f"({sm['current_quantity']:,.1f} vs {sm['prior_quantity']:,.1f} "
+                f"{unit}) — unit counts, no currency in the comparison."
+            )
+        if ytd.get("value_yoy_pct") is not None:
+            pub = ytd.get("published_yoy_value_pct")
+            line = (f"Year to date: {_fmt_pct(ytd['value_yoy_pct'])} by value "
+                    f"(both sides printed on the same release page)")
+            if pub is not None:
+                line += (f"; GACC's own published figure is {pub}% — the two "
+                         f"are cross-checked and emission is withheld when "
+                         f"they disagree beyond printed-cell rounding")
+            out.append(line + ".")
+        if t.get("eur_month") is not None:
+            out.append(f"EUR display level: {_fmt_eur(t['eur_month'])} in the "
+                       f"month, converted at the month's rate — display only; "
+                       f"the growth rates above are CNY-denominated.")
+        out.append("World totals from GACC's commodity catalogue — no "
+                   "country split exists in this source; not an EU-specific "
+                   "figure.")
+        return out
     if subkind.startswith("cn8_yoy_mover"):
         t = d.get("totals") or {}
         prod = d.get("product") or {}

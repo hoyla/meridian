@@ -237,6 +237,11 @@ class GaccPage:
     # EU · US · ASEAN · World, single-month YoY face — the "general surge or
     # EU-specific re-routing?" instrument.
     strip: list[Indicator] = field(default_factory=list)
+    # Second KPI row (Luke, 2026-07-14): two key exports + two key imports
+    # from the commodity catalogue — sharpest big-line movers (≥€1bn month),
+    # CNY-basis face. The tables below show the complete catalogue; these
+    # cards are the only place commodity selection still exists.
+    commodity_strip: list[Indicator] = field(default_factory=list)
     # Partner-agnostic standout: the sharpest single-month move anywhere in
     # the release (world Total excluded — that's the wire headline).
     standout: Optional[HeadlineItem] = None
@@ -245,6 +250,14 @@ class GaccPage:
     # {prev_period, basis_note, rows: [{label, flow, prev_yoy, cur_yoy,
     #  delta, basis}]} — the within-track delta vs the previous GACC month.
     since_last: dict = field(default_factory=dict)
+    # "What's moving — GACC's headline commodities": the section-5/6
+    # commodity catalogue movers (China↔world, no partner dimension),
+    # positioned between since-last and Europe-up-close (Luke, 2026-07-14).
+    # kind="gacc_commodities"; metrics.rows carry the selected movers with
+    # native-CNY YoY, quantity YoY, EUR display levels, and any
+    # code-computed milestone / run-rate facts.
+    # See dev_notes/2026-07-14-gacc-commodity-highlights.md.
+    commodities: Optional[Section] = None
     # The page's WHOLE epistemic framing (early-read status, direction
     # mapping, mainland scope, no-product-detail, FX convention, the
     # conditional Jan–Feb note) — rendered as the single collapsed "About
