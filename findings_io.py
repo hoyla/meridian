@@ -268,6 +268,38 @@ def nk_gacc_aggregate_yoy(
     return (str(alias_id), aggregate_kind, current_end_yyyymm)
 
 
+def nk_gacc_commodity_yoy(
+    commodity_label: str,
+    is_aggregate: bool,
+    current_end_yyyymm: str,
+) -> tuple[str, str, str]:
+    """A gacc_commodity_yoy finding is identified by (commodity label,
+    aggregate-or-leaf, anchor month); the flow lives in the subkind
+    (gacc_commodity_yoy vs _import), matching the aggregate family's
+    convention.
+
+    Unlike partners, GACC's commodity catalogue has no alias table — the
+    label string IS the identity. That is safe because the key is
+    per-anchor and the catalogue's labels are era-consistent: a rename
+    ("Grain" → "Grain food", 2025→2026) changes the key only at anchors
+    where the new label is the one actually printed, so the supersede
+    chain within any anchor stays coherent. Cross-era series continuity is
+    deliberately NOT promised (see the analyser's family comment — the
+    prior-YTD differencing design exists so no computation ever joins a
+    label across eras).
+
+    The aggregate flag is in the key because a starred aggregate and a
+    leaf can share a label after star-stripping (2021 import pages: the
+    machinery-&-electrical aggregate was titled "Machine tools*" with a
+    genuine "Machine tools" leaf inside it) — without the flag the two
+    streams supersede each other on every run."""
+    return (
+        commodity_label,
+        "aggregate" if is_aggregate else "leaf",
+        current_end_yyyymm,
+    )
+
+
 def nk_trade_balance(
     reporter_scope: str,
     partner_scope: str,

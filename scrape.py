@@ -908,7 +908,8 @@ def main() -> None:
                    choices=["mirror-trade", "mirror-gap-trends", "hs-group-yoy",
                             "hs-group-trajectory", "cn8-biggest-mover",
                             "gacc-aggregate-yoy",
-                            "gacc-bilateral-aggregate-yoy", "partner-share",
+                            "gacc-bilateral-aggregate-yoy",
+                            "gacc-commodity-yoy", "partner-share",
                             "trade-balance", "china-all-goods-share", "llm-framing"],
                    help="Run a deterministic anomaly pass over already-ingested data, "
                         "or 'llm-framing' to generate per-hs-group lead scaffolds "
@@ -1618,6 +1619,21 @@ def main() -> None:
             flow=flow_str, yoy_threshold_pct=args.yoy_threshold,
         )
         log.info("GACC bilateral-aggregate YoY analysis (flow=%s): %s", flow_str, counts)
+        return
+
+    if args.analyse == "gacc-commodity-yoy":
+        # GACC's section-5/6 headline-commodity catalogue (~30 curated
+        # commodities, China↔world, no partner dimension). Single-month +
+        # YTD YoY in native CNY (GACC's own comparison basis, cross-checked
+        # against the pct printed on the page) plus quantity YoY — the
+        # "car exports +71% to 1.06mn units" register. Feeds the GACC-only
+        # page's commodity-highlights block.
+        # See dev_notes/2026-07-14-gacc-commodity-highlights.md.
+        flow_str = "export" if args.flow == 1 else "import"
+        counts = anomalies.detect_gacc_commodity_yoy(
+            flow=flow_str, yoy_threshold_pct=args.yoy_threshold,
+        )
+        log.info("GACC commodity YoY analysis (flow=%s): %s", flow_str, counts)
         return
 
     if args.analyse == "partner-share":
