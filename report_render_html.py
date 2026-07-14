@@ -1661,7 +1661,7 @@ def _gacc_since_last_html(gp) -> str:
             f'<tbody>{"".join(body)}</tbody></table></div>')
 
 
-def _gacc_commodities_html(section, payloads) -> str:
+def _gacc_commodities_html(section, payloads, take: dict | None = None) -> str:
     """What's moving — GACC's headline commodities (sections 5/6 catalogue,
     dev_notes/2026-07-14-gacc-commodity-highlights.md). The FULL catalogue
     (Luke, 2026-07-14 — no selection: GACC already curated it): one gtable
@@ -1678,6 +1678,13 @@ def _gacc_commodities_html(section, payloads) -> str:
     if section.intro:
         out.append(f'<p class="kicker">{_inline_md(section.intro)}</p>')
     out.append(_more_about(section))
+    if take:
+        # The commodity take (2026-07-14): the causal/contextual scaffold
+        # over exactly the rows shown below — same verify-or-reject contract
+        # and house styling as the page synthesis.
+        out.append(_scaffold_take_html(
+            take, "◆ Machine reading of the product tables — connects only "
+                  "the cited figures; not a finding"))
 
     def tr(r: dict) -> str:
         fid = r.get("finding_id")
@@ -1978,29 +1985,9 @@ def _gacc_synthesis_html(gp) -> str:
            'every number verified against them, hypotheses from the '
            'curated catalog. Leads to investigate, not conclusions.</p>']
     if s:
-        cites = " ".join(
-            f'<span class="token">finding/{int(fid)}</span>'
-            for fid in (s.get("citations") or []))
-        hyps = []
-        for hyp in s.get("hypotheses") or []:
-            steps = "".join(f"<li>{html.escape(st)}</li>"
-                            for st in hyp.get("steps") or [])
-            steps_html = (
-                '<details class="gdetail"><summary>How to corroborate'
-                f"</summary><ul class=\"take-qs\">{steps}</ul></details>"
-                if steps else "")
-            hyps.append(
-                f'<div class="take-hyp"><strong>{html.escape(hyp.get("label", ""))}'
-                f".</strong> {html.escape(hyp.get('rationale', ''))}"
-                f"{steps_html}</div>")
-        out.append(
-            '<div class="take">'
-            '<div class="take-tag">◆ Machine synthesis — connects only the '
-            'cited figures; not a finding</div>'
-            f'<p class="take-prose">{html.escape(s.get("summary", ""))}</p>'
-            + "".join(hyps)
-            + (f'<p class="take-cite">{cites}</p>' if cites else "")
-            + "</div>")
+        out.append(_scaffold_take_html(
+            s, "◆ Machine synthesis — connects only the cited figures; "
+               "not a finding"))
     if has_q:
         qs = "".join(
             f"<li>{html.escape(item.get('q', ''))}"
@@ -2013,6 +2000,34 @@ def _gacc_synthesis_html(gp) -> str:
             f'<ul class="take-qs">{qs}</ul>'
             "</div>")
     return "".join(out)
+
+
+def _scaffold_take_html(s: dict, tag_text: str) -> str:
+    """One machine-scaffold box (summary + catalog hypotheses with their
+    deterministic corroboration steps + citation tokens) — shared by the
+    page synthesis and the commodity take, same house LLM styling."""
+    cites = " ".join(
+        f'<span class="token">finding/{int(fid)}</span>'
+        for fid in (s.get("citations") or []))
+    hyps = []
+    for hyp in s.get("hypotheses") or []:
+        steps = "".join(f"<li>{html.escape(st)}</li>"
+                        for st in hyp.get("steps") or [])
+        steps_html = (
+            '<details class="gdetail"><summary>How to corroborate'
+            f"</summary><ul class=\"take-qs\">{steps}</ul></details>"
+            if steps else "")
+        hyps.append(
+            f'<div class="take-hyp"><strong>{html.escape(hyp.get("label", ""))}'
+            f".</strong> {html.escape(hyp.get('rationale', ''))}"
+            f"{steps_html}</div>")
+    return (
+        '<div class="take">'
+        f'<div class="take-tag">{html.escape(tag_text)}</div>'
+        f'<p class="take-prose">{html.escape(s.get("summary", ""))}</p>'
+        + "".join(hyps)
+        + (f'<p class="take-cite">{cites}</p>' if cites else "")
+        + "</div>")
 
 
 def _gacc_page_html(gp, payloads) -> str:
@@ -2057,7 +2072,8 @@ def _gacc_page_html(gp, payloads) -> str:
         # Between since-last and Europe (Luke, 2026-07-14): the commodity
         # movers are part of the month's momentum and set up the
         # Europe-specific read that follows.
-        commod = _gacc_commodities_html(gp.commodities, payloads)
+        commod = _gacc_commodities_html(gp.commodities, payloads,
+                                        take=gp.commodity_take)
         if commod:
             subnav.append((gp.commodities.id, "Commodities"))
             parts.append(
