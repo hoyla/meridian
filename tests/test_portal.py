@@ -186,6 +186,62 @@ def _sample_report() -> rm.Report:
                  "coverage": [{"source": "eurostat", "start": "2017-01-01",
                                "end": "2026-04-01", "releases": 111,
                                "last_updated": "2026-06-15"}],
+                 # One row per cell-state the renderer distinguishes: folded
+                 # (GACC January), landed+combined (the Jan–Feb release),
+                 # scheduled (official), estimated (~), awaited, plain landed.
+                 "publication_calendar": {
+                     "as_of": "2026-07-14",
+                     "rows": [
+                         {"period": "2026-01-01", "cells": {
+                             "gacc": {"expected": "2026-03-10", "official": True,
+                                      "landed": None, "status": "folded",
+                                      "combined": False},
+                             "gacc_bulletin": {"expected": "2026-03-18",
+                                               "official": True, "landed": None,
+                                               "status": "folded",
+                                               "combined": False},
+                             "eurostat": {"expected": "2026-03-20",
+                                          "official": True,
+                                          "landed": "2026-03-20",
+                                          "status": "landed",
+                                          "combined": False},
+                             "hmrc": {"expected": "2026-03-12",
+                                      "official": False, "landed": None,
+                                      "status": "awaited",
+                                      "combined": False}}},
+                         {"period": "2026-02-01", "cells": {
+                             "gacc": {"expected": "2026-03-10", "official": True,
+                                      "landed": "2026-03-10",
+                                      "status": "landed", "combined": True},
+                             "gacc_bulletin": {"expected": "2026-03-18",
+                                               "official": True, "landed": None,
+                                               "status": "scheduled",
+                                               "combined": True},
+                             "eurostat": {"expected": "2026-04-17",
+                                          "official": True, "landed": None,
+                                          "status": "scheduled",
+                                          "combined": False},
+                             "hmrc": {"expected": "2026-04-14",
+                                      "official": False, "landed": None,
+                                      "status": "estimated",
+                                      "combined": False}}},
+                         {"period": "2026-06-01", "cells": {
+                             "gacc": {"expected": "2026-07-14", "official": True,
+                                      "landed": "2026-07-14",
+                                      "status": "landed", "combined": False},
+                             "gacc_bulletin": {"expected": "2026-07-18",
+                                               "official": True, "landed": None,
+                                               "status": "scheduled",
+                                               "combined": False},
+                             "eurostat": {"expected": "2026-08-14",
+                                          "official": True, "landed": None,
+                                          "status": "scheduled",
+                                          "combined": False},
+                             "hmrc": {"expected": "2026-08-13",
+                                      "official": True, "landed": None,
+                                      "status": "scheduled",
+                                      "combined": False}}},
+                     ]},
                  "new_findings": [
                      {"subkind": "hs_group_yoy",
                       "label": "year-on-year change for an HS group", "count": 44},
@@ -680,6 +736,35 @@ def test_sources_release_appendix():
     assert "ec.europa.eu/eurostat/x" in h and "fetched 2026-06-01" in h
     md = render_markdown(r)
     assert "Release appendix" in md and "ec.europa.eu/eurostat/x" in md
+
+
+def test_publication_calendar_renders_every_cell_state():
+    """The Sources & coverage publication calendar (Luke, 2026-07-14): per
+    data month, when each source's figures are expected and what they update.
+    The fixture carries one cell per renderer state — landed (✓ + actual
+    date), scheduled (plain official date), estimated (~date), awaited,
+    folded (GACC January → the Jan–Feb combined row), and the Jan–Feb
+    combined marker."""
+    h = render_html(_sample_report())
+    si = h.index('id="tab-sources"')
+    ci = h.index("Publication calendar")
+    assert ci > si                          # lives in the Sources tab
+    assert "✓ 14 Jul" in h                  # landed, actual date (GACC June)
+    assert "✓ 10 Mar (Jan–Feb)" in h        # landed combined release
+    assert "→ Jan–Feb" in h                 # January folds into February's row
+    assert "~14 Apr" in h                   # formula estimate marker
+    assert "· awaited" in h                 # past-due ingested source
+    assert "18 Jul" in h                    # scheduled official (bulletin)
+    # The what-updates-what legend and the schedule provenance links.
+    assert "China update page — new edition" in h
+    assert "Not currently used on this site" in h
+    assert "公告2025年第240号" in h
+    assert "uktradeinfo release calendar" in h
+    # Markdown mirror carries the same table.
+    md = render_markdown(_sample_report())
+    assert "Publication calendar" in md
+    assert "| 2026-06 | ✓ 2026-07-14 | 2026-07-18 | 2026-08-14 | 2026-08-13 |" in md
+    assert "→ Jan–Feb" in md and "~2026-04-14" in md and "(awaited)" in md
 
 
 def test_glossary_renders_in_both_surfaces():

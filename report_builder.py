@@ -1379,12 +1379,89 @@ def _finding_family(subkind: str) -> str:
     return "Other"
 
 
+# The sources whose drops appear in the publication-calendar table, in
+# display order. `track_landed` distinguishes sources we actually ingest
+# (their cells can show "✓ published") from informational cadences
+# (gacc_bulletin — we know when it publishes but don't fetch it, so its past
+# cells just show the scheduled date, never a checkmark or an "awaited").
+_PUBCAL_SOURCES: tuple[tuple[str, bool], ...] = (
+    ("gacc", True),
+    ("gacc_bulletin", False),
+    ("eurostat", True),
+    ("hmrc", True),
+)
+
+
+def _publication_calendar(cur, today: date | None = None) -> dict:
+    """The 'estimated calendar' table for the Sources & coverage tab (Luke,
+    2026-07-14): per reference month, when each source's figures are expected
+    — official schedule dates where a published calendar covers the month
+    (GACC 公告2025年第240号, Eurostat's G.3 calendar, uktradeinfo), our
+    formula estimate otherwise — and whether they have already landed here.
+
+    Window: 3 reference months back through 2 forward of the build date —
+    wide enough that the row journalists care about (the month mid-drop) is
+    always flanked by the just-confirmed and the upcoming ones.
+
+    Cell statuses: 'landed' (release row exists; shows the actual date),
+    'scheduled' (official date, in the future), 'estimated' (formula date,
+    in the future), 'awaited' (expected date has passed with no release —
+    only for ingested sources), 'folded' (GACC January cells: the data
+    arrives inside the Jan–Feb combined release on February's row). GACC
+    February cells carry combined=True so the renderer can label them
+    'Jan–Feb'."""
+    today = today or date.today()
+    anchor = today.replace(day=1)
+    refs = [release_calendar._add_months(anchor, k) for k in range(-3, 3)]
+
+    cur.execute(
+        """SELECT source, period,
+                  MIN(COALESCE(publication_date, first_seen_at::date))
+             FROM releases
+            WHERE period = ANY(%s)
+         GROUP BY source, period""",
+        (refs,),
+    )
+    landed = {(s, p): d for s, p, d in cur.fetchall()}
+
+    rows = []
+    for ref in refs:
+        cells: dict[str, dict] = {}
+        for src, track_landed in _PUBCAL_SOURCES:
+            detail = release_calendar.expected_publish_date_detail(src, ref)
+            if detail is None:
+                continue
+            expected, official = detail
+            is_gacc_kind = src in ("gacc", "gacc_bulletin")
+            landed_date = landed.get((src, ref)) if track_landed else None
+            if is_gacc_kind and ref.month == 1:
+                status = "folded"
+            elif landed_date is not None:
+                status = "landed"
+            elif expected > today:
+                status = "scheduled" if official else "estimated"
+            else:
+                status = "awaited" if track_landed else (
+                    "scheduled" if official else "estimated")
+            cells[src] = {
+                "expected": expected.isoformat(),
+                "official": official,
+                "landed": landed_date.isoformat() if landed_date else None,
+                "status": status,
+                "combined": is_gacc_kind and ref.month == 2,
+            }
+        rows.append({"period": ref.isoformat(), "cells": cells})
+    return {"as_of": today.isoformat(), "rows": rows}
+
+
 def _sources_section(cur, diff=None) -> Section:
     """The Sources & coverage tab: the data sources, how much of each we hold
-    (period coverage), the per-type count of what’s new this cycle, and a
-    readable manifest of what the pack contains. The Trade Map (structural)
-    renders in the same tab — together they answer 'what the briefing rests on
-    and how completely it covers the ground' (principle 7, given its own home)."""
+    (period coverage), the publication calendar (when each source's next
+    figures are expected and what they update), the per-type count of what’s
+    new this cycle, and a readable manifest of what the pack contains. The
+    Trade Map (structural) renders in the same tab — together they answer
+    'what the briefing rests on and how completely it covers the ground'
+    (principle 7, given its own home)."""
     cur.execute("SELECT DISTINCT source FROM releases ORDER BY source")
     sources = [{"source": s, "note": _SOURCE_NOTES.get(s, "")}
                for (s,) in cur.fetchall()]
@@ -1462,6 +1539,7 @@ def _sources_section(cur, diff=None) -> Section:
         intro="What this briefing rests on — the data sources, how much of each "
               "we hold, and what the pack contains.",
         metrics={"sources": sources, "coverage": coverage,
+                 "publication_calendar": _publication_calendar(cur),
                  "reference_sources": reference_sources,
                  "new_findings": new_findings,
                  "new_findings_total": sum(f["count"] for f in new_findings),

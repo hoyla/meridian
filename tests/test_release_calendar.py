@@ -30,25 +30,34 @@ def test_formula_fallback_for_uncalendared_period():
     assert rc.expected_publish_date("eurostat", date(2026, 11, 1)) == date(2027, 1, 15)
 
 
-def test_gacc_has_a_formula_only_calendar():
-    # GACC joined the expectation axis 2026-06-22. No official forward calendar
-    # exists, so it's formula-only (empty `exact`): for ordinary months the
-    # scheduled date is the 8th of the following month, matching the observed
-    # cadence (Apr 2026 → 8 May, May 2026 → 8 Jun). Quarter-end months take a
-    # later override — see test_gacc_quarter_end_months_scheduled_mid_month.
+def test_gacc_official_2026_schedule_takes_precedence():
+    # The official 2026 schedule (公告2025年第240号, discovered 2026-07-14 —
+    # see dev_notes/2026-07-14-gacc-chinese-source-investigation.md) is
+    # hand-entered in `exact` and overrides the formula: Apr 2026 → 9 May
+    # (formula said the 8th), May 2026 → 9 Jun. Both match what GACC actually
+    # did (May pages carry a 9–10 Jun date).
     assert rc.has_calendar("gacc") is True
-    assert rc.expected_publish_date("gacc", date(2026, 4, 1)) == date(2026, 5, 8)
-    assert rc.expected_publish_date("gacc", date(2026, 5, 1)) == date(2026, 6, 8)
+    assert rc.expected_publish_date("gacc", date(2026, 4, 1)) == date(2026, 5, 9)
+    assert rc.expected_publish_date("gacc", date(2026, 5, 1)) == date(2026, 6, 9)
+
+
+def test_gacc_formula_fallback_beyond_entered_year():
+    # 2027 has no hand-entered dates until GACC publishes next year's
+    # announcement (each year's calendar appears Jan–Mar of that year), so the
+    # formula applies: ordinary months the 8th of the following month,
+    # quarter-end months the 13th.
+    assert rc.expected_publish_date("gacc", date(2027, 4, 1)) == date(2027, 5, 8)
+    assert rc.expected_publish_date("gacc", date(2027, 3, 1)) == date(2027, 4, 13)
 
 
 @pytest.mark.parametrize("today,want", [
-    (date(2026, 6, 7), rc.NONE_EXPECTED),   # before the 8 Jun scheduled date
-    (date(2026, 6, 8), rc.DUE),             # on the scheduled date
-    (date(2026, 6, 12), rc.DUE),            # last day of the due-by window (~12th)
-    (date(2026, 6, 13), rc.OVERDUE),        # past the cutoff → overdue
+    (date(2026, 6, 8), rc.NONE_EXPECTED),   # before the official 9 Jun date
+    (date(2026, 6, 9), rc.DUE),             # on the scheduled date
+    (date(2026, 6, 13), rc.DUE),            # last day of the due-by window
+    (date(2026, 6, 14), rc.OVERDUE),        # past the cutoff → overdue
 ])
 def test_gacc_grace_boundaries(today, want):
-    # May 2026 ref → scheduled 8 Jun (close 31 May + 8d), 4-day grace → 12 Jun.
+    # May 2026 ref → official 9 Jun, 4-day grace → due-by 13 Jun.
     assert rc.classify_expectation("gacc", date(2026, 5, 1), today) == want
 
 
@@ -66,10 +75,18 @@ def test_gacc_january_shares_februarys_schedule():
     # China Customs publishes no standalone January (Chinese New Year): January
     # data arrives folded into the Jan–Feb cumulative, on February's schedule.
     # So a GACC January candidate is due on February's date, not January's.
+    # 2026's combined release has an official date: 10 Mar (公告 240号 note 4
+    # analogue — the 2026 schedule's March 快讯 row).
     assert (
         rc.expected_publish_date("gacc", date(2026, 1, 1))
         == rc.expected_publish_date("gacc", date(2026, 2, 1))
-        == date(2026, 3, 8)  # close(28 Feb) + 8d
+        == date(2026, 3, 10)
+    )
+    # Beyond the entered year the remap still applies, on the formula date.
+    assert (
+        rc.expected_publish_date("gacc", date(2027, 1, 1))
+        == rc.expected_publish_date("gacc", date(2027, 2, 1))
+        == date(2027, 3, 8)  # close(28 Feb 2027) + 8d
     )
 
 
@@ -78,15 +95,16 @@ def test_gacc_january_not_overdue_while_waiting_for_february():
     # Mid-February, with the routine's candidate sitting on January: not yet due
     # — without the carve-out this would already read `overdue`.
     assert rc.classify_expectation("gacc", jan, date(2026, 2, 20)) == rc.NONE_EXPECTED
-    # On February's scheduled date → due; past it with nothing → genuinely
-    # overdue (the Jan–Feb combined is itself late).
-    assert rc.classify_expectation("gacc", jan, date(2026, 3, 8)) == rc.DUE
+    # Still quiet up to the official 10 Mar; due on it; past due-by (+4 grace)
+    # with nothing → genuinely overdue (the Jan–Feb combined is itself late).
+    assert rc.classify_expectation("gacc", jan, date(2026, 3, 9)) == rc.NONE_EXPECTED
+    assert rc.classify_expectation("gacc", jan, date(2026, 3, 10)) == rc.DUE
     assert rc.classify_expectation("gacc", jan, date(2026, 3, 20)) == rc.OVERDUE
 
 
 def test_january_carve_out_is_gacc_only():
     # Must not touch other GACC months, or January for the other sources.
-    assert rc.expected_publish_date("gacc", date(2026, 4, 1)) == date(2026, 5, 8)
+    assert rc.expected_publish_date("gacc", date(2026, 4, 1)) == date(2026, 5, 9)
     assert (
         rc.expected_publish_date("hmrc", date(2026, 1, 1))
         != rc.expected_publish_date("hmrc", date(2026, 2, 1))
@@ -99,29 +117,34 @@ def test_january_carve_out_is_gacc_only():
 
 def test_gacc_quarter_end_months_scheduled_mid_month():
     # Quarter-end reference months (Mar/Jun/Sep/Dec) run ~3-5 days later than
-    # ordinary months — the quarterly cumulations land ~the 13th, not the 8th.
-    # They carry a +13 lag override; every other month keeps the +8 base.
-    assert rc.expected_publish_date("gacc", date(2026, 3, 1)) == date(2026, 4, 13)
-    assert rc.expected_publish_date("gacc", date(2026, 6, 1)) == date(2026, 7, 13)
-    assert rc.expected_publish_date("gacc", date(2026, 9, 1)) == date(2026, 10, 13)
-    assert rc.expected_publish_date("gacc", date(2025, 12, 1)) == date(2026, 1, 13)
-    # Ordinary months are unchanged (close + 8).
-    assert rc.expected_publish_date("gacc", date(2026, 4, 1)) == date(2026, 5, 8)
-    assert rc.expected_publish_date("gacc", date(2026, 5, 1)) == date(2026, 6, 8)
+    # ordinary months — the quarterly cumulations land mid-month. The official
+    # 2026 schedule confirms the pattern the formula override encoded: Apr 14 /
+    # Jul 14 / Oct 14 / Jan 14 vs the 7th–10th for ordinary months.
+    assert rc.expected_publish_date("gacc", date(2026, 3, 1)) == date(2026, 4, 14)
+    assert rc.expected_publish_date("gacc", date(2026, 6, 1)) == date(2026, 7, 14)
+    assert rc.expected_publish_date("gacc", date(2026, 9, 1)) == date(2026, 10, 14)
+    assert rc.expected_publish_date("gacc", date(2025, 12, 1)) == date(2026, 1, 14)
+    # Ordinary months stay early-month (official: the 9th).
+    assert rc.expected_publish_date("gacc", date(2026, 4, 1)) == date(2026, 5, 9)
+    assert rc.expected_publish_date("gacc", date(2026, 5, 1)) == date(2026, 6, 9)
+    # The formula override carries the same quarter-end shape into years with
+    # no entered schedule yet.
+    assert rc.expected_publish_date("gacc", date(2027, 6, 1)) == date(2027, 7, 13)
 
 
 def test_gacc_quarter_end_not_overdue_on_the_twelfth():
-    # The regression: June 2026 (a Q2-end month) reads DUE — not OVERDUE — on the
-    # 12th–14th, its real historical window. Before the override the due-by was
-    # the 12th and the routine falsely flagged it OVERDUE on 2026-07-14.
+    # The regression that motivated the override: June 2026 (a Q2-end month)
+    # must not read OVERDUE in its real mid-month window. The official date is
+    # 14 Jul — which GACC met to the day (Chinese site, 09:28 Beijing,
+    # 2026-07-14).
     jun = date(2026, 6, 1)
     assert rc.classify_expectation("gacc", jun, date(2026, 7, 12)) == rc.NONE_EXPECTED
-    assert rc.classify_expectation("gacc", jun, date(2026, 7, 13)) == rc.DUE
+    assert rc.classify_expectation("gacc", jun, date(2026, 7, 13)) == rc.NONE_EXPECTED
     assert rc.classify_expectation("gacc", jun, date(2026, 7, 14)) == rc.DUE
-    # due-by = close(30 Jun) + 13 + 4 grace = 17 Jul; a genuine slip past that
-    # still trips (e.g. the 2022 Sep-ref release that landed 24 Oct).
-    assert rc.classify_expectation("gacc", jun, date(2026, 7, 17)) == rc.DUE
-    assert rc.classify_expectation("gacc", jun, date(2026, 7, 18)) == rc.OVERDUE
+    # due-by = 14 Jul + 4 grace = 18 Jul; a genuine slip past that still trips
+    # (e.g. the 2022 Sep-ref release that landed 24 Oct).
+    assert rc.classify_expectation("gacc", jun, date(2026, 7, 18)) == rc.DUE
+    assert rc.classify_expectation("gacc", jun, date(2026, 7, 19)) == rc.OVERDUE
 
 
 def test_quarter_end_override_is_gacc_only():
@@ -165,8 +188,7 @@ def test_valid_expectations_constant():
 def test_next_release_forecast_orders_by_due_date_and_caps():
     # Latest published period per source. Each source's next candidate is the
     # following month, due on its calendar date:
-    #   gacc 2026-05 → candidate 2026-06 → close 30 Jun + 13d = 13 Jul
-    #     (June is a quarter-end month, so it takes the +13 override not +8)
+    #   gacc 2026-05 → candidate 2026-06 → official 14 Jul (公告 240号)
     #   eurostat 2026-04 → candidate 2026-05 → exact 16 Jul
     #   hmrc 2026-04 → candidate 2026-05 → exact 16 Jul
     latest = {
@@ -176,12 +198,12 @@ def test_next_release_forecast_orders_by_due_date_and_caps():
     }
     # Default limit=2: soonest first, the Jul-16 tie broken by source name.
     assert rc.next_release_forecast(latest) == [
-        ("gacc", date(2026, 7, 13)),
+        ("gacc", date(2026, 7, 14)),
         ("eurostat", date(2026, 7, 16)),
     ]
     # limit=None returns every source, still date-sorted.
     assert rc.next_release_forecast(latest, limit=None) == [
-        ("gacc", date(2026, 7, 13)),
+        ("gacc", date(2026, 7, 14)),
         ("eurostat", date(2026, 7, 16)),
         ("hmrc", date(2026, 7, 16)),
     ]
@@ -194,5 +216,39 @@ def test_next_release_forecast_skips_unknown_and_empty_sources():
         "mystery": date(2026, 5, 1),  # no calendar → skipped
     }
     assert rc.next_release_forecast(latest, limit=None) == [
-        ("gacc", date(2026, 7, 13)),
+        ("gacc", date(2026, 7, 14)),
     ]
+
+
+def test_gacc_bulletin_is_informational_only():
+    # The Monthly Bulletin (统计月报 — the verified vintage) has a cadence for
+    # display but is NOT a probed source: no expectation axis, absent from
+    # has_calendar, invisible to the forecast. Its dates: always the 18th of
+    # the month after the reference month (official 2026 schedule), Jan+Feb
+    # combined onto 18 Mar, and the formula fallback reproduces the same rule
+    # for years with no entered schedule.
+    assert rc.has_calendar("gacc_bulletin") is False
+    assert rc.expected_publish_date("gacc_bulletin", date(2026, 5, 1)) == date(2026, 6, 18)
+    assert rc.expected_publish_date("gacc_bulletin", date(2026, 6, 1)) == date(2026, 7, 18)
+    assert rc.expected_publish_date("gacc_bulletin", date(2026, 1, 1)) == date(2026, 3, 18)
+    assert rc.expected_publish_date("gacc_bulletin", date(2027, 5, 1)) == date(2027, 6, 18)
+    assert rc.classify_expectation("gacc_bulletin", date(2026, 5, 1), date(2026, 6, 20)) is None
+    assert rc.next_release_forecast(
+        {"gacc_bulletin": date(2026, 5, 1)}, limit=None) == []
+
+
+def test_expected_publish_date_detail_flags_official_vs_estimated():
+    # Official (hand-entered from a published schedule) vs our formula
+    # estimate — the portal's publication calendar renders them differently.
+    assert rc.expected_publish_date_detail("gacc", date(2026, 6, 1)) == (
+        date(2026, 7, 14), True)
+    assert rc.expected_publish_date_detail("gacc", date(2027, 6, 1)) == (
+        date(2027, 7, 13), False)
+    assert rc.expected_publish_date_detail("eurostat", date(2026, 5, 1)) == (
+        date(2026, 7, 16), True)
+    assert rc.expected_publish_date_detail("hmrc", date(2026, 12, 1)) == (
+        rc.period_close(date(2026, 12, 1)) + timedelta(days=rc._HMRC.lag_days),
+        False)
+    assert rc.expected_publish_date_detail("gacc_bulletin", date(2026, 4, 1)) == (
+        date(2026, 5, 18), True)
+    assert rc.expected_publish_date_detail("nope", date(2026, 1, 1)) is None

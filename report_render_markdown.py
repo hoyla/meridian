@@ -624,6 +624,40 @@ def _render_sections(sections) -> list[str]:
                                f"({c.get('releases', 0):,} releases, "
                                f"updated {c.get('last_updated') or '—'})")
                 out.append("")
+            pc = m.get("publication_calendar")
+            if pc and pc.get("rows"):
+                out.append("**Publication calendar** — when each source's "
+                           "figures for a data month are expected (✓ = "
+                           "published, ~ = our estimate; other dates are the "
+                           "source's official schedule):")
+                out.append("")
+                out.append("| Data month | China preliminary (GACC) "
+                           "| China verified (bulletin) | Eurostat | HMRC |")
+                out.append("|---|---|---|---|---|")
+                def _pc_cell(cell):
+                    if not cell:
+                        return "—"
+                    st = cell.get("status")
+                    if st == "folded":
+                        return "→ Jan–Feb"
+                    combined = " (Jan–Feb)" if cell.get("combined") else ""
+                    if st == "landed":
+                        return f"✓ {cell.get('landed')}{combined}"
+                    exp = cell.get("expected")
+                    if st == "estimated":
+                        return f"~{exp}{combined}"
+                    if st == "awaited":
+                        return f"{exp}{combined} (awaited)"
+                    return f"{exp}{combined}"
+                for row in pc["rows"]:
+                    cells = row.get("cells", {})
+                    out.append(
+                        f"| {row.get('period', '—')[:7]} "
+                        f"| {_pc_cell(cells.get('gacc'))} "
+                        f"| {_pc_cell(cells.get('gacc_bulletin'))} "
+                        f"| {_pc_cell(cells.get('eurostat'))} "
+                        f"| {_pc_cell(cells.get('hmrc'))} |")
+                out.append("")
             if m.get("new_findings"):
                 out.append(f"**New this cycle** — "
                            f"{m.get('new_findings_total', 0):,} findings added "

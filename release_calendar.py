@@ -39,25 +39,43 @@ Date sources (provenance — these are hand-entered annual constants):
   ~6-week lag; HMRC publishes a few days *before* Eurostat for the same
   reference month (e.g. April 2026 ref: HMRC 12 Jun, Eurostat 15 Jun).
 
-- **GACC**: no official forward publication calendar exists (China Customs
-  does not publish one), so GACC is formula-only — `exact` is empty. Ordinary
-  reference months land the 8th–10th of the following month (e.g. May 2026 →
-  10 Jun; Apr → 8 May), so `lag_days=8` puts the scheduled date on the 8th and
-  a 4-day grace pushes the due-by cutoff to the ~12th. **Quarter-end reference
-  months (Mar/Jun/Sep/Dec) are systematically ~3–5 days later**, landing the
-  13th–15th (the quarterly cumulations) — so they carry a `month_lag_days=13`
-  override (due-by ~the 17th). Without it they read a false `overdue` every
-  quarter. This is not random holiday noise: it is visible across 2019–2026 in
-  GACC's own per-page publication dates and its release index
-  (english.customs.gov.cn/statistics/Statistics?ColumnId=4). A genuinely large
-  slip past the override still reads `overdue`, which is the signal we want.
-  See the GACC addendum in
+- **GACC**: China Customs *does* publish an official annual schedule — a fact
+  established 2026-07-14 (see
+  dev_notes/2026-07-14-gacc-chinese-source-investigation.md, correcting this
+  module's earlier "no forward calendar exists" claim). The 2026 schedule is
+  海关总署公告2025年第240号 ("on the publication times of China customs
+  statistics for 2026"), posted 2026-03-11 on the Chinese site
+  (www.customs.gov.cn/customs/2026-03/11/article_2026031116150585435.html);
+  English editions for 2023–2025 live under
+  english.customs.gov.cn/statistics/Statistics?ColumnId=4. Two structural
+  caveats: the calendar for year N is published **January–March of year N**
+  (the 2018–2023 SDDS path dates and the 2026 announcement all confirm), so
+  early-year months run on the formula fallback until it lands; and the
+  English translation lags by a year or more, so recent years' dates must be
+  read from the Chinese announcement. The 2026 dates are hand-entered in
+  `_GACC.exact`. Beyond the entered year the formula fallback applies:
+  ordinary reference months land the 7th–10th of the following month
+  (`lag_days=8`), while **quarter-end reference months (Mar/Jun/Sep/Dec) are
+  systematically ~3–5 days later** (the quarterly cumulations), carrying a
+  `month_lag_days=13` override — visible across 2019–2026 in GACC's own
+  per-page publication dates and now in the official schedules themselves
+  (2026: Apr 14th / Jul 14th / Oct 14th vs May–Jun 9th / Aug 7th). A genuinely
+  large slip past the override still reads `overdue`, which is the signal we
+  want. See the GACC addendum in
   dev_notes/2026-06-02-eurostat-expectation-axis-design.md.
 
+- **GACC Monthly Bulletin** (统计月报 — the *verified* vintage, revisable
+  until the Yearbook): always the 18th of the month after the reference
+  month, per the same official schedule; Jan+Feb combine onto 18 March. Not
+  an ingested source — carried here (`_GACC_BULLETIN`, outside `CALENDARS`)
+  so the portal's publication-calendar table can show when verified figures
+  arrive, without giving the probe loop an expectation axis for a source we
+  don't scrape.
+
 When a period isn't in the hand-entered table (e.g. a 2027 reference month
-before next year's calendar is entered, or any GACC month) the formula
-`period_close + lag_days` is the fallback. The grace window is set generously
-enough that a source publishing on its real schedule never reads `overdue`.
+before next year's calendar is entered) the formula `period_close + lag_days`
+is the fallback. The grace window is set generously enough that a source
+publishing on its real schedule never reads `overdue`.
 """
 from __future__ import annotations
 
@@ -146,43 +164,92 @@ _HMRC = SourceCalendar(
     },
 )
 
-# GACC preliminary country/region release. China Customs publishes no forward
-# calendar, so this is formula-only (`exact` empty): scheduled = period_close +
-# 8 days ≈ the 8th of the following month, with a 4-day grace → due-by ~12th.
-# That cutoff absorbs the routine 8th–10th wobble for ordinary months.
+# GACC preliminary ("Statistics Express" / 统计快讯) release. `exact` carries
+# the official 2026 schedule from 海关总署公告2025年第240号 (posted 2026-03-11;
+# see the provenance note in the module docstring). Reference month → the
+# announcement's 快讯 date. Keyed like the release anchors: the Jan+Feb
+# combined release sits on the FEBRUARY anchor (January candidates are
+# remapped to February in expected_publish_date), and December's data
+# publishes in January of the following year. Verified live: the June-2026
+# reference month published 2026-07-14, exactly the entry below.
 #
-# EXCEPT quarter-end reference months (Mar/Jun/Sep/Dec — the quarterly
-# cumulations) run ~3–5 days later, landing ~the 13th–15th. Confirmed against
-# GACC's own per-page publication dates (parse.py atcl-date), 2019–2026: avg lag
-# after period-close ~10.5–13.3d vs ~7–9d for other months, and against GACC's
-# release index (english.customs.gov.cn/statistics/Statistics?ColumnId=4). So
-# those four months get lag_days=13 → scheduled ~the 13th, grace 4 → due-by ~the
-# 17th, which stops them reading a false `overdue` every quarter (it bit the
-# routine on 2026-07-14: June, a Q2-end month, flagged OVERDUE on the 12th when
-# June has historically landed Jul 12–14). A genuinely large slip still trips —
-# e.g. the 2022 Sep-ref release on Oct 24 would read `overdue` from the 18th,
-# which is the signal we want. See provenance note above and the memory note
-# reference_gacc_quarter_end_cadence.
+# Formula fallback for years without hand-entered dates: scheduled =
+# period_close + 8 days ≈ the 8th of the following month, with a 4-day grace
+# → due-by ~12th, EXCEPT quarter-end reference months (Mar/Jun/Sep/Dec — the
+# quarterly cumulations) which run ~3–5 days later, landing ~the 13th–15th
+# (month_lag_days=13; confirmed against per-page publication dates 2019–2026
+# AND the official schedules — the false-OVERDUE that bit the routine on
+# 2026-07-14 is documented in reference_gacc_quarter_end_cadence). A genuinely
+# large slip still trips `overdue`, which is the signal we want.
 _GACC = SourceCalendar(
     lag_days=8,
     grace_days=4,
-    exact={},
+    exact={
+        # 公告2025年第240号 — 快讯 column. Reference month → publish date.
+        date(2025, 12, 1): date(2026, 1, 14),
+        date(2026, 2, 1): date(2026, 3, 10),   # Jan+Feb combined
+        date(2026, 3, 1): date(2026, 4, 14),
+        date(2026, 4, 1): date(2026, 5, 9),
+        date(2026, 5, 1): date(2026, 6, 9),
+        date(2026, 6, 1): date(2026, 7, 14),
+        date(2026, 7, 1): date(2026, 8, 7),
+        date(2026, 8, 1): date(2026, 9, 8),
+        date(2026, 9, 1): date(2026, 10, 14),
+        date(2026, 10, 1): date(2026, 11, 10),
+        date(2026, 11, 1): date(2026, 12, 8),
+    },
     month_lag_days={3: 13, 6: 13, 9: 13, 12: 13},
 )
 
-# Sources with a publication calendar. GACC joined 2026-06-22: unlike eurostat/
-# hmrc it has no official forward calendar, so it is formula-only, but it now
-# carries the same expectation axis (none_expected / due / overdue) instead of a
-# blank — a slipped GACC release surfaces on the --source-status OVERDUE line.
+# GACC Monthly Bulletin (统计月报) — the VERIFIED vintage of the same data,
+# always the 18th of the month after the reference month (公告2025年第240号
+# 月刊 column; the 2025 year page confirms all 12 months landed on the 18th).
+# Jan+Feb combine onto 18 March, so like _GACC the combined entry sits on the
+# February anchor. NOT in CALENDARS: we don't scrape the Bulletin, so it must
+# not acquire a probe expectation axis — it exists for the portal's
+# publication-calendar table (via expected_publish_date, which consults
+# _INFORMATIONAL too). lag_days=18 makes the formula fallback (period_close +
+# 18 = the 18th of the following month) exactly the official rule, so future
+# years need no hand-entry unless GACC changes the cadence.
+_GACC_BULLETIN = SourceCalendar(
+    lag_days=18,
+    grace_days=4,
+    exact={
+        date(2025, 12, 1): date(2026, 1, 18),
+        date(2026, 2, 1): date(2026, 3, 18),   # Jan+Feb combined
+        date(2026, 3, 1): date(2026, 4, 18),
+        date(2026, 4, 1): date(2026, 5, 18),
+        date(2026, 5, 1): date(2026, 6, 18),
+        date(2026, 6, 1): date(2026, 7, 18),
+        date(2026, 7, 1): date(2026, 8, 18),
+        date(2026, 8, 1): date(2026, 9, 18),
+        date(2026, 9, 1): date(2026, 10, 18),
+        date(2026, 10, 1): date(2026, 11, 18),
+        date(2026, 11, 1): date(2026, 12, 18),
+    },
+)
+
+# Sources with a probe expectation axis. GACC joined 2026-06-22; its official
+# 2026 dates joined 2026-07-14 (公告2025年第240号). A slipped release surfaces
+# on the --source-status OVERDUE line.
 CALENDARS: dict[str, SourceCalendar] = {
     "eurostat": _EUROSTAT,
     "hmrc": _HMRC,
     "gacc": _GACC,
 }
 
+# Cadences we track for display (the portal's publication calendar) but do NOT
+# scrape: no probe expectations, no --source-status line, not in has_calendar.
+# expected_publish_date consults these too so display callers have one entry
+# point.
+_INFORMATIONAL: dict[str, SourceCalendar] = {
+    "gacc_bulletin": _GACC_BULLETIN,
+}
+
 
 def has_calendar(source: str) -> bool:
-    """True for sources that carry an expectation axis (eurostat, hmrc, gacc)."""
+    """True for sources that carry a probe expectation axis (eurostat, hmrc,
+    gacc). Deliberately excludes informational cadences (gacc_bulletin)."""
     return source in CALENDARS
 
 
@@ -190,30 +257,51 @@ def expected_publish_date(source: str, period: date) -> date | None:
     """The scheduled publication date for `source`'s `period` data.
 
     Exact hand-entered calendar date if known, else the formula fallback
-    (`period_close + lag_days`). None for sources without a calendar. GACC is
-    formula-only (no `exact` entries), so it always takes the fallback branch.
+    (`period_close + lag_days`). None for sources without a calendar. Accepts
+    the informational cadences (gacc_bulletin) as well as the probed sources.
     """
-    cal = CALENDARS.get(source)
+    d_official = _expected_with_provenance(source, period)
+    return d_official[0] if d_official else None
+
+
+def expected_publish_date_detail(
+    source: str, period: date,
+) -> tuple[date, bool] | None:
+    """(scheduled date, is_official) for `source`'s `period` data.
+
+    `is_official` is True when the date comes from a hand-entered `exact`
+    entry (an official published schedule: Eurostat's G.3 calendar, HMRC's
+    uktradeinfo calendar, GACC's annual 公告) and False when it is our formula
+    estimate — the portal's publication-calendar table renders the two
+    differently. None for unknown sources."""
+    return _expected_with_provenance(source, period)
+
+
+def _expected_with_provenance(
+    source: str, period: date,
+) -> tuple[date, bool] | None:
+    cal = CALENDARS.get(source) or _INFORMATIONAL.get(source)
     if cal is None:
         return None
     anchor = period.replace(day=1)
     # GACC publishes no standalone January (Chinese New Year): January data
     # arrives folded into the Jan–Feb cumulative, which lands on February's
-    # schedule. Treat a GACC January candidate as due on February's date so it
-    # reads `none_expected` until the combined release is genuinely due — without
-    # this it reads `overdue` every February while the routine's candidate sits
-    # on January (next_period after December) waiting for a release that, alone,
-    # never comes.
-    if source == "gacc" and anchor.month == 1:
+    # schedule (both vintages — the 快讯 on ~10 Mar and the Bulletin on
+    # 18 Mar). Treat a January candidate as due on February's date so it
+    # reads `none_expected` until the combined release is genuinely due —
+    # without this it reads `overdue` every February while the routine's
+    # candidate sits on January (next_period after December) waiting for a
+    # release that, alone, never comes.
+    if source in ("gacc", "gacc_bulletin") and anchor.month == 1:
         anchor = anchor.replace(month=2)
     if anchor in cal.exact:
-        return cal.exact[anchor]
+        return cal.exact[anchor], True
     # Seasonal lag override (GACC quarter-end months) falls back to the uniform
     # lag_days for any month not listed. Applied after the January remap, so a
     # GACC January candidate (remapped to February, month 2) correctly takes the
     # base lag, not a quarter-end one.
     lag = cal.month_lag_days.get(anchor.month, cal.lag_days)
-    return period_close(anchor) + timedelta(days=lag)
+    return period_close(anchor) + timedelta(days=lag), False
 
 
 def classify_expectation(
