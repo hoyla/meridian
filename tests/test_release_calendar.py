@@ -4,7 +4,7 @@ Pure module, no DB — these run regardless of GACC_TEST_DATABASE_URL.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -32,12 +32,13 @@ def test_formula_fallback_for_uncalendared_period():
 
 def test_gacc_has_a_formula_only_calendar():
     # GACC joined the expectation axis 2026-06-22. No official forward calendar
-    # exists, so it's formula-only (empty `exact`): scheduled = the 8th of the
-    # following month, matching the observed cadence (Apr 2026 → 8 May, Dec
-    # 2025 → 8 Jan).
+    # exists, so it's formula-only (empty `exact`): for ordinary months the
+    # scheduled date is the 8th of the following month, matching the observed
+    # cadence (Apr 2026 → 8 May, May 2026 → 8 Jun). Quarter-end months take a
+    # later override — see test_gacc_quarter_end_months_scheduled_mid_month.
     assert rc.has_calendar("gacc") is True
     assert rc.expected_publish_date("gacc", date(2026, 4, 1)) == date(2026, 5, 8)
-    assert rc.expected_publish_date("gacc", date(2025, 12, 1)) == date(2026, 1, 8)
+    assert rc.expected_publish_date("gacc", date(2026, 5, 1)) == date(2026, 6, 8)
 
 
 @pytest.mark.parametrize("today,want", [
@@ -96,6 +97,43 @@ def test_january_carve_out_is_gacc_only():
     )
 
 
+def test_gacc_quarter_end_months_scheduled_mid_month():
+    # Quarter-end reference months (Mar/Jun/Sep/Dec) run ~3-5 days later than
+    # ordinary months — the quarterly cumulations land ~the 13th, not the 8th.
+    # They carry a +13 lag override; every other month keeps the +8 base.
+    assert rc.expected_publish_date("gacc", date(2026, 3, 1)) == date(2026, 4, 13)
+    assert rc.expected_publish_date("gacc", date(2026, 6, 1)) == date(2026, 7, 13)
+    assert rc.expected_publish_date("gacc", date(2026, 9, 1)) == date(2026, 10, 13)
+    assert rc.expected_publish_date("gacc", date(2025, 12, 1)) == date(2026, 1, 13)
+    # Ordinary months are unchanged (close + 8).
+    assert rc.expected_publish_date("gacc", date(2026, 4, 1)) == date(2026, 5, 8)
+    assert rc.expected_publish_date("gacc", date(2026, 5, 1)) == date(2026, 6, 8)
+
+
+def test_gacc_quarter_end_not_overdue_on_the_twelfth():
+    # The regression: June 2026 (a Q2-end month) reads DUE — not OVERDUE — on the
+    # 12th–14th, its real historical window. Before the override the due-by was
+    # the 12th and the routine falsely flagged it OVERDUE on 2026-07-14.
+    jun = date(2026, 6, 1)
+    assert rc.classify_expectation("gacc", jun, date(2026, 7, 12)) == rc.NONE_EXPECTED
+    assert rc.classify_expectation("gacc", jun, date(2026, 7, 13)) == rc.DUE
+    assert rc.classify_expectation("gacc", jun, date(2026, 7, 14)) == rc.DUE
+    # due-by = close(30 Jun) + 13 + 4 grace = 17 Jul; a genuine slip past that
+    # still trips (e.g. the 2022 Sep-ref release that landed 24 Oct).
+    assert rc.classify_expectation("gacc", jun, date(2026, 7, 17)) == rc.DUE
+    assert rc.classify_expectation("gacc", jun, date(2026, 7, 18)) == rc.OVERDUE
+
+
+def test_quarter_end_override_is_gacc_only():
+    # The other sources have no month_lag_days, so their formula lag is uniform:
+    # a quarter-end month gets no special treatment.
+    assert rc.expected_publish_date("eurostat", date(2026, 11, 1)) == date(2027, 1, 15)
+    assert (
+        rc.expected_publish_date("hmrc", date(2027, 6, 1))
+        == rc.period_close(date(2027, 6, 1)) + timedelta(days=rc._HMRC.lag_days)
+    )
+
+
 @pytest.mark.parametrize("today,want", [
     (date(2026, 6, 14), rc.NONE_EXPECTED),  # day before scheduled 15 Jun
     (date(2026, 6, 15), rc.DUE),            # on the scheduled date
@@ -127,7 +165,8 @@ def test_valid_expectations_constant():
 def test_next_release_forecast_orders_by_due_date_and_caps():
     # Latest published period per source. Each source's next candidate is the
     # following month, due on its calendar date:
-    #   gacc 2026-05 → candidate 2026-06 → close 30 Jun + 8d = 8 Jul
+    #   gacc 2026-05 → candidate 2026-06 → close 30 Jun + 13d = 13 Jul
+    #     (June is a quarter-end month, so it takes the +13 override not +8)
     #   eurostat 2026-04 → candidate 2026-05 → exact 16 Jul
     #   hmrc 2026-04 → candidate 2026-05 → exact 16 Jul
     latest = {
@@ -137,12 +176,12 @@ def test_next_release_forecast_orders_by_due_date_and_caps():
     }
     # Default limit=2: soonest first, the Jul-16 tie broken by source name.
     assert rc.next_release_forecast(latest) == [
-        ("gacc", date(2026, 7, 8)),
+        ("gacc", date(2026, 7, 13)),
         ("eurostat", date(2026, 7, 16)),
     ]
     # limit=None returns every source, still date-sorted.
     assert rc.next_release_forecast(latest, limit=None) == [
-        ("gacc", date(2026, 7, 8)),
+        ("gacc", date(2026, 7, 13)),
         ("eurostat", date(2026, 7, 16)),
         ("hmrc", date(2026, 7, 16)),
     ]
@@ -155,5 +194,5 @@ def test_next_release_forecast_skips_unknown_and_empty_sources():
         "mystery": date(2026, 5, 1),  # no calendar → skipped
     }
     assert rc.next_release_forecast(latest, limit=None) == [
-        ("gacc", date(2026, 7, 8)),
+        ("gacc", date(2026, 7, 13)),
     ]
