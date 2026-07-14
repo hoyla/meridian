@@ -4179,6 +4179,540 @@ def _insert_gacc_bilateral_aggregate_yoy_finding(
 
 
 # =============================================================================
+# GACC commodity YoY: the headline-commodity catalogue (sections 5/6).
+# =============================================================================
+# Added 2026-07-14 (dev_notes/2026-07-14-gacc-commodity-highlights.md) after
+# FT coverage of the June GACC drop led with sector facts (cars +71% YoY to
+# 1.06mn units) that the partners-only GACC page couldn't show. Sections 5/6
+# are GACC's own curated ~30-commodity list (no HS codes), China↔world, with
+# physical quantity + value. One finding per (commodity, anchor), subkind
+# 'gacc_commodity_yoy[_import]'.
+#
+# Denomination differs from the partner families ON PURPOSE: value YoYs here
+# are computed in native CNY (canonical releases), matching GACC's own
+# published comparison basis — every cumulative YoY we emit is cross-checked
+# against the pct printed on the page, and a divergence beyond rounding
+# blocks emission. EUR appears as display levels only (converted at the
+# anchor month's rate). The partner families are EUR-denominated
+# (rolling-window sums need a common currency); a same-basis cross-check
+# like this one isn't available there. Caveat code 'cny_denominated' marks
+# the distinction for the drawer.
+#
+# Single-month prior-year values are DERIVED, not read from the prior year's
+# page: prior-May = (prior-year 1-5 cumulative on the May page) minus
+# (prior-year 1-4 cumulative on the April page), both current-era pages.
+# Two reasons: (1) the catalogue's labels drift across eras ("Agricultural"
+# → "Agriculture products", "Grain" → "Grain food"), so a cross-era label
+# join silently loses renamed commodities; (2) GACC revises — the prior-year
+# columns on current pages carry the revised basis its own published YoY
+# uses, so differencing them compares like with like. The residual vs the
+# original prior-year page is ~0.3% (cars, May 2025: derived 69.3万 vs
+# originally-published 69.5万). Quantity YoY (unitless, FX-free) is derived
+# the same way and is often the more quotable number ("+42.6% by volume").
+
+GACC_COMMODITY_TREND_SOURCE_URL = "analysis://gacc_commodity_yoy/v1"
+
+# Our recomputed cumulative YoY must agree with the pct GACC printed on the
+# same page to within ROUNDING — but "rounding" is value-dependent: GACC
+# computes its published pct on unrounded internal values while the table
+# prints value cells at 0.1 (CNY 100M) precision, so recomputing from the
+# printed cells inherits up to ±0.05 on each side. Propagated through
+# pct = (c−p)/p that is 0.05·(c+p)/p² (×100 for pp) — negligible for the
+# big commodities (prior ~4,000 → ~0.005pp) but several tenths of a pp for
+# small ones (Rice 2019, prior ~15 → ~0.4pp legitimately). The floor term
+# covers GACC's own 1-decimal pct rounding. Beyond the propagated bound,
+# something is structurally wrong — a misread column, a scale shift — and
+# the finding must not emit.
+GACC_COMMODITY_CROSSCHECK_FLOOR_PP = 0.06
+
+
+def _gacc_commodity_crosscheck_tolerance_pp(current: float, prior: float) -> float:
+    propagated = 100.0 * 0.05 * (abs(current) + abs(prior)) / (prior * prior)
+    return GACC_COMMODITY_CROSSCHECK_FLOOR_PP + propagated
+
+
+def _gacc_commodity_history(flow: str) -> dict[tuple[str, bool], dict[date, dict]]:
+    """{(commodity_label, is_aggregate): {period: row}} for canonical-CNY
+    section-5/6 pages.
+
+    The key carries the aggregate flag because a starred aggregate and a leaf
+    can share a label after star-stripping: 2021-era import pages titled the
+    machinery-&-electrical aggregate "Machine tools*" (GACC's early English
+    for 机电产品) while an indented leaf "Machine tools" (Set) sat inside it.
+    Keyed by label alone the two series overwrite each other and the mixed
+    YoY is garbage — caught in the wild by the published-pct cross-check,
+    which is exactly the failure mode it exists for.
+
+    Each row merges the commodity's observations at that period:
+      'monthly'  — {value, quantity, obs_id} (absent on Jan-Feb combined)
+      'ytd'      — {value, quantity, obs_id} ('cumulative_jan_feb' rows land
+                    here too, flagged 'is_jan_feb_combined': the cumulative IS
+                    the YTD through February)
+      'source_row' — the page row verbatim (prior-year cumulatives, published
+                    YoY pcts, is_aggregate, quantity_unit)
+      'unit'     — the release's Unit annotation (for EUR conversion)
+
+    Labels are era-consistent but drift across years; callers must never join
+    the same label across eras (see the family comment — the differencing
+    design exists precisely so they don't have to)."""
+    section = 5 if flow == "export" else 6
+    with _conn() as conn, conn.cursor() as cur:
+        # DISTINCT ON: latest version_seen per (release, commodity, kind) —
+        # same versioned-re-scrape dedup rationale as
+        # _gacc_aggregate_per_period_totals.
+        cur.execute(
+            """
+            SELECT period, period_kind, commodity_label, value_amount,
+                   quantity, source_row, unit, obs_id FROM (
+                SELECT DISTINCT ON (o.release_id, o.commodity_label,
+                                    (o.source_row->>'is_aggregate'),
+                                    o.period_kind)
+                       r.period, o.period_kind, o.commodity_label,
+                       o.value_amount, o.quantity, o.source_row,
+                       r.unit, o.id AS obs_id
+                  FROM observations o
+                  JOIN releases r ON r.id = o.release_id
+                 WHERE r.source = 'gacc'
+                   AND r.section_number = %s
+                   AND r.currency = 'CNY'
+                   AND o.flow = %s
+                   AND o.commodity_label IS NOT NULL
+              ORDER BY o.release_id, o.commodity_label,
+                       (o.source_row->>'is_aggregate'), o.period_kind,
+                       o.version_seen DESC
+            ) latest
+            ORDER BY commodity_label, period
+            """,
+            (section, flow),
+        )
+        rows = cur.fetchall()
+
+    hist: dict[tuple[str, bool], dict[date, dict]] = {}
+    for period, kind, label, value, quantity, source_row, unit, obs_id in rows:
+        is_aggregate = bool((source_row or {}).get("is_aggregate"))
+        slot = hist.setdefault((label, is_aggregate), {}).setdefault(
+            period, {"unit": unit})
+        entry = {
+            "value": float(value) if value is not None else None,
+            "quantity": float(quantity) if quantity is not None else None,
+            "obs_id": obs_id,
+        }
+        if kind == "monthly":
+            slot["monthly"] = entry
+        elif kind == "ytd":
+            slot["ytd"] = entry
+        elif kind == "cumulative_jan_feb":
+            entry["is_jan_feb_combined"] = True
+            slot["ytd"] = entry
+        slot["source_row"] = source_row or {}
+    return hist
+
+
+def _prior_cum(row: dict | None, field: str) -> float | None:
+    """Prior-year cumulative value/quantity from a page row's source_row,
+    tolerating both the regular ('prior_year_ytd_*') and Jan-Feb combined
+    ('prior_year_cumulative_*') field namings."""
+    if row is None:
+        return None
+    src = row.get("source_row") or {}
+    v = src.get(f"prior_year_ytd_{field}")
+    if v is None:
+        v = src.get(f"prior_year_cumulative_{field}")
+    return float(v) if v is not None else None
+
+
+def detect_gacc_commodity_yoy(
+    flow: str = "export",
+    yoy_threshold_pct: float = 0.0,
+) -> dict[str, int]:
+    """For each (commodity, anchor period) on GACC's section-5/6 headline
+    catalogue, emit a finding carrying single-month + cumulative-YTD YoY in
+    native CNY (value) and units (quantity), with EUR display levels.
+    Subkind 'gacc_commodity_yoy[_import]'.
+
+    Editorial use: the "China's car exports rose 71% to 1.06mn in June"
+    register — GACC's own sector cut, world-total scope (no partner
+    dimension), on the GACC-only page between "Since the last read" and
+    "Europe up close".
+
+    Anchors are regular monthly pages only; Jan-Feb combined anchors are
+    skipped in v1 (matching the build note). The three starred catalogue
+    aggregates emit findings too — flagged is_aggregate so page selection
+    excludes them (their membership is not adjacency; never summed).
+
+    `yoy_threshold_pct`: minimum |single-month value YoY| to emit
+    (0.0 = emit one per anchor; anchors whose single-month operator is
+    unavailable are always emitted — the YTD operator still carries news)."""
+    if flow not in ("export", "import"):
+        raise ValueError(f"flow must be 'export' or 'import'; got {flow!r}")
+    counts = {
+        "emitted": 0,
+        "inserted_new": 0, "confirmed_existing": 0, "superseded": 0,
+        "skipped_jan_feb_anchor": 0,
+        "skipped_no_values": 0,
+        "skipped_below_threshold": 0,
+        "skipped_crosscheck_divergent": 0,
+    }
+
+    hist = _gacc_commodity_history(flow)
+    if not hist:
+        return counts
+
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) VALUES (%s, 'running') RETURNING id",
+            (GACC_COMMODITY_TREND_SOURCE_URL,),
+        )
+        analysis_run_id = cur.fetchone()[0]
+
+    try:
+        # FX rates are per-period, shared across all ~30 commodities — cache
+        # them once here rather than hitting the DB per (commodity, anchor).
+        fx_cache: dict[tuple[str, date], Any] = {}
+
+        def _fx(ccy: str, p: date):
+            k = (ccy, p)
+            if k not in fx_cache:
+                fx_cache[k] = lookups.lookup_fx(ccy, "EUR", p)
+            return fx_cache[k]
+
+        for (label, is_aggregate), by_period in hist.items():
+            periods_sorted = sorted(by_period.keys())
+
+            # Full monthly EUR series, built ONCE per commodity and shared by
+            # every anchor's finding (the aggregate family's convention).
+            # Era-local by construction: one label = one era's series; a
+            # renamed commodity starts a fresh series rather than silently
+            # splicing regimes.
+            eur_series = []
+            for p in periods_sorted:
+                pm = by_period[p].get("monthly")
+                if pm is None or pm["value"] is None:
+                    continue
+                pscale, pccy = parse_unit_scale(by_period[p].get("unit"))
+                if pscale is None:
+                    continue
+                pfx = _fx(pccy or "CNY", p)
+                if pfx is None:
+                    continue
+                eur_series.append(
+                    {"period": p.isoformat(),
+                     "value_eur": pm["value"] * pscale * pfx.rate}
+                )
+
+            for t in periods_sorted:
+                row = by_period[t]
+                ytd = row.get("ytd")
+                monthly = row.get("monthly")
+                if ytd is not None and ytd.get("is_jan_feb_combined"):
+                    counts["skipped_jan_feb_anchor"] += 1
+                    continue
+                if monthly is None and ytd is None:
+                    counts["skipped_no_values"] += 1
+                    continue
+
+                src = row.get("source_row") or {}
+                unit = row.get("unit")
+                scale, currency = parse_unit_scale(unit)
+                quantity_unit = src.get("quantity_unit")
+
+                # ----- Single-month YoY (native CNY + quantity) -----
+                # Prior-year same-month = prior-YTD(t) − prior-YTD(t−1mo),
+                # both columns from current-era pages (label-safe,
+                # revision-consistent — see family comment). January anchors
+                # need no differencing: prior-YTD(Jan) IS prior January.
+                sm_block: dict | None = None
+                prev_row = by_period.get(_months_back(t, 1))
+                pc_val_t, pc_qty_t = _prior_cum(row, "value"), _prior_cum(row, "quantity")
+                if t.month == 1:
+                    prior_sm_val, prior_sm_qty = pc_val_t, pc_qty_t
+                    derivation = "prior_ytd_january_direct"
+                else:
+                    pc_val_prev = _prior_cum(prev_row, "value")
+                    pc_qty_prev = _prior_cum(prev_row, "quantity")
+                    prior_sm_val = (
+                        pc_val_t - pc_val_prev
+                        if pc_val_t is not None and pc_val_prev is not None else None
+                    )
+                    prior_sm_qty = (
+                        pc_qty_t - pc_qty_prev
+                        if pc_qty_t is not None and pc_qty_prev is not None else None
+                    )
+                    derivation = "prior_ytd_adjacent_page_difference"
+                m_val = monthly["value"] if monthly else None
+                m_qty = monthly["quantity"] if monthly else None
+                sm_val_yoy = (
+                    (m_val - prior_sm_val) / abs(prior_sm_val)
+                    if m_val is not None and prior_sm_val not in (None, 0) else None
+                )
+                sm_qty_yoy = (
+                    (m_qty - prior_sm_qty) / abs(prior_sm_qty)
+                    if m_qty is not None and prior_sm_qty not in (None, 0) else None
+                )
+                if sm_val_yoy is not None or sm_qty_yoy is not None:
+                    sm_block = {
+                        "current_value_cny": m_val,
+                        "prior_value_cny": prior_sm_val,
+                        "value_yoy_pct": sm_val_yoy,
+                        "current_quantity": m_qty,
+                        "prior_quantity": prior_sm_qty,
+                        "quantity_yoy_pct": sm_qty_yoy,
+                        "quantity_unit": quantity_unit,
+                        "current_period": t.isoformat(),
+                        "prior_derivation": derivation,
+                    }
+
+                # ----- Cumulative YTD YoY (same-page pair) -----
+                # Both sides printed on THIS page (current 1-N vs prior-year
+                # 1-N), i.e. GACC's own comparison basis — which is why the
+                # published pct is a hard cross-check, not a soft caveat.
+                ytd_block: dict | None = None
+                published_val_pct = src.get("published_yoy_value_pct")
+                published_qty_pct = src.get("published_yoy_quantity_pct")
+                y_val = ytd["value"] if ytd else None
+                y_qty = ytd["quantity"] if ytd else None
+                ytd_val_yoy = (
+                    (y_val - pc_val_t) / abs(pc_val_t)
+                    if y_val is not None and pc_val_t not in (None, 0) else None
+                )
+                ytd_qty_yoy = (
+                    (y_qty - pc_qty_t) / abs(pc_qty_t)
+                    if y_qty is not None and pc_qty_t not in (None, 0) else None
+                )
+                if ytd_val_yoy is not None and published_val_pct is not None:
+                    divergence_pp = abs(ytd_val_yoy * 100 - float(published_val_pct))
+                    tolerance_pp = _gacc_commodity_crosscheck_tolerance_pp(
+                        y_val, pc_val_t)
+                    if divergence_pp > tolerance_pp:
+                        log.warning(
+                            "GACC commodity %r at %s: recomputed YTD YoY "
+                            "%.2f%% diverges from published %s%% by %.2fpp "
+                            "(tolerance %.2fpp) — NOT emitting (misread "
+                            "column / scale shift?)",
+                            label, t.isoformat(), ytd_val_yoy * 100,
+                            published_val_pct, divergence_pp, tolerance_pp,
+                        )
+                        counts["skipped_crosscheck_divergent"] += 1
+                        continue
+                if ytd_val_yoy is not None or ytd_qty_yoy is not None:
+                    ytd_block = {
+                        "current_value_cny": y_val,
+                        "prior_value_cny": pc_val_t,
+                        "value_yoy_pct": ytd_val_yoy,
+                        "current_quantity": y_qty,
+                        "prior_quantity": pc_qty_t,
+                        "quantity_yoy_pct": ytd_qty_yoy,
+                        "quantity_unit": quantity_unit,
+                        "months_in_ytd": t.month,
+                        "published_yoy_value_pct": published_val_pct,
+                        "published_yoy_quantity_pct": published_qty_pct,
+                        "crosscheck": (
+                            "agreed" if (ytd_val_yoy is not None
+                                         and published_val_pct is not None)
+                            else "unavailable"
+                        ),
+                    }
+
+                if sm_block is None and ytd_block is None:
+                    counts["skipped_no_values"] += 1
+                    continue
+                if (yoy_threshold_pct > 0.0 and sm_val_yoy is not None
+                        and abs(sm_val_yoy) < yoy_threshold_pct):
+                    counts["skipped_below_threshold"] += 1
+                    continue
+
+                # ----- EUR display levels (anchor-month rate) -----
+                eur_month = eur_ytd = None
+                if scale is not None:
+                    fx = _fx(currency or "CNY", t)
+                    if fx is not None:
+                        if m_val is not None:
+                            eur_month = m_val * scale * fx.rate
+                        if y_val is not None:
+                            eur_ytd = y_val * scale * fx.rate
+
+                low_base = (
+                    eur_month is not None and eur_month < LOW_BASE_THRESHOLD_EUR
+                )
+                obs_ids = [e["obs_id"] for e in (monthly, ytd) if e]
+                if prev_row is not None and t.month != 1:
+                    # The differenced prior rides on the previous page's row.
+                    for k in ("monthly", "ytd"):
+                        if prev_row.get(k):
+                            obs_ids.append(prev_row[k]["obs_id"])
+
+                action = _insert_gacc_commodity_yoy_finding(
+                    analysis_run_id, label, t, flow=flow,
+                    sm_block=sm_block, ytd_block=ytd_block,
+                    eur_month=eur_month, eur_ytd=eur_ytd,
+                    is_aggregate=is_aggregate, low_base=low_base,
+                    quantity_unit=quantity_unit,
+                    monthly_series=eur_series, obs_ids=obs_ids,
+                )
+                _tally(counts, action)
+
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='success', ended_at=now() WHERE id=%s",
+                (analysis_run_id,),
+            )
+    except Exception as e:
+        log.exception("GACC commodity YoY analysis failed")
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_runs SET status='failed', error_message=%s, ended_at=now() WHERE id=%s",
+                (str(e), analysis_run_id),
+            )
+        raise
+    return counts
+
+
+def _insert_gacc_commodity_yoy_finding(
+    analysis_run_id: int,
+    label: str,
+    anchor_period: date,
+    *,
+    flow: str,
+    sm_block: dict | None,
+    ytd_block: dict | None,
+    eur_month: float | None,
+    eur_ytd: float | None,
+    is_aggregate: bool,
+    low_base: bool,
+    quantity_unit: str | None,
+    monthly_series: list[dict],
+    obs_ids: list[int],
+) -> findings_io.EmitAction:
+    flow_label = "China exports of" if flow == "export" else "China imports of"
+    flow_subkind_suffix = "" if flow == "export" else "_import"
+    anchor_str = anchor_period.strftime("%Y-%m")
+
+    sm_val_yoy = sm_block.get("value_yoy_pct") if sm_block else None
+    sm_qty_yoy = sm_block.get("quantity_yoy_pct") if sm_block else None
+    headline_pct = (
+        f"{sm_val_yoy*100:+.1f}% YoY" if sm_val_yoy is not None
+        else (f"YTD {ytd_block['value_yoy_pct']*100:+.1f}% YoY"
+              if ytd_block and ytd_block.get("value_yoy_pct") is not None
+              else "n/a")
+    )
+    title = (
+        f"GACC commodity ({flow_label} {label}): {anchor_str} {headline_pct}"
+        + (f", {sm_qty_yoy*100:+.1f}% by volume" if sm_qty_yoy is not None else "")
+    )
+
+    body_lines = [
+        f"GACC headline commodity: {label}"
+        + (" [catalogue aggregate — never sum with member rows]" if is_aggregate else ""),
+        f"Direction: {flow_label} {label} (world total — no partner dimension)",
+        "",
+        "Value YoY is computed in native CNY (GACC's own comparison basis); "
+        "EUR figures are display levels converted at the anchor month's rate.",
+    ]
+    if sm_block is not None:
+        body_lines += ["", f"Single month ({anchor_str}):"]
+        if sm_block["value_yoy_pct"] is not None:
+            body_lines.append(
+                f"  Value:    CNY {sm_block['current_value_cny']:,.1f} (100M) "
+                f"({sm_block['value_yoy_pct']*100:+.1f}% YoY vs derived prior "
+                f"{sm_block['prior_value_cny']:,.1f})"
+            )
+        if sm_block["quantity_yoy_pct"] is not None:
+            body_lines.append(
+                f"  Quantity: {sm_block['current_quantity']:,.1f} {quantity_unit or ''} "
+                f"({sm_block['quantity_yoy_pct']*100:+.1f}% YoY vs derived prior "
+                f"{sm_block['prior_quantity']:,.1f})"
+            )
+        body_lines.append(
+            "  Prior-year month derived as the difference of prior-year "
+            "cumulative columns on this page and last month's page "
+            "(GACC's revised basis; typically ~0.3% from the originally-"
+            "published month)."
+        )
+    if ytd_block is not None:
+        body_lines += ["", f"Year-to-date (1-{anchor_period.month}):"]
+        if ytd_block["value_yoy_pct"] is not None:
+            body_lines.append(
+                f"  Value:    CNY {ytd_block['current_value_cny']:,.1f} (100M) "
+                f"({ytd_block['value_yoy_pct']*100:+.1f}% YoY)"
+            )
+        if ytd_block.get("published_yoy_value_pct") is not None:
+            body_lines.append(
+                f"  GACC's published YoY: {ytd_block['published_yoy_value_pct']}% "
+                f"(cross-check {ytd_block['crosscheck']})"
+            )
+    if eur_month is not None:
+        body_lines += ["", f"EUR display level: €{eur_month/1e9:,.2f}B in {anchor_str}"]
+
+    caveat_codes = ["cny_denominated"]
+    if is_aggregate:
+        caveat_codes.append("catalogue_aggregate")
+    if low_base:
+        caveat_codes.append("low_base_effect")
+
+    detail = {
+        "method": "gacc_commodity_yoy_v1",
+        "method_query": {
+            "source": "observations (source=gacc, sections 5/6, canonical CNY)",
+            "flow": flow,
+            "commodity_label": label,
+            "sm_prior_derivation": (
+                sm_block.get("prior_derivation") if sm_block else None
+            ),
+        },
+        "commodity": {
+            "label": label,
+            "is_aggregate": is_aggregate,
+            "quantity_unit": quantity_unit,
+        },
+        "windows": {
+            "current_end": anchor_period.isoformat(),
+        },
+        "totals": {
+            "single_month": sm_block,
+            "ytd_cumulative": ytd_block,
+            "eur_month": eur_month,
+            "eur_ytd": eur_ytd,
+        },
+        "monthly_series": monthly_series,
+        "caveat_codes": caveat_codes,
+    }
+    score = abs(sm_val_yoy) if sm_val_yoy is not None else 0.0
+    subkind = f"gacc_commodity_yoy{flow_subkind_suffix}"
+
+    with _conn() as conn, conn.cursor() as cur:
+        _, action = findings_io.emit_finding(
+            cur,
+            scrape_run_id=analysis_run_id,
+            kind="anomaly",
+            subkind=subkind,
+            natural_key=findings_io.nk_gacc_commodity_yoy(
+                label, is_aggregate, anchor_str),
+            value_fields={
+                "method": detail["method"],
+                "sm_value_yoy_pct": (
+                    round(sm_val_yoy, 6) if sm_val_yoy is not None else None
+                ),
+                "sm_quantity_yoy_pct": (
+                    round(sm_qty_yoy, 6) if sm_qty_yoy is not None else None
+                ),
+                "ytd_value_yoy_pct": (
+                    round(ytd_block["value_yoy_pct"], 6)
+                    if ytd_block and ytd_block.get("value_yoy_pct") is not None
+                    else None
+                ),
+                "eur_month": round(eur_month, 2) if eur_month is not None else None,
+                "is_aggregate": is_aggregate,
+            },
+            observation_ids=sorted(set(obs_ids)),
+            score=score,
+            title=title,
+            body="\n".join(body_lines),
+            detail=detail,
+        )
+    return action
+
+
+# =============================================================================
 # EU–China trade balance: the all-goods bilateral deficit, framed per day.
 # =============================================================================
 # Added 2026-06-17 after a journalist (Lisa O'Carroll) flagged that the tool

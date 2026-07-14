@@ -549,6 +549,19 @@ def _run_periodic_cycle(
             flow=flow_str,
         )
 
+    # GACC headline-commodity YoY (sections 5/6, China↔world, no partner
+    # dimension) — the GACC-only page's commodity-highlights block. Native-
+    # CNY YoY cross-checked against GACC's published pct; the June-drop
+    # walk ingests sections 4+5+6 together, so this regenerates in the same
+    # cycle. See dev_notes/2026-07-14-gacc-commodity-highlights.md.
+    for flow_str in ("export", "import"):
+        key = f"gacc_commodity_yoy_{flow_str}"
+        counts[key] = _run_analyser(
+            key, "gacc_commodity_yoy", anomalies.detect_gacc_commodity_yoy,
+            flow_label=flow_str,
+            flow=flow_str,
+        )
+
     # EU–China trade balance (the all-goods bilateral deficit, framed per
     # day). No flow axis — the balance IS imports minus exports — so it
     # runs once and emits both partner scopes (CN+HK+MO and CN-only)
@@ -756,9 +769,9 @@ def run_gacc_update(
          release): re-run the GACC analysers and rebuild the snapshot, so
          the page picks up any superseded values, without a new-period
          event.
-      3. Re-run the GACC analyser families (aggregate + bilateral, both
-         flows). Idempotent at the per-finding level, same as the main
-         cycle.
+      3. Re-run the GACC analyser families (aggregate + bilateral +
+         commodity, both flows). Idempotent at the per-finding level, same
+         as the main cycle.
       4. Rebuild the portal snapshot (the ONE report — the Full-briefing
          tab's deterministic content is unchanged by construction since no
          Eurostat/HMRC data moved; its LLM takes are carried forward via
@@ -892,6 +905,11 @@ def _run_gacc_update_cycle(
         counts[bkey] = _run_analyser_logged(
             bkey, "gacc_bilateral_aggregate_yoy",
             anomalies.detect_gacc_bilateral_aggregate_yoy,
+            flow_label=flow_str, flow=flow_str,
+        )
+        ckey = f"gacc_commodity_yoy_{flow_str}"
+        counts[ckey] = _run_analyser_logged(
+            ckey, "gacc_commodity_yoy", anomalies.detect_gacc_commodity_yoy,
             flow_label=flow_str, flow=flow_str,
         )
 
