@@ -55,6 +55,25 @@ SYNTHESIS_CATALOG_IDS = (
     "post_pandemic_normalisation",
 )
 
+# The catalog subset for the COMMODITY take — product-shaped hypotheses the
+# sections-5/6 tables can actually ground (the commodity block gave this
+# page a product dimension, so the exclusion rationale above no longer
+# applies there). export_controls_china and domestic_demand_pivot were added
+# for this take (dev_notes/2026-07-14-gacc-commodity-highlights.md § takes):
+# the rare-earths and car-export registers respectively — their catalog
+# descriptions carry the causal vocabulary so the model never asserts
+# policy events itself.
+COMMODITY_CATALOG_IDS = (
+    "export_controls_china",
+    "domestic_demand_pivot",
+    "energy_transition",
+    "trade_defence_outcome",
+    "capacity_expansion_china",
+    "us_tariff_diversion",
+    "currency_effect",
+    "base_effect",
+)
+
 # Answerability enum for the questions-take: the model TAGS each question
 # with where its answer lives, choosing from this fixed vocabulary. The
 # render supplies the reader-facing copy (and links) per tag — the model
@@ -98,6 +117,45 @@ Hard rules — violating any one silently rejects the whole output:
    "because of tariffs" belongs in a hypothesis rationale, hedged.
 5. Name the parties ("China's exports to the EU"), never bare "exports".
 6. <= 70 words for the summary; one sentence per rationale.
+
+This is a scaffold for a reporter to investigate, never a publishable claim."""
+
+
+COMMODITY_SYSTEM_PROMPT = """You are a trade-desk research assistant for Guardian journalists.
+
+You are given this month's product-level readings from China's own customs
+figures (GACC): every line of its headline commodity catalogue — exports and
+imports, value growth (in CNY terms) and, where published, volume growth and
+computed milestone / pace facts. Write the ONE paragraph a desk editor needs
+(aim ~60 words, max 75): which product moves define this month's release, and
+what pattern do they make together (volume vs value, exports vs imports)?
+Prefer lines that combine a sharp rate with real scale; a computed milestone
+or pace fact is usually the lead. Then pick AT MOST TWO hypotheses from the
+CATALOG consistent with those readings, each with a one-line rationale citing
+a number shown.
+
+If the readings make no coherent pattern worth flagging, return
+{"summary": null}. Abstaining is correct on an unremarkable month.
+
+Output JSON only:
+  {"summary": "<the paragraph>",
+   "hypotheses": [{"id": "<catalog id>", "rationale": "<one line>"}]}
+  or {"summary": null}
+
+Hard rules — violating any one silently rejects the whole output:
+1. Every number you mention MUST appear in the facts shown, unchanged
+   (round +100.7% -> +100% or +101%, never -> +102%).
+2. hypotheses[].id MUST come from the CATALOG list shown. At most two.
+3. Use ONLY the facts shown. No external events, dates, companies or
+   policies by name — the catalog descriptions carry the causal vocabulary.
+4. State comparisons, never causes: "volume fell while value rose" is
+   yours; "because of export controls" belongs in a hypothesis rationale,
+   hedged.
+5. Name the product and direction ("China's exports of rare earths"),
+   never bare "exports".
+6. These are world totals with no country split — never imply a
+   destination.
+7. <= 75 words for the summary; one sentence per rationale.
 
 This is a scaffold for a reporter to investigate, never a publishable claim."""
 
@@ -156,6 +214,24 @@ def assemble_synthesis_prompt(facts: dict) -> tuple[str, str]:
           '"hypotheses": [{"id", "rationale"}]} or {"summary": null}'
     )
     return SYNTHESIS_SYSTEM_PROMPT, user
+
+
+def assemble_commodity_prompt(facts: dict) -> tuple[str, str]:
+    catalog = [h for h in hypothesis_catalog.get_catalog_for_prompt()
+               if h["id"] in COMMODITY_CATALOG_IDS]
+    cat_lines = "\n".join(
+        f"- {h['id']}: {h['label']} — {h['description']}" for h in catalog)
+    user = (
+        "THIS MONTH'S GACC COMMODITY READINGS (China's own customs figures; "
+        "value growth in CNY terms, volume growth in physical units, EUR "
+        "levels display-only; world totals, no country split):\n"
+        + _facts_lines(facts)
+        + "\n\nCATALOG (pick hypothesis ids from here only):\n"
+        + cat_lines
+        + '\n\nOutput JSON only: {"summary": "<= 75-word paragraph", '
+          '"hypotheses": [{"id", "rationale"}]} or {"summary": null}'
+    )
+    return COMMODITY_SYSTEM_PROMPT, user
 
 
 def assemble_questions_prompt(facts: dict) -> tuple[str, str]:
@@ -222,34 +298,37 @@ def _cited_finding_ids(text: str, facts: dict) -> list[int]:
     return fids
 
 
-def generate_synthesis(facts: dict, backend=None) -> dict | None:
-    """Facts -> verified synthesis dict or None (abstain / reject / error).
-    {summary, citations, hypotheses: [{id, label, rationale, steps}]}."""
-    system, user = assemble_synthesis_prompt(facts)
+def _generate_scaffold(facts: dict, backend, *, assemble, offered_ids,
+                       cluster: str) -> dict | None:
+    """Shared verify-or-reject body for the summary-plus-hypotheses takes
+    (page synthesis + commodity take). Facts -> verified dict or None
+    (abstain / reject / error): {summary, citations,
+    hypotheses: [{id, label, rationale, steps}]}."""
+    system, user = assemble(facts)
     backend = backend or make_backend(role="takes")
     raw = backend.generate(system, user)
     obj = _parse_json(raw)
     if obj is None:
-        _log_reject("gacc_page_synthesis", "parse", "unparseable JSON", raw)
+        _log_reject(cluster, "parse", "unparseable JSON", raw)
         return None
     if obj.get("summary") in (None, "null", ""):
         return None  # first-class abstention
     summary = str(obj["summary"]).strip()
     hyps = obj.get("hypotheses") or []
     if len(summary.split()) > SYNTHESIS_WORD_HARD:
-        _log_reject("gacc_page_synthesis", "validate",
+        _log_reject(cluster, "validate",
                     f"too long ({len(summary.split())} words)", raw)
         return None
     if len(hyps) > MAX_HYPOTHESES:
-        _log_reject("gacc_page_synthesis", "validate",
+        _log_reject(cluster, "validate",
                     f"{len(hyps)} hypotheses (max {MAX_HYPOTHESES})", raw)
         return None
-    offered = set(SYNTHESIS_CATALOG_IDS)
+    offered = set(offered_ids)
     picked: list[dict] = []
     for h in hyps:
         hid = (h or {}).get("id")
         if hid not in offered:
-            _log_reject("gacc_page_synthesis", "validate",
+            _log_reject(cluster, "validate",
                         f"hypothesis id {hid!r} not in the offered catalog", raw)
             return None
         entry = hypothesis_catalog.CATALOG_BY_ID[hid]
@@ -263,7 +342,7 @@ def generate_synthesis(facts: dict, backend=None) -> dict | None:
     check_text = " ".join([summary] + [p["rationale"] for p in picked])
     ok, failures = verify_numbers(check_text, facts.get("numbers") or {})
     if not ok:
-        _log_reject("gacc_page_synthesis", "validate",
+        _log_reject(cluster, "validate",
                     f"unverified number(s): {failures}", raw, failures)
         return None
     return {
@@ -271,6 +350,25 @@ def generate_synthesis(facts: dict, backend=None) -> dict | None:
         "citations": _cited_finding_ids(check_text, facts),
         "hypotheses": picked,
     }
+
+
+def generate_synthesis(facts: dict, backend=None) -> dict | None:
+    """Facts -> verified synthesis dict or None (abstain / reject / error)."""
+    return _generate_scaffold(
+        facts, backend, assemble=assemble_synthesis_prompt,
+        offered_ids=SYNTHESIS_CATALOG_IDS, cluster="gacc_page_synthesis")
+
+
+def generate_commodity_take(facts: dict, backend=None) -> dict | None:
+    """The commodity take (dev_notes/2026-07-14-gacc-commodity-highlights.md
+    § takes): the causal/contextual layer over the FULL sections-5/6 fact
+    set — the input set equals the displayed set, so every citable number
+    has a drawer on the page. Same verify-or-reject contract as the
+    synthesis; the commodity-shaped catalog subset carries the causal
+    vocabulary (export controls, domestic-demand pivot, …)."""
+    return _generate_scaffold(
+        facts, backend, assemble=assemble_commodity_prompt,
+        offered_ids=COMMODITY_CATALOG_IDS, cluster="gacc_page_commodity")
 
 
 def generate_questions(facts: dict, backend=None) -> list[dict] | None:

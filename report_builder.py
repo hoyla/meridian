@@ -2609,12 +2609,87 @@ def _gacc_llm_facts(page: GaccPage, rows: list[_GaccRow], period: date) -> dict:
             "strip_fids": strip_fids}
 
 
+def _gacc_commodity_llm_facts(page: GaccPage, period: date) -> dict:
+    """The fact set for the commodity take — every displayed catalogue row
+    (both flows, leaves AND aggregates) plus the computed milestone / pace
+    facts, in the exact formats the page shows. The input set EQUALS the
+    displayed set by construction, so any number the take cites has a
+    drawer on the page (the finding/N dead-end stays dead). Display-scale
+    numerals for milestone/pace figures ride in the numbers dict alongside
+    the raw magnitudes: verify_numbers reads the "10.17" in "10.17mn" as a
+    bare count, so the count-scale value must be a fact too."""
+    cm = (page.commodities.metrics if page.commodities is not None else {}) or {}
+    lines: list[str] = []
+    numbers: dict[str, float] = {}
+    prov: dict[str, int] = {}
+
+    def add(key: str, val, fid) -> None:
+        if val is None:
+            return
+        numbers[key] = float(val)
+        if fid is not None:
+            prov[key] = fid
+
+    n = 0
+    for flow in ("export", "import"):
+        flow_phrase = ("China's exports of" if flow == "export"
+                       else "China's imports of")
+        for group in ("rows", "aggregates"):
+            for row in cm.get(f"{flow}_{group}", []):
+                n += 1
+                key = f"cm{n}"
+                fid = row.get("finding_id")
+                label = row["label"] + (
+                    " [catalogue aggregate — includes other lines]"
+                    if group == "aggregates" else "")
+                bits: list[str] = []
+                if row.get("sm_value_yoy") is not None:
+                    bits.append(f"{_fmt_signed_pct(row['sm_value_yoy'])} YoY "
+                                f"by value (single month, CNY terms)")
+                    add(f"{key}_smval", row["sm_value_yoy"], fid)
+                if row.get("sm_quantity_yoy") is not None:
+                    q = f"{_fmt_signed_pct(row['sm_quantity_yoy'])} by volume"
+                    if row.get("quantity_display"):
+                        q += f" ({row['quantity_display']})"
+                    bits.append(q)
+                    add(f"{key}_smqty", row["sm_quantity_yoy"], fid)
+                if row.get("eur_month") is not None:
+                    bits.append(f"{_fmt_eur(row['eur_month'])} in the month")
+                    add(f"{key}_eur", row["eur_month"], fid)
+                if row.get("ytd_value_yoy") is not None:
+                    bits.append(f"YTD {_fmt_signed_pct(row['ytd_value_yoy'])}")
+                    add(f"{key}_ytd", row["ytd_value_yoy"], fid)
+                if not bits:
+                    continue
+                lines.append(f"{flow_phrase} {label}, "
+                             f"{_fmt_month_abbr(period)}: " + "; ".join(bits))
+                for fk, fact in (row.get("facts") or {}).items():
+                    lines.append(f"  Computed fact ({row['label']}): "
+                                 f"{fact['text']}")
+                    for vk in ("threshold_units", "month_units",
+                               "pace_units", "prior_full_year_units"):
+                        v = fact.get(vk)
+                        if v is None:
+                            continue
+                        add(f"{key}_{fk}_{vk}", v, fid)
+                        # Display-scale twin (the "10.17" in "10.17mn").
+                        for scale in (1e9, 1e6, 1e3):
+                            if v >= scale:
+                                add(f"{key}_{fk}_{vk}_disp", v / scale, fid)
+                                break
+    return {"lines": lines, "numbers": numbers, "prov": prov,
+            "strip_fids": [i.provenance.finding_ids[0]
+                           for i in page.commodity_strip
+                           if i.provenance.finding_ids]}
+
+
 def _generate_gacc_page_slots(page: GaccPage, rows: list[_GaccRow],
                               period: date) -> None:
     """Populate the page's LLM slots in place (paid backend calls — the
-    caller opts in per the cost discipline). Best-effort: any backend or
-    generation failure leaves the deterministic page standing alone, same
-    posture as every other LLM surface."""
+    caller opts in per the cost discipline; three calls per new GACC month
+    since the commodity take joined: synthesis + questions + commodity).
+    Best-effort: any backend or generation failure leaves the deterministic
+    page standing alone, same posture as every other LLM surface."""
     import llm_gacc_page
     facts = _gacc_llm_facts(page, rows, period)
     if not facts["lines"]:
@@ -2640,6 +2715,13 @@ def _generate_gacc_page_slots(page: GaccPage, rows: list[_GaccRow],
             )
     except Exception:
         log.exception("gacc page: questions generation failed; slot empty")
+    try:
+        cfacts = _gacc_commodity_llm_facts(page, period)
+        if cfacts["lines"]:
+            page.commodity_take = llm_gacc_page.generate_commodity_take(
+                cfacts, backend)
+    except Exception:
+        log.exception("gacc page: commodity take generation failed; slot empty")
 
 
 def _build_gacc_page(cur, generate_takes: bool = False) -> GaccPage | None:

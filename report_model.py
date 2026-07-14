@@ -272,7 +272,15 @@ class GaccPage:
     # `questions` = the page-level questions-take (interrogative, per the
     #   takes safety contract) with an `answerable` tag per question naming
     #   where the answer lives (our sections / drawers / external sources).
+    # `commodity_take` = the commodity block's causal/contextual scaffold
+    #   (2026-07-14, +1 paid call/month): same {summary, citations,
+    #   hypotheses} shape and verify-or-reject contract as `synthesis`, over
+    #   the FULL sections-5/6 fact set (input set == displayed set, so every
+    #   citable number has a drawer). The commodity-shaped catalog subset —
+    #   export controls, domestic-demand pivot, energy transition — carries
+    #   the causal vocabulary.
     synthesis: Optional[dict] = None
+    commodity_take: Optional[dict] = None
     questions: Optional[LLMSlot] = None
 
 

@@ -228,6 +228,53 @@ CAUSAL_HYPOTHESES = [
         ],
     },
     {
+        # China-side (GACC commodity-take) entry — the export-control /
+        # tech-race register the rare-earths lines need
+        # (dev_notes/2026-07-14-gacc-commodity-highlights.md § takes).
+        # The DESCRIPTION carries the causal vocabulary; the model may only
+        # pick the id and argue from shown numbers.
+        "id": "export_controls_china",
+        "label": "Chinese export controls",
+        "description": (
+            "China's own export-licensing and control measures restricting "
+            "outbound flows of strategic materials — rare earths and their "
+            "compounds, gallium/germanium, graphite, antimony — typically "
+            "as leverage in technology-trade disputes. Signature: a sharp "
+            "fall in China's exports of a controlled material, often with "
+            "volume falling harder than value (licensing throttles tonnage; "
+            "scarcity lifts price), while overall exports rise."
+        ),
+        "corroboration_steps": [
+            "Check MOFCOM/GACC announcement lists for licensing or control measures covering the material, and their effective dates against the affected months",
+            "Compare volume vs value in the drawer: licensing throttles tonnage first — value falling less than quantity is consistent with a price offset",
+            "Test the mirror: importer-side customs (Eurostat/US/Japan/Korea) should show the same material falling with a lag",
+            "Watch adjacent lines for substitution or stockpiling (a pre-announcement surge is the classic control signature)",
+        ],
+    },
+    {
+        # China-side (GACC commodity-take) entry — the domestic-slowdown →
+        # export-push mechanism (the car-export register). External
+        # specifics (subsidy programmes, named markets) stay in this
+        # description; the model argues only from the shown numbers.
+        "id": "domestic_demand_pivot",
+        "label": "Domestic-demand pivot to exports",
+        "description": (
+            "Weak Chinese domestic demand pushing producers toward export "
+            "markets — the classic pattern for cars (domestic sales "
+            "slowing after subsidy phase-outs while manufacturers hold "
+            "output), steel, and other scale industries. Signature: "
+            "sustained export volume growth outpacing value growth "
+            "(price competition abroad), across several months, in a "
+            "sector with known domestic-market softness."
+        ),
+        "corroboration_steps": [
+            "Check the sector's Chinese domestic sales/output data (CAAM for vehicles, NBS industrial output) for the same months",
+            "Compare volume vs value YoY in the drawer: an export push shows volume leading value (price give-back abroad)",
+            "Look for destination-market policy responses (tariff or anti-dumping activity) as independent evidence of the surge's visibility",
+            "Test persistence: a pivot holds across months; a one-month spike is more likely shipment timing",
+        ],
+    },
+    {
         "id": "post_pandemic_normalisation",
         "label": "Post-pandemic normalisation",
         "description": (

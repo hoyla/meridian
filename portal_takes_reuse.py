@@ -151,6 +151,9 @@ def graft_gacc_slots(report: Report, prior: dict) -> int:
     if gp.synthesis is None and prior_gp.get("synthesis"):
         gp.synthesis = prior_gp["synthesis"]
         grafted += 1
+    if gp.commodity_take is None and prior_gp.get("commodity_take"):
+        gp.commodity_take = prior_gp["commodity_take"]
+        grafted += 1
     prior_q = prior_gp.get("questions") or {}
     if (gp.questions is None and prior_q.get("status") == "generated"
             and prior_q.get("questions")):
