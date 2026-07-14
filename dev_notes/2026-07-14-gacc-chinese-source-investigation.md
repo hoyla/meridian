@@ -124,6 +124,38 @@ schedule instead of inference. **Third**, today (14 Jul) is the *scheduled*
 preliminary date for June — the Chinese side posted on schedule at 09:28
 Beijing; the English translation is the laggard.
 
+### The 2026 calendar exists only in Chinese — and calendars are not advance-published
+
+Luke's follow-up challenge ("the most recent calendar I can see on the
+English site is 2025") exposed two more facts:
+
+- **Publication timing:** calendars appear **January–March of the year
+  they cover**, not ahead of it. The CN SDDS category (数据公布时间表,
+  `…/302274/302278/302279/index.html`) holds 2015–2023 with path dates
+  telling the story: 2023's published 2023-03-18, 2022's 2022-03-13,
+  2021's 2021-01-07, 2020's 2020-01-23. The **2026 schedule** was
+  published as **公告2025年第240号** ("on the publication times of China
+  customs statistics for 2026") on **2026-03-11**, in the 统计制度
+  category (`…/302274/tjzd/index.html`), article
+  `/customs/2026-03/11/article_2026031116150585435.html`. So each
+  January–February runs on *no* published current-year schedule — the
+  empirical `month_lag_days` override stays as the fallback even if the
+  calendar is ingested.
+- **No English 2026 edition** as of 14 Jul 2026 — the English Release
+  Calendar page stops at 2025. The 2026 schedule (快讯/月刊/在线查询):
+  Jan 14/18/20, Feb —, Mar 10/18/20, Apr 14/18/20, May 9/18/20,
+  Jun 9/18/20, **Jul 14/18/20**, Aug 7/18/20, Sep 8/18/20 (+年鉴 30th),
+  Oct 14/18/20, Nov 10/18/20, Dec 8/18/20. Its notes 二/三 state the
+  vintage rule in plainer terms than the English 2025 edition: the 快讯 is
+  月度**初步**汇总数据 (preliminary aggregation), superseded by the
+  corrected 月度**正式**数据 (official monthly data) on which the 月刊 is
+  built — 以最新公布数据为准 (the latest published figure prevails).
+
+Same 统计制度 category bonus: the official **2026 commodity catalogues**
+for both products (海关统计快讯进口/出口重点商品目录（2026年）,
+海关统计月报进口/出口主要商品目录（2026年）) — the canonical anchor for
+the commodity-highlights label-drift gotchas (Machine-tools-2021 etc.).
+
 Express article pages carry **no HTML table** — one `.xls` attachment each
 (this is true of the 2025 articles too, despite the search index suggesting
 otherwise; the search indexes the attachment *content*). Article URLs are

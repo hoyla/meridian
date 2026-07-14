@@ -949,7 +949,10 @@ Two separable build tracks (dev-note build sketch):
   pure known-technology work.
 - Also: ingest the official Release Calendar to drive `release_calendar.py`
   from GACC's own schedule (it corroborates PR #139's empirical
-  quarter-end override).
+  quarter-end override). Caveat: calendars publish **Jan–Mar of the year
+  they cover** (2026's = CN-only 公告2025年第240号, posted 2026-03-11;
+  no English edition), so the empirical override remains the Jan–Feb
+  fallback each year.
 
 Append-only + provenance discipline throughout (principles 3/4/7); the
 per-release Chinese URL backfill (above) falls out of Track 1 for free.
