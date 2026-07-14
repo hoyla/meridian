@@ -7,9 +7,21 @@ and Luke's observation that the Chinese site was already carrying **June 2026**
 tables while the English site still topped out at May. Luke's framing for the
 decision: *"we want to be sure that we're comparing apples with apples."*
 
+*Revised the same evening after Luke's challenge: the first version mis-stated
+the 统计月报 cadence as ~18th of M+2 — it is the **18th of M+1** (verified for
+all 12 months of 2025) — and consequently overstated the discovery gap ("the CN
+source can never be the only source"). Corrected throughout; the recovery
+picture is much better than first written.*
+
 Everything below was verified live on 2026-07-14 (UK time). Where a claim
 rests on a fetched file, the file's URL + SHA-256 is in the provenance
 appendix.
+
+**Decision (Luke, 2026-07-14 evening):** the observed lead — Chinese tables up
+02:28 UK, English still absent at 16:50 UK, 14+ hours later — is editorially
+material ("12 hours is a long time in the news media"), and with values proven
+identical there is *"a very strong argument to use the Chinese."* Next step is
+the build spike (WAF headless feasibility), not more research.
 
 ## TL;DR
 
@@ -25,29 +37,37 @@ appendix.
    Chinese June tables went up ~09:28 Beijing on 14 Jul; English hadn't
    posted by late afternoon UK the same day. Historical page-date evidence
    says 0–1 day; it cannot be made rigorous retrospectively (see §Timing).
-3. **The catch is discovery, not data.** The Chinese Express index lists
-   *only the current drop* (no archive, no pagination); the site search has
-   **no 2026 coverage** (apparently a CMS-migration casualty); Wayback is
-   blocked by the WAF. Miss a drop window and the on-site recovery path is
-   the monthly report ~5 weeks later — or the English site.
+3. **Discovery has a narrow blind window, not a hole.** The Chinese Express
+   index lists *only the current drop* (no archive, no pagination); the site
+   search has **no 2026 coverage** (apparently a CMS-migration casualty);
+   Wayback is blocked by the WAF. *But* the 统计月报 year pages are a
+   complete, permanent archive from the **18th of M+1** — ~8–9 days behind
+   the Express drop — so the CN site can stand alone. The English archive is
+   only strictly needed inside that ~8-day window (≈2 months for January,
+   which waits for the combined Jan–Feb cycle), for pre-2025 history, and as
+   a cross-check.
 4. **Access is two-tier.** All `www.customs.gov.cn` *HTML* is behind a
    JS-challenge WAF (curl: 412; embedded/headless browsers and Wayback's
-   crawler fail; real Chrome passes). The **spreadsheet attachments are not
-   WAF-protected** — plain curl fetches them. A pipeline needs exactly one
-   WAF-passing HTML fetch per drop to discover attachment URLs.
+   crawler fail; real Chrome passes) — this includes the 月报 year pages.
+   The **spreadsheet attachments are not WAF-protected** — plain curl
+   fetches them. A pipeline needs exactly one WAF-passing HTML fetch per
+   drop to discover attachment URLs.
 5. **Bonus discovery:** the 统计月报 (monthly report) is a *richer* product
    than anything we ingest today — 18 tables × CNY/USD including
    **partner × HS-chapter cross-tables** (the cross the preliminary release
    famously lacks), full country list (277 rows), single-month YoY columns —
-   with per-year archive pages (2025–2026 at the current path), published
-   ~18th of M+2, values identical to the preliminary (verified May-2026).
+   with per-year archive pages (2025–2026 at the current path), published on
+   the **18th of M+1** (all 12 months of 2025 verified; Jan folds into the
+   combined cycle → 18 Mar), values identical to the preliminary (verified
+   May-2026). That timing puts China-side partner × chapter detail roughly
+   **four weeks ahead of Eurostat's coverage of the same month**.
 
 ## Site taxonomy (Chinese ↔ English)
 
 | Chinese product | Where | English equivalent | Cadence |
 |---|---|---|---|
 | 统计快讯 "Statistics Express" | category `…/302274/302275/index.html` — **current drop only**, ~13 articles/month | `english.customs.gov.cn/statics/report/preliminary.html` (the source we ingest) | ~7th–14th of M+1 |
-| 统计月报 "Monthly report" | per-year pages `…/302274/302277/<YYYY>/index.html` (2025, 2026 exist; 2024 and earlier 404 at this path — pre-migration paths elsewhere) | `statics/report/monthly*.html` (we don't ingest) | ~18th of M+2 |
+| 统计月报 "Monthly report" | per-year pages `…/302274/302277/<YYYY>/index.html` (2025, 2026 exist; 2024 and earlier 404 at this path — pre-migration paths elsewhere) | `statics/report/monthly*.html` (we don't ingest) | **18th of M+1**, metronomic (2025: all 12 months on the 18th; Jan → 18 Mar with the combined cycle) |
 | 数据在线查询 | `stats.customs.gov.cn` query platform | — | interactive |
 
 Express article pages carry **no HTML table** — one `.xls` attachment each
@@ -114,7 +134,7 @@ Evidence assembled (page dates are CMS stamps, so treat with care):
 | 2025-05 | 2025-06-09 | 2025-06-10 | CN +1 day |
 | 2025-06 (quarter-end) | 2025-07-14 | 2025-07-14 | same day |
 | 2025-09 (quarter-end) | 2025-10-13 | **2025-10-08 (!)** | printed date not credible — the Q3 presser was 13 Oct; the English `atcl-date` can predate actual posting |
-| 2026-06 (quarter-end) | **2026-07-14 ~09:28 Beijing (observed live)** | not posted as of ~17:00 UK same day | CN leads ≥ several hours |
+| 2026-06 (quarter-end) | **2026-07-14 09:28 Beijing = 02:28 UK (observed live)** | still not posted at 16:50 UK same day | CN leads ≥ **14 hours** and counting |
 
 The 2025-09 row is the methodological caveat: our `releases.publication_date`
 comes from the English page's printed `atcl-date` div (parse.py:269), which
@@ -127,12 +147,16 @@ a couple of cycles.
 
 Working conclusion: CN leads by **hours (drop-day) to one day**, not weeks.
 The month-wide gap that prompted this investigation was simply what drop-day
-looks like when you check between the two postings. A CN-first trigger buys
-drop-day hours (wire-style value; the chat-notify ping lands earlier) and
-resilience if the English translation ever stalls — it does not buy a
-calendar lead.
+looks like when you check between the two postings. But drop-day hours are
+not nothing: today's observed lead passed 14 hours with English still
+absent, and (Luke) *"12 hours is a long time in the news media"* — on the
+days this tool exists for, a CN-first trigger moves the chat-notify ping
+from evening (or the next morning) to breakfast time. Plus resilience if
+the English translation ever stalls outright.
 
-## Discovery & recovery (the real weakness)
+## Discovery & recovery (narrower than it first looked)
+
+The Express surface alone is weak on history:
 
 - Express index = **current drop only**. No pagination, no year pages
   (`302275/2025/index.html` → 404), no archive.
@@ -144,15 +168,29 @@ calendar lead.
   portlet.
 - Wayback: essentially useless here — its crawler receives the WAF
   challenge (captures are 412 shells).
-- Therefore: **a month that has rotated off the index but not yet into the
-  search index (e.g. May 2026, today) is undiscoverable on-site** unless you
-  already hold its article/attachment URL.
+
+*But* — as Luke pointed out, collapsing the first version of this section —
+the **月报 year pages are the archive**: every month of 2025 and 2026
+(to date) is permanently listed at
+`…/302274/302277/<YYYY>/index.html`, published on the 18th of M+1, with
+values identical to the Express (verified). So on-site recovery exists for
+anything older than ~8–9 days past its Express drop.
+
+The genuine exposure is only:
+
+- the **~8-day blind window** between an Express drop (~10th of M+1) and its
+  月报 publication (18th of M+1) — and only if we missed the drop itself;
+  **January** is the real outlier (~2 months exposed, since its 月报 waits
+  for the combined Jan–Feb cycle → 18 Mar);
+- **pre-2025 history** (year pages 404 for 2024 and earlier at this path —
+  moot for us: the English archive already gave us 2018→present);
+- 月报-as-recovery is a **second parser profile** (different units, string
+  cells, different table numbering/M-codes), though mechanically simple.
 
 Pipeline implication: snapshot every drop when it happens (append-only, as
-ever — principle 4); treat the English site as the recovery/backfill source
-(it keeps its full per-year archive `preliminary<year>.html`, which is how
-we hold 2018→present); the monthly report becomes a second recovery source
-at M+2 (2025+ only at the current path).
+ever — principle 4); the 月报 year page is the on-site recovery/backfill
+source from the 18th; the English site remains the belt-and-braces
+cross-check and the only source for the blind window and pre-2025.
 
 ## Access
 
@@ -171,10 +209,13 @@ browser profile, or falling back to English-index-triggered discovery with
 CN attachments fetched for verification only. The WAF cookie's replayability
 into curl was not testable in this session.
 
-## If B is built — design sketch (not scheduled)
+## Build sketch (next step: the WAF spike)
 
-CN adapter as an *additional* source, never a replacement (defensibility:
-the English pages remain what most Guardian readers/editors can eyeball):
+CN becomes the *primary trigger* (per the decision above), with the English
+site retained as the verification layer and blind-window/pre-2025 fallback —
+defensibility: the English pages remain what most Guardian readers/editors
+can eyeball, so every CN-sourced figure should stay traceable to an English
+page once it exists:
 
 1. Poll the Express index (WAF-passing fetch) alongside the existing English
    poll; log first-seen for both (settles the lead question with data).
@@ -195,9 +236,9 @@ the English pages remain what most Guardian readers/editors can eyeball):
 Open pre-build questions: WAF headless feasibility (the one real unknown);
 whether the June-2026 EN release, when it lands, matches the CN file already
 in hand (pre-registered below — **run this diff first**); how often GACC
-revises Express figures after the fact (the May-2026 月报 says "not at
-M+2"; a year-end revision sweep is still possible and only observable over
-time).
+revises Express figures after the fact (the May-2026 月报 says "not at the
+18th-of-M+1 vintage"; a year-end revision sweep is still possible and only
+observable over time).
 
 ## Pre-registered diff: June 2026 (run when the English release lands)
 
@@ -265,8 +306,15 @@ DB comparisons ran against `observations` joined to `releases`
 (`source='gacc'`, CNY, section 4/5) on the live DB. The June-2025 Express
 article URL (for the timing table): `/customs/2025-07/14/article_2026012219105085809.html`;
 September-2025: `/customs/2025-10/13/article_2026012219105635275.html`.
-English June absence re-verified at ~17:00 UK via the preliminary index
-(`Feb./Mar./Apr./May.` only). WAF behaviour: `curl` → HTTP 412 on all
-`www.customs.gov.cn` HTML; the in-app embedded browser fails the challenge
-(412 → 400); real Chrome passes and the origin appends a challenge token to
-requests; Wayback captures of article pages are 3.7 KB challenge shells.
+English June absence re-verified at 16:50 UK via the preliminary index
+(`Feb./Mar./Apr./May.` only — 14+ hours after the CN posting). WAF
+behaviour: `curl` → HTTP 412 on all `www.customs.gov.cn` HTML; the in-app
+embedded browser fails the challenge (412 → 400); real Chrome passes and
+the origin appends a challenge token to requests; Wayback captures of
+article pages are 3.7 KB challenge shells.
+
+月报 cadence verification (the same-evening correction): the 2025 year page
+`…/302274/302277/2025/index.html` lists all 38 table rows × all 12 months,
+every article path dated the **18th of M+1** without exception (1月/2月 both
+`2025-03/18`; 3月 `2025-04/18` … 11月 `2025-12/18`; 12月 `2026-01/18`). The
+2026 page shows the same pattern through May (`2026-06/18`).

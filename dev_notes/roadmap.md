@@ -917,21 +917,34 @@ per-release Chinese URL backfill would require scraping + title-matching
 the Chinese index — folded into the "Chinese site as earlier trigger"
 investigation below.
 
-### Chinese site as an earlier ingest trigger (investigation)
+### Chinese site as the primary GACC trigger — investigated, GO pending spike
 
-Observed 2026-07-14: the Chinese 统计快讯 index published the June
-by-country + commodity tables (dated 14 Jul) while the English
-`preliminary.html` index still topped out at May. We currently poll
-**only** the English index, so we may be leaving ~a day (and, at the
-quarter-end-late drops, potentially a full month) of lead time on the
-table. Before acting, verify we'd be comparing like with like:
-- Are the Chinese tables the *same* preliminary release, or an earlier
-  partial cut that later gets revised? Compare values once English lands.
-- Quantify the lead reliably across several months (not one drop).
-- Cost: Chinese partner/commodity labels need a different ISO/label
-  match path, and the site fronts a JS anti-bot wall that blocks
-  headless `curl` (our scraper's fetch path). Assess feasibility.
-Keep append-only + provenance discipline (principles 3/4/7) if built.
+Investigation done same day (2026-07-14):
+[`2026-07-14-gacc-chinese-source-investigation.md`](2026-07-14-gacc-chinese-source-investigation.md).
+The apples-to-apples questions all resolved favourably: values are
+**identical** to our English-parsed data everywhere compared (Express
+by-country May-2025 30/30 rows × 6 values; 月报-vs-prelim May-2026 26/26;
+commodity spot rows); the 统计月报 year pages are a complete permanent
+archive at the 18th of M+1 (so the CN site stands alone bar an ~8-day
+blind window per month, ~2 months for January); the observed drop-day
+lead was 14+ hours (CN 02:28 UK, EN still absent at 16:50). Decision
+(Luke): the lead is editorially material — *"very strong argument to use
+the Chinese."*
+
+Remaining before build:
+- **Run the pre-registered June-2026 diff** (30-row CSV in the dev note)
+  the moment the English June release lands — the same-release proof.
+- **The WAF spike** (the one real unknown): all `www.customs.gov.cn`
+  HTML sits behind a JS-challenge WAF that blocks curl/embedded browsers;
+  attachments fetch freely. Test whether headless Playwright(-stealth)
+  passes; the pipeline needs one passing HTML fetch per drop.
+- Then the adapter per the dev note's build sketch: CN-first trigger,
+  EN as verification layer + blind-window/pre-2025 fallback, cross-check
+  assert per drop, zh↔en partner map stored not inferred. Append-only +
+  provenance discipline throughout (principles 3/4/7).
+
+The per-release Chinese URL backfill (above) falls out of this for free
+once the adapter snapshots CN articles.
 
 ## Future-platform items
 
