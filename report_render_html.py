@@ -1037,10 +1037,115 @@ def _reference_html(section) -> str:
     return "\n".join(out)
 
 
+# Column headers + what each source's drop updates on this site — the legend
+# under the publication-calendar table. Static editorial text, kept beside the
+# renderer (the builder supplies only dates/statuses).
+_PUBCAL_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("gacc", "China preliminary (GACC)"),
+    ("gacc_bulletin", "China verified (GACC bulletin)"),
+    ("eurostat", "Eurostat (EU)"),
+    ("hmrc", "HMRC (UK)"),
+)
+
+_PUBCAL_EFFECTS: tuple[tuple[str, str], ...] = (
+    ("China preliminary (GACC 统计快讯)",
+     "China update page — new edition for the month; the China-context "
+     "sections of the next Full briefing refresh with it. China’s first, "
+     "unrevised read, ~5 weeks ahead of Eurostat."),
+    ("China verified (GACC Monthly Bulletin 统计月报)",
+     "GACC’s corrected official figures for the same month, ~9 days after "
+     "the preliminary. Not currently used on this site — shown so you know "
+     "when revisions to the preliminary become possible."),
+    ("Eurostat",
+     "Full briefing — new monthly edition (the flagship), and the European "
+     "confirmation of China’s earlier preliminary read for the same month."),
+    ("HMRC",
+     "UK figures within the Full briefing (the UK scope of the deficit and "
+     "sector tables)."),
+)
+
+
+def _fmt_day_month_short(iso: str | None) -> str:
+    if not iso:
+        return "—"
+    try:
+        from datetime import date as _d
+        d = _d.fromisoformat(iso)
+    except (ValueError, TypeError):
+        return iso
+    return f"{d.day} {d:%b}"
+
+
+def _pubcal_cell_html(cell: dict | None) -> str:
+    """One publication-calendar cell. Statuses (set by the builder):
+    landed → '✓ 14 Jul' (the actual date); scheduled → the official date;
+    estimated → '~13 Aug'; awaited → '14 Jul · awaited' (ingested source past
+    its date with nothing landed); folded → GACC January, which arrives inside
+    the Jan–Feb combined release on February's row."""
+    if not cell:
+        return "<td>—</td>"
+    status = cell.get("status")
+    if status == "folded":
+        return '<td class="note">→ Jan–Feb</td>'
+    combined = " (Jan–Feb)" if cell.get("combined") else ""
+    if status == "landed":
+        return (f'<td>✓ {html.escape(_fmt_day_month_short(cell.get("landed")))}'
+                f"{combined}</td>")
+    exp = html.escape(_fmt_day_month_short(cell.get("expected")))
+    if status == "estimated":
+        return f'<td>~{exp}{combined} <span class="note">est.</span></td>'
+    if status == "awaited":
+        return f'<td>{exp}{combined} <span class="note">· awaited</span></td>'
+    return f"<td>{exp}{combined}</td>"
+
+
+def _pubcal_html(pc: dict) -> str:
+    """The publication calendar (Luke, 2026-07-14): per data month, when each
+    source's figures are expected — official schedule dates where published,
+    our estimate otherwise — and what each drop updates on this site."""
+    out = ['<h3 class="ref-h2">Publication calendar</h3>',
+           '<p class="kicker">When each source’s figures for a data month are '
+           'expected, and what they update here. Dates come from the sources’ '
+           'own published schedules where available; ~dates are our estimates '
+           'from historical cadence.</p>',
+           '<div class="dt-scroll"><table class="dtable"><thead><tr>'
+           "<th>Data month</th>"]
+    for _, label in _PUBCAL_COLUMNS:
+        out.append(f"<th>{html.escape(label)}</th>")
+    out.append("</tr></thead><tbody>")
+    for row in pc.get("rows", []):
+        out.append(f"<tr><td>{html.escape(_fmt_month(row.get('period')))}</td>")
+        for src, _ in _PUBCAL_COLUMNS:
+            out.append(_pubcal_cell_html(row.get("cells", {}).get(src)))
+        out.append("</tr>")
+    out.append("</tbody></table></div>")
+    out.append('<p class="kicker">✓ published (actual date) · plain date = '
+               "the source’s official schedule · ~date = our estimate · "
+               "January’s Chinese figures arrive inside the combined Jan–Feb "
+               "release.</p>")
+    out.append('<ul class="ref">')
+    for name, effect in _PUBCAL_EFFECTS:
+        out.append(f"<li><strong>{html.escape(name)}</strong> — "
+                   f"{html.escape(effect)}</li>")
+    out.append("</ul>")
+    out.append(
+        '<p class="kicker">Schedule sources: GACC’s annual announcement '
+        '(<a href="http://www.customs.gov.cn/customs/2026-03/11/'
+        'article_2026031116150585435.html" target="_blank" rel="noopener">'
+        "公告2025年第240号</a>, the 2026 timetable; published each Jan–Mar "
+        "for the year, so early-year months are estimates), Eurostat’s "
+        '<a href="https://ec.europa.eu/eurostat/documents/6842948/10520689/'
+        'Release+Calendar" target="_blank" rel="noopener">G.3 trade-in-goods '
+        "release calendar</a>, and HMRC’s "
+        '<a href="https://www.uktradeinfo.com/trade-data/release-calendar" '
+        'target="_blank" rel="noopener">uktradeinfo release calendar</a>.</p>')
+    return "".join(out)
+
+
 def _sources_html(section) -> str:
     """The Sources & coverage tab: data sources, period coverage (a small
-    table), and a readable findings manifest. The Trade Map renders after this
-    in the same tab (assembled in render_html)."""
+    table), the publication calendar, and a readable findings manifest. The
+    Trade Map renders after this in the same tab (assembled in render_html)."""
     m = section.metrics or {}
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
@@ -1080,6 +1185,9 @@ def _sources_html(section) -> str:
                 f'<td>{c.get("releases", 0):,}</td>'
                 f'<td>{html.escape(c.get("last_updated") or "—")}</td></tr>')
         out.append("</tbody></table></div>")
+    pubcal = m.get("publication_calendar")
+    if pubcal and pubcal.get("rows"):
+        out.append(_pubcal_html(pubcal))
     # New findings this cycle, by type (moved here from 'What changed' — it's a
     # coverage tally, not substance). Sits with Period coverage.
     nf = m.get("new_findings", [])
