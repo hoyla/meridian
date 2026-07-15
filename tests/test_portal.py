@@ -269,13 +269,24 @@ def _sample_report() -> rm.Report:
              "total_rows": 2, "shown_rows": 2, "inline": True},
             {"name": "hs_yoy_imports", "description": "full detail",
              "headers": ["group"], "rows": [], "total_rows": 3509,
-             "shown_rows": 0, "inline": False}]})
-    gacc_bi = rm.Section(
-        id="gacc-bilateral", title="China’s trade by country (GACC)",
+             "shown_rows": 0, "inline": False},
+            {"name": "gacc_bilateral_yoy", "description": "China-side rows",
+             "headers": ["partner"], "rows": [["European Union"]],
+             "total_rows": 1, "shown_rows": 1, "inline": True,
+             "track": "gacc"}]})
+    # The by-country roster lives on the GACC-only page since the 2026-07-15
+    # single-period consolidation — the Full briefing carries no GACC section.
+    gacc_by_country = rm.Section(
+        id="gacc-by-country", title="By country",
         kind="gacc_bilateral", intro="By partner.",
+        metrics={"grouped": True},
         sections=[rm.Section(
-            id="gacc-united-states", title="United States", kind="gacc_bilateral",
-            findings=[rm.Finding(
+            id="gacc-bycountry-world", title="Rest of the world",
+            kind="gacc_partner_group",
+            sections=[rm.Section(
+                id="gaccpage-united-states", title="United States",
+                kind="gacc_bilateral",
+                findings=[rm.Finding(
                 finding_id=10, subkind="gacc_bilateral_aggregate_yoy",
                 title="China exports to US",
                 metrics={"scope": "China", "flow": "export", "yoy_pct": -0.297,
@@ -285,7 +296,8 @@ def _sample_report() -> rm.Report:
                          "note": ("Incomplete window — missing January 2026 from "
                                   "the current 12-month window"),
                          "caveats": ["partial_window"]},
-                provenance=rm.Provenance(finding_ids=[10], source="gacc"))])])
+                provenance=rm.Provenance(
+                    finding_ids=[10], source="gacc"))])])])
     meta = rm.ReportMeta(data_period=date(2026, 4, 1), variant="eurostat",
                          snapshot_id="t", generated_at=datetime(2026, 6, 20, 12, 0))
     return rm.Report(meta=meta,
@@ -294,8 +306,12 @@ def _sample_report() -> rm.Report:
                      source_vintages={"eurostat": date(2026, 4, 1),
                                       "hmrc": date(2026, 4, 1),
                                       "gacc": date(2026, 5, 1)},
-                     sections=[state, mirror, sector, structural, gacc_bi,
+                     sections=[state, mirror, sector, structural,
                                sources, data, reference, glossary],
+                     gacc_page=rm.GaccPage(
+                         data_period=date(2026, 5, 1),
+                         tab_label="GACC-only (May 2026)",
+                         by_country=gacc_by_country),
                      provenance_payloads={
                          # KPI finding (the deficit indicator cites finding 1).
                          "1": {"finding_id": 1, "title": "EU-27 deficit",
@@ -331,10 +347,11 @@ def test_serialisation_roundtrips_and_dates_are_iso():
 
 def test_markdown_renders_all_sections():
     md = render_markdown(_sample_report())
+    # (No GACC by-country marker: the roster lives on the GACC-only page
+    # since 2026-07-15, outside the sections walk.)
     for marker in ("# Headlines", "## Key indicators", "## State of play",
                    "## Mirror-trade gaps", "## Sector detail", "## Trade map",
-                   "## Methodology & caveats", "## Sources & coverage",
-                   "## China’s trade by country (GACC)"):
+                   "## Methodology & caveats", "## Sources & coverage"):
         assert marker in md, marker
     assert "China only, excl. HK/Macao" in md  # cn-only deficit = Eurostat CN-only, NOT GACC
     assert "China reports" in md          # mirror-gap (GACC vs Eurostat) — the one place "China reports" is right
@@ -355,7 +372,10 @@ def test_html_renders_all_sections_and_is_self_contained():
     assert "Rotterdam" in h               # transshipment hub note
     assert "China only, excl. HK/Macao" in h   # cn-only deficit = Eurostat CN-only, NOT GACC
     assert "China reports" in h           # mirror-gap (GACC vs Eurostat) — the one place "China reports" is right
-    assert 'class="see-also"' in h and 'href="#brief-gacc_bilateral"' in h  # State-of-play → Trading-partners bridge
+    # State-of-play → cross-track bridge (2026-07-15: the by-country roster
+    # lives on the GACC-only tab; the briefing links, never embeds).
+    assert ('class="see-also"' in h
+            and '→ See also the <a href="#tab-gacc">GACC-only tab</a>' in h)
     assert "EV supply chain" in h         # theme pill/chip
 
 
@@ -669,7 +689,12 @@ def test_masthead_updated_stamp_and_briefing_identity_strip():
     assert ('class="tag" title="Triggered by new Eurostat data. '
             'Received 1 Jun 2026.">Eurostat · to Apr 2026</span>') in h
     assert "HMRC · to Apr 2026" in h
-    assert "GACC context · to May 2026" in h
+    # No GACC VINTAGE chip on the briefing strip (2026-07-15 ruling): the
+    # strip claims only this tab's Eurostat/HMRC anchor; GACC gets a
+    # signpost to its own tab instead.
+    assert "GACC context" not in h
+    assert ("China has already reported May 2026 — "
+            '<a href="#tab-gacc">see the GACC-only tab</a>') in h
     assert "Boilerplate second sentence" not in h
 
 
@@ -812,13 +837,25 @@ def test_glossary_web_hides_docx_bundle_terms():
 def test_tables_tab_inline_and_download_only():
     r = _sample_report()
     h = render_html(r)
-    assert "Download Excel workbook" in h and 'href="data.xlsx"' in h
+    # Page-level downloads row (2026-07-15): workbook + Findings briefing,
+    # one home for everything that leaves the portal.
+    assert 'class="dl-row"' in h
+    assert "Excel workbook" in h and 'href="data.xlsx"' in h
+    assert "Findings briefing" in h and 'href="findings.md"' in h
+    assert h.count("Excel workbook") == 1  # once, not per table
     assert "Copy as TSV" in h and 'class="dtable"' in h
-    # download + copy are same-size buttons grouped per-table (no big top CTA)
     assert 'class="dt-actions"' in h and 'class="data-toolbar"' not in h
-    assert h.count("btn-sm") >= 2          # both buttons are the small size
     assert ">Cars<" in h                   # an inline cell
     assert "hs_yoy_imports" in h and "3,509 rows" in h  # download-only, count shown
+    # Track groups carry the period-explicit labels — main first, then the
+    # gacc-track table under its own vintage claim (2026-07-15: the Tables
+    # tab is the one deliberately mixed-vintage surface, so the claims
+    # descend to the group headers).
+    assert h.count('class="dt-group"') == 2
+    assert "Full briefing (Apr 2026) — Eurostat + HMRC" in h
+    assert "GACC-only (May 2026) — China customs" in h
+    assert (h.index("Full briefing (Apr 2026) — Eurostat + HMRC")
+            < h.index("GACC-only (May 2026) — China customs"))
     md = render_markdown(r)
     assert "## Tables" in md and "hs_yoy_imports" in md
 
@@ -830,8 +867,12 @@ def test_gacc_bilateral_per_partner_expanders():
     assert 'class="partner"' in h and "<summary>" in h
     assert "United States" in h
     assert "China’s exports" in h and "€460.00B" in h   # headline in the summary
-    md = render_markdown(_sample_report())               # LLM surface keeps it flat
-    assert "## China’s trade by country (GACC)" in md
+    # Group header + the row-scale balance dial (2026-07-15 consolidation);
+    # single-flow partner → one semicircle only, no degenerate zero-radius arc.
+    assert 'class="pp-group" id="gacc-bycountry-world">Rest of the world' in h
+    assert 'class="pp-glyph"' in h and h.count("a0.00 0.00") == 0
+    # (No markdown parity assertion: the by-country roster moved to the
+    # GACC-only page, and render_markdown covers report.sections only.)
 
 
 def test_gacc_bilateral_expanded_panel_restores_ytd_window_and_caveat_prose():
@@ -847,10 +888,8 @@ def test_gacc_bilateral_expanded_panel_restores_ytd_window_and_caveat_prose():
     assert "Incomplete window — missing January 2026" in h   # prose, not chip
     # window + note appear once, not duplicated per flow
     assert h.count("12 months to May 2026") == 1
-    md = render_markdown(_sample_report())
-    assert "*12 months to May 2026*" in md
-    assert "YTD (5-mo): +12.5% · €33.20B" in md
-    assert "Incomplete window — missing January 2026" in md
+    # (Markdown parity assertions dropped 2026-07-15: the partner roster
+    # lives on the GACC-only page, outside render_markdown's sections walk.)
 
 
 def test_gacc_bilateral_partner_balance_row():
@@ -1459,6 +1498,20 @@ def test_publish_snapshot_validates_before_touching_gcs(tmp_path, monkeypatch):
         portal_publish.publish_snapshot(str(tmp_path), bucket="b")  # no 04_Portal/
 
 
+def test_publish_stamp_date_from_snapshot(tmp_path):
+    """Download filenames are stamped with the snapshot's generation DATE
+    (Luke, 2026-07-15: the workbook spans two tracks' vintages, so a month
+    name would misdescribe it; the date never lies). Unreadable → None →
+    the app's static fallback filename serves."""
+    import portal_publish
+    pd = tmp_path / "04_Portal"
+    pd.mkdir()
+    (pd / "report.json").write_text(json.dumps(
+        {"meta": {"generated_at": "2026-07-15T14:05:12"}}))
+    assert portal_publish._stamp_date_from_snapshot(pd) == "2026-07-15"
+    assert portal_publish._stamp_date_from_snapshot(tmp_path) is None
+
+
 def test_publish_archive_prefix_read_from_snapshot(tmp_path):
     """The archive prefix comes from the snapshot's own meta and is keyed by
     snapshot_id, not the period alone (so same-month republishes never
@@ -1513,6 +1566,7 @@ def test_publish_archives_each_publish_separately(tmp_path, monkeypatch):
             "data_period": "2026-04-01", "snapshot_id": snapshot_id}}))
         (pd / "index.html").write_text("<!doctype html>")
         (bundle / "04_Data.xlsx").write_bytes(b"xlsx")
+        (bundle / "02_Findings.md").write_text("# Findings")
         return bundle
 
     sid1 = "eurostat-2026-04-01-20260620T080000"
@@ -1520,13 +1574,14 @@ def test_publish_archives_each_publish_separately(tmp_path, monkeypatch):
     first = portal_publish.publish_snapshot(str(_bundle("b1", sid1)), bucket="b")
     second = portal_publish.publish_snapshot(str(_bundle("b2", sid2)), bucket="b")
 
-    for name in ("report.json", "index.html", "data.xlsx"):
+    for name in ("report.json", "index.html", "data.xlsx", "findings.md"):
         assert f"latest/{name}" in first and f"latest/{name}" in second
         assert f"periods/2026-04-01/{sid1}/{name}" in first
         assert f"periods/2026-04-01/{sid2}/{name}" in second
     # The second publish rewrote nothing under the first's archive path.
     assert set(first) & set(second) == {
-        "latest/report.json", "latest/index.html", "latest/data.xlsx"}
+        "latest/report.json", "latest/index.html", "latest/data.xlsx",
+        "latest/findings.md"}
     assert uploads == first + second  # every returned path was actually uploaded
 
 

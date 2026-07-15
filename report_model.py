@@ -42,7 +42,10 @@ ChartType = Literal[
     "bignumber", "bignumber_delta", "sparkline", "donut", "line", "bar"
 ]
 
-SCHEMA_VERSION = "0.3.0"  # 0.3.0: + GaccPage.synthesis / .questions (the page's LLM slots)
+SCHEMA_VERSION = "0.4.0"  # 0.4.0: GaccPage.europe → .by_country (all partners, grouped);
+                          # region charts move to the world section; the Full
+                          # briefing no longer carries a floating GACC section
+                          # (2026-07-15 single-period-surfaces ruling)
 # 0.2.0: + Report.gacc_page (the GACC-only tab) + Report.source_vintages
 
 
@@ -245,8 +248,16 @@ class GaccPage:
     # Partner-agnostic standout: the sharpest single-month move anywhere in
     # the release (world Total excluded — that's the wire headline).
     standout: Optional[HeadlineItem] = None
-    europe: Optional[Section] = None  # EU bloc + member states + UK, both flows
-    world: Optional[Section] = None   # blocs + world total + HK entrepôt line
+    # "By country" — every named GACC partner, both flows, grouped Europe
+    # first (EU bloc + member states + UK), then rest of the world; biggest
+    # first within each group. Consolidates the old Europe-up-close section
+    # with the Full briefing's former China-by-country section (2026-07-15
+    # ruling: each surface single-period; the briefing carries no floating
+    # GACC content).
+    by_country: Optional[Section] = None
+    # Blocs + world total + HK entrepôt line, with the annual per-region
+    # trend charts on metrics["region_charts"] (the region tier's visual).
+    world: Optional[Section] = None
     # {prev_period, basis_note, rows: [{label, flow, prev_yoy, cur_yoy,
     #  delta, basis}]} — the within-track delta vs the previous GACC month.
     since_last: dict = field(default_factory=dict)

@@ -56,6 +56,22 @@ def _archive_prefix_from_snapshot(portal_dir: Path) -> str | None:
         return None
 
 
+def _stamp_date_from_snapshot(portal_dir: Path) -> str | None:
+    """The snapshot's generation DATE (YYYY-MM-DD), for the download
+    filenames ('meridian-data-2026-07-15.xlsx'). Snapshot date, not a
+    reference month, by ruling (Luke, 2026-07-15): the workbook spans two
+    tracks' vintages, so any single-month name misdescribes most of the
+    file — the date is the only stamp that never lies, and the cover sheet
+    carries the per-source coverage. None if unreadable → the static
+    fallback filename serves."""
+    try:
+        meta = json.loads((portal_dir / "report.json").read_text()).get("meta") or {}
+        gen = meta.get("generated_at") or ""
+        return str(gen)[:10] or None
+    except Exception:
+        return None
+
+
 def read_latest_report(
     bucket: str | None = None, *, required: bool = False,
 ) -> dict | None:
@@ -146,6 +162,7 @@ def publish_snapshot(bundle_dir: str, *, bucket: str | None = None) -> list[str]
     # archive) so /data.xlsx can serve it. If it's still missing the workbook
     # build must have failed upstream (logged there); skip rather than fail the
     # whole publish — the download 404s until the next successful build.
+    stamp = _stamp_date_from_snapshot(portal_dir)
     xlsx = Path(bundle_dir) / "04_Data.xlsx"
     if xlsx.is_file():
         dests = ["latest/data.xlsx"]
@@ -154,6 +171,12 @@ def publish_snapshot(bundle_dir: str, *, bucket: str | None = None) -> list[str]
         for dest in dests:
             blob = b.blob(dest)
             blob.cache_control = "no-cache"
+            if stamp:
+                # The app forwards this to the browser — snapshot-date
+                # filenames distinguish successive downloads (see
+                # _stamp_date_from_snapshot for the naming ruling).
+                blob.content_disposition = (
+                    f'attachment; filename="meridian-data-{stamp}.xlsx"')
             blob.upload_from_filename(str(xlsx), content_type=_XLSX_MIME)
             written.append(dest)
             log.info("portal-publish: wrote gs://%s/%s", bucket, dest)
@@ -161,6 +184,28 @@ def publish_snapshot(bundle_dir: str, *, bucket: str | None = None) -> list[str]
         log.warning("portal-publish: no 04_Data.xlsx in %s (workbook build "
                     "likely failed upstream); /data.xlsx download will 404 "
                     "until the next successful build", bundle_dir)
+
+    # The companion Findings briefing (2026-07-15: findings only, no leads)
+    # — same skip-and-warn posture as the workbook.
+    findings = Path(bundle_dir) / "02_Findings.md"
+    if findings.is_file():
+        dests = ["latest/findings.md"]
+        if archive:
+            dests.append(f"{archive}/findings.md")
+        for dest in dests:
+            blob = b.blob(dest)
+            blob.cache_control = "no-cache"
+            if stamp:
+                blob.content_disposition = (
+                    f'attachment; filename="meridian-findings-{stamp}.md"')
+            blob.upload_from_filename(
+                str(findings), content_type="text/markdown; charset=utf-8")
+            written.append(dest)
+            log.info("portal-publish: wrote gs://%s/%s", bucket, dest)
+    else:
+        log.warning("portal-publish: no 02_Findings.md in %s; the portal "
+                    "/findings.md download will 404 until the next "
+                    "successful build", bundle_dir)
     return written
 
 

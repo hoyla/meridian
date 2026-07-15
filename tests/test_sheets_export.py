@@ -540,3 +540,45 @@ def test_briefing_pack_export_can_disable_spreadsheet(
 def test_google_sheets_writer_raises_until_wired_up():
     with pytest.raises(NotImplementedError, match="not yet wired up"):
         sheets_export.GoogleSheetsWriter().write([], "any-spreadsheet-id")
+
+
+def test_xlsx_writer_cover_sheet(tmp_path):
+    """The About sheet (2026-07-15): once downloaded the workbook loses all
+    portal context, so it leads with generation moment, snapshot id,
+    per-source vintages, and a per-sheet track listing — provenance
+    principle 7 for the one artefact that leaves the portal."""
+    from openpyxl import load_workbook
+
+    from sheets_export import SheetData, XlsxWriter
+
+    sheets = [
+        SheetData(name="summary", description="One row per group. More.",
+                  headers=["a"], rows=[[1]]),
+        SheetData(name="gacc_bilateral_yoy", description="China-side rows.",
+                  headers=["a"], rows=[[1], [2]], track="gacc"),
+    ]
+    cover = {
+        "generated_at": "2026-07-15 14:05",
+        "snapshot_id": "eurostat-2026-04-01-20260715T140500",
+        "vintage_lines": ["Eurostat — data to Apr 2026",
+                          "GACC (China customs — runs weeks ahead) — data to Jun 2026"],
+        "track_labels": {
+            "main": "Full briefing (Apr 2026) — Eurostat + HMRC",
+            "gacc": "GACC-only (Jun 2026) — China customs"},
+    }
+    path = XlsxWriter().write(sheets, str(tmp_path / "x.xlsx"), cover=cover)
+    wb = load_workbook(path)
+    assert wb.sheetnames[0] == "About"          # the cover leads
+    assert wb.sheetnames[1:] == ["summary", "gacc_bilateral_yoy"]
+    text = "\n".join(
+        str(v) for row in wb["About"].iter_rows(values_only=True)
+        for v in row if v is not None)
+    assert "Generated: 2026-07-15 14:05" in text
+    assert "eurostat-2026-04-01-20260715T140500" in text
+    assert "Eurostat — data to Apr 2026" in text
+    assert "GACC-only (Jun 2026) — China customs" in text
+    assert "One row per group." in text          # first sentence only
+    assert "More." not in text
+    # Without cover, no About sheet (the bundle paths opt in explicitly).
+    path2 = XlsxWriter().write(sheets, str(tmp_path / "y.xlsx"))
+    assert load_workbook(path2).sheetnames[0] == "summary"
