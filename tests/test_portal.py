@@ -270,12 +270,19 @@ def _sample_report() -> rm.Report:
             {"name": "hs_yoy_imports", "description": "full detail",
              "headers": ["group"], "rows": [], "total_rows": 3509,
              "shown_rows": 0, "inline": False}]})
-    gacc_bi = rm.Section(
-        id="gacc-bilateral", title="China’s trade by country (GACC)",
+    # The by-country roster lives on the GACC-only page since the 2026-07-15
+    # single-period consolidation — the Full briefing carries no GACC section.
+    gacc_by_country = rm.Section(
+        id="gacc-by-country", title="By country",
         kind="gacc_bilateral", intro="By partner.",
+        metrics={"grouped": True},
         sections=[rm.Section(
-            id="gacc-united-states", title="United States", kind="gacc_bilateral",
-            findings=[rm.Finding(
+            id="gacc-bycountry-world", title="Rest of the world",
+            kind="gacc_partner_group",
+            sections=[rm.Section(
+                id="gaccpage-united-states", title="United States",
+                kind="gacc_bilateral",
+                findings=[rm.Finding(
                 finding_id=10, subkind="gacc_bilateral_aggregate_yoy",
                 title="China exports to US",
                 metrics={"scope": "China", "flow": "export", "yoy_pct": -0.297,
@@ -285,7 +292,8 @@ def _sample_report() -> rm.Report:
                          "note": ("Incomplete window — missing January 2026 from "
                                   "the current 12-month window"),
                          "caveats": ["partial_window"]},
-                provenance=rm.Provenance(finding_ids=[10], source="gacc"))])])
+                provenance=rm.Provenance(
+                    finding_ids=[10], source="gacc"))])])])
     meta = rm.ReportMeta(data_period=date(2026, 4, 1), variant="eurostat",
                          snapshot_id="t", generated_at=datetime(2026, 6, 20, 12, 0))
     return rm.Report(meta=meta,
@@ -294,8 +302,12 @@ def _sample_report() -> rm.Report:
                      source_vintages={"eurostat": date(2026, 4, 1),
                                       "hmrc": date(2026, 4, 1),
                                       "gacc": date(2026, 5, 1)},
-                     sections=[state, mirror, sector, structural, gacc_bi,
+                     sections=[state, mirror, sector, structural,
                                sources, data, reference, glossary],
+                     gacc_page=rm.GaccPage(
+                         data_period=date(2026, 5, 1),
+                         tab_label="GACC-only (May 2026)",
+                         by_country=gacc_by_country),
                      provenance_payloads={
                          # KPI finding (the deficit indicator cites finding 1).
                          "1": {"finding_id": 1, "title": "EU-27 deficit",
@@ -331,10 +343,11 @@ def test_serialisation_roundtrips_and_dates_are_iso():
 
 def test_markdown_renders_all_sections():
     md = render_markdown(_sample_report())
+    # (No GACC by-country marker: the roster lives on the GACC-only page
+    # since 2026-07-15, outside the sections walk.)
     for marker in ("# Headlines", "## Key indicators", "## State of play",
                    "## Mirror-trade gaps", "## Sector detail", "## Trade map",
-                   "## Methodology & caveats", "## Sources & coverage",
-                   "## China’s trade by country (GACC)"):
+                   "## Methodology & caveats", "## Sources & coverage"):
         assert marker in md, marker
     assert "China only, excl. HK/Macao" in md  # cn-only deficit = Eurostat CN-only, NOT GACC
     assert "China reports" in md          # mirror-gap (GACC vs Eurostat) — the one place "China reports" is right
@@ -355,7 +368,10 @@ def test_html_renders_all_sections_and_is_self_contained():
     assert "Rotterdam" in h               # transshipment hub note
     assert "China only, excl. HK/Macao" in h   # cn-only deficit = Eurostat CN-only, NOT GACC
     assert "China reports" in h           # mirror-gap (GACC vs Eurostat) — the one place "China reports" is right
-    assert 'class="see-also"' in h and 'href="#brief-gacc_bilateral"' in h  # State-of-play → Trading-partners bridge
+    # State-of-play → cross-track bridge (2026-07-15: the by-country roster
+    # lives on the GACC-only tab; the briefing links, never embeds).
+    assert ('class="see-also"' in h
+            and '→ See also the <a href="#tab-gacc">GACC-only tab</a>' in h)
     assert "EV supply chain" in h         # theme pill/chip
 
 
@@ -669,7 +685,12 @@ def test_masthead_updated_stamp_and_briefing_identity_strip():
     assert ('class="tag" title="Triggered by new Eurostat data. '
             'Received 1 Jun 2026.">Eurostat · to Apr 2026</span>') in h
     assert "HMRC · to Apr 2026" in h
-    assert "GACC context · to May 2026" in h
+    # No GACC VINTAGE chip on the briefing strip (2026-07-15 ruling): the
+    # strip claims only this tab's Eurostat/HMRC anchor; GACC gets a
+    # signpost to its own tab instead.
+    assert "GACC context" not in h
+    assert ("China has already reported May 2026 — "
+            '<a href="#tab-gacc">see the GACC-only tab</a>') in h
     assert "Boilerplate second sentence" not in h
 
 
@@ -830,8 +851,12 @@ def test_gacc_bilateral_per_partner_expanders():
     assert 'class="partner"' in h and "<summary>" in h
     assert "United States" in h
     assert "China’s exports" in h and "€460.00B" in h   # headline in the summary
-    md = render_markdown(_sample_report())               # LLM surface keeps it flat
-    assert "## China’s trade by country (GACC)" in md
+    # Group header + the row-scale balance dial (2026-07-15 consolidation);
+    # single-flow partner → one semicircle only, no degenerate zero-radius arc.
+    assert 'class="pp-group" id="gacc-bycountry-world">Rest of the world' in h
+    assert 'class="pp-glyph"' in h and h.count("a0.00 0.00") == 0
+    # (No markdown parity assertion: the by-country roster moved to the
+    # GACC-only page, and render_markdown covers report.sections only.)
 
 
 def test_gacc_bilateral_expanded_panel_restores_ytd_window_and_caveat_prose():
@@ -847,10 +872,8 @@ def test_gacc_bilateral_expanded_panel_restores_ytd_window_and_caveat_prose():
     assert "Incomplete window — missing January 2026" in h   # prose, not chip
     # window + note appear once, not duplicated per flow
     assert h.count("12 months to May 2026") == 1
-    md = render_markdown(_sample_report())
-    assert "*12 months to May 2026*" in md
-    assert "YTD (5-mo): +12.5% · €33.20B" in md
-    assert "Incomplete window — missing January 2026" in md
+    # (Markdown parity assertions dropped 2026-07-15: the partner roster
+    # lives on the GACC-only page, outside render_markdown's sections walk.)
 
 
 def test_gacc_bilateral_partner_balance_row():

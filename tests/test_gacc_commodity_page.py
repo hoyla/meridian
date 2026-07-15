@@ -107,9 +107,12 @@ def _minimal_gacc_page(commodities=None) -> rm.GaccPage:
                   "source_url": "https://english.customs.gov.cn/x.html",
                   "source_url_zh": None},
         since_last={"prev_period": "2026-04-01", "rows": []},
-        europe=rm.Section(id="gacc-europe", title="Europe up close",
-                          kind="gacc_bilateral", intro="China’s own numbers.",
-                          metrics={}),
+        by_country=rm.Section(
+            id="gacc-by-country", title="By country",
+            kind="gacc_bilateral", intro="China’s own numbers.",
+            metrics={"grouped": True},
+            sections=[rm.Section(id="gacc-bycountry-europe", title="Europe",
+                                 kind="gacc_partner_group")]),
         commodities=commodities,
         understanding="**An early read.** Test copy.",
     )
@@ -126,16 +129,16 @@ def _render(page: rm.GaccPage) -> str:
     return render_html(report)
 
 
-def test_commodities_renders_between_since_last_and_europe():
+def test_commodities_renders_between_since_last_and_partner_sections():
     html = _render(_minimal_gacc_page(commodities=_commodities_section()))
     i_since = html.index('id="gacc-sincelast"')
     i_com = html.index('id="gacc-commodities"')
-    i_eur = html.index('id="gacc-europe"')
-    assert i_since < i_com < i_eur
+    i_country = html.index('id="gacc-by-country"')
+    assert i_since < i_com < i_country
     # subnav entry, in the same order
     assert html.index('data-spy="gacc-sincelast"') \
         < html.index('data-spy="gacc-commodities"') \
-        < html.index('data-spy="gacc-europe"')
+        < html.index('data-spy="gacc-by-country"')
 
 
 def test_commodities_surface_full_catalogue_shape():

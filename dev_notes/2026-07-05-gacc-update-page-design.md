@@ -354,3 +354,77 @@ the build, recorded so this doc doesn't mislead a future reader:
   live false positive — the model echoes the notation it is shown, so fact
   lines say "12-month". (3) `notify`'s export enrichment needed the track
   filter (a gacc row masqueraded as "a fresh briefing" otherwise).
+
+---
+
+## Addendum — 2026-07-15: single-period surfaces & the by-country consolidation
+
+**Trigger:** Luke hit the Full briefing's "GACC context · to Jun 2026" chip
+cold and read it as a two-track violation. It wasn't — the cycle invariants
+all held — but the investigation exposed a real remnant: the briefing's
+"China's trade by country (GACC)" section predated this design (f2a97c7,
+21 Jun), floated at GACC-latest (after the June drop, TWO months past the
+Apr anchor — quarter-end timing makes the doc's "a month ahead" the best
+case, not the rule), and this doc ratified rather than reconciled it. If the
+designer trips on it, reporters will.
+
+**Ruling (Luke): surfaces are single-period.** Every claim on a tab is
+anchored to that tab's reference month; the other track is reached by
+cross-link, never embedded at another vintage.
+
+As built (branch `ljh-gacc-by-country-consolidation`):
+
+- **Briefing:** the GACC section is REMOVED. The identity strip carries
+  Eurostat/HMRC vintage chips only, plus a SIGNPOST ("China has already
+  reported {Mon} — see the GACC-only tab") that claims nothing about this
+  page. The state-of-play see-also bridge points cross-tab. And
+  `what_changed.new_count` is track-scoped (gacc_* subkinds excluded): a
+  GACC calendar arrival must not move the briefing's "since last briefing"
+  tally. (The bundle findings.md keeps the whole-cycle count — portal-model
+  scoping only.)
+- **GACC page:** "Europe up close" + the briefing's former 24-partner
+  roster CONSOLIDATE into one grouped **"By country"** section — Europe
+  group first (EU bloc default-open, then member states + UK), then Rest
+  of the world; biggest-first within groups (the change-shaped reads stay
+  in strip / standout / since-last). **"China and the world" stays as-is**
+  and gains the three annual region charts (region-tier data beside the
+  region-tier table), moving ABOVE By country — compact context before the
+  long roster. Each partner row carries a fixed-size ◐ **balance dial**
+  (the larger flow fills the row budget, the smaller scales by √ratio) —
+  same grammar as the world strip's area-scaled glyphs, which keep the
+  single-country majors per the 2026-07-05 proportion ruling.
+- **Copy/plumbing:** the publication-calendar effect line no longer claims
+  the briefing refreshes on a GACC drop; About-box guide updated; the
+  `europe_section` answerability TAG is kept (baked into stored LLM
+  output) and retargeted to `#gacc-bycountry-europe`; `GaccPage.europe` →
+  `by_country`; schema 0.4.0.
+- **Identity note:** this doc's "slim GACC tab" framing is formally
+  retired — with the commodity catalogue and the full roster this is the
+  dense page, and rightly so: it is the product's freshest asset.
+
+**Refinement (2026-07-15, same day, Luke):** the world section sheds its two
+non-region rows. The **UK** goes (it was in neither the region charts nor the
+KPI strip; it lives one scroll down in the Europe group) and the **HK
+entrepôt line** goes — so the section's cast equals the region charts' cast
+exactly (Total + ASEAN / EU / US / Latin America / Africa / Russia). The US
+and Russia stay: the section's framing question needs the US, and Russia is
+the standing story. The entrepôt treatment moves to the By-country HK row,
+upgraded: a structural iso2 flag (HK/MO, never label spellings) drives a
+collapsed-row chip + a panel-leading explainer, including the cross-reference
+to the Full briefing's Mirror-trade gaps (plain text, not a link — section
+anchors don't switch tabs). This also fixed a gap the consolidation would
+have shipped: the old warning lived only on the world row, so the By-country
+HK row — second-biggest rest-of-world, +189% import month — would have
+carried no flag at all.
+
+**Plus (same day):** the world section gained its own "More about" expander —
+the cast rationale ("every region-level aggregate GACC publishes, plus the US
+and Russia; the cast is GACC's, not an editorial selection") and **why there
+is no Middle East line**: GACC's preliminary release publishes no Middle East
+aggregate and names no Middle East partner (no Saudi Arabia, no UAE) — that
+trade sits unseparated inside Belt & Road and the world total; splitting it
+out needs GACC's fuller monthly publications or partner-side data (UN
+Comtrade), on the roadmap. Echoed in the By-country "Which countries appear"
+note. Rationale: an absence a reporter would otherwise read as our omission
+must be named as the source's reporting choice (provenance principle — never
+present a gap without saying whose gap it is).

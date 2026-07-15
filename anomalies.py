@@ -4333,7 +4333,7 @@ def detect_gacc_commodity_yoy(
     Editorial use: the "China's car exports rose 71% to 1.06mn in June"
     register — GACC's own sector cut, world-total scope (no partner
     dimension), on the GACC-only page between "Since the last read" and
-    "Europe up close".
+    the region/country sections.
 
     Anchors are regular monthly pages only; Jan-Feb combined anchors are
     skipped in v1 (matching the build note). The three starred catalogue

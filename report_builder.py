@@ -625,6 +625,18 @@ def _headline_item(m: dict, disp: dict[str, str]) -> HeadlineItem:
 
 def _what_changed(diff, disp: dict[str, str]) -> WhatChanged:
     from briefing_pack.sections.front_page import _since_last_pack_lines
+    import dataclasses as _dc
+    # Track-scope the portal tally (2026-07-15): the Full briefing's "since
+    # the last briefing" numbers must not move on a GACC-track calendar
+    # arrival — supersession (and news) follows source-track. GACC-track
+    # findings all carry gacc_* subkinds; mirror-gap findings (Eurostat×GACC
+    # crosses) are main-track and don't. The bundle's findings.md keeps the
+    # unscoped diff (it documents the whole cycle); this scoping is
+    # portal-model only.
+    main_new = sum(n for sk, n in (diff.new_by_subkind or [])
+                   if not str(sk).startswith("gacc_"))
+    if main_new != diff.total_new:
+        diff = _dc.replace(diff, total_new=main_new)
     # `disp` maps the stable internal group key → reader-facing display name.
     # Shift.group_name is rendered verbatim by both renderers (no slug, no
     # lookup), so resolve the display string here at the model-build site.
@@ -2017,7 +2029,8 @@ def _gacc_standout(rows: list[_GaccRow], period: date) -> HeadlineItem | None:
 
 def _gacc_partner_section(label: str, slug_prefix: str,
                           flows_rows: list[_GaccRow], period: date,
-                          default_open: bool = False) -> Section:
+                          default_open: bool = False,
+                          hub: bool = False) -> Section:
     """One partner subsection in the _gacc_bilateral_section shape (same
     Finding metrics + netted-balance metrics), so the existing renderer
     handles it unchanged. `default_open` renders the expander unfolded —
@@ -2050,6 +2063,12 @@ def _gacc_partner_section(label: str, slug_prefix: str,
     metrics = _partner_balance(flows)
     if default_open:
         metrics["default_open"] = True
+    if hub:
+        # Entrepôt routing hub (HK/MO — separate customs regimes): the row
+        # renders a visible flag + an explainer, so a routing spike is
+        # never read as that partner's own demand. Structural (iso2), set
+        # by the caller — never GACC's label spellings.
+        metrics["is_hub"] = True
     return Section(
         id=slug_prefix + _slugify_heading(label), title=label,
         kind="gacc_bilateral", findings=findings,
@@ -2058,58 +2077,99 @@ def _gacc_partner_section(label: str, slug_prefix: str,
     )
 
 
-def _gacc_europe_section(rows: list[_GaccRow], period: date) -> Section | None:
-    """Europe up close: GACC's EU aggregate first (both flows), then every
-    EU member state GACC releases plus the UK — the China-side read on the
-    numbers Europe will confirm in ~5 weeks. Sorted by the size of the
-    single-month move (fall back 12-month), sharpest first."""
+def _gacc_by_country_section(rows: list[_GaccRow], period: date) -> Section | None:
+    """By country: every named GACC partner, both flows, in two groups —
+    Europe first (GACC's EU aggregate, then each member state it names,
+    plus the UK), then the rest of the world; biggest first within each
+    group, the EU bloc's expander open by default.
+
+    Consolidates the old Europe-up-close section with the Full briefing's
+    former China-by-country section (2026-07-15 ruling: surfaces are
+    single-period — the briefing carries no floating GACC content, and ALL
+    per-country GACC detail lives here at this page's period)."""
     eu_iso = eurostat.EU27_PARTNER_CODES | {"GB"}
-    by_label: dict[str, list[_GaccRow]] = {}
     eu_bloc: list[_GaccRow] = []
+    europe: dict[str, list[_GaccRow]] = {}
+    world: dict[str, list[_GaccRow]] = {}
     for r in rows:
         if r.family != "bilateral":
             continue
         if r.kind == "eu_bloc":
             eu_bloc.append(r)
         elif r.iso2 in eu_iso:
-            by_label.setdefault(r.label, []).append(r)
-    if not eu_bloc and not by_label:
+            europe.setdefault(r.label, []).append(r)
+        else:
+            world.setdefault(r.label, []).append(r)
+    if not (eu_bloc or europe or world):
         return None
+
+    def scale(pair: list[_GaccRow]) -> float:
+        # Biggest-first = the larger flow's rolling-12mo value (a roster
+        # ordering, predictable across editions; the change-shaped reads
+        # live in the strip / standout / since-last above).
+        return max((r.rolling_eur or 0.0) for r in pair)
+
     root = Section(
-        id="gacc-europe", title="Europe up close",
+        id="gacc-by-country", title="By country",
         kind="gacc_bilateral",
-        intro="China’s own reported trade with the EU and with each "
-              "member state it names, plus the UK — both directions. "
-              "“Imports from” here is the China-side read on "
-              "European exporters’ China demand.",
-        about=_GACC_PAGE_ABOUT_EUROPE,
+        intro="China’s own reported trade with every partner it names, "
+              "both flows — Europe first, then the rest of the world.",
+        about=_GACC_PAGE_ABOUT_BY_COUNTRY,
+    )
+    root.metrics["grouped"] = True
+    grp_eu = Section(
+        id="gacc-bycountry-europe", title="Europe",
+        kind="gacc_partner_group",
+        intro="The EU aggregate, each member state GACC names, and the UK. "
+              "“Imports from” here is the China-side read on European "
+              "exporters’ China demand.",
     )
     if eu_bloc:
-        root.sections.append(_gacc_partner_section(
+        grp_eu.sections.append(_gacc_partner_section(
             eu_bloc[0].label, "gaccpage-", eu_bloc, period,
             default_open=True))
-
-    def swing(pair: list[_GaccRow]) -> float:
-        vals = [abs(r.sm_yoy if r.sm_yoy is not None else (r.rolling_yoy or 0.0))
-                for r in pair]
-        return max(vals) if vals else 0.0
-
-    for label, pair in sorted(by_label.items(), key=lambda kv: -swing(kv[1])):
-        root.sections.append(_gacc_partner_section(label, "gaccpage-", pair, period))
+    for label, pair in sorted(europe.items(), key=lambda kv: -scale(kv[1])):
+        grp_eu.sections.append(_gacc_partner_section(label, "gaccpage-", pair, period))
+    grp_row = Section(
+        id="gacc-bycountry-world", title="Rest of the world",
+        kind="gacc_partner_group",
+    )
+    for label, pair in sorted(world.items(), key=lambda kv: -scale(kv[1])):
+        grp_row.sections.append(_gacc_partner_section(
+            label, "gaccpage-", pair, period,
+            hub=any(r.iso2 in ("HK", "MO") for r in pair)))
+    root.sections = [g for g in (grp_eu, grp_row) if g.sections]
     return root
 
 
+_GACC_PAGE_ABOUT_WORLD = (
+    "**Why these regions.** The table and charts carry every region-level "
+    "aggregate GACC’s preliminary release publishes, plus two named-country "
+    "majors (the US and Russia). The cast is GACC’s, not an editorial "
+    "selection — nothing is filtered out.\n\n"
+    "**Why there is no Middle East line.** GACC’s preliminary release "
+    "publishes no Middle East aggregate and names no Middle East partner — "
+    "no Saudi Arabia, no UAE — so China–Gulf trade sits unseparated inside "
+    "the Belt & Road row and the world total. That is China’s reporting "
+    "choice, not a gap on our side. Splitting it out needs a source that "
+    "itemises those partners — GACC’s fuller monthly publications or "
+    "partner-side data such as UN Comtrade — which is on the roadmap, not "
+    "in this release."
+)
+
 # The single-country majors shown in the world view alongside the blocs:
-# UK (repeated from Europe-up-close, deliberately), US (indispensable to
-# the re-routing frame the section serves) and Russia (sanctions-era
-# China–Russia trade is a standing story). iso2 → compact glyph label;
-# extend here when another major earns a line. NB: no Middle East entry
-# is POSSIBLE from this source — GACC's preliminary release carries no
-# such aggregate and names no Middle East partners; that trade sits
+# US (indispensable to the re-routing frame the section serves) and Russia
+# (sanctions-era China–Russia trade is a standing story). With these two,
+# the section's cast equals the region charts' cast exactly — one coherent
+# region tier. The UK and the HK entrepôt line were removed 2026-07-15
+# (Luke): both now live one scroll down in the By-country roster, where
+# HK carries the entrepôt treatment. iso2 → compact glyph label; extend
+# here when another major earns a line. NB: no Middle East entry is
+# POSSIBLE from this source — GACC's preliminary release carries no such
+# aggregate and names no Middle East partners; that trade sits
 # unseparated inside Belt & Road and the world Total (the "more partner
 # countries" breadth item on the roadmap is the route to it).
 _GACC_WORLD_MAJORS: dict[str, str] = {
-    "GB": "UK",
     "US": "US",
     "RU": "Russia",
 }
@@ -2118,19 +2178,16 @@ _GACC_WORLD_MAJORS: dict[str, str] = {
 def _gacc_world_section(rows: list[_GaccRow], period: date) -> Section | None:
     """China and the world: the named blocs + the world total, both flows —
     the interpretive context around the Europe read (re-routing shows up
-    here) — plus the EU bloc and the named majors (_GACC_WORLD_MAJORS) so
-    the scale view is complete (Luke, 2026-07-05: deliberate repetition of
-    the Europe section's data; a world view without China's biggest
-    counterparts gives no sense of proportion). Hong Kong rides along as a
-    labelled entrepôt signal: mainland exports *to* HK often precede
-    re-export flows, and on this page HK is a partner, never part of
-    “China”."""
+    here) — plus the EU bloc, the US and Russia (_GACC_WORLD_MAJORS), so
+    the cast equals the region charts' cast exactly. The UK and the Hong
+    Kong entrepôt line moved to the By-country roster below (2026-07-15):
+    single countries with no region-tier job belong in the country tier,
+    and HK's entrepôt flag rides its row there."""
     ents: dict[str, dict] = {}
     for r in rows:
-        is_hub = r.family == "bilateral" and r.iso2 == "HK"
         is_major = (r.family == "bilateral"
                     and (r.kind == "eu_bloc" or r.iso2 in _GACC_WORLD_MAJORS))
-        if r.family != "aggregate" and not is_hub and not is_major:
+        if r.family != "aggregate" and not is_major:
             continue
         # Compact label for the scale glyphs (the table keeps the full
         # name; the glyph tooltips too). Mapped structurally — iso2 /
@@ -2139,13 +2196,11 @@ def _gacc_world_section(rows: list[_GaccRow], period: date) -> Section | None:
             short = "EU"
         elif r.iso2 in _GACC_WORLD_MAJORS:
             short = _GACC_WORLD_MAJORS[r.iso2]
-        elif is_hub:
-            short = "HK"
         else:
             short = r.label
         e = ents.setdefault(r.label, {
             "label": r.label, "short_label": short, "kind": r.kind,
-            "is_hub": is_hub, "flows": {},
+            "flows": {},
         })
         e["flows"][r.flow] = {
             "sm_yoy": r.sm_yoy, "ytd_yoy": r.ytd_yoy,
@@ -2156,22 +2211,29 @@ def _gacc_world_section(rows: list[_GaccRow], period: date) -> Section | None:
         return None
 
     def order(e: dict):
-        # World total first, then blocs + majors by size, the HK hub last.
+        # World total first, then blocs + majors by size.
         exp = (e["flows"].get("export") or {}).get("rolling_eur") or 0.0
-        return (0 if e["kind"] == "world" else (2 if e["is_hub"] else 1), -exp)
+        return (0 if e["kind"] == "world" else 1, -exp)
 
     root = Section(
         id="gacc-world", title="China and the world",
         kind="gacc_world",
         intro="The context that makes the Europe numbers readable: is an EU "
               "move part of a general surge in China’s trade, or "
-              "specific to Europe? The EU and UK lines repeat the section "
-              "above deliberately, so the comparison sits in one place. "
-              "Hong Kong appears as a partner — an entrepôt signal, never "
-              "summed into any China or EU figure.",
+              "specific to Europe? The EU appears here at bloc level, "
+              "alongside the US and Russia — the per-country detail, "
+              "including the UK and the Hong Kong entrepôt line, follows "
+              "in By country below.",
+        about=_GACC_PAGE_ABOUT_WORLD,
     )
     root.metrics["rows"] = sorted(ents.values(), key=order)
     root.metrics["period"] = period.isoformat()
+    # The annual per-region trend charts (exports / imports / balance) —
+    # region-tier data, so they live with the region-tier table (moved here
+    # 2026-07-15 from the Full briefing's retired China-by-country section).
+    charts = _gacc_partner_charts()
+    if charts:
+        root.metrics["region_charts"] = charts
     return root
 
 
@@ -2211,8 +2273,8 @@ def _gacc_since_last(cur, rows: list[_GaccRow], period: date) -> dict:
 # dev_notes/2026-07-14-gacc-commodity-highlights.md. China↔world totals from
 # GACC's own ~30-commodity headline catalogue — the sector lens this page
 # lacked (its country table has none). Positioned between "Since the last
-# read" and "Europe up close" (Luke, 2026-07-14): the movers are part of the
-# month's momentum and set up the Europe-specific read that follows.
+# read" and the region/country sections (Luke, 2026-07-14): the movers are
+# part of the month's momentum and set up the partner reads that follow.
 
 
 class _GaccCommodityRow:
@@ -2559,17 +2621,25 @@ def _gacc_identity(cur, period: date, rows: list[_GaccRow]) -> dict:
     }
 
 
-_GACC_PAGE_ABOUT_EUROPE = (
+_GACC_PAGE_ABOUT_BY_COUNTRY = (
     "**Which countries appear.** GACC’s preliminary country/region "
-    "table names its major partners, so smaller EU member states may be "
-    "absent — this is China’s reporting choice, not a data gap on our "
-    "side. Partners are matched to EU membership by ISO code, never by "
+    "table names its major partners, so smaller countries (including "
+    "smaller EU member states) may be absent — this is China’s reporting "
+    "choice, not a data gap on our side. Notably, GACC names no Middle "
+    "East partner in this release: China–Gulf trade sits unseparated in "
+    "the world total (and the Belt & Road row in China and the world "
+    "above). Partners are matched to EU membership by ISO code, never by "
     "label spelling.\n\n"
     "**No product detail here.** The GACC country table has no commodity "
     "dimension — these country sections are partners-only by data "
     "availability. GACC’s product view (world totals, no country split) is "
     "the commodities section above; the EU-specific product detail arrives "
-    "with the European confirmation in ~5 weeks."
+    "with the European confirmation in ~5 weeks.\n\n"
+    "**Hong Kong (and Macao).** Separate customs regimes, so they appear "
+    "here as partners and are flagged as **entrepôt** rows: a large share "
+    "of mainland exports to Hong Kong are re-exported onward, so their "
+    "figures read as routing, not local demand — and they are never summed "
+    "into any China or EU total on this site."
 )
 
 # The single "About this page" disclosure (under the KPI strip, mirroring
@@ -2821,7 +2891,7 @@ def _build_gacc_page(cur, generate_takes: bool = False) -> GaccPage | None:
         identity=_gacc_identity(cur, period, rows),
         strip=_gacc_strip_cards(rows, period),
         standout=_gacc_standout(rows, period),
-        europe=_gacc_europe_section(rows, period),
+        by_country=_gacc_by_country_section(rows, period),
         world=_gacc_world_section(rows, period),
         since_last=_gacc_since_last(cur, rows, period),
         commodities=_gacc_commodities_section(cur, period),
@@ -3058,14 +3128,14 @@ def build_report(
                         questions=qs or [],
                     )
             if source_trigger == "eurostat":
+                # No GACC section here (2026-07-15 ruling): the Full briefing
+                # is single-period — Eurostat/HMRC at the anchor month, every
+                # claim. ALL per-country/world GACC content lives on the
+                # GACC-only tab at ITS period; the identity strip carries a
+                # signpost, not a floating section.
                 sections = [_state_of_play_section(cur),
                             _mirror_gap_section(cur),
                             _sector_detail_section(cur, predictability),
-                            # China's own (GACC) bilateral context — in the
-                            # Findings doc's state-of-play, missing from the
-                            # portal till now. Uses GACC's latest period (a month
-                            # ahead); empty-safe if no GACC data.
-                            _gacc_bilateral_section(cur, _gacc_latest_period(cur)),
                             _structural_section(cur, data_period),
                             _sources_section(cur, diff),
                             _data_section(),

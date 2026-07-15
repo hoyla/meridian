@@ -1,7 +1,7 @@
 """Tests for the GACC-only tab (dev_notes/2026-07-05-gacc-update-page-design.md):
 the `_build_gacc_page` builder (DB-backed, live-Postgres approach) and the
 renderer's two-track surface — period-explicit tab labels, the masthead
-descent, the identity strips, the context strip, the world table's entrepôt
+descent, the identity strips, the context strip, the By-country entrepôt
 line, and the since-last-read delta."""
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import psycopg2.extras
 import pytest
 
 import release_calendar
+import report_builder as rb
 import report_model as rm
 from report_render_html import render_html
 
@@ -51,11 +52,32 @@ def _gacc_page(**over) -> rm.GaccPage:
                   "`finding/43`",
             provenance=rm.Provenance(finding_ids=[43], source="gacc",
                                      as_of=date(2026, 5, 1))),
-        europe=rm.Section(id="gacc-europe", title="Europe up close",
-                          kind="gacc_bilateral", intro="China’s own numbers.",
-                          metrics={"order_note": "sharpest move first"}),
+        by_country=rm.Section(
+            id="gacc-by-country", title="By country",
+            kind="gacc_bilateral", intro="China’s own numbers.",
+            metrics={"grouped": True},
+            sections=[
+                rm.Section(id="gacc-bycountry-europe", title="Europe",
+                           kind="gacc_partner_group"),
+                rm.Section(
+                    id="gacc-bycountry-world", title="Rest of the world",
+                    kind="gacc_partner_group",
+                    sections=[rm.Section(
+                        id="gaccpage-hong-kong-china",
+                        title="Hong Kong, China", kind="gacc_bilateral",
+                        metrics={"is_hub": True},
+                        findings=[rm.Finding(
+                            finding_id=45,
+                            subkind="gacc_bilateral_aggregate_yoy",
+                            title="China exports to Hong Kong, China",
+                            metrics={"scope": "China", "flow": "export",
+                                     "yoy_pct": 0.02,
+                                     "current_eur": 2.4e11},
+                            provenance=rm.Provenance(
+                                finding_ids=[45], source="gacc"))])])]),
         world=rm.Section(id="gacc-world", title="China and the world",
-                         kind="gacc_world", intro="Context.", metrics={"rows": [
+                         kind="gacc_world", intro="Context.",
+                         about=rb._GACC_PAGE_ABOUT_WORLD, metrics={"rows": [
                              {"label": "Total", "short_label": "Total", "kind": "world", "is_hub": False,
                               "flows": {"export": {
                                   "sm_yoy": 0.04, "ytd_yoy": 0.05,
@@ -81,12 +103,6 @@ def _gacc_page(**over) -> rm.GaccPage:
                                   "sm_yoy": 0.18, "ytd_yoy": 0.12,
                                   "rolling_yoy": 0.10, "rolling_eur": 9.0e11,
                                   "finding_id": 48}}},
-                             {"label": "Hong Kong, China", "short_label": "HK", "kind": "single_country",
-                              "is_hub": True,
-                              "flows": {"export": {
-                                  "sm_yoy": 0.11, "ytd_yoy": None,
-                                  "rolling_yoy": 0.02, "rolling_eur": 2.4e11,
-                                  "finding_id": 45}}},
                          ], "period": "2026-05-01"}),
         since_last={"prev_period": "2026-04-01", "rows": [
             {"label": "the EU", "flow": "export", "basis": "single-month",
@@ -142,8 +158,10 @@ def test_briefing_identity_strip_carries_source_vintages():
     h = render_html(_report(gacc_page=_gacc_page()))
     assert "Eurostat · to Apr 2026" in h
     assert "HMRC · to Apr 2026" in h
-    assert "GACC context · to May 2026" in h
-    # The GACC-context chip bridges to the GACC-only tab.
+    # The briefing strip carries no GACC VINTAGE chip (2026-07-15 ruling) —
+    # a signpost to the other track's tab replaces it.
+    assert "GACC context" not in h
+    assert "China has already reported May 2026" in h
     assert 'href="#tab-gacc"' in h
 
 
@@ -171,15 +189,29 @@ def test_gacc_identity_strip_dates_links_and_about_page():
     assert i_kpis < i_about < i_standout
 
 
-def test_world_table_orders_and_labels_the_entrepot_line():
+def test_world_table_sheds_hub_line_and_by_country_carries_it():
+    """2026-07-15: the world section is the region tier — no HK entrepôt
+    line, no hub labelling. The entrepôt treatment (summary chip +
+    panel-leading explainer, incl. the mirror-gaps cross-reference) rides
+    the By-country HK row instead."""
     h = render_html(_report(gacc_page=_gacc_page()))
-    assert "entrepôt signal" in h
-    # World total first, bloc next, the hub line last.
-    i_total, i_asean, i_hk = (h.index(">Total<"), h.index(">ASEAN<"),
-                              h.index("Hong Kong, China"))
-    assert i_total < i_asean < i_hk
+    world = h[h.index('id="gacc-world"'):h.index('id="gacc-by-country"')]
+    assert "Hong Kong" not in world and "entrepôt" not in world
+    # The cast rationale + the no-Middle-East explanation ride the section's
+    # More-about expander (2026-07-15: an absence a reader would otherwise
+    # read as our omission is named as GACC's reporting choice).
+    assert "More about this section" in world
+    assert "no Middle East aggregate" in world
+    assert "Belt &amp; Road row and the world total" in world
+    # World total first, bloc next.
+    assert world.index(">Total<") < world.index(">ASEAN<")
     # A missing operator renders an em-dash cell, never a fabricated figure.
-    assert '<td class="num">—</td>' in h
+    assert '<td class="num">—</td>' in world
+    bc = h[h.index('id="gacc-by-country"'):]
+    assert "Hong Kong, China" in bc
+    assert "entrepôt ⓘ" in bc                      # collapsed-row chip
+    assert "Entrepôt signal.</strong>" in bc        # panel explainer leads
+    assert "Mirror-trade gaps" in bc                # cross-track pointer
 
 
 def test_world_scale_glyphs_render_with_honest_exclusions():
@@ -187,26 +219,25 @@ def test_world_scale_glyphs_render_with_honest_exclusions():
     left half = exports, right half = imports, area ∝ 12-month value. The
     world TOTAL (the sum of its own components) and overlapping blocs
     (RCEP ⊃ ASEAN) stay table-only so the visual field can't double-count;
-    the hub glyph carries its dashed outline; tooltips repeat the table's
-    figures."""
+    tooltips repeat the table's figures. (No hub glyph since 2026-07-15 —
+    the HK entrepôt line lives in By country.)"""
     h = render_html(_report(gacc_page=_gacc_page()))
-    bub = h[h.index('class="gtable-wrap gworld-bubbles"'):]
+    bub = h[h.index('class="gtable-wrap gworld-bubbles"'):
+            h.index('id="gacc-by-country"')]
     assert "China’s exports to European Union: €500.00B" in bub
     assert "China’s imports from European Union: €250.00B" in bub
     assert "12 months to May 2026" in bub
     # Honest exclusions: no Total, no RCEP glyph — but both stay in the table.
     assert "exports to Total" not in bub and "exports to RCEP" not in bub
     assert ">RCEP<" in h  # the table row survives
-    # Hub styling + legend.
-    assert 'stroke-dasharray="4 3"' in bub
     assert "left-heavy = China’s surplus" in bub
     # Under-glyph labels are the compact form (full names overlapped on
-    # small glyphs — Luke, 2026-07-05); tooltips keep the full names, and
-    # the hub tag rides its own second line.
-    assert ">EU</text>" in bub and ">HK</text>" in bub
-    assert ">(entrepôt)</text>" in bub
+    # small glyphs — Luke, 2026-07-05); tooltips keep the full names.
+    assert ">EU</text>" in bub
     assert ">European Union</text>" not in bub
-    assert ">Hong Kong, China</text>" not in bub
+    # No hub styling anywhere in the strip.
+    assert "Hong Kong" not in bub and "entrepôt" not in bub
+    assert 'stroke-dasharray' not in bub
 
 
 def test_world_scale_glyphs_absent_below_two_entities():
@@ -277,8 +308,10 @@ def test_strip_and_standout_render_with_drawer_hooks():
     h = render_html(_report(gacc_page=_gacc_page()))
     assert "CHINA → EU" in h and "+12.4%" in h
     assert "Standout move" in h and "sharpest single-month shift" in h
-    # Europe section carries its own ordering phrase, not the main tab's.
-    assert "sharpest move first" in h
+    # The by-country roster orders biggest-first (2026-07-15: the
+    # change-shaped reads live in strip/standout/since-last, so the roster
+    # keeps a predictable size sort).
+    assert "biggest first" in h
 
 
 def test_no_separate_understanding_section():
@@ -300,8 +333,8 @@ def test_gacc_tab_has_its_own_sticky_subnav():
     panel = h[h.index('id="tab-gacc"'):h.index('id="tab-methodology"')
               if 'id="tab-methodology"' in h else len(h)]
     assert '<nav class="subnav"' in panel
-    for anchor in ("gacc-standout", "gacc-sincelast", "gacc-europe",
-                   "gacc-world"):
+    for anchor in ("gacc-standout", "gacc-sincelast", "gacc-world",
+                   "gacc-by-country"):
         assert f'data-spy="{anchor}"' in panel
     assert 'data-spy="gacc-understanding"' not in panel  # consolidated away
     # Sections use the shared brief-sec class (sticky-bar scroll offset).
@@ -511,70 +544,85 @@ def test_standout_excludes_world_total_and_size_floors(seeded, test_db_url):
     assert seeded["tiny_label"] not in gp.standout.prose
 
 
-def test_europe_includes_members_and_bloc_but_not_us_or_tiny(
+def test_by_country_groups_europe_first_then_rest_of_world(
         seeded, test_db_url):
+    """The 2026-07-15 consolidation: ONE by-country roster, grouped — the
+    Europe group (EU bloc first, then member states + UK) then Rest of the
+    world (everything else, US and tiny partners included: the roster has
+    no size floor — small partners are data, not noise)."""
     gp = _build(test_db_url)
-    titles = [s.title for s in gp.europe.sections]
-    # EU bloc leads; Germany (EU member) follows; the US and the tiny
-    # non-EU partner never appear in the Europe section.
-    assert titles[0] == gp.europe.sections[0].title  # bloc first by construction
-    assert seeded["de_label"] in titles
-    assert seeded["us_label"] not in titles
-    assert seeded["tiny_label"] not in titles
+    assert gp.by_country.metrics.get("grouped") is True
+    groups = {g.title: g for g in gp.by_country.sections}
+    assert list(groups) == ["Europe", "Rest of the world"]
+    eu_titles = [s.title for s in groups["Europe"].sections]
+    row_titles = [s.title for s in groups["Rest of the world"].sections]
+    # EU bloc leads Europe; Germany (EU member) is in the Europe group; the
+    # US and the tiny non-EU partner land in Rest of the world.
+    assert seeded["de_label"] in eu_titles
+    assert seeded["us_label"] in row_titles
+    assert seeded["tiny_label"] in row_titles
+    assert seeded["us_label"] not in eu_titles
     # Both flows for the bloc.
-    bloc = gp.europe.sections[0]
+    bloc = groups["Europe"].sections[0]
     assert {f.metrics["flow"] for f in bloc.findings} == {"export", "import"}
+    # Rest of world orders biggest-first by the larger flow's 12mo value.
+    def _scale(sec):
+        return max((f.metrics.get("current_eur") or 0.0) for f in sec.findings)
+    scales = [_scale(s) for s in groups["Rest of the world"].sections]
+    assert scales == sorted(scales, reverse=True)
 
 
 def test_eu_bloc_expander_defaults_open_everywhere(seeded, test_db_url):
-    """The EU bloc's twisty ships unfolded in BOTH bilateral surfaces
-    (Luke, 2026-07-05) — 'Europe up close' on the GACC page and 'China's
-    trade by country (GACC)' on the main Briefing — so one open profile
-    signals what every collapsed country row contains. Marker is the
-    structural eu_bloc kind, set at build time; member states stay
-    collapsed."""
+    """The EU bloc's twisty ships unfolded (Luke, 2026-07-05) — one open
+    profile signals what every collapsed country row contains. Marker is
+    the structural eu_bloc kind, set at build time; every other partner
+    (both groups) stays collapsed. `_gacc_bilateral_section` — the gacc
+    VARIANT's flat section, no longer on the Briefing since the 2026-07-15
+    consolidation — keeps the same contract."""
     import report_builder as rb
 
-    # GACC page: Europe up close.
+    # GACC page: the By-country Europe group leads with the open bloc.
     gp = _build(test_db_url)
-    eu_sec = gp.europe.sections[0]
+    eu_group = gp.by_country.sections[0]
+    eu_sec = eu_group.sections[0]
     assert eu_sec.metrics.get("default_open") is True
-    assert all(not s.metrics.get("default_open")
-               for s in gp.europe.sections[1:])
+    others = (eu_group.sections[1:]
+              + [s for g in gp.by_country.sections[1:] for s in g.sections])
+    assert all(not s.metrics.get("default_open") for s in others)
 
-    # Main Briefing: China's trade by country.
+    # The gacc variant's flat section: same single-open contract.
     conn = psycopg2.connect(test_db_url)
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        main_sec = rb._gacc_bilateral_section(cur, seeded["period"])
+        variant_sec = rb._gacc_bilateral_section(cur, seeded["period"])
     finally:
         conn.close()
     flags = {s.title: bool(s.metrics.get("default_open"))
-             for s in main_sec.sections}
+             for s in variant_sec.sections}
     assert sum(flags.values()) == 1  # exactly one open: the bloc
     assert flags[eu_sec.title] is True
 
-    # And the renderer honours it: the open attribute lands on that
-    # details element only.
+    # And the renderer honours it in the grouped roster: the open attribute
+    # lands on exactly one details element.
     from report_render_html import _gacc_bilateral_html
-    h = _gacc_bilateral_html(main_sec)
+    h = _gacc_bilateral_html(gp.by_country)
     assert '<details class="partner" open id=' in h
     assert h.count('<details class="partner" open') == 1
 
 
-def test_world_rows_order_and_hub_flag(seeded, test_db_url):
+def test_world_rows_order_and_hub_moved_to_by_country(seeded, test_db_url):
     gp = _build(test_db_url)
     rows = gp.world.metrics["rows"]
     labels = [r["label"] for r in rows]
-    # World total first, then blocs + the named majors, HK hub last.
+    # World total first, then blocs + the named majors by size.
     assert rows[0]["kind"] == "world"
-    assert rows[-1]["is_hub"] is True
     assert "ASEAN" in " ".join(labels)
-    # The majors join the world view (Luke, 2026-07-05): the EU bloc (a
-    # deliberate repeat of Europe-up-close), the US and Russia; the
-    # ordinary EU member (Germany) does NOT — it stays in the Europe
-    # section only. (No Middle East entity is possible: GACC's release
-    # carries no such aggregate and names no Middle East partners.)
+    # The majors are the US and Russia (2026-07-15: the cast equals the
+    # region charts' cast); the EU bloc joins them; the ordinary EU member
+    # (Germany) does NOT — it stays in the By-country Europe group. The HK
+    # entrepôt line left this section entirely. (No Middle East entity is
+    # possible: GACC's release carries no such aggregate and names no
+    # Middle East partners.)
     kinds = {r["label"]: r["kind"] for r in rows}
     assert "eu_bloc" in kinds.values()
     assert seeded["us_label"] in labels
@@ -582,6 +630,15 @@ def test_world_rows_order_and_hub_flag(seeded, test_db_url):
     shorts = {r["label"]: r.get("short_label") for r in rows}
     assert shorts[seeded["ru_label"]] == "Russia"
     assert seeded["de_label"] not in labels
+    assert not any("Hong Kong" in lbl for lbl in labels)
+    assert not any(r.get("is_hub") for r in rows)
+    # The hub flag rides the By-country row instead — structurally (iso2).
+    row_group = {g.title: g for g in gp.by_country.sections}["Rest of the world"]
+    hk = [s for s in row_group.sections if "Hong Kong" in s.title]
+    assert hk and hk[0].metrics.get("is_hub") is True
+    # No other partner inherits the flag.
+    assert sum(1 for g in gp.by_country.sections for s in g.sections
+               if s.metrics.get("is_hub")) == 1
 
 
 def test_since_last_computes_single_month_swing(seeded, test_db_url):
