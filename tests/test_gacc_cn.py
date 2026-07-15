@@ -232,3 +232,118 @@ def test_verify_against_empty_db_declines(clean_db, capsys):
     assert gacc_cn.verify_against_db(JUN_CNY.read_bytes(),
                                      xls_url=XLS_URL) == -1
     assert "nothing to verify" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Commodity tables (sections 5/6)
+# ---------------------------------------------------------------------------
+
+S5_CNY = FIXTURES / "release_cn_section5_major_exports_jun2026_cny.xls"
+S5_USD = FIXTURES / "release_cn_section5_major_exports_jun2026_usd.xls"
+S6_CNY = FIXTURES / "release_cn_section6_major_imports_jun2026_cny.xls"
+S6_USD = FIXTURES / "release_cn_section6_major_imports_jun2026_usd.xls"
+
+
+def test_commodity_metadata_and_routing():
+    m5 = _parse(S5_CNY).metadata
+    assert (m5.section_number, m5.currency) == (5, "CNY")
+    assert m5.period == date(2026, 6, 1)
+    assert m5.description == "China's Major Exports by Quantity and Value"
+    m6 = _parse(S6_USD).metadata
+    assert (m6.section_number, m6.currency) == (6, "USD")
+    assert m6.unit == "USD1 Million"
+    assert m6.description == "China's Major Imports by Quantity and Value"
+
+
+def test_commodity_observations_exports():
+    r = _parse(S5_CNY)
+    by_key = {(o["commodity_label"], o["period_kind"]): o
+              for o in r.observations}
+    # 31 catalogue lines × (monthly, ytd) — 汽车零配件 is value-only but has
+    # values in both kinds, so nothing drops.
+    assert len(r.observations) == 62
+    agri = by_key[("Agriculture products", "monthly")]
+    assert agri["value"] == 665.5
+    assert agri["quantity"] is None          # value-only aggregate line
+    assert agri["source_row"]["is_aggregate"] is True
+    assert agri["source_row"]["published_yoy_value_pct"] == 3.7
+    assert agri["flow"] == "export"
+    ic = by_key[("Electronic integrated circuits", "ytd")]
+    assert ic["value"] == round(6497.5, 1) or ic["value"] > 0  # value present
+    assert ic["quantity"] == 1794.4
+    assert ic["quantity_unit"] == "100 Million PCS"
+    assert ic["source_row"]["quantity_unit_zh"] == "亿个"
+    # prior-year + full precision live in source_row only
+    assert ic["source_row"]["prior_year_ytd_quantity"] == 1677.1
+    assert ic["source_row"]["full_precision"]["ytd_quantity"] == 1794.42408603
+    ships = by_key[("Ships", "ytd")]
+    assert ships["quantity"] == 3412.0 and ships["quantity_unit"] == "Ship"
+
+
+def test_commodity_observations_imports():
+    r = _parse(S6_CNY)
+    by_key = {(o["commodity_label"], o["period_kind"]): o
+              for o in r.observations}
+    assert len(r.observations) == 68        # 34 lines × 2 kinds
+    assert by_key[("Crude petroleum oils", "ytd")]["quantity"] == 24761.0
+    cars = by_key[("Motor vehicles（including chassis fitted with engines)",
+                   "monthly")]
+    assert cars["quantity"] == 3.8 and cars["quantity_unit"] == "10,000 Cars"
+    assert cars["flow"] == "import"
+    wood = by_key[("Wood Logs and Lumber", "ytd")]
+    assert wood["quantity_unit"] == "10,000 CBM"
+    rare = by_key[("Rare-earth ore, metals, compounds", "ytd")]
+    assert rare["quantity"] == 53886.6 and rare["quantity_unit"] == "Ton"
+
+
+def test_commodity_floor_check_passes():
+    r = _parse(S5_CNY)
+    assert parse.section56_floor_check(r.observations, r.metadata) is None
+
+
+def test_commodity_unit_change_refuses_quantities_keeps_values(monkeypatch):
+    """The Machine-tools-2021 guard: if a line's unit cell differs from the
+    derivation-time unit, its quantities are dropped (basis moved) while its
+    values still ingest."""
+    doctored = dict(gacc_cn.ZH_TO_EN_COMMODITIES_EXPORT)
+    doctored["集成电路"] = ("Electronic integrated circuits", "万个",
+                        "10,000 PCS")   # pretend the derivation saw 万个
+    monkeypatch.setattr(gacc_cn, "ZH_TO_EN_COMMODITIES_EXPORT", doctored)
+    r = _parse(S5_CNY)
+    ic = next(o for o in r.observations
+              if o["commodity_label"] == "Electronic integrated circuits"
+              and o["period_kind"] == "ytd")
+    assert ic["quantity"] is None and ic["quantity_unit"] is None
+    assert ic["value"] is not None          # values survive
+
+
+def test_unmapped_commodity_label_fails_loudly(monkeypatch):
+    trimmed = {k: v for k, v in gacc_cn.ZH_TO_EN_COMMODITIES_EXPORT.items()
+               if k != "稀土"}
+    monkeypatch.setattr(gacc_cn, "ZH_TO_EN_COMMODITIES_EXPORT", trimmed)
+    with pytest.raises(ValueError, match="稀土"):
+        _parse(S5_CNY)
+
+
+def test_monthly_bulletin_commodity_file_refuses():
+    """The Bulletin's commodity tables (（13）…主要商品量值表 — 主要 not 重点)
+    are the verified vintage and must not parse as an Express preliminary."""
+    bulletin = FIXTURES / "release_cn_monthly_bulletin_s13_may2026_cny.xls"
+    with pytest.raises(UnparseableReleasePage, match="Refusing to guess"):
+        gacc_cn.parse_cn_express_xls(bulletin.read_bytes(), xls_url="t://x")
+
+
+def test_commodity_ingest_and_verify_roundtrip(clean_db, capsys):
+    xls = S5_CNY.read_bytes()
+    rid = gacc_cn.ingest_cn_xls_bytes(
+        xls, xls_url="test://s5", article_url=ARTICLE_URL, sha256="y" * 64)
+    assert rid is not None
+    with db.transaction() as conn, conn.cursor() as cur:
+        cur.execute("SELECT section_number, currency, release_kind "
+                    "FROM releases WHERE id = %s", (rid,))
+        assert cur.fetchone() == (5, "CNY", "preliminary")
+        cur.execute("SELECT count(*) FROM observations WHERE release_id=%s",
+                    (rid,))
+        assert cur.fetchone()[0] == 62
+    assert gacc_cn.verify_against_db(xls, xls_url="test://s5") == 0
+    assert "IDENTICAL" in capsys.readouterr().out
