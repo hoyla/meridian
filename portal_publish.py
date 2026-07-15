@@ -1,11 +1,12 @@
 """Publish a periodic-run portal snapshot to the Cloud Run portal's GCS bucket.
 
 Uploads `<bundle>/04_Portal/{report.json,index.html}` to `gs://<bucket>/latest/`
-(what the service serves) and archives a per-period copy under
-`periods/<data_period>/`. The bucket comes from `PORTAL_BUCKET` (or the `bucket`
-arg). Run by hand after a cycle, like `--upload-to-drive`; needs Application
-Default Credentials with write on the bucket
-(`gcloud auth application-default login`).
+(what the service serves) and archives a per-publish copy under
+`periods/<data_period>/<snapshot_id>/`, so republishing within the same anchor
+month appends rather than overwrites (append-only audit trail). The bucket
+comes from `PORTAL_BUCKET` (or the `bucket` arg). Run by hand after a cycle,
+like `--upload-to-drive`; needs Application Default Credentials with write on
+the bucket (`gcloud auth application-default login`).
 
 `warm_service` optionally sets the Cloud Run service's `--min-instances=1` so a
 freshly published report has no cold-start delay during its launch window — you
@@ -38,13 +39,19 @@ _SNAPSHOT_FILES: dict[str, str] = {
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-def _period_from_snapshot(portal_dir: Path) -> str | None:
-    """Read the data period from report.json's meta, for the per-period archive
-    path. None if absent/unreadable — the archive copy is then skipped (latest/
-    is still written)."""
+def _archive_prefix_from_snapshot(portal_dir: Path) -> str | None:
+    """The archive prefix for this publish, `periods/<data_period>/<snapshot_id>`,
+    read from report.json's meta. Keyed by snapshot_id (variant + period + build
+    timestamp) rather than the period alone, so each publish within the same
+    anchor month lands in its own path instead of overwriting the last one.
+    None if either field is absent or the meta unreadable — the archive copy is
+    then skipped (latest/ is still written)."""
     try:
         meta = json.loads((portal_dir / "report.json").read_text()).get("meta") or {}
-        return meta.get("data_period")
+        period, snapshot_id = meta.get("data_period"), meta.get("snapshot_id")
+        if period and snapshot_id:
+            return f"periods/{period}/{snapshot_id}"
+        return None
     except Exception:
         return None
 
@@ -110,7 +117,9 @@ def read_latest_report(
 
 def publish_snapshot(bundle_dir: str, *, bucket: str | None = None) -> list[str]:
     """Upload the bundle's 04_Portal snapshot to `gs://<bucket>/latest/` plus a
-    per-period archive. Returns the object paths written.
+    per-publish archive under `periods/<data_period>/<snapshot_id>/` — latest/
+    is the mutable live pointer, the archive is append-only. Returns the object
+    paths written.
 
     Raises ValueError if no bucket is configured, or FileNotFoundError if the
     bundle has no 04_Portal snapshot — both validated before touching GCS, so
@@ -125,7 +134,11 @@ def publish_snapshot(bundle_dir: str, *, bucket: str | None = None) -> list[str]
             f"no 04_Portal snapshot in {portal_dir} "
             "(run --periodic-run first to produce it)"
         )
-    period = _period_from_snapshot(portal_dir)
+    archive = _archive_prefix_from_snapshot(portal_dir)
+    if not archive:
+        log.warning(
+            "portal-publish: report.json meta lacks data_period/snapshot_id; "
+            "skipping the periods/ archive copy (latest/ still published)")
 
     from google.cloud import storage  # lazy — keep GCS off the import path
     b = storage.Client().bucket(bucket)
@@ -133,8 +146,8 @@ def publish_snapshot(bundle_dir: str, *, bucket: str | None = None) -> list[str]
     for name, ctype in present:
         src = str(portal_dir / name)
         dests = [f"latest/{name}"]
-        if period:
-            dests.append(f"periods/{period}/{name}")
+        if archive:
+            dests.append(f"{archive}/{name}")
         for dest in dests:
             blob = b.blob(dest)
             blob.cache_control = "no-cache"  # always serve the freshest latest/
@@ -145,7 +158,7 @@ def publish_snapshot(bundle_dir: str, *, bucket: str | None = None) -> list[str]
     # The full workbook (the Tables tab's 'Download Excel') lives at the bundle
     # root, beside 04_Portal/. Both publish paths now produce it — --periodic-run
     # via export(), and --portal-snapshot via write_portal_snapshot(
-    # write_workbook=True). Publish it to latest/data.xlsx (+ the per-period
+    # write_workbook=True). Publish it to latest/data.xlsx (+ the per-publish
     # archive) so /data.xlsx can serve it. If it's still missing the workbook
     # build must have failed upstream (logged there); skip rather than fail the
     # whole publish — the download 404s until the next successful build.
@@ -153,8 +166,8 @@ def publish_snapshot(bundle_dir: str, *, bucket: str | None = None) -> list[str]
     xlsx = Path(bundle_dir) / "04_Data.xlsx"
     if xlsx.is_file():
         dests = ["latest/data.xlsx"]
-        if period:
-            dests.append(f"periods/{period}/data.xlsx")
+        if archive:
+            dests.append(f"{archive}/data.xlsx")
         for dest in dests:
             blob = b.blob(dest)
             blob.cache_control = "no-cache"
@@ -177,8 +190,8 @@ def publish_snapshot(bundle_dir: str, *, bucket: str | None = None) -> list[str]
     findings = Path(bundle_dir) / "02_Findings.md"
     if findings.is_file():
         dests = ["latest/findings.md"]
-        if period:
-            dests.append(f"periods/{period}/findings.md")
+        if archive:
+            dests.append(f"{archive}/findings.md")
         for dest in dests:
             blob = b.blob(dest)
             blob.cache_control = "no-cache"

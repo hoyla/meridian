@@ -1512,15 +1512,77 @@ def test_publish_stamp_date_from_snapshot(tmp_path):
     assert portal_publish._stamp_date_from_snapshot(tmp_path) is None
 
 
-def test_publish_period_read_from_snapshot(tmp_path):
-    """The per-period archive path comes from the snapshot's own meta; a missing
-    or unreadable snapshot yields None (latest/ still publishes)."""
+def test_publish_archive_prefix_read_from_snapshot(tmp_path):
+    """The archive prefix comes from the snapshot's own meta and is keyed by
+    snapshot_id, not the period alone (so same-month republishes never
+    overwrite). Either field missing, or an unreadable snapshot, yields None
+    (latest/ still publishes)."""
     import portal_publish
     pd = tmp_path / "04_Portal"
     pd.mkdir()
+    (pd / "report.json").write_text(json.dumps({"meta": {
+        "data_period": "2026-04-01",
+        "snapshot_id": "eurostat-2026-04-01-20260620T081000"}}))
+    assert (portal_publish._archive_prefix_from_snapshot(pd)
+            == "periods/2026-04-01/eurostat-2026-04-01-20260620T081000")
+    # Period without snapshot_id: no archive path — never fall back to the bare
+    # periods/<period>/ (that's the overwriting layout this replaced).
     (pd / "report.json").write_text(json.dumps({"meta": {"data_period": "2026-04-01"}}))
-    assert portal_publish._period_from_snapshot(pd) == "2026-04-01"
-    assert portal_publish._period_from_snapshot(tmp_path) is None
+    assert portal_publish._archive_prefix_from_snapshot(pd) is None
+    assert portal_publish._archive_prefix_from_snapshot(tmp_path) is None
+
+
+def test_publish_archives_each_publish_separately(tmp_path, monkeypatch):
+    """Two publishes with the same anchor month (data_period) must land in two
+    distinct archive paths, keyed by meta.snapshot_id — the append-only audit
+    trail. Only latest/ (the live pointer) is shared between them."""
+    import portal_publish
+    from google.cloud import storage
+
+    uploads: list[str] = []
+
+    class _Blob:
+        def __init__(self, name):
+            self.name = name
+
+        def upload_from_filename(self, src, content_type=None):
+            uploads.append(self.name)
+
+    class _Bucket:
+        def blob(self, name):
+            return _Blob(name)
+
+    class _Client:
+        def bucket(self, name):
+            return _Bucket()
+
+    monkeypatch.setattr(storage, "Client", lambda *a, **k: _Client())
+
+    def _bundle(name, snapshot_id):
+        bundle = tmp_path / name
+        pd = bundle / "04_Portal"
+        pd.mkdir(parents=True)
+        (pd / "report.json").write_text(json.dumps({"meta": {
+            "data_period": "2026-04-01", "snapshot_id": snapshot_id}}))
+        (pd / "index.html").write_text("<!doctype html>")
+        (bundle / "04_Data.xlsx").write_bytes(b"xlsx")
+        (bundle / "02_Findings.md").write_text("# Findings")
+        return bundle
+
+    sid1 = "eurostat-2026-04-01-20260620T080000"
+    sid2 = "eurostat-2026-04-01-20260620T171500"  # same month, later publish
+    first = portal_publish.publish_snapshot(str(_bundle("b1", sid1)), bucket="b")
+    second = portal_publish.publish_snapshot(str(_bundle("b2", sid2)), bucket="b")
+
+    for name in ("report.json", "index.html", "data.xlsx", "findings.md"):
+        assert f"latest/{name}" in first and f"latest/{name}" in second
+        assert f"periods/2026-04-01/{sid1}/{name}" in first
+        assert f"periods/2026-04-01/{sid2}/{name}" in second
+    # The second publish rewrote nothing under the first's archive path.
+    assert set(first) & set(second) == {
+        "latest/report.json", "latest/index.html", "latest/data.xlsx",
+        "latest/findings.md"}
+    assert uploads == first + second  # every returned path was actually uploaded
 
 
 # --------------------------------------------------------------------------
