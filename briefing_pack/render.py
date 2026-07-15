@@ -637,6 +637,8 @@ def export(
         sheets_export.XlsxWriter().write(
             sheets_export.assemble_sheets(), str(xlsx_path),
             charts=docx, charts_top_n=top_n,
+            cover=sheets_export.build_cover_meta(
+                generated_at=datetime.now()),
         )
         log.info("Wrote spreadsheet to %s", xlsx_path)
         if out_path is None and md_dir != xlsx_top:

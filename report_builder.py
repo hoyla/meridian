@@ -3036,6 +3036,10 @@ def _data_section() -> Section:
             "total_rows": total,
             "shown_rows": len(rows),
             "inline": inline,
+            # Track grouping (2026-07-15): the Tables tab is the one
+            # deliberately mixed-vintage surface, so every table declares
+            # its release track and the renderer groups by it.
+            "track": getattr(sd, "track", "main"),
         })
     if tables:
         root.metrics = {"tables": tables}

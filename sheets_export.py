@@ -65,6 +65,13 @@ class SheetData:
     description: str     # one-line description rendered as the first row
     headers: list[str]
     rows: list[list[Any]]
+    # Which release track the sheet's data belongs to — "main" (the Full
+    # briefing's Eurostat/HMRC anchor month) or "gacc" (the GACC-only
+    # track, which runs weeks ahead). Drives the Tables tab's track
+    # grouping and the workbook cover sheet (2026-07-15: the workbook is
+    # the one deliberately mixed-vintage artefact, so every sheet must
+    # say which vintage it carries).
+    track: str = "main"
 
 
 class Writer(Protocol):
@@ -310,11 +317,10 @@ def _summary_sheet(
             "Predictability badge: 🟢 = headline % is robust over 6mo, "
             "🟡 = noisy, 🔴 = volatile (lean on trajectory shape instead). "
             "`top_movers_rank_imp` / `top_movers_rank_exp` are 1-5 for "
-            "this cycle's editorial picks — the same rows that lead "
-            "`findings.md`; NULL otherwise. Companion documents in this "
-            "folder: findings.md (deterministic Markdown rendering of the "
-            "same findings, NotebookLM-ready) and leads.md (LLM-scaffolded "
-            "investigation starts per HS group)."
+            "this cycle's editorial picks — the same rows that lead the "
+            "Findings briefing (the deterministic Markdown rendering of "
+            "these findings, NotebookLM-ready — downloadable beside this "
+            "workbook on the portal's Tables tab); NULL otherwise."
         ),
         headers=headers, rows=rows,
     )
@@ -864,7 +870,7 @@ def _gacc_bilateral_yoy_sheet() -> SheetData:
             "monthly figures — see the per-finding provenance file for "
             "the full editorial guidance."
         ),
-        headers=headers, rows=rows,
+        headers=headers, rows=rows, track="gacc",
     )
 
 
@@ -1002,6 +1008,7 @@ class XlsxWriter:
     def write(
         self, sheets: list[SheetData], dest: str, *,
         charts: bool = False, charts_top_n: int = DEFAULT_TOP_N,
+        cover: dict | None = None,
     ) -> str:
         from openpyxl import Workbook
         from openpyxl.styles import Font
@@ -1009,6 +1016,44 @@ class XlsxWriter:
 
         wb = Workbook()
         wb.remove(wb.active)
+
+        if cover:
+            # "About" leads the workbook (2026-07-15): once downloaded the
+            # file loses all portal context, so it must say what it is —
+            # per-source vintages, per-sheet track, generation moment —
+            # provenance principle 7 applied to the one surface that
+            # otherwise escapes it. Built from `build_cover_meta()`.
+            ws = wb.create_sheet(title="About")
+            ws.append(["Meridian — data workbook"])
+            ws["A1"].font = Font(bold=True, size=14)
+            if cover.get("generated_at"):
+                ws.append([f"Generated: {cover['generated_at']}"])
+            if cover.get("snapshot_id"):
+                ws.append([f"Snapshot: {cover['snapshot_id']}"])
+            ws.append(["Downloaded from the Meridian portal (Tables tab); "
+                       "the companion Findings briefing is available there."])
+            ws.append([])
+            ws.append(["Data vintages (each sheet names its track below — "
+                       "the two tracks cover different reference months):"])
+            ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
+            for line in cover.get("vintage_lines", []):
+                ws.append([f"  {line}"])
+            ws.append([])
+            hdr_row = ws.max_row + 1
+            ws.append(["Sheet", "Track & data vintage", "Rows", "Description"])
+            for cell in ws[hdr_row]:
+                cell.font = Font(bold=True)
+            labels = cover.get("track_labels", {})
+            for sd in sheets:
+                first_sentence = sd.description.split(". ")[0].rstrip(".") + "."
+                ws.append([sd.name, labels.get(sd.track, sd.track),
+                           len(sd.rows), first_sentence])
+            ws.append([])
+            ws.append(["Every figure carries its finding/N id — full "
+                       "provenance (source URLs, arithmetic, caveats) is on "
+                       "the portal under Sources & coverage."])
+            for col, width in (("A", 26), ("B", 34), ("C", 8), ("D", 90)):
+                ws.column_dimensions[col].width = width
 
         for sd in sheets:
             ws = wb.create_sheet(title=sd.name[:31])
@@ -1260,6 +1305,46 @@ class GoogleSheetsWriter:
             "GoogleSheetsWriter is not yet wired up. Pending service-account credentials. "
             "Use --out-format xlsx for now; the data shape is identical."
         )
+
+
+def build_cover_meta(generated_at=None, snapshot_id: str | None = None) -> dict:
+    """Assemble the workbook cover sheet's metadata: per-source data
+    vintages (one MAX(period) query) + the track labels the Tables tab and
+    the tab bar use ("Full briefing (Apr 2026)" / "GACC-only (Jun 2026)"),
+    so the downloaded artefact and the portal describe the tracks in the
+    same words. Best-effort: a DB failure returns a minimal cover rather
+    than sinking the workbook build."""
+    cover: dict = {"track_labels": {"main": "Full briefing",
+                                    "gacc": "GACC-only"},
+                   "vintage_lines": []}
+    if generated_at is not None:
+        cover["generated_at"] = (f"{generated_at:%Y-%m-%d %H:%M}"
+                                 if hasattr(generated_at, "strftime")
+                                 else str(generated_at))
+    if snapshot_id:
+        cover["snapshot_id"] = snapshot_id
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT source, MAX(period) FROM releases "
+                "WHERE source IN ('eurostat', 'hmrc', 'gacc') GROUP BY source")
+            vin = dict(cur.fetchall())
+    except Exception:
+        log.exception("cover sheet: vintage query failed; minimal cover")
+        return cover
+    disp = {"eurostat": "Eurostat", "hmrc": "HMRC",
+            "gacc": "GACC (China customs — runs weeks ahead)"}
+    for src in ("eurostat", "hmrc", "gacc"):
+        if vin.get(src):
+            cover["vintage_lines"].append(
+                f"{disp[src]} — data to {vin[src]:%b %Y}")
+    if vin.get("eurostat"):
+        cover["track_labels"]["main"] = (
+            f"Full briefing ({vin['eurostat']:%b %Y}) — Eurostat + HMRC")
+    if vin.get("gacc"):
+        cover["track_labels"]["gacc"] = (
+            f"GACC-only ({vin['gacc']:%b %Y}) — China customs")
+    return cover
 
 
 def export(out_format: str = "xlsx", out_path: str | None = None,

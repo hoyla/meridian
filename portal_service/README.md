@@ -12,12 +12,16 @@ laptop  --periodic-run → 04_Portal/{report.json,index.html}
 Cloud Run (this app) ──reads latest──┘ ── serves ──▶ IAP (domain:guardian.co.uk) ──▶ reporter
 ```
 
-Routes: `/` → latest `index.html` (a tabbed page: Briefing · Tables ·
-Methodology · Glossary); `/report.json` → the canonical snapshot; `/data.xlsx`
-→ the journalist workbook the Tables tab links to (published beside the
-snapshot by `portal_publish`; 404 if a snapshot was made without one);
-`/healthz` → liveness (no GCS touch). Responses are gzipped (`GZipMiddleware`)
-— the rendered HTML/JSON run to hundreds of KB and Cloud Run doesn't compress
+Routes: `/` → latest `index.html` (a tabbed page: Briefing · GACC-only ·
+Tables · Sources & coverage · Methodology · Glossary); `/report.json` → the
+canonical snapshot; `/data.xlsx` → the journalist workbook the Tables tab
+links to; `/findings.md` → the companion Findings briefing (Markdown,
+NotebookLM-ready). Both downloads are published beside the snapshot by
+`portal_publish` (404 if a snapshot was made without them) and carry a
+snapshot-dated filename in the blob's Content-Disposition
+(`meridian-data-2026-07-15.xlsx`), which the app forwards; `/healthz` →
+liveness (no GCS touch). Responses are gzipped (`GZipMiddleware`) — the
+rendered HTML/JSON run to hundreds of KB and Cloud Run doesn't compress
 for us.
 
 ---
