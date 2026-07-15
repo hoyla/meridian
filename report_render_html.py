@@ -583,14 +583,15 @@ _ABOUT_SITE = (
     "partner’s reported imports, and how much of the gap exceeds the normal "
     "CIF/FOB accounting wedge (a possible transshipment signal).\n"
     "- **Sector detail** — the full per-HS-group year-on-year breakdown, with "
-    "value, volume and predictability badges.\n"
-    "- **China’s trade by country (GACC)** — China’s own reported trade with "
-    "each of its ~24 named partner countries, both flows, rolling 12 months.\n\n"
+    "value, volume and predictability badges.\n\n"
     "The **GACC-only tab** is the second release track: China’s own figures "
     "for the month Europe hasn’t confirmed yet, published ~5 weeks ahead of "
-    "the Eurostat equivalent. It follows different conventions to this tab — "
-    "China-perspective, mainland customs territory only — and carries its own "
-    "“About this page” note.\n\n"
+    "the Eurostat equivalent — including China’s trade **by country** (every "
+    "partner GACC names, Europe first) and the **China-and-the-world** region "
+    "view. It follows different conventions to this tab — China-perspective, "
+    "mainland customs territory only — and carries its own “About this page” "
+    "note. Everything on this tab is anchored to one reference month; "
+    "everything on that tab to its own, later one.\n\n"
     "Unless a figure is labelled **China-only**, **“China” includes Hong "
     "Kong and Macao**: a large share of China’s exports route through Hong Kong, "
     "so the combined envelope reflects the trade flow more completely. Where a "
@@ -1049,9 +1050,9 @@ _PUBCAL_COLUMNS: tuple[tuple[str, str], ...] = (
 
 _PUBCAL_EFFECTS: tuple[tuple[str, str], ...] = (
     ("China preliminary (GACC 统计快讯)",
-     "China update page — new edition for the month; the China-context "
-     "sections of the next Full briefing refresh with it. China’s first, "
-     "unrevised read, ~5 weeks ahead of Eurostat."),
+     "China update page — new edition for the month (all by-country and "
+     "world GACC detail lives there; the Full briefing itself does not "
+     "change). China’s first, unrevised read, ~5 weeks ahead of Eurostat."),
     ("China verified (GACC Monthly Bulletin 统计月报)",
      "GACC’s corrected official figures for the same month, ~9 days after "
      "the preliminary. Not currently used on this site — shown so you know "
@@ -1433,73 +1434,157 @@ def _mirror_gap_html(section) -> str:
 
 def _gacc_bilateral_html(section) -> str:
     """Progressive disclosure: one collapsed button per partner (name + a
-    headline figure), expanding on click to that partner’s flows. Keeps ~24
-    partners compact while offering full per-country granularity on demand.
-    The ordering phrase defaults to the main tab's size sort; a section can
-    override it via metrics['order_note'] (the GACC page's Europe section
-    sorts by sharpest single-month move instead)."""
-    order_note = ((getattr(section, "metrics", None) or {})
-                  .get("order_note") or "biggest first")
+    balance glyph + a headline figure), expanding on click to that partner’s
+    flows. Keeps ~24 partners compact while offering full per-country
+    granularity on demand. The ordering phrase defaults to the size sort; a
+    section can override it via metrics['order_note'].
+
+    metrics['grouped'] (the GACC page's By-country section) renders the
+    child sections as titled GROUPS of partners (Europe / Rest of the world)
+    instead of a flat partner list — same rows, one level of headers."""
+    m = getattr(section, "metrics", None) or {}
+    grouped = bool(m.get("grouped"))
+    groups = section.sections if grouped else [section]
+    n_partners = sum(len(g.sections) for g in groups) if grouped else len(section.sections)
+    order_note = m.get("order_note") or "biggest first"
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
         out.append(f'<p class="kicker">{_inline_md(section.intro)} '
-                   f'{len(section.sections)} partners, {html.escape(order_note)} — '
-                   "click a partner to expand.</p>")
+                   f'{n_partners} partners, {html.escape(order_note)} — '
+                   "click a partner to expand. "
+                   f'<span class="glyph-key" aria-hidden="true">'
+                   f'<svg width="12" height="12" viewBox="0 0 32 32">'
+                   f'<circle cx="16" cy="16" r="15" fill="{_FLOW_IMPORT}"/>'
+                   f'<path d="M16 1a15 15 0 0 0 0 30z" fill="{_FLOW_EXPORT}"/></svg> '
+                   "left = China’s exports, right = imports — a lopsided mark "
+                   "is the trade balance at a glance.</span></p>")
     out.append(_more_about(section))
     # Three annual per-region trend charts (exports / imports / balance) above
     # the per-partner expanders — the macro shape before the country detail.
-    charts = (getattr(section, "metrics", None) or {}).get("partner_charts") or []
+    # (The GACC page's By-country section carries none: its region tier —
+    # charts included — lives in China and the world above.)
+    charts = m.get("partner_charts") or []
     cards = [_chart_card(c.get("title", ""), "", _multiline_legend_html(c),
                          _multiline_chart_svg(c))
              for c in charts]
     cards = [c for c in cards if c]
     if cards:
         out.append('<div class="chart-row chart-row-1">' + "".join(cards) + "</div>")
-    for p in section.sections:
-        # Collapsed summary headline: China's exports (the primary read), else
-        # whatever the first finding is — so the button is useful before opening.
-        hdr = next((f for f in p.findings if f.metrics.get("flow") == "export"),
-                   p.findings[0] if p.findings else None)
-        summ = ""
-        if hdr:
-            lab = ("China’s exports" if hdr.metrics.get("flow") == "export"
-                   else "China’s imports")
-            val = _fmt_eur(hdr.metrics.get("current_eur"))
-            yoy = hdr.metrics.get("yoy_pct")
-            if yoy is not None:
-                yoy = float(yoy)
-                col = _UP if yoy > 0 else _DOWN
-                summ = (f'<span class="pp-fig">{lab} {val} '
-                        f'<span style="color:{col}">{"+" if yoy >= 0 else "−"}'
-                        f'{abs(yoy) * 100:.1f}%</span></span>')
-            else:
-                summ = f'<span class="pp-fig">{lab} {val}</span>'
-        # The EU bloc's expander ships unfolded (builder-set default_open —
-        # Luke, 2026-07-05): one open profile signals what every collapsed
-        # country row contains. A reader can still twist it shut.
-        open_attr = " open" if (p.metrics or {}).get("default_open") else ""
-        out.append(f'<details class="partner"{open_attr} id="{html.escape(p.id)}">')
-        out.append(f'<summary><span class="pp-name">{html.escape(p.title)}</span>'
-                   f'{summ}</summary><div class="pp-body">')
-        # Window orientation, once per partner (same period for both flows).
-        win = next((f.metrics.get("window_label") for f in p.findings
-                    if f.metrics.get("window_label")), None)
-        if win:
-            out.append(f'<p class="pp-window">{html.escape(win)}</p>')
-        for f in p.findings:
-            out.append(_sector_flow_row(f))
-            out.append(_bilateral_ctx_row(f))
-        out.append(_bilateral_balance_row(p))
-        # The incomplete-window prose, once per partner (deduped — both flows
-        # usually carry the same note).
-        notes: list[str] = []
-        for f in p.findings:
-            nt = f.metrics.get("note")
-            if nt and nt not in notes:
-                notes.append(nt)
-        for nt in notes:
-            out.append(f'<p class="pp-caveat">⚠ {html.escape(nt)}</p>')
-        out.append("</div></details>")
+    for grp in groups:
+        if grouped:
+            out.append(f'<h3 class="pp-group" id="{html.escape(grp.id)}">'
+                       f"{html.escape(grp.title)}</h3>")
+            if grp.intro:
+                out.append(f'<p class="pp-group-note">{_inline_md(grp.intro)}</p>')
+        out.extend(_gacc_partner_details(p) for p in grp.sections)
+    return "\n".join(out)
+
+
+def _balance_glyph_svg(exp: float | None, imp: float | None) -> str:
+    """The row-scale ◐ balance dial: the world strip's abutting-semicircles
+    mark at fixed row height. The LARGER flow's half fills the row budget and
+    the smaller half scales by √(value ratio) — so the lopsidedness (China's
+    surplus or deficit with this partner) reads while the row is collapsed.
+    Cross-partner scale lives in the € figures and the world strip's
+    area-scaled glyphs; this one carries shape only. Decorative (aria-hidden):
+    the numbers stay in the row text."""
+    e, i = float(exp or 0.0), float(imp or 0.0)
+    big = max(e, i)
+    if big <= 0:
+        return ""
+    R = 9.0
+    cx = cy = R + 1
+    side = f"{2 * R + 2:.0f}"
+    halves = []
+    # sweep 0 bulges left (exports), 1 bulges right (imports); a zero-radius
+    # half (single-flow partner) is skipped rather than drawn degenerate.
+    for v, sweep, fill in ((e, 0, _FLOW_EXPORT), (i, 1, _FLOW_IMPORT)):
+        r = R * (v / big) ** 0.5
+        if r <= 0:
+            continue
+        halves.append(f'<path d="M{cx} {cy - r:.2f} a{r:.2f} {r:.2f} 0 0 '
+                      f'{sweep} 0 {2 * r:.2f}z" fill="{fill}"/>')
+    return (f'<svg class="pp-glyph" width="{side}" height="{side}" '
+            f'viewBox="0 0 {side} {side}" aria-hidden="true">'
+            + "".join(halves) + "</svg>")
+
+
+def _gacc_partner_details(p) -> str:
+    """One partner's collapsed <details> row (used flat and inside the
+    By-country groups)."""
+    out: list[str] = []
+    # Collapsed summary headline: China's exports (the primary read), else
+    # whatever the first finding is — so the button is useful before opening.
+    hdr = next((f for f in p.findings if f.metrics.get("flow") == "export"),
+               p.findings[0] if p.findings else None)
+    summ = ""
+    if hdr:
+        lab = ("China’s exports" if hdr.metrics.get("flow") == "export"
+               else "China’s imports")
+        val = _fmt_eur(hdr.metrics.get("current_eur"))
+        yoy = hdr.metrics.get("yoy_pct")
+        if yoy is not None:
+            yoy = float(yoy)
+            col = _UP if yoy > 0 else _DOWN
+            summ = (f'<span class="pp-fig">{lab} {val} '
+                    f'<span style="color:{col}">{"+" if yoy >= 0 else "−"}'
+                    f'{abs(yoy) * 100:.1f}%</span></span>')
+        else:
+            summ = f'<span class="pp-fig">{lab} {val}</span>'
+    # The balance dial in the collapsed row (Luke, 2026-07-15): both flows'
+    # 12-month values, tooltip carries the figures the glyph abstracts.
+    flow_eur = {f.metrics.get("flow"): f.metrics.get("current_eur")
+                for f in p.findings}
+    glyph = _balance_glyph_svg(flow_eur.get("export"), flow_eur.get("import"))
+    if glyph:
+        tip = (f"China’s exports {_fmt_eur(flow_eur.get('export'))} · "
+               f"imports {_fmt_eur(flow_eur.get('import'))} (12mo)")
+        glyph = f'<span class="pp-glyph-wrap" title="{html.escape(tip)}">{glyph}</span>'
+    # Entrepôt hub rows (builder-set, structural HK/MO): a visible chip on
+    # the collapsed row + an explainer leading the expanded panel, so a
+    # routing spike is never read as that partner's own demand
+    # (2026-07-15 — the flag moved here when the world section shed its
+    # HK line).
+    hub = bool((p.metrics or {}).get("is_hub"))
+    hub_chip = (' <span class="hub-note" title="A large share of mainland '
+                'exports routed here are re-exported onward — routing, not '
+                'local demand.">entrepôt ⓘ</span>' if hub else "")
+    # The EU bloc's expander ships unfolded (builder-set default_open —
+    # Luke, 2026-07-05): one open profile signals what every collapsed
+    # country row contains. A reader can still twist it shut.
+    open_attr = " open" if (p.metrics or {}).get("default_open") else ""
+    out.append(f'<details class="partner"{open_attr} id="{html.escape(p.id)}">')
+    out.append(f'<summary>{glyph}<span class="pp-name">{html.escape(p.title)}</span>'
+               f'{hub_chip}{summ}</summary><div class="pp-body">')
+    if hub:
+        out.append(
+            '<p class="pp-hub"><strong>Entrepôt signal.</strong> '
+            f"{html.escape(p.title)} runs its own customs regime, and a "
+            "large share of mainland exports routed here are re-exported "
+            "onward to third markets. Read a spike as routing, not local "
+            "demand. These figures are never summed into any China or EU "
+            "total on this site; the EU-side counterpart of this routing "
+            "is quantified in the Full briefing’s Mirror-trade gaps "
+            "section.</p>")
+    # Window orientation, once per partner (same period for both flows).
+    win = next((f.metrics.get("window_label") for f in p.findings
+                if f.metrics.get("window_label")), None)
+    if win:
+        out.append(f'<p class="pp-window">{html.escape(win)}</p>')
+    for f in p.findings:
+        out.append(_sector_flow_row(f))
+        out.append(_bilateral_ctx_row(f))
+    out.append(_bilateral_balance_row(p))
+    # The incomplete-window prose, once per partner (deduped — both flows
+    # usually carry the same note).
+    notes: list[str] = []
+    for f in p.findings:
+        nt = f.metrics.get("note")
+        if nt and nt not in notes:
+            notes.append(nt)
+    for nt in notes:
+        out.append(f'<p class="pp-caveat">⚠ {html.escape(nt)}</p>')
+    out.append("</div></details>")
     return "\n".join(out)
 
 
@@ -1856,11 +1941,16 @@ def _gacc_commodities_html(section, payloads, take: dict | None = None) -> str:
 
 
 def _gacc_world_html(section) -> str:
-    """China and the world: blocs + world total, both flows, one row each —
-    plus the Hong Kong entrepôt line, visibly labelled as a routing signal."""
+    """China and the world: blocs + world total (+ US and Russia), both
+    flows, one row each — the region tier; single-country detail, including
+    the HK entrepôt line, lives in By country below (2026-07-15)."""
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
         out.append(f'<p class="kicker">{_inline_md(section.intro)}</p>')
+    # "More about" expander — carries the cast rationale + the no-Middle-East
+    # explanation (2026-07-15: an absence a reader would otherwise read as
+    # our omission gets named as GACC's reporting choice).
+    out.append(_more_about(section))
     rows = (section.metrics or {}).get("rows") or []
     if not rows:
         return "\n".join(out)
@@ -1879,11 +1969,6 @@ def _gacc_world_html(section) -> str:
     for e in rows:
         ex, im = e["flows"].get("export"), e["flows"].get("import")
         label = html.escape(e["label"])
-        if e.get("is_hub"):
-            label += (' <span class="hub-note" title="Mainland exports to Hong '
-                      'Kong often precede re-export flows — an entrepôt '
-                      'signal. Never summed into any China or EU figure.">'
-                      "entrepôt signal ⓘ</span>")
         # Finding tokens ride beneath the partner name (a whole column of
         # tokens earned more width than it gave information).
         toks = " ".join(
@@ -1911,6 +1996,16 @@ def _gacc_world_html(section) -> str:
         f'<tbody>{"".join(body)}</tbody></table></div>')
     out.append(_gacc_world_bubbles_svg(
         rows, (section.metrics or {}).get("period")))
+    # The annual per-region trend charts — the region tier's time dimension,
+    # under the scale glyphs (moved here 2026-07-15 from the Full briefing's
+    # retired China-by-country section).
+    charts = (section.metrics or {}).get("region_charts") or []
+    cards = [_chart_card(c.get("title", ""), "", _multiline_legend_html(c),
+                         _multiline_chart_svg(c))
+             for c in charts]
+    cards = [c for c in cards if c]
+    if cards:
+        out.append('<div class="chart-row chart-row-1">' + "".join(cards) + "</div>")
     return "\n".join(out)
 
 
@@ -1989,22 +2084,20 @@ def _gacc_world_bubbles_svg(rows: list[dict], period_iso: str | None) -> str:
         short = e.get("short_label") or label
         # Pad placement by the label's footprint on BOTH sides so labels
         # can never collide, however small the glyph (~6.6px/char at 11.5px).
-        label_w = max(len(short), len("(entrepôt)") if e.get("is_hub") else 0) * 6.6
+        label_w = len(short) * 6.6
         cx = x + max(r_e, label_w / 2, 4.0)
-        hub_stroke = (' stroke="#8a8578" stroke-dasharray="4 3" stroke-width="1.5"'
-                      if e.get("is_hub") else "")
         if r_e > 0:
             glyphs.append(
                 f'<path d="M {cx:.1f} {yc - r_e:.1f} '
                 f'A {r_e:.1f} {r_e:.1f} 0 0 0 {cx:.1f} {yc + r_e:.1f} Z" '
-                f'fill="{_FLOW_EXPORT}" fill-opacity="0.85"{hub_stroke}>'
+                f'fill="{_FLOW_EXPORT}" fill-opacity="0.85">'
                 f"<title>China’s exports to {html.escape(label)}: "
                 f"{html.escape(_fmt_eur(exp))}{html.escape(when)}</title></path>")
         if r_i > 0:
             glyphs.append(
                 f'<path d="M {cx:.1f} {yc - r_i:.1f} '
                 f'A {r_i:.1f} {r_i:.1f} 0 0 1 {cx:.1f} {yc + r_i:.1f} Z" '
-                f'fill="{_FLOW_IMPORT}" fill-opacity="0.85"{hub_stroke}>'
+                f'fill="{_FLOW_IMPORT}" fill-opacity="0.85">'
                 f"<title>China’s imports from {html.escape(label)}: "
                 f"{html.escape(_fmt_eur(imp))}{html.escape(when)}</title></path>")
         # The shared diameter, so tiny halves still read as half a glyph.
@@ -2015,10 +2108,6 @@ def _gacc_world_bubbles_svg(rows: list[dict], period_iso: str | None) -> str:
         glyphs.append(
             f'<text x="{cx:.1f}" y="{yc + R_MAX + 18:.1f}" font-size="11.5" '
             f'fill="#5c5749" text-anchor="middle">{html.escape(short)}</text>')
-        if e.get("is_hub"):
-            glyphs.append(
-                f'<text x="{cx:.1f}" y="{yc + R_MAX + 31:.1f}" font-size="10" '
-                f'fill="#8a8578" text-anchor="middle">(entrepôt)</text>')
         x = max(cx + max(r_i, 4.0), cx + label_w / 2) + GAP
     width = int(x)
     legend = (
@@ -2044,7 +2133,10 @@ def _gacc_world_bubbles_svg(rows: list[dict], period_iso: str | None) -> str:
 # date from the page identity when available.
 _GACC_ANSWERABLE_COPY: dict[str, tuple[str, str | None]] = {
     "world_table": ("answer in", "#gacc-world"),
-    "europe_section": ("answer in", "#gacc-europe"),
+    # Tag key predates the 2026-07-15 consolidation (Europe-up-close →
+    # the By-country Europe group) and is baked into stored LLM output —
+    # keep the KEY, point it at the group anchor.
+    "europe_section": ("answer in", "#gacc-bycountry-europe"),
     "drawers": ("check the cited figure’s drawer", None),
     "eurostat_confirmation": ("answerable when Eurostat confirms this month", None),
     "un_comtrade": ("needs UN Comtrade — third-country data we don’t hold", None),
@@ -2055,7 +2147,7 @@ _GACC_ANSWERABLE_COPY: dict[str, tuple[str, str | None]] = {
 
 _GACC_ANSWERABLE_LINK_LABEL = {
     "world_table": "China and the world",
-    "europe_section": "Europe up close",
+    "europe_section": "By country (Europe)",
 }
 
 
@@ -2142,10 +2234,11 @@ def _gacc_page_html(gp, payloads) -> str:
     """The whole GACC-only tab panel, in the design's reading order:
     identity → context strip → commodity KPI row → synthesis (the machine
     corner) → standout → since-last → commodities (the full catalogue,
-    world scope) → Europe up close → world → understanding-these-figures
-    expander. Carries its own sticky sub-nav, same pattern as the Briefing
-    tab (the global scroll-spy scopes itself to the visible panel — hidden
-    sections never intersect)."""
+    world scope) → China and the world (region tier: table, scale glyphs,
+    annual trend charts) → By country (the full partner roster, Europe
+    group first — 2026-07-15 consolidation). Carries its own sticky
+    sub-nav, same pattern as the Briefing tab (the global scroll-spy scopes
+    itself to the visible panel — hidden sections never intersect)."""
     parts = [f"<section>{_gacc_identity_html(gp)}</section>"]
     subnav: list[tuple[str, str]] = []
     if gp.strip:
@@ -2187,15 +2280,18 @@ def _gacc_page_html(gp, payloads) -> str:
             parts.append(
                 f'<section class="brief-sec" id="{html.escape(gp.commodities.id)}">'
                 + commod + "</section>")
-    if gp.europe is not None:
-        gp.europe.metrics.setdefault("order_note", "sharpest move first")
-        subnav.append((gp.europe.id, "Europe"))
-        parts.append(f'<section class="brief-sec" id="{html.escape(gp.europe.id)}">'
-                      + _gacc_bilateral_html(gp.europe) + "</section>")
+    # Region tier before country tier (Luke, 2026-07-15): the compact
+    # world/regions read sets the frame, then the full roster — and the
+    # 24-row table can't bury the context section beneath it.
     if gp.world is not None:
         subnav.append((gp.world.id, "World"))
         parts.append(f'<section class="brief-sec" id="{html.escape(gp.world.id)}">'
                       + _gacc_world_html(gp.world) + "</section>")
+    if gp.by_country is not None:
+        subnav.append((gp.by_country.id, "By country"))
+        parts.append(
+            f'<section class="brief-sec" id="{html.escape(gp.by_country.id)}">'
+            + _gacc_bilateral_html(gp.by_country) + "</section>")
     # No bottom "Understanding these figures" section: the page's whole
     # epistemic framing lives in the single About-this-page disclosure
     # above (consolidated 2026-07-05 — two about-boxes with overlapping
@@ -2733,6 +2829,14 @@ details.partner[open]>summary{border-bottom:1px solid var(--line)}
 .pp-ctx{font-size:12px;color:var(--muted);margin:-2px 0 8px;padding-left:2px;font-variant-numeric:tabular-nums}
 .pp-caveat{font-size:12px;color:var(--muted);margin:8px 0 0;line-height:1.45;border-top:1px solid var(--line);padding-top:7px}
 @media(max-width:560px){.pp-fig{margin-left:0;flex-basis:100%}}
+/* By-country groups + the row-scale balance dials (2026-07-15 consolidation) */
+.pp-glyph-wrap{align-self:center;line-height:0}
+.pp-glyph{display:block}
+.pp-group{font-family:var(--font-headline);font-size:16px;font-weight:700;color:var(--ink);margin:18px 0 4px;scroll-margin-top:52px}
+.pp-group-note{font-size:12.5px;color:var(--muted);margin:0 0 8px}
+.pp-hub{font-size:12px;color:var(--muted);margin:0 0 10px;line-height:1.45;border-left:3px solid var(--line);padding-left:8px}
+.glyph-key{color:var(--muted)}
+.glyph-key svg{vertical-align:-1px}
 /* prose (methodology guides, glossary defs) */
 .prose{font-family:var(--font-body);font-size:15px;line-height:1.55;color:var(--ink)}
 .prose p{margin:8px 0}.prose ul{margin:8px 0;padding-left:20px}.prose li{margin:3px 0}
@@ -3103,9 +3207,10 @@ def render_html(report: Report) -> str:
     subnav: list[tuple[str, str]] = []   # (anchor id, short label) for the sub-nav
     # Per-tab identity strip (design doc § masthead: claims descend to the
     # level where they're true). The old masthead badge + "Data to X" land
-    # here, per source — including the GACC-context chip, which runs a month
-    # AHEAD of the Eurostat core and pre-empts "why does the GACC section
-    # show a later month?".
+    # here, per source. This tab's claim set is Eurostat + HMRC at the anchor
+    # month — so those are the only VINTAGE chips; the GACC line below is a
+    # SIGNPOST to the other track's tab, not a claim about this page
+    # (2026-07-15 ruling: the briefing carries no floating GACC content).
     vin = report.source_vintages or {}
 
     def _vin_lbl(v) -> str | None:
@@ -3126,12 +3231,12 @@ def render_html(report: Report) -> str:
     hm_lbl = _vin_lbl(vin.get("hmrc"))
     if hm_lbl:
         strip_chips.append(f'<span class="idchip">HMRC · to {hm_lbl}</span>')
-    ga_lbl = _vin_lbl(vin.get("gacc"))
+    gp = report.gacc_page
+    ga_lbl = _vin_lbl(gp.data_period) if gp is not None else None
     if ga_lbl:
-        target = (' — <a href="#tab-gacc">see the GACC-only tab</a>'
-                  if report.gacc_page is not None else "")
-        strip_chips.append(f'<span class="idchip">GACC context · to {ga_lbl}'
-                           f"{target}</span>")
+        strip_chips.append(
+            f'<span class="idchip">China has already reported {ga_lbl} — '
+            '<a href="#tab-gacc">see the GACC-only tab</a></span>')
     if strip_chips:
         brief.append(f'<section><div class="id-strip">{"".join(strip_chips)}'
                      "</div></section>")
@@ -3158,36 +3263,25 @@ def render_html(report: Report) -> str:
         else:                                # nothing moved → slim one-liner, no nav
             brief.append("<section>" + _what_changed(wc) + "</section>")
     _BRIEF_NAV = {"state_of_play": "Trade position", "mirror_gap": "Mirror gaps",
-                  "sector_detail": "Sector detail", "gacc_bilateral": "GACC by country"}
-    has_gacc = any(
-        s.kind == "gacc_bilateral"
-        and (s.sections or (s.metrics or {}).get("partner_charts"))
-        for s in report.sections)
+                  "sector_detail": "Sector detail"}
     for sec in report.sections:
         inner = None
         if sec.kind == "state_of_play" and sec.sections:
             inner = _state_of_play_section(sec)
-            if has_gacc:
-                # Bridge to the GACC "by country" section far below: the two do
-                # different jobs (EU↔China detail here; China's own-customs view
-                # of its whole world there) and sit far apart in this tab, so a
-                # reader sees the relationship and can jump straight to it.
+            if report.gacc_page is not None:
+                # Bridge to the other release track: China's own-customs view
+                # (by country + world) lives on the GACC-only tab at ITS
+                # period — the briefing carries no GACC section of its own
+                # (2026-07-15 single-period ruling).
                 inner += (
-                    '<p class="see-also">→ See also '
-                    '<a href="#brief-gacc_bilateral">China’s trade by country '
-                    '(GACC)</a> — China’s own customs view of its trade with the '
-                    'world, the global counterpart to the EU-focused picture '
-                    'above.</p>')
+                    '<p class="see-also">→ See also the '
+                    '<a href="#tab-gacc">GACC-only tab</a> — China’s own '
+                    'customs view of its trade with Europe and the world, the '
+                    'global counterpart to the EU-focused picture above.</p>')
         elif sec.kind == "sector_detail" and sec.sections:
             inner = _sector_section(sec)
         elif sec.kind == "mirror_gap" and sec.findings:
             inner = _mirror_gap_html(sec)
-        elif sec.kind == "gacc_bilateral" and (
-                sec.sections or (sec.metrics or {}).get("partner_charts")):
-            # Render when there are per-partner subsections OR the annual
-            # per-region charts — the charts live on the root and shouldn't be
-            # suppressed just because the per-country findings are absent.
-            inner = _gacc_bilateral_html(sec)
         # 'structural' (the Trade Map) is NOT here — it moved to the Sources &
         # coverage tab below.
         if inner is not None:
