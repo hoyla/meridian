@@ -25,15 +25,9 @@ alerting suite). What's left:
   CSS-clamp the inline `label_short` (truncate with an ellipsis) and let the
   existing hover tooltip carry the full self-explanatory text. Cosmetic only; the
   full text is always reachable on hover.
-- **Favicon** (Luke, 2026-07-05). The portal serves none — every page load
-  404s on `/favicon.ico` via the GCS proxy, and the browser tab shows the
-  generic globe. House-consistent implementation: a `data:` URI
-  `<link rel="icon">` in `render_html`'s head (an inline SVG — the snapshot
-  stays one self-contained blob; no portal_service route, no bucket object,
-  works in the local preview too). Candidate mark: the two-tone ◐ semicircle
-  glyph from the world scale chart — on-brand since 2026-07-05 — in the
-  masthead blue/amber. One `<link>` line + the SVG string; a render test
-  asserting the head carries it.
+
+(The favicon shipped 2026-07-07, #136 — the ◐ data-URI mark, exactly the
+implementation sketched here; see history.md § 2026-07-07/08.)
 
 ## Analyser de-duplication / shared windowing primitive (E1) — flagged 2026-06-25
 
@@ -105,8 +99,11 @@ the Eurostat sections don't all transfer:
 - **Mirror-trade gaps** — does **not** transfer as-is: the gap is specifically
   China↔EU (GACC exports vs Eurostat imports). A UK analogue means China↔UK
   (GACC vs HMRC) — a new analyser, not a reuse.
-- **China's trade by partner (GACC)** — transfers unchanged (source-independent
-  context).
+- **China's trade by partner (GACC)** — no longer transfers at all: since
+  the 2026-07-15 single-period ruling (#151) NO briefing variant embeds
+  GACC content — it lives on the GACC-only tab at its own month, reached
+  by cross-link. An HMRC release would carry the same signpost chip the
+  Eurostat briefing does.
 
 Smallest viable version: reuse the Eurostat section-builder with the UK scope
 foregrounded and the mirror-gap section dropped (or swapped for a China↔UK
@@ -123,6 +120,14 @@ with answerability tags). Full write-up:
 [`2026-07-05-gacc-update-page-design.md`](2026-07-05-gacc-update-page-design.md);
 operations (takes lifecycle across the two tracks):
 `portal_service/README.md` § "The second track".
+
+Since reshaped twice: **commodity highlights** (2026-07-14, #140–#144 —
+sections 5/6 catalogue, KPI mover cards, the commodity take) and the
+**2026-07-15 single-period consolidation** (#151 — the briefing sheds its
+floating GACC section; By-country absorbs Europe-up-close + the full
+roster; world section gains the region charts; entrepôt + Middle East
+explainers). Both in history.md; the design doc carries dated addenda.
+The "slim page" framing is retired — this is the dense page, deliberately.
 
 Residuals, none scheduled (v1.1 candidates from the design session):
 
@@ -144,7 +149,8 @@ Residuals, none scheduled (v1.1 candidates from the design session):
   a bundle built without bucket env had empty takes and would have wiped
   the live ones).
 - **Archive / release feed** — period-labelled tabs invite "where's April's
-  GACC page?"; `periods/` copies exist, a reader-facing feed doesn't yet.
+  GACC page?"; `periods/` copies exist and are append-only per snapshot
+  since #150 (2026-07-15), but a reader-facing feed doesn't yet.
 
 ## docx → Drive pipeline — legacy; teardown deferred (2026-06-22)
 
@@ -259,10 +265,15 @@ append-only + provenance on everything new (principles 3/4/7).
    - **Eurostat:** unit-price (€/kg) trends as a first-class series (we hold
      value + kg; price = the divergence signal); supplementary units; finer
      partner cuts.
-   - **GACC:** more partner countries (beyond the ~24); **commodity-level** GACC
-     if obtainable — currently bloc/partner aggregates only, so a China-side HS
-     mirror is a big unlock (ties to *Eurostat-side HS-level mirror* below);
-     surface the CNY-vs-USD divergence.
+   - **GACC:** more partner countries (beyond the ~24). Commodity-level
+     GACC PARTIALLY LANDED 2026-07-14 (#140–#142): the sections-5/6
+     headline catalogue (~30 commodities, China↔world, no partner split,
+     no HS codes) is ingested 2019→now and live on the GACC page. The
+     remaining unlock is the **partner × HS-division crosses** in the
+     Monthly Bulletin — Track 2 of the Chinese-source work (§ below) —
+     which is what a real China-side HS mirror needs (ties to
+     *Eurostat-side HS-level mirror* below). Still open: surface the
+     CNY-vs-USD divergence.
    - **HMRC:** finer UK granularity (regions, transport mode) if a UK story
      warrants it.
 
@@ -281,6 +292,14 @@ append-only + provenance on everything new (principles 3/4/7).
    correlate moves with policy — also feeds the LLM-takes v2 retrieval angle).
 
 ## "Biggest mover" KPI — surface what we're *not* watching (A→B); design 2026-06-24
+
+> **Option A SHIPPED same day** (2026-06-24, `--analyse cn8-biggest-mover`
+> + the fifth KPI card with its "outside the headline movers" framing —
+> recorded as a 2026-07-15 addendum to history.md § 2026-06-24, having
+> been missed at the time). **What remains open here is Option B** (the
+> true blind-spot radar over unwatched chapters) and the
+> **feedback loop** — both gated, as designed, on whether reporters react
+> to the Option-A card. The design rationale below stands.
 
 **Motivation.** A fifth KPI card that highlights an out-of-the-ordinary sector
 move. The real goal (Luke, 2026-06-24) is to surface something **we're not
@@ -632,28 +651,22 @@ What's still open from this arc:
     browser). On that failure: record it in `periodic_run_log` (error
     field) and notify (see below); recovery is a one-off
     `python -m briefing_pack.drive_export …` by hand to refresh the token.
-  - **Per-run outcome notification (Luke wants this).** Have the scheduled
-    Routine report the outcome *every* run, not just on failure: whether
-    new source data was found and **from where** (GACC / Eurostat / HMRC),
-    whether a new briefing was generated (and its data period), whether the
-    Drive upload succeeded, and any error. Most of this is already in
-    `PeriodicRunResult` (`action_taken`, `reason`, `data_period`,
-    `findings_path`, `analyser_counts`) plus `_new_releases_since` /
-    `_why_this_export_paragraph`; the Drive-upload result depends on the
-    `--upload-to-drive` wiring above, so build the notification together
-    with that. A dead-token alert is then just one possible outcome line.
-    Delivery, simplest first: (a) the Routine agent summarises + push-
-    notifies at the end of each run; (b) a macOS `osascript` desktop
-    notification with a one-line summary; (c) the Slack/email digest
-    channel once built. (a)+(b) work today without the deferred delivery
-    channel; the unattended path must still fail-loud (non-interactive
-    `get_credentials` that raises rather than blocking on a browser).
+  - **Per-run outcome notification — SUBSTANTIALLY SHIPPED** as
+    `--notify-chat` (2026-06-23, #74 + the #76–#78 alert suite + the
+    2026-07-07 error pings): the Routine posts to a Google Chat Space on
+    new data per source, new briefings (track-labelled since 2026-07-05),
+    overdue sources, and errored GACC walks. What remains from the
+    original sketch is only the **Drive-upload outcome line**, which
+    depends on the `--upload-to-drive` wiring above — build together IF
+    the Drive path ever revives (see the docx-teardown decision above:
+    it likely won't).
 
   Sharing needs no work: export folders inherit permissions from the
   `MERIDIAN_DRIVE_PARENT_ID` parent, which is already shared with Lisa and
   colleagues.
-- **Promote `--docx` from opt-in to default-on.** Defer until
-  Lisa has eyeballed 2-3 real cycles' worth of output.
+- ~~Promote `--docx` from opt-in to default-on~~ — **superseded** by the
+  2026-06-22 docx→Drive teardown decision (§ above): the portal is the
+  Lisa-facing surface and `--periodic-run` runs `docx=False` by design.
 
 ### Test coverage catch-up (flagged 2026-05-21)
 
@@ -687,26 +700,18 @@ order:
   target / a conftest warning so a bare `pytest` makes the skip obvious,
   and so these run in CI rather than only when remembered locally.
 
-### Watch the first 2-3 real cycles + decide delivery vector
+### Watch the first 2-3 real cycles + decide delivery vector — cycles WATCHED; vector still open
 
 Periodic-run **pipeline + Routine** shipped 2026-05-11 (Phase 6.9 /
-6.10 — see `history.md` and
-[`2026-05-11-periodic-runs-design.md`](2026-05-11-periodic-runs-design.md)).
-Routine fires daily at 09:01 local time. What remains is observation
-and Layer-3 design:
+6.10). The observation half is done: many real cycles have landed
+(Eurostat May/Jun releases, the HMRC pair, three GACC months incl. the
+two-track June flow), Lisa has the portal ("absolutely brilliant",
+2026-06-22), and the diff/Tier-1 reads validated editorially. What
+survives of this section:
 
-- **Click "Run now" once from the Scheduled sidebar** to pre-approve
-  the tools the Routine uses (`psql`, `python scrape.py ...`).
-  Otherwise the first real scheduled run will pause on permission
-  prompts.
-- **Watch the first 2–3 real cycles land** (whenever the next
-  Eurostat release publishes — typically 6-8 weeks after period
-  close). Tier 1 currently shows same-day method-bump churn
-  (everything created today); after the first real Eurostat-release
-  cycle, it'll show the actual data diff. Validate that the diff
-  reads usefully editorially.
-- **Decide on delivery vector** (Layer 3) once we've seen what a
-  real cycle looks like in Lisa's hands. Don't pre-pick
+- **Decide on delivery vector** (Layer 3) — now framed as **iteration 5
+  of the journalist-usability arc** (§ above): change-based alerts once
+  the vector is picked. Don't pre-pick
   email / Slack / Drive — pick after the first usable export
   has been delivered manually a few times.
 - **Migrate Luke's environment** from laptop to desktop. Steps in
@@ -725,13 +730,15 @@ for the per-claim test that motivates each.
 ### Eurostat-side HS-level mirror for "China's exports to EU"
 
 Soapbox routinely quotes GACC-side HS-level figures ("China's
-EV+hybrid exports to EU +87% in Q1 2026 at $20.6B"). GACC
-sections 5/6 in our DB have only ~30 hand-curated commodity
-names (no HS codes), so the GACC-side HS-level test is blocked
-on parser work for sections 5 and 6 specifically. The cleaner
-path is to rely on Eurostat for HS-level and accept the CIF/FOB
-caveat — but the editorial register ("China reported $20.6B...")
-isn't substitutable.
+EV+hybrid exports to EU +87% in Q1 2026 at $20.6B"). Sections 5/6
+are now fully ingested (2026-07-14, #140–#142 + the CN parser #149)
+but remain a ~30-name curated catalogue with **no HS codes and no
+partner split** — so the GACC-side HS-level test is no longer a
+parser gap, it's a source-shape gap. The real path is the Monthly
+Bulletin's partner × HS-division crosses (Track 2, § Chinese site
+below). Meanwhile Eurostat covers HS-level with the CIF/FOB caveat —
+but the editorial register ("China reported $20.6B...") isn't
+substitutable.
 
 ### 2017 pre-v2 COMEXT format duplicate `000TOTAL` rows
 
@@ -912,50 +919,54 @@ unrelated CMS path schemes (Chinese =
 `www.customs.gov.cn/customs/<yyyy-mm>/<dd>/article_<id>.html`, English =
 `Statics/<UUID>.html`), so the old `english.→www.` host swap 404'd.
 `_construct_chinese_source_url` now returns the stable Chinese *统计快讯*
-(Statistics Express) **index** instead (2026-07-14 fix). A true
-per-release Chinese URL backfill would require scraping + title-matching
-the Chinese index — folded into the "Chinese site as earlier trigger"
-investigation below.
+(Statistics Express) **index** instead (2026-07-14 fix, #145). Months
+ingested CN-first (June 2026 onward, via Track 1 below) carry their real
+per-release Chinese URLs from ingest; the **backfill for the EN-first
+back-catalogue** would still require scraping + title-matching the
+Chinese index — do it if a story needs a historical 中文 citation.
 
-### Chinese site as the primary GACC trigger — investigated, GO pending spike
+### Chinese site as the primary GACC trigger — Track 1 SHIPPED and validated; automation + Track 2 open
 
-Investigation done same day (2026-07-14), twice corrected same evening:
+Investigation 2026-07-14 (twice corrected same evening):
 [`2026-07-14-gacc-chinese-source-investigation.md`](2026-07-14-gacc-chinese-source-investigation.md).
-The apples-to-apples questions resolved favourably: values are
-**identical** to our English-parsed data everywhere compared (Express
-by-country May-2025 30/30 rows × 6 values; Bulletin-vs-prelim May-2026
-26/26; commodity spot rows); observed drop-day lead 14+ hours (CN 02:28
-UK, EN still absent at 16:50). Decision (Luke): the lead is editorially
-material — *"very strong argument to use the Chinese."*
+Values **identical** to English everywhere compared; observed drop-day
+lead **hours (14+), not weeks**. Decision (Luke): *"very strong argument
+to use the Chinese."* Key structure (GACC's own Release Calendar):
+**Preliminary** 7th–9th of M+1 (12th–14th after quarter-ends) vs
+**Monthly Bulletin = the VERIFIED vintage** (the 18th, both languages,
+revisable until the Yearbook) — different products, never silently
+interchangeable.
 
-Key structure (per GACC's own Release Calendar, English site, WAF-free —
-`statistics/Statistics?ColumnId=4`): **Preliminary Release** 7th–9th of
-M+1 (12th–14th after quarter-ends) vs **Monthly Bulletin** — the
-*verified* vintage, revisable until the Yearbook — always the 18th, both
-languages, with per-year archives on both sites (the English Bulletin at
-`statics/report/monthly.html` is WAF-free). The two are different GACC
-products: never silently interchangeable; same-vintage recovery for a
-missed prelim drop = the English preliminary archive.
+**Track 1 — SHIPPED 2026-07-14/15 and validated on its first live month**
+(history.md § both days): #148 (by-country xls parser/ingest — CN values
+rounded to English printed precision so the later EN pass re-verifies as
+`unchanged`; cross-language natural key; `gacc_cn.py verify`) + #149 (the
+commodity tables, zh↔en dictionary derived value-matched). June 2026 was
+ingested from the CN site ~18h before the English pages existed and
+published to the portal that morning; the pre-registered June diff
+resolved **620/620 exact** when the EN pages landed (2026-07-15). The
+per-release Chinese URLs are captured at ingest for CN-first months
+(historical backfill for EN-first months: still open, above).
 
-Two separable build tracks (dev-note build sketch):
-- **Track 1 — the hours** (needs the WAF spike, the one real unknown):
-  poll the CN Express index for the drop-day trigger; xls attachments are
-  WAF-free once discovered. First: **run the pre-registered June-2026
-  diff** (30-row CSV in the dev note) when the English June release lands.
+**Still open:**
+- **The trigger automation** (the remaining piece of Track 1): the June
+  ingest was hand-triggered on the chat ping. Automating it needs the
+  **WAF spike** (poll the CN Express index for the drop-day trigger; the
+  xls attachments are WAF-free once discovered) and then the routine
+  wiring so the CN walk runs unattended.
 - **Track 2 — the crosses** (no WAF at all): ingest the **English Monthly
   Bulletin** — (2) all-country + (15)/(16) partner × HS-division
   cross-tables, verified figures ~4 weeks ahead of Eurostat's same-month
   coverage — as a new vintage-labelled source. Bigger analytical prize,
-  pure known-technology work.
-- Also: ingest the official Release Calendar to drive `release_calendar.py`
-  from GACC's own schedule (it corroborates PR #139's empirical
-  quarter-end override). Caveat: calendars publish **Jan–Mar of the year
-  they cover** (2026's = CN-only 公告2025年第240号, posted 2026-03-11;
-  no English edition), so the empirical override remains the Jan–Feb
-  fallback each year.
+  pure known-technology work; also what the breadth item "China-side HS
+  mirror" actually needs.
+- The official Release Calendar shipped into the portal (#147, the
+  publication-calendar table + GACC's 2026 dates), corroborating #139's
+  empirical quarter-end override. Caveat stands: calendars publish
+  **Jan–Mar of the year they cover**, so the empirical override remains
+  the Jan–Feb fallback each year.
 
-Append-only + provenance discipline throughout (principles 3/4/7); the
-per-release Chinese URL backfill (above) falls out of Track 1 for free.
+Append-only + provenance discipline throughout (principles 3/4/7).
 
 ## Future-platform items
 
