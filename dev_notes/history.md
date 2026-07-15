@@ -10,6 +10,195 @@ to understand how the project got here.
 
 ---
 
+## 2026-07-15 — Single-period surfaces: the ruling, three PRs, and a validated bet
+
+The densest shipping day since 2026-07-05, and it started with a broken
+download link.
+
+**The stale-image incident (morning).** Luke reported the Tables tab's
+"Download Excel workbook" 404ing. Diagnosis: the live Cloud Run revision
+had been built 2026-06-21 12:39 UTC — *before* the commit that added the
+`/data.xlsx` route (and the GZip middleware) that same evening. Every
+publish since had only written the bucket; **bucket publishes never ship
+app code**, so the HTML gained the button while the service never gained
+the route — and the portal served its ~1.3MB page uncompressed for three
+weeks. Fixed by redeploying from main (rev `00006-ntf`; Luke ran the
+deploy — the assistant's auto-mode rightly refuses prod deploys). Lesson
+recorded in `portal_service/README.md` and memory: any `portal_service/`
+change needs `gcloud run deploy --source portal_service`; check
+deployed-revision date vs the last commit touching that dir.
+
+**The single-period ruling (#151).** Investigating the Tables tab's
+period ambiguity, Luke hit the Full briefing's "GACC context · to Jun
+2026" chip cold and read it as a two-track violation. It wasn't — every
+cycle invariant held — but the archaeology exposed a real remnant: the
+briefing's "China's trade by country (GACC)" section predated the
+two-track design (f2a97c7, 21 Jun), floated at GACC-latest (TWO months
+past the Apr anchor after the quarter-end June drop), and the 2026-07-05
+design doc had ratified rather than reconciled it. The empirical diff
+(yesterday's snapshot vs today's) proved the claim set never moved — only
+the floating section, its chip, and a cross-track leak in the
+"since last briefing" counter. **Ruling (Luke): surfaces are
+single-period** — every claim on a tab anchors to that tab's reference
+month; the other track is reached by cross-link, never embedded at
+another vintage. As built: the briefing sheds the GACC section (a
+signpost chip replaces it), and the GACC page consolidates — "Europe up
+close" + the briefing's 24-partner roster become one grouped **By
+country** section (Europe first, EU bloc open, ◐ balance dials on every
+row), **China and the world** moves above it and gains the three annual
+region charts, then (same-day refinements) sheds its UK and HK rows so
+its cast equals the charts' cast exactly, the **entrepôt treatment moves
+to the By-country HK row** (chip + panel-leading explainer + mirror-gaps
+cross-reference — fixing a real gap: the roster's HK row, +189% import
+month, had carried no flag at all), and a world-section More-about
+explains **why there is no Middle East line** (GACC names no ME partner;
+China–Gulf trade sits unseparated in Belt & Road + the world total).
+`what_changed.new_count` is now track-scoped; `GaccPage.europe` →
+`by_country`; schema 0.4.0. Design-doc addendum records it all;
+the "slim GACC tab" framing is formally retired.
+
+**The Chinese-source bet validated (afternoon).** The English June
+preliminary landed ~13:30 UTC — ~18h after the CN ingest — and the walk
+resolved the pre-registered June-2026 diff from
+`2026-07-14-gacc-chinese-source-investigation.md`: the English pass
+landed on the same release rows (cross-language natural key) and
+re-verified every observation — **620/620 `unchanged`** (§4 by-country
+180×2 currencies, §5 exports 62×2, §6 imports 68×2), zero versioned,
+zero inserted, plus 136 May §6 values re-verified. `releases.source_url`
+flipped to the eyeballable English pages as designed, and a same-day
+republish carried those links into the live provenance drawers (254
+EN-site URLs; one deliberate 中文 identity link remains). Track 1's
+timeliness play — publish from the Chinese release, verify against the
+English — worked end-to-end on its first live month at zero accuracy
+cost.
+
+**The Tables batch (#152, evening).** Extends the ruling to the one
+deliberately mixed-vintage surface. The Tables tab groups by TRACK under
+the page tabs' period-explicit labels; a page-level downloads row
+replaces the per-table CTA (workbook + the **Findings briefing** —
+Markdown, NotebookLM-ready; findings only, NO leads, Luke's ruling); the
+workbook gains an **About cover sheet** (generated-at, snapshot id,
+per-source vintages, per-sheet track + rows) so the file self-documents
+once it leaves the portal; and downloads carry **snapshot-dated
+filenames** via blob Content-Disposition (`meridian-data-2026-07-15.xlsx`
+— naming ruling: the workbook spans two tracks' vintages, so a month
+name would misdescribe it; the date never lies). The standalone snapshot
+build now renders the findings briefing at the same moment as the
+workbook; `app.py` gained `/findings.md` + disposition forwarding —
+deployed rev `00007-lqd` BEFORE the first publish from the new code (the
+deploy-order rule, learned the easy way this time).
+
+**Also merged: #150** — the `periods/` bucket archive is keyed by
+`snapshot_id` (append-only), closing the overwrite-within-anchor-month
+violation of principle 4 spotted during the morning's investigation
+(spawned as a parallel task, PR'd and merged same day).
+
+Suite 777 → 779 across the day. Ops: two service deploys (00006, 00007),
+three publishes (all reuse-takes, zero LLM spend), one incident
+post-mortem, one 620/620 parity certificate.
+
+---
+
+## 2026-07-14 — GACC commodity highlights + the Chinese-source switch (Track 1)
+
+Two arcs in one long day (#139–#149 merged 07-14 into the morning of
+07-15), triggered by the June GACC drop being quarter-end-late and by
+FT's sector coverage of it ("cars +71%").
+
+**Quarter-end cadence fix (#139).** GACC's preliminary releases for
+quarter-end reference months (Mar/Jun/Sep/Dec) land ~12th–14th, not
+7th–9th; `release_calendar.py`'s flat due-by-12th flagged June falsely
+overdue (bit on 07-14). Fixed via a `month_lag_days` override; June read
+`due`, and the official 2026 calendar (ingested via #147) corroborates.
+
+**Commodity highlights (#140–#144).** The "partners-only, no commodity
+dimension" premise was true of section 4 only — GACC's preliminary ALSO
+publishes sections (5)/(6), a curated ~30-commodity catalogue
+(China↔world, quantity+value, no HS codes). Shipped in one arc: the
+parser (10-cell regular / 8-cell Jan-Feb layouts, stable 2019–2026) +
+`--gacc-replay-snapshots` backfill (340 pages re-parsed from stored
+snapshots, zero refetches — the append-only snapshot store paying rent);
+`detect_gacc_commodity_yoy[_import]` (native-CNY YoY hard-cross-checked
+against GACC's own printed pct — divergence blocks emission; single-month
+priors by adjacent-page prior-YTD differencing, label-drift-immune);
+the page block ("What's moving — GACC's headline commodities") with
+computed milestone/run-rate facts; Luke's same-day calls — the FULL
+catalogue per flow (no re-curating a curation: selection had hidden cars
+at +33%), aggregates pinned at foot, selection surviving only on a new
+second KPI row (2 export + 2 import movers, ≥€1bn month floor); and PR D
+(#143) — the commodity take (third paid call/month) over the full
+displayed fact set, with two new causal-catalog entries
+(`export_controls_china`, `domestic_demand_pivot`). The May test run
+exposed citation over-matching (a 65-token substring heuristic) → #144
+re-cites via the verifier's own matcher. Durable gotchas in the design
+doc: the 2021 "Machine tools*" label collision (identity = (label,
+is_aggregate) everywhere), catalogue label drift across eras (never join
+labels across years — the differencing design exists so nothing has to),
+and the three starred aggregates' non-adjacent membership (never
+summed).
+
+**The Chinese-source investigation → Track 1 (#145–#149).** Started as a
+404 fix (#145: the 中文 link — the two sites' CMS paths are unrelated, so
+the host-swap never worked; now points at the stable Express index) and
+became the source-strategy question: could the Chinese site be the
+primary trigger? Investigation (#146, twice corrected same evening —
+cadence and vintage): the CN 统计快讯 IS our English "preliminary"
+exactly (values identical everywhere compared: 30/30×6 by-country,
+26/26 Bulletin-vs-prelim); the **Monthly Bulletin (统计月报, the 18th,
+both languages) is a different product — the VERIFIED vintage** — never
+silently interchangeable; and the observed drop-day lead is **hours
+(14+), not weeks**. Decision (Luke): *"very strong argument to use the
+Chinese."* Track 1 shipped immediately: #148 parses + ingests the CN
+Express by-country xls (values rounded to English printed precision at
+parse time, so the later English pass reads `unchanged`; same natural
+key → the EN walk lands on the same release rows and re-verifies;
+`gacc_cn.py verify` institutionalises the diff), #149 the commodity
+tables (zh↔en label dictionary derived value-matched). **That evening
+GACC published June (quarter-end schedule) on the CN site and it was
+ingested ~18h before the English pages existed** — releases 1231–1236,
+sections 4/5/6 × CNY/USD — and the June edition was published to the
+portal the next morning from CN data alone. (The parity resolution: see
+2026-07-15.) Also #147: the **publication calendar** on Sources &
+coverage — per-source expected dates incl. GACC's official 2026 schedule
+(公告2025年第240号; calendars publish Jan–Mar of their own year, so the
+empirical override stays the each-January fallback) — with the
+what-updates-what legend.
+
+---
+
+## 2026-07-07/08 — Ops hardening: the parse floor and the honest alarm
+
+A standing twice-daily "error — held back 32" chat alarm turned out to be
+three separate things wearing one trenchcoat, and fixing it properly
+closed the last adversarial-review residual.
+
+- **#135 — the GACC section-4 parse floor** (A1 residual, F5 in the
+  2026-07-01 review): `parse.py` previously raised only on *structural*
+  failure, so a partial parse (rows silently dropped) could store a thin
+  release and feed the analysers a truncated partner set invisibly. Now
+  `section4_floor_check` rejects on two layout-independent invariants —
+  fewer than 20 top-level partners, or a parsed 'Total' row that fails to
+  carry the max value (a same-width column shift signature). Hard-fail by
+  design: reject ⇒ run `failed`, no release row, next walk retries.
+- **#136 — the portal favicon**: the two-tone ◐ semicircle mark (the
+  world scale-glyph flow colours) inlined as a `data:` URI in the head —
+  no route, no bucket object, works in local preview.
+- **#137 — held-back releases now ping**: the source probe classified a
+  held-back release as `no_change` (it counts before/after releases, and
+  a floor rejection is swallowed into a `failed` scrape_runs row), so a
+  tripped floor meant the page silently didn't update. The walk now
+  detects failed GACC runs (`_failed_gacc_runs_since`) → `result='error'`
+  → transition-based chat alert with the reason.
+- **#138 — the false alarm itself**: the "32 held back" were a standing
+  backlog, not one page — 2018 image-only pages (no table), unrecognised
+  legacy titles, and a section-1 USD-floor false positive. Fixed: the
+  value floor scoped to section 4 only, `UnparseableReleasePage` →
+  terminal `no_parser` (not retried-forever `failed`), and the floor made
+  supersede-aware. Durable lesson: audit `scrape_runs` before trusting a
+  single-page diagnosis.
+
+---
+
 ## 2026-07-05 — GACC-only page: the second release track (LIVE)
 
 Designed, built, live-reviewed and deployed in a single day with Luke in the
@@ -120,6 +309,13 @@ baked, 9 drawers rendered. Tests: drawer renders for a gated KPI + mover, and is
 absent (plain cite) without a payload. Full suite green (567). Remaining
 follow-ups (extend the gated set to the long tail; richer per-subkind arithmetic)
 are in roadmap.md.
+
+*(Addendum, recorded 2026-07-15: the same day also shipped the "Biggest
+mover" KPI — Option A of the roadmap design, the CN8-grain single-product
+mover within watched sectors, `--analyse cn8-biggest-mover` + the fifth
+KPI card with its "outside the headline movers" framing. Option B — the
+true blind-spot radar over unwatched chapters — remains gated on reporter
+feedback; see roadmap.md.)*
 
 ---
 
