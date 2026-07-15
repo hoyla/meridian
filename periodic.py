@@ -287,8 +287,27 @@ def write_portal_snapshot(
                 xlsx_path = Path(bundle_dir) / "04_Data.xlsx"
                 sheets_export.XlsxWriter().write(
                     sheets_export.assemble_sheets(), str(xlsx_path),
+                    cover=sheets_export.build_cover_meta(
+                        generated_at=report.meta.generated_at,
+                        snapshot_id=report.meta.snapshot_id),
                 )
                 log.info("portal snapshot: wrote workbook to %s", xlsx_path)
+                # The companion Findings briefing (2026-07-15, Luke's call:
+                # findings only, no leads on the portal) — rendered at the
+                # same build moment as the workbook so "the same findings"
+                # stays literally true. Deterministic (no LLM calls at
+                # render time); same best-effort posture as the workbook.
+                try:
+                    from briefing_pack.render import render as render_findings
+                    md_path = Path(bundle_dir) / "02_Findings.md"
+                    md_path.write_text(render_findings(), encoding="utf-8")
+                    log.info("portal snapshot: wrote findings briefing to %s",
+                             md_path)
+                except Exception:
+                    log.exception(
+                        "portal snapshot: findings render failed; the portal "
+                        "/findings.md download will 404 until the next "
+                        "successful build")
             except Exception:
                 log.exception(
                     "portal snapshot: workbook build failed; portal published "

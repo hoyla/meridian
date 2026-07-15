@@ -44,6 +44,20 @@ def _read(path: str) -> bytes | None:
     return blob.download_as_bytes() if blob.exists() else None
 
 
+def _read_with_disposition(path: str, fallback: str) -> tuple[bytes, str] | None:
+    """Read a downloadable blob plus its Content-Disposition. The publish
+    step stamps a snapshot-dated filename onto the blob (e.g.
+    'meridian-data-2026-07-15.xlsx' — the workbook spans two release
+    tracks' vintages, so the snapshot date is the one stamp that never
+    lies); older snapshots without the metadata get `fallback`."""
+    if not _storage:
+        return None
+    blob = _storage.bucket(BUCKET).get_blob(path)
+    if blob is None:
+        return None
+    return blob.download_as_bytes(), (blob.content_disposition or fallback)
+
+
 @app.get("/healthz")
 def healthz() -> dict:
     """Liveness probe — does not touch GCS (so it stays green before the first
@@ -71,12 +85,33 @@ def report_json() -> Response:
 @app.get("/data.xlsx")
 def data_xlsx() -> Response:
     """The journalist spreadsheet (every tab, every row) — the Tables tab's
-    'Download Excel workbook'. Published alongside the snapshot; 404 if a
-    snapshot was made without one (e.g. an --portal-snapshot-only refresh)."""
-    data = _read("latest/data.xlsx")
-    if data is None:
+    'Excel workbook' download. Published alongside the snapshot with a
+    snapshot-dated filename in the blob's Content-Disposition; 404 if a
+    snapshot was made without one."""
+    got = _read_with_disposition(
+        "latest/data.xlsx", 'attachment; filename="meridian-data.xlsx"')
+    if got is None:
         raise HTTPException(status_code=404, detail="No workbook in this snapshot.")
+    data, disposition = got
     return Response(
         content=data, media_type=_XLSX_MIME,
-        headers={"Content-Disposition": 'attachment; filename="meridian-data.xlsx"'},
+        headers={"Content-Disposition": disposition},
+    )
+
+
+@app.get("/findings.md")
+def findings_md() -> Response:
+    """The Findings briefing — the deterministic Markdown rendering of the
+    same findings (NotebookLM-ready), the Tables tab's second download.
+    Published beside the workbook from the same build moment; 404 if this
+    snapshot was made without one."""
+    got = _read_with_disposition(
+        "latest/findings.md", 'attachment; filename="meridian-findings.md"')
+    if got is None:
+        raise HTTPException(status_code=404,
+                            detail="No findings document in this snapshot.")
+    data, disposition = got
+    return Response(
+        content=data, media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": disposition},
     )

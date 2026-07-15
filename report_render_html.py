@@ -1298,7 +1298,7 @@ def _fmt_cell(c, header: str = "") -> str:
     return str(c)
 
 
-def _one_table_html(t: dict, *, hidden: bool, xlsx: bool = True) -> str:
+def _one_table_html(t: dict, *, hidden: bool) -> str:
     name = t["name"]
     headers = t.get("headers", [])
     th = "".join(f"<th>{html.escape(str(h))}</th>" for h in headers)
@@ -1321,16 +1321,12 @@ def _one_table_html(t: dict, *, hidden: bool, xlsx: bool = True) -> str:
                  f'{t["total_rows"]:,} rows — the full set is in the Excel '
                  "download.</p>")
     style = ' style="display:none"' if hidden else ""
-    # Download (whole workbook) + Copy (this table) are the same-size buttons,
-    # download first, tip beside Copy — so the per-table pills aren't upstaged by
-    # a big CTA. Only one table is visible at a time, so the download shows once.
-    dl = ('<a class="btn btn-sm" href="data.xlsx" download>⤓ Download Excel '
-          "workbook</a>" if xlsx else "")
+    # Copy (this table) rides the table header; the workbook + findings
+    # downloads live once in the tab-level dl-row (2026-07-15).
     return (
         f'<div class="dt-wrap" id="dt-{html.escape(name)}"{style}>'
         f'<div class="dt-head"><span class="dt-desc">{html.escape(t.get("description", ""))}</span>'
         '<div class="dt-actions">'
-        f"{dl}"
         f'<button class="btn btn-sm copy-tsv" data-table="dt-{html.escape(name)}">'
         "⧉ Copy as TSV</button>"
         '<span class="dt-tip">pastes into Sheets / Excel</span>'
@@ -1341,39 +1337,64 @@ def _one_table_html(t: dict, *, hidden: bool, xlsx: bool = True) -> str:
     )
 
 
-def _data_tables_html(section, *, xlsx: bool = True) -> str:
-    """The Tables tab — embedded digestible spreadsheet tabs (pill-switched),
-    a Copy-as-TSV button per table, and a full-workbook .xlsx download. The
-    heavy tabs are listed as download-only (no thousands of rows inline)."""
+def _data_tables_html(section, *, track_labels: dict[str, str] | None = None,
+                      findings_download: bool = True) -> str:
+    """The Tables tab — embedded digestible spreadsheet tabs (pill-switched
+    within each TRACK group), a Copy-as-TSV button per table, and a
+    page-level downloads row (the workbook + the Findings briefing).
+
+    Track grouping (2026-07-15): this is the portal's one deliberately
+    mixed-vintage surface — one workbook serving both release tracks — so
+    the tables are grouped under the same period-explicit labels as the
+    page tabs ("Full briefing (Apr 2026)…" / "GACC-only (Jun 2026)…"),
+    and each group's vintage claim descends to exactly the tables it is
+    true of. Heavy tabs stay download-only, listed under their group."""
     m = section.metrics or {}
     tables = m.get("tables", [])
     out = [f'<h2 class="lead">{html.escape(section.title)}</h2>']
     if section.intro:
         out.append(f'<p class="kicker">{_inline_md(section.intro)}</p>')
-    # The pills lead (table selector); the workbook download + Copy-as-TSV are
-    # same-size buttons in each table's header (no big CTA upstaging the pills).
-    inline = [t for t in tables if t.get("inline") and t.get("rows")]
-    others = [t for t in tables if not (t.get("inline") and t.get("rows"))]
-    if inline:
-        pills = "".join(
-            f'<button class="dtab{" on" if i == 0 else ""}" '
-            f'data-target="dt-{html.escape(t["name"])}">{html.escape(t["name"])} '
-            f'<span class="dtab-n">{t["total_rows"]:,}</span></button>'
-            for i, t in enumerate(inline))
-        out.append(f'<div class="dtabs">{pills}</div>')
-        for i, t in enumerate(inline):
-            out.append(_one_table_html(t, hidden=(i != 0), xlsx=xlsx))
-    if others:
-        out.append('<div class="data-more"><h3 class="ref-h2">Also in the '
-                   "workbook</h3><ul class=\"ref\">")
-        for t in others:
-            out.append(f'<li><strong>{html.escape(t["name"])}</strong> — '
-                       f'{html.escape(t.get("description", ""))} '
-                       f'<span class="note">({t.get("total_rows", 0):,} rows — '
-                       "in the download)</span></li>")
-        out.append("</ul></div>")
+    # Page-level downloads row — one home for everything that leaves the
+    # portal (the per-table button rode each table header before 2026-07-15;
+    # one row reads better than a repeated CTA).
+    dls = ['<a class="btn btn-sm" href="data.xlsx" download>⤓ Excel workbook '
+           "— every table, every row</a>"]
+    if findings_download:
+        dls.append('<a class="btn btn-sm" href="findings.md" download>'
+                   "⤓ Findings briefing — Markdown, NotebookLM-ready</a>")
+    out.append(f'<div class="dl-row">{"".join(dls)}</div>')
     if not tables:
         out.append('<p class="note">No tables in this snapshot.</p>')
+        return "\n".join(out)
+    labels = track_labels or {}
+    order = [tr for tr in ("main", "gacc") if any(
+        t.get("track", "main") == tr for t in tables)]
+    order += sorted({t.get("track", "main") for t in tables} - set(order))
+    for tr in order:
+        grp = [t for t in tables if t.get("track", "main") == tr]
+        inline = [t for t in grp if t.get("inline") and t.get("rows")]
+        others = [t for t in grp if not (t.get("inline") and t.get("rows"))]
+        out.append('<div class="dt-group">')
+        out.append(f'<h3 class="pp-group">{html.escape(labels.get(tr, tr))}</h3>')
+        if inline:
+            pills = "".join(
+                f'<button class="dtab{" on" if i == 0 else ""}" '
+                f'data-target="dt-{html.escape(t["name"])}">{html.escape(t["name"])} '
+                f'<span class="dtab-n">{t["total_rows"]:,}</span></button>'
+                for i, t in enumerate(inline))
+            out.append(f'<div class="dtabs">{pills}</div>')
+            for i, t in enumerate(inline):
+                out.append(_one_table_html(t, hidden=(i != 0)))
+        if others:
+            out.append('<div class="data-more"><h4 class="ref-h2">Also in the '
+                       "workbook</h4><ul class=\"ref\">")
+            for t in others:
+                out.append(f'<li><strong>{html.escape(t["name"])}</strong> — '
+                           f'{html.escape(t.get("description", ""))} '
+                           f'<span class="note">({t.get("total_rows", 0):,} rows — '
+                           "in the download)</span></li>")
+            out.append("</ul></div>")
+        out.append("</div>")
     return "\n".join(out)
 
 
@@ -2892,6 +2913,8 @@ details.partner[open]>summary{border-bottom:1px solid var(--line)}
 .btn:hover{background:#063a82}
 .btn-sm{font-size:12px;padding:5px 10px;background:var(--surface);color:var(--masthead);border:1px solid var(--line)}
 .btn-sm:hover{background:var(--surface-alt);border-color:var(--link)}
+.dl-row{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
+.dt-group{margin:0 0 22px}
 .dtabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}
 .dtab{font-family:var(--font-sans);font-size:13px;color:var(--masthead);background:var(--surface);border:1px solid var(--line);border-radius:62.5rem;padding:5px 12px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
 .dtab.on{background:var(--masthead);color:#fff;border-color:var(--masthead)}
@@ -3120,7 +3143,7 @@ _PORTAL_JS = """<script>
   // ---- data-table pills (switch which table shows) + Copy as TSV
   [].forEach.call(document.querySelectorAll('.dtabs'),function(bar){
     var pills=[].slice.call(bar.querySelectorAll('.dtab'));
-    var scope=panelOf(bar)||document;
+    var scope=(bar.closest&&bar.closest('.dt-group'))||panelOf(bar)||document;
     pills.forEach(function(p){p.addEventListener('click',function(){
       var target=p.getAttribute('data-target');
       pills.forEach(function(q){q.classList.toggle('on',q===p);});
@@ -3312,8 +3335,22 @@ def render_html(report: Report) -> str:
                         _gacc_page_html(report.gacc_page,
                                         report.provenance_payloads)))
     if data_sec is not None and (data_sec.metrics or {}).get("tables"):
+        # Track labels mirror the page tabs' period-explicit names, with the
+        # sources appended — the vintage claim descends to each group
+        # (2026-07-15; the Tables tab carries both tracks' data by design).
+        tlabels = {"main": "Full briefing — Eurostat + HMRC"}
+        md = report.meta.data_period if report.meta else None
+        if md:
+            tlabels["main"] = (f"Full briefing ({_vin_lbl(md)}) — "
+                               "Eurostat + HMRC")
+        tlabels["gacc"] = "GACC-only — China customs"
+        if report.gacc_page is not None and report.gacc_page.data_period:
+            tlabels["gacc"] = (f"GACC-only ({_vin_lbl(report.gacc_page.data_period)}) "
+                               "— China customs")
         tabdefs.append(("tables", "Tables",
-                        "<section>" + _data_tables_html(data_sec) + "</section>"))
+                        "<section>"
+                        + _data_tables_html(data_sec, track_labels=tlabels)
+                        + "</section>"))
     # Sources & coverage = provenance/coverage (sources, period coverage,
     # findings manifest) + the Trade Map (moved off Briefing), one tab.
     src_parts = []

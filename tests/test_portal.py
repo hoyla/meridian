@@ -269,7 +269,11 @@ def _sample_report() -> rm.Report:
              "total_rows": 2, "shown_rows": 2, "inline": True},
             {"name": "hs_yoy_imports", "description": "full detail",
              "headers": ["group"], "rows": [], "total_rows": 3509,
-             "shown_rows": 0, "inline": False}]})
+             "shown_rows": 0, "inline": False},
+            {"name": "gacc_bilateral_yoy", "description": "China-side rows",
+             "headers": ["partner"], "rows": [["European Union"]],
+             "total_rows": 1, "shown_rows": 1, "inline": True,
+             "track": "gacc"}]})
     # The by-country roster lives on the GACC-only page since the 2026-07-15
     # single-period consolidation — the Full briefing carries no GACC section.
     gacc_by_country = rm.Section(
@@ -833,13 +837,25 @@ def test_glossary_web_hides_docx_bundle_terms():
 def test_tables_tab_inline_and_download_only():
     r = _sample_report()
     h = render_html(r)
-    assert "Download Excel workbook" in h and 'href="data.xlsx"' in h
+    # Page-level downloads row (2026-07-15): workbook + Findings briefing,
+    # one home for everything that leaves the portal.
+    assert 'class="dl-row"' in h
+    assert "Excel workbook" in h and 'href="data.xlsx"' in h
+    assert "Findings briefing" in h and 'href="findings.md"' in h
+    assert h.count("Excel workbook") == 1  # once, not per table
     assert "Copy as TSV" in h and 'class="dtable"' in h
-    # download + copy are same-size buttons grouped per-table (no big top CTA)
     assert 'class="dt-actions"' in h and 'class="data-toolbar"' not in h
-    assert h.count("btn-sm") >= 2          # both buttons are the small size
     assert ">Cars<" in h                   # an inline cell
     assert "hs_yoy_imports" in h and "3,509 rows" in h  # download-only, count shown
+    # Track groups carry the period-explicit labels — main first, then the
+    # gacc-track table under its own vintage claim (2026-07-15: the Tables
+    # tab is the one deliberately mixed-vintage surface, so the claims
+    # descend to the group headers).
+    assert h.count('class="dt-group"') == 2
+    assert "Full briefing (Apr 2026) — Eurostat + HMRC" in h
+    assert "GACC-only (May 2026) — China customs" in h
+    assert (h.index("Full briefing (Apr 2026) — Eurostat + HMRC")
+            < h.index("GACC-only (May 2026) — China customs"))
     md = render_markdown(r)
     assert "## Tables" in md and "hs_yoy_imports" in md
 
@@ -1480,6 +1496,20 @@ def test_publish_snapshot_validates_before_touching_gcs(tmp_path, monkeypatch):
         portal_publish.publish_snapshot(str(tmp_path))            # no bucket
     with pytest.raises(FileNotFoundError):
         portal_publish.publish_snapshot(str(tmp_path), bucket="b")  # no 04_Portal/
+
+
+def test_publish_stamp_date_from_snapshot(tmp_path):
+    """Download filenames are stamped with the snapshot's generation DATE
+    (Luke, 2026-07-15: the workbook spans two tracks' vintages, so a month
+    name would misdescribe it; the date never lies). Unreadable → None →
+    the app's static fallback filename serves."""
+    import portal_publish
+    pd = tmp_path / "04_Portal"
+    pd.mkdir()
+    (pd / "report.json").write_text(json.dumps(
+        {"meta": {"generated_at": "2026-07-15T14:05:12"}}))
+    assert portal_publish._stamp_date_from_snapshot(pd) == "2026-07-15"
+    assert portal_publish._stamp_date_from_snapshot(tmp_path) is None
 
 
 def test_publish_period_read_from_snapshot(tmp_path):
