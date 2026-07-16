@@ -1251,6 +1251,117 @@ def test_take_citations_render_in_both_surfaces():
     assert 'class="take-cite"' in html
 
 
+class _ScriptedBackend:
+    """Returns a canned response per call; records how many it was asked for."""
+
+    model = "fake-model"
+
+    def __init__(self, *responses: str):
+        self.responses = list(responses)
+        self.calls = 0
+
+    def generate(self, system: str, user: str) -> str:
+        self.calls += 1
+        return self.responses.pop(0)
+
+
+@pytest.fixture
+def _take_rejections(monkeypatch):
+    """llm_takes rejections go to a list, not the DB."""
+    captured: list[dict] = []
+    import llm_takes
+    monkeypatch.setattr(llm_takes, "log_rejection",
+                        lambda **kw: captured.append(kw) or 1)
+    return captured
+
+
+def _stub_assemble(monkeypatch, facts, id_map=None):
+    """Skip the DB load — these tests are about the retry control flow."""
+    import llm_takes
+    monkeypatch.setattr(
+        llm_takes, "_assemble",
+        lambda group, anchor=None: (facts, "sys", "user", id_map or {}))
+
+
+def test_take_retries_a_json_parse_flake(monkeypatch, _take_rejections):
+    """Regression (2026-07-16 live run, llm_rejection_log 17-18): two of five
+    headline slots were blanked purely by malformed JSON — non-deterministic,
+    the same bundle parsed fine on the preceding run. Malformed JSON is a
+    backend flake, so re-ask; the first failure is still logged so the flake
+    rate stays measurable."""
+    import llm_takes
+    facts = {"scopes": {"eu_27": {"imports": {"yoy_pct": 0.355}}}}
+    _stub_assemble(monkeypatch, facts)
+    backend = _ScriptedBackend(
+        "{oops not json",
+        '{"questions":[{"q":"Is the +35.5% rise volume-driven?","axis":"x"}]}',
+    )
+
+    got = llm_takes.generate_take("EV + hybrid passenger cars", backend)
+
+    assert got.questions == [{"q": "Is the +35.5% rise volume-driven?",
+                             "axis": "x"}]
+    assert backend.calls == 2
+    # the flake is still on the record even though the retry saved the slot
+    assert len(_take_rejections) == 1
+    assert _take_rejections[0]["stage"] == "parse"
+    assert _take_rejections[0]["reason"] == "json_parse_error"
+
+
+def test_take_parse_retry_is_bounded(monkeypatch, _take_rejections):
+    """Retries are bounded, and every attempt is logged."""
+    import llm_takes
+    _stub_assemble(monkeypatch, {"scopes": {}})
+    backend = _ScriptedBackend("{bad", "{still bad")
+
+    assert llm_takes.generate_take("Amino acids (HS 2922)", backend) is None
+    assert backend.calls == llm_takes.TAKE_PARSE_ATTEMPTS == 2
+    assert len(_take_rejections) == 2
+    assert all(r["stage"] == "parse" for r in _take_rejections)
+
+
+def test_take_validate_rejection_is_never_retried(monkeypatch, _take_rejections):
+    """The safety contract: a take citing a number absent from the facts is a
+    CORRECTNESS rejection, not a flake. It must stay rejected first time —
+    never re-asked until the model happens to produce something that passes."""
+    import llm_takes
+    facts = {"scopes": {"eu_27": {"imports": {"yoy_pct": 0.355}}}}
+    _stub_assemble(monkeypatch, facts)
+    backend = _ScriptedBackend(
+        '{"questions":[{"q":"Is the 93% share large?","axis":"x"}]}',
+        '{"questions":[{"q":"Is the +35.5% rise volume-driven?","axis":"x"}]}',
+    )
+
+    assert llm_takes.generate_take("Permanent magnets", backend) is None
+    assert backend.calls == 1                      # the second response is never asked for
+    assert len(_take_rejections) == 1
+    assert _take_rejections[0]["stage"] == "validate"
+    assert _take_rejections[0]["reason"] == "number_not_in_facts"
+
+
+def test_take_off_anchor_rejection_is_never_retried(monkeypatch, _take_rejections):
+    """The anchor backstop is a validate rejection too, so the same rule binds:
+    a take that opens on the wrong flow stays rejected first time rather than
+    being re-rolled until it lands on-anchor."""
+    import llm_takes
+    facts = {"scopes": {"eu_27": {"imports": {"yoy_pct": 0.341},
+                                  "exports": {"yoy_pct": -0.418}}}}
+    _stub_assemble(monkeypatch, facts)
+    anchor = llm_takes.TakeAnchor(finding_id=90859, scope="eu_27",
+                                  flow="exports")
+    backend = _ScriptedBackend(
+        '{"questions":[{"q":"In EU-27 imports of finished cars from China, '
+        'is the +34.1% rise volume-driven?","axis":"x"}]}',
+        '{"questions":[{"q":"Are EU-27 exports of finished cars to China '
+        'falling at -41.8% for structural reasons?","axis":"x"}]}',
+    )
+
+    assert llm_takes.generate_take("Finished cars", backend,
+                                   anchor=anchor) is None
+    assert backend.calls == 1
+    assert _take_rejections[0]["reason"] == "first_question_off_anchor"
+
+
 # ---- labels (theme layer) ----
 
 def test_labels_themes_many_to_many():
