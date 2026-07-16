@@ -50,6 +50,16 @@ log = logging.getLogger(__name__)
 # the EU-27 hs_group_yoy* family.
 TAKE_SUBKINDS = ("hs_group_yoy", "hs_group_yoy_export")
 
+# Attempts allowed at getting parseable JSON out of the backend. A parse
+# failure is a backend flake, not a judgement — the same bundle produced a
+# clean take on the preceding run — so one retry is worth it: each blanked
+# slot costs a reporter a take on a top mover. Bounded at 2 and applied to
+# the parse path ONLY; a `_validate_questions` rejection is a correctness
+# verdict on the content and is never retried. Backend-agnostic by design:
+# the default is the CLI (Max subscription, free), and even on claude_api one
+# extra call per flake is negligible against losing the slot.
+TAKE_PARSE_ATTEMPTS = 2
+
 # ---------------------------------------------------------------------------
 # Flow anchoring
 #
@@ -358,6 +368,7 @@ def _grounded_in(
 def generate_take(
     group_name: str, backend=None, *, scrape_run_id: int | None = None,
     anchor: TakeAnchor | None = None,
+    parse_attempts: int = TAKE_PARSE_ATTEMPTS,
 ) -> TakeResult | None:
     """Generate and verify a take for one group. Returns a TakeResult
     (validated questions + the finding ids they actually cite), or None if
@@ -368,7 +379,15 @@ def generate_take(
     verify-or-reject (reusing the leads pipeline's guard): reject any output
     that fails to parse, isn't interrogative, cites a number absent from the
     facts, or (when anchored) opens off the slot's own flow. Rejections are
-    logged to llm_rejection_log for later inspection."""
+    logged to llm_rejection_log for later inspection.
+
+    Malformed JSON is re-asked up to `parse_attempts` times (see
+    TAKE_PARSE_ATTEMPTS) because it's a non-deterministic backend flake rather
+    than anything wrong with the finding. A validation rejection is NOT retried
+    — neither an unverified number nor an off-anchor opener: both are
+    correctness verdicts on the content and stay rejected first time. Every
+    attempt is logged, so the flake rate stays measurable even when the retry
+    saves the slot."""
     assembled = _assemble(group_name, anchor)
     if assembled is None:
         return None
@@ -376,18 +395,25 @@ def generate_take(
     backend = backend or _default_backend()
     model_name = getattr(backend, "model", None) or backend.__class__.__name__
 
-    try:
-        raw = backend.generate(system, user)
-    except Exception as e:  # transport/backend failure → placeholder, don't block
-        log.warning("take generation failed for %r: %s", group_name, e)
-        return None
+    questions = None
+    for attempt in range(1, max(1, parse_attempts) + 1):
+        try:
+            raw = backend.generate(system, user)
+        except Exception as e:  # transport/backend failure → placeholder, don't block
+            log.warning("take generation failed for %r: %s", group_name, e)
+            return None
 
-    questions = _parse_questions(raw)
-    if questions is None:
-        log.warning("take rejected (parse) for %r", group_name)
+        questions = _parse_questions(raw)
+        if questions is not None:
+            break
+        log.warning("take rejected (parse) for %r [attempt %d/%d]",
+                    group_name, attempt, parse_attempts)
         log_rejection(scrape_run_id=scrape_run_id, cluster_name=group_name,
                       model=model_name, stage="parse",
-                      reason="json_parse_error", raw_output=raw[:4000])
+                      reason="json_parse_error",
+                      detail=f"attempt {attempt}/{parse_attempts}",
+                      raw_output=raw[:4000])
+    if questions is None:
         return None
 
     rejection = _validate_questions(questions, facts, anchor)
