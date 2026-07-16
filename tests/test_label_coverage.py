@@ -117,6 +117,41 @@ def test_semiconductors_theme_membership():
         == ["Semiconductors"]
 
 
+def test_micromobility_theme_membership():
+    """The Micromobility lens (2026-07-16, Luke: 'three groups, connected by
+    micromobility theme'). Locks the editorial design: (1) the two 8711 groups
+    mirror the CN8 split because the 2019 anti-dumping boundary runs exactly
+    along it — merging them would average the duty cliff away; (2) pedal
+    bicycles are IN (trade-policy baseline; duties since 1993) even though not
+    electric; (3) none of the three joins 'EV supply chain' or 'Automotive' —
+    micromobility is its own story, not a car-trade or battery-chain
+    sub-plot."""
+    by_name = {l.name: l for l in labels.SEED_LABELS}
+    assert "Micromobility" in by_name
+    lab = by_name["Micromobility"]
+    assert lab.kind == "narrative"
+    assert set(lab.member_groups) == {
+        "Electric bicycles, pedal-assist (CN8 87116010)",
+        "Electric motorcycles, scooters & mopeds (CN8 87116090)",
+        "Bicycles, non-motorised (HS 8712)",
+    }
+    for g in lab.member_groups:
+        assert labels.themes_for_group(g) == ["Micromobility"], g
+    # The can't-split-scooters-from-motorbikes caveat is load-bearing copy.
+    assert "cannot be separated" in lab.definition
+
+
+def test_micromobility_8711_seeds_partition_the_electric_code():
+    """The two 8711 seeds must stay an exact partition of CN8 871160 — one
+    group per side of the anti-dumping boundary, no overlap, no broad pattern
+    (871160% or 8711%) that would re-merge them. Reads the schema.sql seeds."""
+    ebike = _seeded_patterns("Electric bicycles, pedal-assist (CN8 87116010)")
+    scoot = _seeded_patterns(
+        "Electric motorcycles, scooters & mopeds (CN8 87116090)")
+    assert ebike == ["87116010%"]
+    assert scoot == ["87116090%"]
+
+
 def _seeded_patterns(group_name: str) -> list[str]:
     """The hs_patterns ARRAY seeded for `group_name`, read from schema.sql —
     the canonical in-repo artifact (the migration carries an identical copy).

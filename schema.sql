@@ -759,7 +759,16 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
    'seed:semiconductors_2026_07'),
   ('Doped wafers (HS 3818)',
    'HS 3818 — chemical elements and compounds doped for use in electronics, in discs, wafers or similar forms: the silicon-wafer feedstock stage between polysilicon (280461, tracked under Solar) and chip fabrication. Small EU–China flow (~EUR 0.2bn each way per 12mo) but completes the upstream of the Semiconductors theme. Needs a one-off eurostat_world_aggregates backfill for the China-share metric (no existing group covers chapter 38 at this prefix).',
-   ARRAY['3818%'], 'seed:semiconductors_2026_07');
+   ARRAY['3818%'], 'seed:semiconductors_2026_07'),
+  ('Electric bicycles, pedal-assist (CN8 87116010)',
+   'CN8 87116010 — bicycles, tricycles and quadricycles with pedal assistance, auxiliary electric motor <= 250 W: the classic European commuter e-bike. The trade-policy story: EU anti-dumping + countervailing duties on the Chinese product (combined up to ~79%) took effect January 2019 and imports collapsed ~90% in a year — EUR 313m (2017) / EUR 302m (2018) -> EUR 33m (2019); still depressed (~EUR 60-140m/yr since). Watch for circumvention: production shifting to third countries our China-partner lens cannot see, or drift into the un-dutied 87116090. E-bikes above 250 W classify there, not here.',
+   ARRAY['87116010%'], 'seed:micromobility_2026_07'),
+  ('Electric motorcycles, scooters & mopeds (CN8 87116090)',
+   'CN8 87116090 — electrically-propelled motorcycles, mopeds and cycles EXCEPT pedal-assist <= 250 W e-bikes (87116010): stand-up e-scooters, e-mopeds, e-motorcycles and higher-powered e-bikes in ONE code — the constituents cannot be separated at CN8 granularity, so never present this as an e-scooter-only (or e-motorbike-only) number. The boom code: EU imports from China EUR 225m (2017) -> EUR 1.37bn (2022), ~EUR 0.9-1bn/12mo since. NOT covered by the 2019 e-bike anti-dumping duties — which also makes it the place reclassified flows would surface.',
+   ARRAY['87116090%'], 'seed:micromobility_2026_07'),
+  ('Bicycles, non-motorised (HS 8712)',
+   'HS 8712 — pedal bicycles and other non-motorised cycles (CN8 87120030 ball-bearing bicycles, 87120070 other incl. delivery tricycles). In the Micromobility theme as the substitution/trade-policy baseline rather than for an electric angle: Chinese bicycles have carried EU anti-dumping duties since 1993 — the bloc''s longest-running measure, repeatedly extended and covering circumvention via third countries. EU imports from China ~EUR 120-210m/yr across our window.',
+   ARRAY['8712%'], 'seed:micromobility_2026_07');
 
 -- Reader-facing display name for the EV-battery group. `name` stays the stable
 -- internal key (findings snapshot it into detail.group.name; analysers + tests

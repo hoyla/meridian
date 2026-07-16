@@ -102,6 +102,40 @@ Post-merge ops: `eurostat_world_aggregates` backfill for **3818 only**
 (8542/8541/8486 already swept by the ch-84/85 broad group's aggregates), then
 findings appear on the next periodic `--analyse`.
 
+## Micromobility theme (same day, Luke-approved)
+
+"Do we have coverage for electric bikes, electric scooters and electric
+motorbikes?" — no: heading 8711 (where ALL electric two-wheelers classify) and
+8712 (pedal bicycles) were tracked by no group, and chapter 87 has no catch-all
+(cars 8703 / parts 8708 only). Raw data ingested back to 2017. The yearly read
+surfaced two ready-made stories:
+
+- **The anti-dumping cliff** — pedal-assist e-bike imports (87116010) fell
+  €302m (2018) → €33m (2019), the year the EU's combined ~79% duties on the
+  Chinese product took effect; still depressed. Conventional bicycles carry the
+  EU's longest-running anti-dumping measure of all (since 1993).
+- **The ~€1bn/yr e-scooter/moped boom** (87116090): €225m (2017) → €1.37bn
+  (2022), ~€0.9–1bn/12mo since — and NOT covered by the duties, which also
+  makes it where reclassified flows would surface.
+
+New theme **"Micromobility"** (migration `2026-07-16c` + schema.sql seeds) =
+three new groups: `Electric bicycles, pedal-assist (CN8 87116010)`,
+`Electric motorcycles, scooters & mopeds (CN8 87116090)`,
+`Bicycles, non-motorised (HS 8712)`. Design decisions, all test-pinned:
+
+- The two 8711 groups **mirror the CN8 split** because the anti-dumping
+  boundary runs exactly along it; one merged group would average the cliff
+  away. A schema-parsing test keeps them an exact partition (no `871160%`).
+- **Honesty caveat in the 87116090 description**: e-scooters, e-mopeds and
+  e-motorcycles share one code and cannot be separated — never present it as
+  an e-scooter-only number (same pattern as the Semiconductors GPU caveat).
+- Pedal bicycles are in as the **substitution/trade-policy baseline**, not for
+  an electric angle; deliberately NOT in "EV supply chain" or "Automotive".
+
+Post-merge ops: `eurostat_world_aggregates` backfill for 87116010 / 87116090 /
+8712 (nothing in ch-87 beyond 8703/8708 has aggregates), then the next
+periodic `--analyse`.
+
 ### A caveat this exposed
 
 Running `--audit-labels` against the dev **local** DB reports the

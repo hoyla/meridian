@@ -169,6 +169,25 @@ SEED_LABELS: list[Label] = [
         ],
     ),
     Label(
+        "Micromobility",
+        "Two-wheeler trade with China — electric and pedal. Two live stories: "
+        "the 2019 anti-dumping cliff (EU duties of up to ~79% on Chinese "
+        "pedal-assist e-bikes cut that flow ~90% in a year; conventional "
+        "bicycles have carried EU anti-dumping duties since 1993, the bloc's "
+        "longest-running measure), and the ~EUR 1bn/yr e-scooter/moped boom "
+        "in the code the duties don't cover. Includes non-motorised bicycles "
+        "as the substitution/trade-policy baseline rather than for the "
+        "'electric' angle. Code-split caveat: CN8 87116090 bundles e-scooters, "
+        "e-mopeds and e-motorcycles in one code — they cannot be separated.",
+        "narrative",
+        member_groups=[
+            "Electric bicycles, pedal-assist (CN8 87116010)",
+            "Electric motorcycles, scooters & mopeds (CN8 87116090)",
+            "Bicycles, non-motorised (HS 8712)",
+        ],
+        created_by="seed:micromobility_2026_07",
+    ),
+    Label(
         "Food & agriculture",
         "Agri-food trade with China — meat, produce, sweeteners and animal-feed "
         "inputs, often the subject of dumping or food-safety disputes. Includes "
