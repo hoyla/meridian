@@ -768,7 +768,10 @@ INSERT INTO hs_groups (name, description, hs_patterns, created_by) VALUES
    ARRAY['87116090%'], 'seed:micromobility_2026_07'),
   ('Bicycles, non-motorised (HS 8712)',
    'HS 8712 — pedal bicycles and other non-motorised cycles (CN8 87120030 ball-bearing bicycles, 87120070 other incl. delivery tricycles). In the Micromobility theme as the substitution/trade-policy baseline rather than for an electric angle: Chinese bicycles have carried EU anti-dumping duties since 1993 — the bloc''s longest-running measure, repeatedly extended and covering circumvention via third countries. EU imports from China ~EUR 120-210m/yr across our window.',
-   ARRAY['8712%'], 'seed:micromobility_2026_07');
+   ARRAY['8712%'], 'seed:micromobility_2026_07'),
+  ('Penicillin-family APIs (CN8 29411000)',
+   'CN8 29411000 — penicillins and derivatives with a penicillanic-acid structure: the amoxicillin code, and the categorisation caveat comes first: amoxicillin has no EU customs line of its own, so this bucket ALSO contains ampicillin, piperacillin and the rest of the penicillin family — never present it as an amoxicillin-only number (China''s own customs does split amoxicillin at 8 digits; EU data cannot). China supplied ~87% of extra-EU import quantity in 2025 but ~73% by value. Live policy hook: Sandoz''s May 2026 anti-dumping complaint (its Kundl, Austria site is the EU''s only vertically integrated amoxicillin producer) — watch this series for a pre-duty surge or post-duty cliff, cf. the 2019 e-bike collapse under 87116010. Child of "Antibiotics (HS 2941)".',
+   ARRAY['29411000%'], 'seed:soapbox_amoxicillin_2026_07');
 
 -- Reader-facing display name for the EV-battery group. `name` stays the stable
 -- internal key (findings snapshot it into detail.group.name; analysers + tests

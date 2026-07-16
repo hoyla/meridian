@@ -215,6 +215,7 @@ SEED_LABELS: list[Label] = [
         "narrative",
         member_groups=[
             "Antibiotics (HS 2941)",
+            "Penicillin-family APIs (CN8 29411000)",
             "Ibuprofen-class monocarboxylic acids (HS 2916)",
             "Paracetamol-class amides (HS 2924)",
             "Vitamins & provitamins (HS 2936)",

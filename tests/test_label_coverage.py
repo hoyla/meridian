@@ -141,6 +141,24 @@ def test_micromobility_theme_membership():
     assert "cannot be separated" in lab.definition
 
 
+def test_penicillin_child_group_theming_and_caveat():
+    """The amoxicillin-proxy child (CN8 29411000, inside the Antibiotics
+    parent — Soapbox amoxicillin piece, 2026-07-16). Same theme as the parent,
+    Pharma only; and the seed description must keep the categorisation
+    disclaimer — amoxicillin has no EU customs line, so the code can never be
+    presented as an amoxicillin-only number (load-bearing copy, like the
+    Semiconductors GPU caveat)."""
+    assert labels.themes_for_group("Penicillin-family APIs (CN8 29411000)") \
+        == ["Pharma & fine chemicals"]
+    assert _seeded_patterns("Penicillin-family APIs (CN8 29411000)") \
+        == ["29411000%"]
+    import pathlib
+    sql = (pathlib.Path(__file__).parent.parent / "schema.sql").read_text()
+    seed_start = sql.index("('Penicillin-family APIs (CN8 29411000)'")
+    seed = sql[seed_start:seed_start + 2000]
+    assert "amoxicillin has no EU customs line" in seed
+
+
 def test_micromobility_8711_seeds_partition_the_electric_code():
     """The two 8711 seeds must stay an exact partition of CN8 871160 — one
     group per side of the anti-dumping boundary, no overlap, no broad pattern

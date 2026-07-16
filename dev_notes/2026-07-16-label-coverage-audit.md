@@ -136,6 +136,41 @@ Post-merge ops: `eurostat_world_aggregates` backfill for 87116010 / 87116090 /
 8712 (nothing in ch-87 beyond 8703/8708 has aggregates), then the next
 periodic `--analyse`.
 
+## Soapbox amoxicillin/dependency-loop follow-up (same day, Luke-approved)
+
+Luke flagged the second Soapbox piece
+(https://soapboxtrade.substack.com/p/chinese-exports-to-the-eu-head-for) —
+amoxicillin categorisation + the "solar dependency loop". Both headline claims
+**reproduce** through our `detect_partner_share` helpers (CN+HK+MO numerator,
+EU-27 reporters, extra-EU denominator, 2025 full year):
+
+| claim | Soapbox | ours |
+|---|---|---|
+| China share, extra-EU penicillin-family (29411000) imports, by qty | 86% | **87.2%** (73.3% by value) |
+| China share, extra-EU solar module (85414300) imports | 99% | **99.3%** qty / 98.3% value |
+
+(Gap on penicillins ≈ their CN-only vs our CN+HK+MO envelope. First naive
+attempt summed `observations` directly and got an impossible 103% on solar —
+the analyser helpers exist precisely because the raw tables need the
+subset/envelope filters. Bonus finding: all-of-2941 reads 76.7% by qty but
+only 34.1% by value — the starkest tonnes-vs-euros gap we've seen.)
+
+Shipped from this: **`Penicillin-family APIs (CN8 29411000)`** child group
+(migration `2026-07-16d` + schema seed; Pharma & fine chemicals theme beside
+its parent). Categorisation caveat is load-bearing, test-pinned copy:
+amoxicillin has no EU customs line — the code also holds ampicillin,
+piperacillin etc., never present it as amoxicillin-only (China's customs DOES
+split it at 8 digits; that's the detailed-query-platform roadmap item). Policy
+hook baked into the description: Sandoz anti-dumping complaint (May 2026) —
+this series is positioned to record any pre-duty surge/post-duty cliff like
+the e-bike codes did. No world-aggregates backfill needed (parent's 2941%
+covers it).
+
+Recorded in roadmap.md: the **mutual-dependency pairing** analyser (all-goods
+buildable now from GACC section 4; division-level with Track 2; product-level
+needs the detailed-query source) and the **GACC detailed-query platform**
+(stats.customs.gov.cn) as a deferred targeted-query source.
+
 ### A caveat this exposed
 
 Running `--audit-labels` against the dev **local** DB reports the
