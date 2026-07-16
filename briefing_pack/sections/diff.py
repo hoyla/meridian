@@ -72,7 +72,8 @@ class _DiffData:
     restated_max_pp: float = 0.0  # sharpest collapsed correction, for the line
 
 
-def _compute_diff(cur, baseline_brief_run_id: int | None = None) -> _DiffData:
+def _compute_diff(cur, baseline_brief_run_id: int | None = None,
+                  baseline_before_period: date | None = None) -> _DiffData:
     """Phase 6.8 (+ 2026-05-12 method-bump detection): compute 'what
     changed since the previous brief'.
 
@@ -88,6 +89,19 @@ def _compute_diff(cur, baseline_brief_run_id: int | None = None) -> _DiffData:
     against the 21 May baseline), without deleting the withdrawn pack's
     audit row from `brief_runs`.
 
+    `baseline_before_period` (the portal's mode; explicit-id wins if both
+    are set): diff against the latest main-track row whose `data_period`
+    is strictly EARLIER — i.e. the last briefing the reader saw before
+    this period's. The portal snapshot is built after its own cycle's
+    row exists (periodic-run records the row at export, then builds the
+    snapshot; a republish amends a cycle recorded long before), so the
+    most-recent row is the current cycle itself and a timestamp baseline
+    self-references — every periodic run would publish an empty "since
+    the last briefing" (first hit: the 2026-07-16 May briefing). Anchoring
+    on the period instead also makes the diff idempotent across rebuilds
+    of the same period. Rows with NULL data_period (legacy, unsequenced)
+    can't be placed and are skipped.
+
     The default (most-recent) baseline is scoped to the MAIN track: a
     GACC-update row landing between two briefing cycles must not become
     Tier 1's baseline, or every finding created before it would silently
@@ -97,6 +111,14 @@ def _compute_diff(cur, baseline_brief_run_id: int | None = None) -> _DiffData:
         cur.execute(
             "SELECT generated_at, output_path FROM brief_runs WHERE id = %s",
             (baseline_brief_run_id,),
+        )
+    elif baseline_before_period is not None:
+        cur.execute(
+            "SELECT generated_at, output_path FROM brief_runs "
+            "WHERE trigger = ANY(%s) AND data_period IS NOT NULL "
+            "AND data_period < %s "
+            "ORDER BY generated_at DESC LIMIT 1",
+            (list(MAIN_TRACK_TRIGGERS), baseline_before_period),
         )
     else:
         cur.execute(
