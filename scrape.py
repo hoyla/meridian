@@ -30,6 +30,7 @@ import db
 import eurostat
 import fx
 import hmrc
+import labels
 import llm_framing
 import lookups
 import parse
@@ -896,6 +897,13 @@ def main() -> None:
                         "000TOTAL set across [START, END] (YYYY-MM each) and exit. "
                         "A coverage gap = a member state present in some months "
                         "but absent in another (silently understating aggregates).")
+    p.add_argument("--audit-labels", action="store_true",
+                   help="Reconcile the editorial themes (labels.py) against the "
+                        "hs_groups in the connected DB and exit: dead label "
+                        "references (members with no group row), live groups "
+                        "carrying no theme, and subset pattern collisions "
+                        "(one group's codes wholly inside another's). A "
+                        "diagnostic — point it at local or production.")
     p.add_argument("--hs-prefix", action="append", metavar="HS",
                    help="HS-CN8 prefix(es) to filter Eurostat to (e.g. 87038). "
                         "Default: no HS filter. Repeat for multiple.")
@@ -1704,6 +1712,42 @@ def main() -> None:
         for ccy in args.fetch_fx:
             counts = fx.populate_fx_rates_from_ecb(ccy.upper(), since=args.fx_since)
             log.info("FX %s/EUR: %s", ccy.upper(), counts)
+        return
+
+    if args.audit_labels:
+        with db.transaction() as conn, conn.cursor() as cur:
+            cur.execute("SELECT name, hs_patterns, created_by FROM hs_groups")
+            rows = cur.fetchall()
+        names = {r[0] for r in rows}
+        patterns_by_group = {r[0]: (r[1] or []) for r in rows}
+        held = {r[0] for r in rows if db.is_held_created_by(r[2])}
+
+        dead = labels.dead_member_refs(names)
+        print(f"Dead label references ({len(dead)}):"
+              if dead else "Dead label references: none — every member "
+              "group resolves.")
+        for lab_name, missing in dead:
+            print(f"  {lab_name!r} -> missing group {missing!r}")
+
+        unthemed = [g for g in labels.unthemed_groups(names) if g not in held]
+        print(f"\nLive groups with no theme ({len(unthemed)}) — informational; "
+              "broad catch-alls are theme-less by design:")
+        for g in unthemed:
+            print(f"  {g}")
+
+        collisions = labels.subset_pattern_collisions(patterns_by_group)
+        print(f"\nSubset pattern collisions ({len(collisions)}) — a group's "
+              "codes wholly inside another's. A curated CN8 leaf inside a broad "
+              "parent is expected; a same-granularity pair (a shared exact "
+              "prefix, ‡) is likely a duplicate to reconcile:")
+        for sub, sup in collisions:
+            st, pt = labels.themes_for_group(sub), labels.themes_for_group(sup)
+            # ‡ marks an exact shared prefix — the two overlap at the same
+            # granularity rather than the child nesting under a broader code.
+            shared = labels._prefixes([*patterns_by_group[sub]]) & \
+                labels._prefixes([*patterns_by_group[sup]])
+            mark = " ‡" if shared else ""
+            print(f"  {sub!r} ⊆ {sup!r}{mark}  themes {st} vs {pt}")
         return
 
     if args.eurostat_coverage:

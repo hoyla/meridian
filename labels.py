@@ -26,6 +26,7 @@ NEVER be summed to a "total" — that double-counts.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 
@@ -139,6 +140,7 @@ SEED_LABELS: list[Label] = [
         member_groups=[
             "Finished cars (broad)",
             "EV + hybrid passenger cars",
+            "Conventional hybrids (HEV, non-plug-in)",
             "Motor-vehicle parts",
             "Engine parts (CN8 84099100 + 84099900)",
             "Internal-combustion engines (HS 8407 + 8408)",
@@ -238,3 +240,70 @@ def label_patterns(label: Label, patterns_by_group: dict[str, list[str]]) -> lis
     for g in label.member_groups:
         pats += patterns_by_group.get(g, [])
     return sorted(set(pats))
+
+
+# --- Coverage reconciliation ------------------------------------------------
+# labels.py is code; the groups it names live in the DB (journalist-editable,
+# added via migrations). So these three drift risks can only be checked against
+# an actual group set, not against the module alone. The helpers below are pure
+# — the caller supplies the live facts (names / patterns) — so both the
+# --audit-labels CLI and the DB-backed test in tests/test_label_coverage.py can
+# share one implementation. See dev_notes/2026-07-16-label-coverage-audit.md.
+
+
+def dead_member_refs(known_group_names: Iterable[str]) -> list[tuple[str, str]]:
+    """(label_name, missing_group_name) for every `member_groups` entry that
+    has no matching hs_groups row. A non-empty result means the label silently
+    expands to fewer codes than it claims — the class of drift that left
+    "Oil & gas: origin watch" pointing at 2710/2711 groups a DB never got.
+    Sorted for stable diagnostics/test output."""
+    known = set(known_group_names)
+    out = [
+        (lab.name, g)
+        for lab in SEED_LABELS
+        for g in lab.member_groups
+        if g not in known
+    ]
+    return sorted(out)
+
+
+def unthemed_groups(known_group_names: Iterable[str]) -> list[str]:
+    """Live group names carrying no cross-cutting theme. INFORMATIONAL, not an
+    error: the broad catch-alls ("Steel (broad)", "Electrical equipment &
+    machinery (chapters 84-85, broad)") are deliberately theme-less, as are
+    groups no existing lens fits. Surfaced so a genuine omission (a car body
+    type missing from Automotive) is visible rather than silent."""
+    return sorted(g for g in set(known_group_names) if not themes_for_group(g))
+
+
+def _prefixes(patterns: Iterable[str]) -> frozenset[str]:
+    return frozenset(p.rstrip("%") for p in patterns)
+
+
+def _covers(broad: frozenset[str], narrow: frozenset[str]) -> bool:
+    """True if every prefix in `narrow` is at or below some prefix in `broad`
+    (i.e. narrow's code-set ⊆ broad's)."""
+    return all(any(n.startswith(b) for b in broad) for n in narrow)
+
+
+def subset_pattern_collisions(
+    patterns_by_group: Mapping[str, Iterable[str]],
+) -> list[tuple[str, str]]:
+    """(subset_group, superset_group) pairs where the first's HS code-set is
+    wholly contained in the second's. Most are legitimate — a curated CN8 leaf
+    inside its broad parent (e.g. the rare-earth CN8 compounds inside
+    "Rare-earth materials"). But a same-intent pair like the two lithium groups
+    that both claimed 282520 is usually accidental duplication worth
+    reconciling. INFORMATIONAL: annotate with themes at the call site so
+    parent/child (shared theme) reads differently from a true duplicate."""
+    prefs = {name: _prefixes(pats) for name, pats in patterns_by_group.items()}
+    out: list[tuple[str, str]] = []
+    for a, pa in prefs.items():
+        for b, pb in prefs.items():
+            if a == b or not pa or not pb:
+                continue
+            # a ⊆ b, and not the trivial equal-set double-count (report each
+            # unordered equal pair once, keyed by name order).
+            if _covers(pb, pa) and (pa != pb or a < b):
+                out.append((a, b))
+    return sorted(out)
