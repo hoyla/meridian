@@ -74,26 +74,30 @@ def graft_prior_takes(report: Report, prior: dict) -> int:
 
     prior_headline = prior.get("headline") or {}
 
-    # Per-finding takes: finding id -> generated questions, from the prior items.
-    by_finding: dict[int, list[dict]] = {}
+    # Per-finding takes: ANCHOR finding id -> the prior take, keyed on
+    # grounded_in[0] only. grounded_in is now the take's full citation list
+    # (anchor first, then cross-flow findings its questions cite) — keying on
+    # every id would let an export slot's take graft onto the import slot it
+    # merely cited for contrast.
+    by_finding: dict[int, dict] = {}
     for it in prior_headline.get("items") or []:
         take = it.get("take") or {}
-        if take.get("status") == "generated" and take.get("questions"):
-            for fid in take.get("grounded_in") or []:
-                by_finding[fid] = take["questions"]
+        grounded = take.get("grounded_in") or []
+        if take.get("status") == "generated" and take.get("questions") and grounded:
+            by_finding[grounded[0]] = take
 
     grafted = 0
     for item in report.headline.items:
         if item.take is not None and item.take.status == "generated":
             continue  # never clobber a live take
         fids = item.provenance.finding_ids or []
-        qs = next((by_finding[f] for f in fids if f in by_finding), None)
-        if qs:
+        prior_take = next((by_finding[f] for f in fids if f in by_finding), None)
+        if prior_take:
             item.take = LLMSlot(
                 slot_type="specific",
-                grounded_in=[fids[0]],
+                grounded_in=prior_take.get("grounded_in") or [fids[0]],
                 status="generated",
-                questions=qs,
+                questions=prior_take["questions"],
             )
             grafted += 1
 

@@ -1159,6 +1159,98 @@ def test_take_validate_is_the_safety_contract():
     assert rej and rej["reason"] == "not_interrogative"
 
 
+def test_take_anchor_from_subkind():
+    """A finding's subkind encodes its (scope, flow); the anchor parser
+    recovers both. Non-hs_group subkinds anchor nothing."""
+    from llm_takes import _anchor_from_subkind
+    a = _anchor_from_subkind(7, "hs_group_yoy")
+    assert (a.scope, a.flow) == ("eu_27", "imports")
+    a = _anchor_from_subkind(7, "hs_group_yoy_export")
+    assert (a.scope, a.flow) == ("eu_27", "exports")
+    assert a.party_phrase == "EU-27 exports to China"
+    a = _anchor_from_subkind(7, "hs_group_yoy_uk_export")
+    assert (a.scope, a.flow) == ("uk", "exports")
+    a = _anchor_from_subkind(7, "hs_group_yoy_combined")
+    assert (a.scope, a.flow) == ("eu_27_plus_uk", "imports")
+    assert _anchor_from_subkind(7, "trade_balance") is None
+    assert _anchor_from_subkind(7, None) is None
+
+
+def test_take_validate_anchor_is_a_backstop():
+    """Regression (2026-07-16 live run): the 'Finished cars' EXPORT slot's take
+    (-41.8%) opened with the IMPORT story (+34.1%) — a different subject under
+    the headline. With an anchor, question 1 must address the anchored flow;
+    the opposite flow stays legal as later contrast; unanchored calls behave
+    exactly as before."""
+    from llm_takes import TakeAnchor, _validate_questions
+    facts = {"scopes": {"eu_27": {"imports": {"yoy_pct": 0.341},
+                                  "exports": {"yoy_pct": -0.418}}}}
+    anchor = TakeAnchor(finding_id=90859, scope="eu_27", flow="exports")
+    # the live failure shape: Q1 about imports under the export slot
+    rej = _validate_questions(
+        [{"q": "In EU-27 imports of finished cars from China, is the +34.1% "
+               "rise volume-driven?", "axis": "x"}], facts, anchor)
+    assert rej and rej["reason"] == "first_question_off_anchor"
+    # an export-led Q1 passes — and the import story is fine as later contrast
+    assert _validate_questions([
+        {"q": "Are EU-27 exports of finished cars to China collapsing at "
+              "-41.8% for structural reasons?", "axis": "x"},
+        {"q": "Is the -41.8% export fall connected to EU-27 imports from "
+              "China rising +34.1%?", "axis": "contrast"},
+    ], facts, anchor) is None
+    # no anchor: previous behaviour unchanged
+    assert _validate_questions(
+        [{"q": "Is the +34.1% rise volume-driven?", "axis": "x"}], facts) is None
+
+
+def test_finding_ids_for_paths_maps_scope_blocks():
+    """Matched fact paths resolve to the findings that produced them; paths
+    outside the scopes tree map to nothing."""
+    from llm_framing import finding_ids_for_paths
+    id_map = {"eu_27.yoy_import": 1, "eu_27.yoy_export": 2,
+              "uk.trajectory_import": 3}
+    paths = ["scopes.eu_27.exports.yoy_pct",
+             "scopes.eu_27.imports.current_12mo_eur",
+             "scopes.uk.trajectory_imports.last_yoy",
+             "caveats",
+             "scopes.eu_27.exports.prior_12mo_eur"]  # dedup: exports already seen
+    assert finding_ids_for_paths(id_map, paths) == [2, 1, 3]
+
+
+def test_take_grounded_in_lists_what_it_cites():
+    """Regression (2026-07-16 live run): the EV import slot asserted
+    grounded_in=[89514] while its Q3 cited the export finding's -40.9% — a
+    provenance trail that didn't contain the number shown. grounded_in now
+    opens with the anchor and lists every other finding whose numbers the
+    questions actually cite."""
+    from llm_takes import TakeAnchor, _grounded_in
+    facts = {"scopes": {"eu_27": {"imports": {"yoy_pct": 0.341},
+                                  "exports": {"yoy_pct": -0.418}}}}
+    id_map = {"eu_27.yoy_import": 89489, "eu_27.yoy_export": 90859}
+    anchor = TakeAnchor(finding_id=90859, scope="eu_27", flow="exports")
+    grounded = _grounded_in([
+        {"q": "Are EU-27 exports of finished cars to China collapsing "
+              "at -41.8%?", "axis": "x"},
+        {"q": "Is that connected to EU-27 imports from China rising "
+              "+34.1%?", "axis": "contrast"},
+    ], facts, id_map, anchor)
+    assert grounded == [90859, 89489]  # anchor first, then the cited sibling
+    # qualitative questions cite nothing extra: anchor only
+    assert _grounded_in([{"q": "Is this structural?", "axis": "x"}],
+                        facts, id_map, anchor) == [90859]
+
+
+def test_take_citations_render_in_both_surfaces():
+    """The per-finding take block now carries its citation tokens (same
+    pattern as the general take), so the honest grounded_in reaches the
+    reporter, not just report.json."""
+    r = _sample_report()  # its take has grounded_in=[2]
+    md = render_markdown(r)
+    html = render_html(r)
+    assert "_Sources: `finding/2`_" in md
+    assert 'class="take-cite"' in html
+
+
 # ---- labels (theme layer) ----
 
 def test_labels_themes_many_to_many():
@@ -1671,6 +1763,27 @@ def test_reuse_drops_per_finding_take_on_id_mismatch():
     assert report.headline.items[0].take is None
     assert report.headline.llm_slots[0].status == "generated"
     assert n == 1
+
+
+def test_reuse_grafts_key_on_anchor_not_cited_findings():
+    """grounded_in now lists cross-flow citations after the anchor; the graft
+    must key on the ANCHOR (first id) only — keying on every id would let an
+    export slot's take graft onto the import slot it merely cited for
+    contrast."""
+    import portal_takes_reuse as ptr
+    prior = _prior_with_takes("2026-04-01")
+    # prior take anchored on finding 2, citing finding 7 for contrast
+    prior["headline"]["items"][0]["take"]["grounded_in"] = [2, 7]
+    # the CITED sibling's slot must NOT receive the take
+    report = _bare_report("2026-04-01")
+    report.headline.items[0].provenance.finding_ids = [7]
+    ptr.graft_prior_takes(report, prior)
+    assert report.headline.items[0].take is None
+    # the anchor's slot still grafts, carrying the full citation list
+    report2 = _bare_report("2026-04-01")
+    ptr.graft_prior_takes(report2, prior)
+    take = report2.headline.items[0].take
+    assert take is not None and take.grounded_in == [2, 7]
 
 
 def test_reuse_never_clobbers_a_live_take():

@@ -324,6 +324,11 @@ class HsGroupCluster:
     scopes: dict[str, HsGroupScopeData] = field(default_factory=dict)
     # Union of underlying finding ids across all scopes for provenance.
     underlying_finding_ids: list[int] = field(default_factory=list)
+    # Which finding produced which (scope, flow) block — "eu_27.yoy_import"
+    # → finding id. Lets a consumer map a verified fact path back to the
+    # specific finding it came from (per-fact provenance), where
+    # `underlying_finding_ids` is only the flat union.
+    finding_id_by_scope_attr: dict[str, int] = field(default_factory=dict)
     # Union of caveat codes across all underlying findings.
     caveat_codes: set[str] = field(default_factory=set)
 
@@ -381,6 +386,7 @@ def _load_hs_group_clusters(group_names: list[str] | None = None) -> list[HsGrou
                     if row is not None:
                         setattr(cluster.scopes[scope], attr, dict(row["detail"]))
                         cluster.underlying_finding_ids.append(row["id"])
+                        cluster.finding_id_by_scope_attr[f"{scope}.{attr}"] = row["id"]
                         cluster.caveat_codes.update(row["detail"].get("caveat_codes") or [])
             if cluster.underlying_finding_ids:
                 clusters.append(cluster)
@@ -846,6 +852,39 @@ def matched_fact_paths(text: str, facts: dict[str, Any]) -> list[str]:
         match, path, _ = _find_closest_fact(val, kind, fact_numbers)
         if match and path is not None and path not in out:
             out.append(path)
+    return out
+
+
+# Fact-block name (as emitted by _build_scope_facts) → HsGroupScopeData
+# attribute (as keyed in HsGroupCluster.finding_id_by_scope_attr).
+_FACT_BLOCK_TO_SCOPE_ATTR: dict[str, str] = {
+    "imports": "yoy_import",
+    "exports": "yoy_export",
+    "trajectory_imports": "trajectory_import",
+    "trajectory_exports": "trajectory_export",
+}
+
+
+def finding_ids_for_paths(
+    finding_id_by_scope_attr: dict[str, int], paths: list[str],
+) -> list[int]:
+    """Map matched fact paths (from `matched_fact_paths` over a
+    `_build_facts` dict — e.g. 'scopes.eu_27.exports.yoy_pct') back to the
+    finding ids that produced those blocks, in path order, deduplicated.
+    Paths outside the scopes tree (group-level fields like caveats) map to
+    nothing. This is what lets a take's `grounded_in` list every finding
+    whose numbers it actually cites, rather than asserting a single id."""
+    out: list[int] = []
+    for path in paths:
+        parts = path.split(".")
+        if len(parts) < 3 or parts[0] != "scopes":
+            continue
+        attr = _FACT_BLOCK_TO_SCOPE_ATTR.get(parts[2].split("[")[0])
+        if attr is None:
+            continue
+        fid = finding_id_by_scope_attr.get(f"{parts[1]}.{attr}")
+        if fid is not None and fid not in out:
+            out.append(fid)
     return out
 
 
