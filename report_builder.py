@@ -3075,7 +3075,18 @@ def build_report(
     ) as cur:
         predictability = _compute_predictability_per_group(cur)
         top_movers = _compute_top_movers(cur, predictability=predictability)
-        diff = _compute_diff(cur, baseline_brief_run_id=diff_baseline_brief_run_id)
+        # Anchor "since the last briefing" on this report's data_period, not
+        # on the most recent brief_runs row: the snapshot is built after its
+        # own cycle's row exists (periodic-run records at export, the portal
+        # is a later step; a republish amends an already-recorded cycle), so
+        # the most-recent row is the cycle itself and the diff comes back
+        # empty. `data_period < own` pins the baseline to the previous
+        # briefing the reader actually saw, however often this one is rebuilt.
+        diff = _compute_diff(
+            cur,
+            baseline_brief_run_id=diff_baseline_brief_run_id,
+            baseline_before_period=data_period,
+        )
         # Reader-facing group labels (db.group_display_names) — substituted at
         # every display/slug site; the stable internal key stays for lookups.
         disp = db.group_display_names(cur)
