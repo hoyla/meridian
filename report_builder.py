@@ -3121,15 +3121,20 @@ def build_report(
             if generate_takes:
                 # Per-mover LLM take (leading questions), verify-or-reject; a
                 # failed/rejected take leaves a placeholder, never blocks.
+                # grounded_in is the take's honest citation list — the slot's
+                # anchor finding first, then every other finding whose numbers
+                # the questions actually cite (cross-flow contrast questions
+                # draw on the sibling finding's numbers).
                 from llm_takes import generate_take_for_finding
                 for m, item in zip(top_movers, items):
                     fid = m.get("id")
-                    qs = generate_take_for_finding(fid) if fid else None
+                    take = generate_take_for_finding(fid) if fid else None
                     item.take = LLMSlot(
                         slot_type="specific",
-                        grounded_in=[fid] if fid else [],
-                        status="generated" if qs else "placeholder",
-                        questions=qs or [],
+                        grounded_in=(take.grounded_in if take
+                                     else ([fid] if fid else [])),
+                        status="generated" if take else "placeholder",
+                        questions=take.questions if take else [],
                     )
             if source_trigger == "eurostat":
                 # No GACC section here (2026-07-15 ruling): the Full briefing

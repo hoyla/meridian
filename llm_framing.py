@@ -324,6 +324,11 @@ class HsGroupCluster:
     scopes: dict[str, HsGroupScopeData] = field(default_factory=dict)
     # Union of underlying finding ids across all scopes for provenance.
     underlying_finding_ids: list[int] = field(default_factory=list)
+    # Which finding produced which (scope, flow) block — "eu_27.yoy_import"
+    # → finding id. Lets a consumer map a verified fact path back to the
+    # specific finding it came from (per-fact provenance), where
+    # `underlying_finding_ids` is only the flat union.
+    finding_id_by_scope_attr: dict[str, int] = field(default_factory=dict)
     # Union of caveat codes across all underlying findings.
     caveat_codes: set[str] = field(default_factory=set)
 
@@ -381,6 +386,7 @@ def _load_hs_group_clusters(group_names: list[str] | None = None) -> list[HsGrou
                     if row is not None:
                         setattr(cluster.scopes[scope], attr, dict(row["detail"]))
                         cluster.underlying_finding_ids.append(row["id"])
+                        cluster.finding_id_by_scope_attr[f"{scope}.{attr}"] = row["id"]
                         cluster.caveat_codes.update(row["detail"].get("caveat_codes") or [])
             if cluster.underlying_finding_ids:
                 clusters.append(cluster)
@@ -753,7 +759,38 @@ def _collect_facts_numeric(facts: dict, into: list[tuple[str, float]] | None = N
     return into
 
 
-def _extract_numbers_from_text(text: str) -> list[tuple[str, float, str]]:
+def _group_code_strings(facts: dict[str, Any]) -> set[str]:
+    """Digit-only customs codes that DEFINE this group, derived from its
+    `hs_patterns` (e.g. '870360%' → '870360'), plus their HS6/HS4
+    truncations ('8703'). Used to strip the group's own codes from take
+    text before number extraction.
+
+    Rationale: a group name that embeds no code (e.g. "EV + hybrid
+    passenger cars", whose codes are 870360/870370/870380) still prompts
+    the model to write a bare subheading like "870360" — with no HS/CN8
+    prefix for `_HS_CODE_RE` to catch, so the bare integer reaches the
+    verifier as an unverifiable `count` and kills an otherwise-good take
+    (observed 2026-07-16: both EV takes rejected on "870360"). Citing the
+    code that DEFINES the group is not a numeric claim. Tying the strip to
+    the group's own patterns keeps it safe — an invented quantity that
+    isn't one of the group's codes still fails verification. Only lengths
+    ≥ 4 are stripped, mirroring `_HS_CODE_RE`'s `\\d{4,8}` — bare 2-digit
+    chapter numbers are deliberately left to fail (as before)."""
+    pats = facts.get("hs_patterns") if isinstance(facts, dict) else None
+    out: set[str] = set()
+    if not isinstance(pats, (list, tuple)):
+        return out
+    for p in pats:
+        digits = re.sub(r"\D", "", str(p))
+        for length in (len(digits), 6, 4):
+            if 4 <= length <= len(digits):
+                out.add(digits[:length])
+    return out
+
+
+def _extract_numbers_from_text(
+    text: str, code_strings: set[str] | None = None,
+) -> list[tuple[str, float, str]]:
     """Extract (raw_match, parsed_value, kind) triples from the LLM output.
     `kind` ∈ {'pct', 'currency', 'count'}. Currency parsed to EUR-base.
 
@@ -763,10 +800,18 @@ def _extract_numbers_from_text(text: str) -> list[tuple[str, float, str]]:
     negative so it can match a fact stored as a negative fraction.
 
     Calendar years (19xx / 20xx) are pre-stripped so they don't enter the
-    verification pipeline as false-positive failures."""
+    verification pipeline as false-positive failures. When `code_strings`
+    is given (the group's own customs codes — see `_group_code_strings`),
+    bare occurrences of those codes are stripped too, so a subheading the
+    model writes without an HS/CN8 prefix isn't read as an invented count."""
     text_for_extraction = _YEAR_RE.sub("YEAR", text)
     text_for_extraction = _TIME_PERIOD_RE.sub("PERIOD", text_for_extraction)
     text_for_extraction = _HS_CODE_RE.sub("HSCODE", text_for_extraction)
+    if code_strings:
+        # Longest-first so an 8-digit code is consumed before its 4-digit
+        # truncation; word-bounded so we only strip standalone codes.
+        alt = "|".join(re.escape(c) for c in sorted(code_strings, key=len, reverse=True))
+        text_for_extraction = re.sub(rf"\b(?:{alt})\b", "GROUPCODE", text_for_extraction)
     text_for_extraction = _GEO_LABEL_RE.sub("GEOLABEL", text_for_extraction)
     text_for_extraction = _HS_CHAPTER_RE.sub("CHAPTER", text_for_extraction)
     out: list[tuple[str, float, str]] = []
@@ -815,7 +860,7 @@ def verify_numbers(
     tolerance. Returns (ok, failures). An empty text or text with no
     numbers returns (True, []) — abstaining from numbers is fine."""
     fact_numbers = _collect_facts_numeric(facts)
-    extracted = _extract_numbers_from_text(text)
+    extracted = _extract_numbers_from_text(text, _group_code_strings(facts))
     failures: list[VerificationFailure] = []
     for raw, val, kind in extracted:
         match, closest_path, closest_val = _find_closest_fact(val, kind, fact_numbers)
@@ -842,10 +887,43 @@ def matched_fact_paths(text: str, facts: dict[str, Any]) -> list[str]:
     used."""
     fact_numbers = _collect_facts_numeric(facts)
     out: list[str] = []
-    for _raw, val, kind in _extract_numbers_from_text(text):
+    for _raw, val, kind in _extract_numbers_from_text(text, _group_code_strings(facts)):
         match, path, _ = _find_closest_fact(val, kind, fact_numbers)
         if match and path is not None and path not in out:
             out.append(path)
+    return out
+
+
+# Fact-block name (as emitted by _build_scope_facts) → HsGroupScopeData
+# attribute (as keyed in HsGroupCluster.finding_id_by_scope_attr).
+_FACT_BLOCK_TO_SCOPE_ATTR: dict[str, str] = {
+    "imports": "yoy_import",
+    "exports": "yoy_export",
+    "trajectory_imports": "trajectory_import",
+    "trajectory_exports": "trajectory_export",
+}
+
+
+def finding_ids_for_paths(
+    finding_id_by_scope_attr: dict[str, int], paths: list[str],
+) -> list[int]:
+    """Map matched fact paths (from `matched_fact_paths` over a
+    `_build_facts` dict — e.g. 'scopes.eu_27.exports.yoy_pct') back to the
+    finding ids that produced those blocks, in path order, deduplicated.
+    Paths outside the scopes tree (group-level fields like caveats) map to
+    nothing. This is what lets a take's `grounded_in` list every finding
+    whose numbers it actually cites, rather than asserting a single id."""
+    out: list[int] = []
+    for path in paths:
+        parts = path.split(".")
+        if len(parts) < 3 or parts[0] != "scopes":
+            continue
+        attr = _FACT_BLOCK_TO_SCOPE_ATTR.get(parts[2].split("[")[0])
+        if attr is None:
+            continue
+        fid = finding_id_by_scope_attr.get(f"{parts[1]}.{attr}")
+        if fid is not None and fid not in out:
+            out.append(fid)
     return out
 
 
