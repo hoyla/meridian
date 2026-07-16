@@ -195,6 +195,29 @@ def test_time_period_shorthand_not_a_false_positive(_capture_rejections):
     assert not _capture_rejections
 
 
+def test_bare_group_hs_code_not_a_false_positive():
+    """Regression (2026-07-16 live run): both EV+hybrid headline takes were
+    rejected on '870360' — the group's own subheading (patterns
+    870360%/870370%/870380%), written by the model without an HS/CN8 prefix
+    for _HS_CODE_RE to catch. The group's own defining codes (and their HS4
+    truncation) must strip, not read as an invented count — while a number
+    that is NOT one of the group's codes still fails."""
+    from llm_framing import verify_numbers, _group_code_strings
+    facts = {"hs_patterns": ["870380%", "870370%", "870360%"],
+             "scopes": {"yoy_import": {"yoy_pct": 0.386}}}
+    assert _group_code_strings(facts) == {"8703", "870360", "870370", "870380"}
+    # bare subheading + HS4 heading both pass, alongside a verified pct
+    ok, failures = verify_numbers(
+        "Is the +38.6% rise in imports under 870360 (within the 8703 heading) "
+        "volume-driven?", facts)
+    assert ok, failures
+    # an invented count that isn't one of the group's codes still fails
+    ok, failures = verify_numbers("Did all 55000 units ship in May?", facts)
+    assert not ok and failures[0].kind == "count"
+    # a group with no embedded codes yields no strip set (no over-reach)
+    assert _group_code_strings({"scopes": {}}) == set()
+
+
 def test_questions_reject_unverified_number(_capture_rejections):
     raw = _questions_json(
         [{"q": "Why did EU exports rise 44.4%?", "axis": "x",
