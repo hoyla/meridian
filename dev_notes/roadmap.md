@@ -758,6 +758,31 @@ across 2017–2018 (up to 50 per cell, HS detail included), so it scopes itself 
 re-ingesting 2017–2018 is the prerequisite to extending the unique index back
 over those periods.
 
+### Mutual-dependency ("dependency loop") pairing — Luke-approved 2026-07-16
+
+From the second Soapbox amoxicillin/solar piece
+(https://soapboxtrade.substack.com/p/chinese-exports-to-the-eu-head-for; see
+[`2026-07-16-label-coverage-audit.md`](2026-07-16-label-coverage-audit.md)
+§Soapbox). Their analytical move: pair "China's share of extra-EU imports"
+(which `detect_partner_share` already emits per group) with the symmetric
+"EU's share of China's exports" in the same product — solar reads 99% / 37.3%,
+i.e. mutual exposure, not one-way leverage. We hold exactly half the pair.
+Decomposes as:
+
+1. **All-goods level — buildable now.** GACC section 4 is by-partner, so "EU
+   share of China's total exports" is computable from held data; pair with
+   `china_all_goods_share` into a two-sided dependency indicator/finding.
+2. **Division level — lands with Track 2.** The Monthly Bulletin's partner ×
+   HS-division crosses give "EU share of China's [division] exports" — the
+   loop per commodity family, not per CN8.
+3. **Product level — needs the detailed-query source** (§ below). Soapbox's
+   37.3%-of-China's-panel-exports figure is 8-digit GACC data.
+
+Editorial value: converts one-sided "Europe depends on China" findings into
+two-sided exposure stories — more defensible and usually more interesting.
+Build as its own branch (analyser + finding subkind + portal surface), not
+bolted onto a labelling batch.
+
 ## Methodology depth (pick up if a story warrants it)
 
 ### Editorial calibration of `low_base_threshold_eur` via shock-validation backtest
@@ -894,6 +919,19 @@ that flags "generator pending"; extend `provenance._RENDERERS` when
 a journalist asks for one specifically.
 
 ## Data sources (deferred until needed)
+
+### GACC detailed-query platform (8-digit, by-partner) — noted 2026-07-16
+
+GACC's online statistics query platform (stats.customs.gov.cn) exposes
+8-digit commodity × partner data — granularity our aggregate-release ingest
+(sections 4/5/6) and even Track 2's division-level crosses never reach. It is
+what let Soapbox split amoxicillin + amoxicillin trihydrate into their own
+lines (EU customs data cannot — CN8 29411000 bundles the penicillin family)
+and compute product-level "EU share of China's exports" (solar: 37.3%).
+Use case: a *targeted-query* adapter for specific story codes, not a bulk
+ingest. Strictly principle-6: explore the platform by hand first (query UX,
+CN/EN availability, WAF behaviour, terms) before any adapter code. Unlocks
+level 3 of the mutual-dependency pairing (§ Coverage extension above).
 
 ### 2018 GACC mirror-trade
 

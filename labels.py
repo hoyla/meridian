@@ -26,6 +26,7 @@ NEVER be summed to a "total" — that double-counts.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 
@@ -132,6 +133,28 @@ SEED_LABELS: list[Label] = [
         ],
     ),
     Label(
+        "Semiconductors",
+        "The chip supply chain: EU-made fab equipment flowing east (the ASML "
+        "story — ~50:1 export/import ratio on HS 8486) and the two-way chip "
+        "trade, where Europe is a net EXPORTER to China at heading level "
+        "(automotive/industrial silicon out, legacy chips in). Includes the "
+        "wafer feedstock stage and the gallium/germanium inputs China has "
+        "placed under export licence. A lens with a stated limit: HS/CN8 "
+        "cannot isolate GPUs or AI accelerators — bare chips sit inside "
+        "854231 mixed with CPUs and MCUs, assembled cards inside 8473 "
+        "computer parts — so this theme carries the supply chain, never a "
+        "'GPU imports' number.",
+        "narrative",
+        member_groups=[
+            "Semiconductor manufacturing equipment",
+            "Integrated circuits (HS 8542)",
+            "Semiconductor devices excl. solar PV (HS 8541)",
+            "Doped wafers (HS 3818)",
+            "Gallium, germanium & other minor metals (HS 8112)",
+        ],
+        created_by="seed:semiconductors_2026_07",
+    ),
+    Label(
         "Automotive",
         "Finished vehicles, EV/hybrid cars and the parts that feed them — the "
         "China–Europe car-trade story.",
@@ -139,10 +162,30 @@ SEED_LABELS: list[Label] = [
         member_groups=[
             "Finished cars (broad)",
             "EV + hybrid passenger cars",
+            "Conventional hybrids (HEV, non-plug-in)",
             "Motor-vehicle parts",
             "Engine parts (CN8 84099100 + 84099900)",
             "Internal-combustion engines (HS 8407 + 8408)",
         ],
+    ),
+    Label(
+        "Micromobility",
+        "Two-wheeler trade with China — electric and pedal. Two live stories: "
+        "the 2019 anti-dumping cliff (EU duties of up to ~79% on Chinese "
+        "pedal-assist e-bikes cut that flow ~90% in a year; conventional "
+        "bicycles have carried EU anti-dumping duties since 1993, the bloc's "
+        "longest-running measure), and the ~EUR 1bn/yr e-scooter/moped boom "
+        "in the code the duties don't cover. Includes non-motorised bicycles "
+        "as the substitution/trade-policy baseline rather than for the "
+        "'electric' angle. Code-split caveat: CN8 87116090 bundles e-scooters, "
+        "e-mopeds and e-motorcycles in one code — they cannot be separated.",
+        "narrative",
+        member_groups=[
+            "Electric bicycles, pedal-assist (CN8 87116010)",
+            "Electric motorcycles, scooters & mopeds (CN8 87116090)",
+            "Bicycles, non-motorised (HS 8712)",
+        ],
+        created_by="seed:micromobility_2026_07",
     ),
     Label(
         "Food & agriculture",
@@ -172,6 +215,7 @@ SEED_LABELS: list[Label] = [
         "narrative",
         member_groups=[
             "Antibiotics (HS 2941)",
+            "Penicillin-family APIs (CN8 29411000)",
             "Ibuprofen-class monocarboxylic acids (HS 2916)",
             "Paracetamol-class amides (HS 2924)",
             "Vitamins & provitamins (HS 2936)",
@@ -238,3 +282,70 @@ def label_patterns(label: Label, patterns_by_group: dict[str, list[str]]) -> lis
     for g in label.member_groups:
         pats += patterns_by_group.get(g, [])
     return sorted(set(pats))
+
+
+# --- Coverage reconciliation ------------------------------------------------
+# labels.py is code; the groups it names live in the DB (journalist-editable,
+# added via migrations). So these three drift risks can only be checked against
+# an actual group set, not against the module alone. The helpers below are pure
+# — the caller supplies the live facts (names / patterns) — so both the
+# --audit-labels CLI and the DB-backed test in tests/test_label_coverage.py can
+# share one implementation. See dev_notes/2026-07-16-label-coverage-audit.md.
+
+
+def dead_member_refs(known_group_names: Iterable[str]) -> list[tuple[str, str]]:
+    """(label_name, missing_group_name) for every `member_groups` entry that
+    has no matching hs_groups row. A non-empty result means the label silently
+    expands to fewer codes than it claims — the class of drift that left
+    "Oil & gas: origin watch" pointing at 2710/2711 groups a DB never got.
+    Sorted for stable diagnostics/test output."""
+    known = set(known_group_names)
+    out = [
+        (lab.name, g)
+        for lab in SEED_LABELS
+        for g in lab.member_groups
+        if g not in known
+    ]
+    return sorted(out)
+
+
+def unthemed_groups(known_group_names: Iterable[str]) -> list[str]:
+    """Live group names carrying no cross-cutting theme. INFORMATIONAL, not an
+    error: the broad catch-alls ("Steel (broad)", "Electrical equipment &
+    machinery (chapters 84-85, broad)") are deliberately theme-less, as are
+    groups no existing lens fits. Surfaced so a genuine omission (a car body
+    type missing from Automotive) is visible rather than silent."""
+    return sorted(g for g in set(known_group_names) if not themes_for_group(g))
+
+
+def _prefixes(patterns: Iterable[str]) -> frozenset[str]:
+    return frozenset(p.rstrip("%") for p in patterns)
+
+
+def _covers(broad: frozenset[str], narrow: frozenset[str]) -> bool:
+    """True if every prefix in `narrow` is at or below some prefix in `broad`
+    (i.e. narrow's code-set ⊆ broad's)."""
+    return all(any(n.startswith(b) for b in broad) for n in narrow)
+
+
+def subset_pattern_collisions(
+    patterns_by_group: Mapping[str, Iterable[str]],
+) -> list[tuple[str, str]]:
+    """(subset_group, superset_group) pairs where the first's HS code-set is
+    wholly contained in the second's. Most are legitimate — a curated CN8 leaf
+    inside its broad parent (e.g. the rare-earth CN8 compounds inside
+    "Rare-earth materials"). But a same-intent pair like the two lithium groups
+    that both claimed 282520 is usually accidental duplication worth
+    reconciling. INFORMATIONAL: annotate with themes at the call site so
+    parent/child (shared theme) reads differently from a true duplicate."""
+    prefs = {name: _prefixes(pats) for name, pats in patterns_by_group.items()}
+    out: list[tuple[str, str]] = []
+    for a, pa in prefs.items():
+        for b, pb in prefs.items():
+            if a == b or not pa or not pb:
+                continue
+            # a ⊆ b, and not the trivial equal-set double-count (report each
+            # unordered equal pair once, keyed by name order).
+            if _covers(pb, pa) and (pa != pb or a < b):
+                out.append((a, b))
+    return sorted(out)
