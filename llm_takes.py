@@ -27,14 +27,19 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+from dataclasses import dataclass, field
 
 from llm_framing import (
+    _SCOPE_PARTIES,
     ClaudeCLIBackend,
     _build_facts,
     _conn,
     _format_facts_for_prompt,
     _load_hs_group_clusters,
+    finding_ids_for_paths,
     make_backend,
+    matched_fact_paths,
     verify_numbers,
 )
 from llm_rejection_log import log_rejection
@@ -44,6 +49,74 @@ log = logging.getLogger(__name__)
 # Top movers are the v1 targets (the most quotable shifts); their findings are
 # the EU-27 hs_group_yoy* family.
 TAKE_SUBKINDS = ("hs_group_yoy", "hs_group_yoy_export")
+
+# ---------------------------------------------------------------------------
+# Flow anchoring
+#
+# A take is generated per-GROUP (the facts span both flows and all scopes so
+# cross-flow contrast stays possible), but each headline slot is one specific
+# FINDING — one flow, one scope. Without an anchor the model leads with the
+# group's dominant story regardless of which slot it sits under: on the
+# 2026-07-16 live run the "Finished cars" EXPORT slot (-41.8%) opened with a
+# question about IMPORTS (+34.1%) — a different subject — and the two
+# same-group slots got near-duplicate takes. The anchor pins question 1 to
+# the slot's own flow; the opposite flow stays legal as later contrast.
+# ---------------------------------------------------------------------------
+
+_SUBKIND_ANCHOR_RE = re.compile(
+    r"^hs_group_(?:yoy|trajectory)(_uk|_combined)?(_export)?$"
+)
+_SUBKIND_SCOPE = {None: "eu_27", "_uk": "uk", "_combined": "eu_27_plus_uk"}
+
+# Q1 must talk about the anchored flow. Phrasing varies ("EU-27 imports of
+# finished cars from China", "UK car exports to China"), so match the flow
+# word and its direction preposition with anything in between (within the
+# one-sentence question).
+_FLOW_ANCHOR_RES = {
+    "imports": re.compile(r"\bimports?\b.*?\bfrom\s+China\b", re.IGNORECASE | re.DOTALL),
+    "exports": re.compile(r"\bexports?\b.*?\bto\s+China\b", re.IGNORECASE | re.DOTALL),
+}
+
+
+@dataclass
+class TakeAnchor:
+    """The specific (scope, flow) a take's slot is about."""
+    finding_id: int
+    scope: str   # eu_27 | uk | eu_27_plus_uk
+    flow: str    # imports | exports
+
+    @property
+    def party_phrase(self) -> str:
+        """Human phrasing for the prompt, e.g. 'EU-27 exports to China'."""
+        imports_phrase, exports_phrase = _SCOPE_PARTIES[self.scope]
+        return imports_phrase if self.flow == "imports" else exports_phrase
+
+
+def _anchor_from_subkind(finding_id: int, subkind: str | None) -> TakeAnchor | None:
+    """Parse a finding's subkind into its anchor. The subkind encodes both
+    scope and flow (hs_group_yoy[_uk|_combined][_export]); an unrecognised
+    subkind anchors nothing (the take falls back to unanchored, as before)."""
+    m = _SUBKIND_ANCHOR_RE.match(subkind or "")
+    if not m:
+        return None
+    return TakeAnchor(
+        finding_id=finding_id,
+        scope=_SUBKIND_SCOPE[m.group(1)],
+        flow="exports" if m.group(2) else "imports",
+    )
+
+
+@dataclass
+class TakeResult:
+    """A verified take plus its honest provenance: `grounded_in` opens with
+    the slot's anchor finding and then lists every OTHER finding whose
+    numbers the questions actually cite (via matched_fact_paths — the same
+    matcher the verifier uses). Before this, the slot asserted grounded_in=
+    [anchor] while freely citing numbers from sibling findings — a
+    provenance trail that didn't contain the numbers shown (2026-07-16:
+    the EV import slot's Q3 cited the export finding's -40.9%)."""
+    questions: list[dict]
+    grounded_in: list[int] = field(default_factory=list)
 
 
 TAKE_SYSTEM_PROMPT = """You are a trade-desk research assistant for Guardian journalists.
@@ -105,32 +178,60 @@ _SCOPE_LEGEND = (
 
 def group_name_for_finding(finding_id: int) -> str | None:
     """Resolve a finding id to its hs_group name (the take is per-group)."""
+    group, _anchor = _group_and_anchor_for_finding(finding_id)
+    return group
+
+
+def _group_and_anchor_for_finding(
+    finding_id: int,
+) -> tuple[str | None, TakeAnchor | None]:
+    """Resolve a finding id to (group name, flow/scope anchor) in one query.
+    The facts stay per-group; the anchor pins the take to the finding's own
+    flow and scope."""
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT detail->'group'->>'name' FROM findings WHERE id = %s",
+            "SELECT detail->'group'->>'name', subkind FROM findings WHERE id = %s",
             (finding_id,),
         )
         row = cur.fetchone()
-    return row[0] if row and row[0] else None
+    if not row or not row[0]:
+        return None, None
+    return row[0], _anchor_from_subkind(finding_id, row[1])
 
 
-def _assemble(group_name: str) -> tuple[dict, str, str] | None:
-    """Load a group's facts and assemble (raw_facts, system, user).
+def _assemble(
+    group_name: str, anchor: TakeAnchor | None = None,
+) -> tuple[dict, str, str, dict[str, int]] | None:
+    """Load a group's facts and assemble (raw_facts, system, user, id_map).
 
     `raw_facts` is the typed fact set the verifier checks output numbers
     against — the same set the old leads pipeline verifies against, so the
-    guard transfers unchanged; the prompt shows the %/€-formatted form. Returns
-    None if the group has no loadable findings."""
+    guard transfers unchanged; the prompt shows the %/€-formatted form.
+    `id_map` is the cluster's scope/flow → finding-id map, for resolving
+    which findings the output's numbers actually came from. An `anchor`
+    adds the slot-subject instruction (question 1 must address that flow).
+    Returns None if the group has no loadable findings."""
     clusters = _load_hs_group_clusters([group_name])
     if not clusters:
         return None
     cluster = clusters[0]
     facts = _build_facts(cluster)
     formatted = _format_facts_for_prompt(facts)
+    anchor_block = ""
+    if anchor is not None:
+        anchor_block = (
+            f"ANCHOR — this take sits under ONE specific headline: "
+            f"{anchor.party_phrase} ({anchor.flow}). Hard rule, same rejection "
+            f"contract as the numbered rules: your FIRST question must be about "
+            f"{anchor.party_phrase} — the anchored flow. The opposite flow or "
+            f"another scope may appear only in a later question, and only as "
+            f"explicit contrast with the anchored flow.\n\n"
+        )
     user = (
         f"Finding (HS group): {cluster.group_name}\n"
         f"Definition: {cluster.group_description or '—'}\n\n"
         f"{_SCOPE_LEGEND}\n\n"
+        f"{anchor_block}"
         f"FACTS — the only numbers you may cite:\n"
         f"{json.dumps(formatted, indent=2, default=str)}\n\n"
         f"Propose the questions this finding genuinely warrants — usually one, "
@@ -138,25 +239,28 @@ def _assemble(group_name: str) -> tuple[dict, str, str] | None:
         f"non-obvious thread (rare). Do not pad to three. Output JSON only:\n"
         f'{{"questions": [{{"q": "...", "axis": "..."}}]}}'
     )
-    return facts, TAKE_SYSTEM_PROMPT, user
+    return facts, TAKE_SYSTEM_PROMPT, user, dict(cluster.finding_id_by_scope_attr)
 
 
-def build_take_prompt(group_name: str) -> tuple[str, str] | None:
+def build_take_prompt(
+    group_name: str, anchor: TakeAnchor | None = None,
+) -> tuple[str, str] | None:
     """The (system, user) prompt for a group's leading-question take — the
     backend-agnostic dev artifact. Returns None if the group has no findings."""
-    assembled = _assemble(group_name)
+    assembled = _assemble(group_name, anchor)
     if assembled is None:
         return None
-    _facts, system, user = assembled
+    _facts, system, user, _id_map = assembled
     return system, user
 
 
 def build_take_prompt_for_finding(finding_id: int) -> tuple[str, str] | None:
-    """Convenience: finding id → assembled prompt (via its group)."""
-    group = group_name_for_finding(finding_id)
+    """Convenience: finding id → assembled prompt (via its group), anchored
+    to the finding's own flow and scope."""
+    group, anchor = _group_and_anchor_for_finding(finding_id)
     if not group:
         return None
-    return build_take_prompt(group)
+    return build_take_prompt(group, anchor)
 
 
 # ---------------------------------------------------------------------------
@@ -200,11 +304,23 @@ def _default_backend():
     return ClaudeCLIBackend()
 
 
-def _validate_questions(questions: list[dict], facts: dict) -> dict | None:
+def _validate_questions(
+    questions: list[dict], facts: dict, anchor: TakeAnchor | None = None,
+) -> dict | None:
     """Verify-or-reject. Returns a rejection dict on the first failure, else
     None. Each question must be interrogative (contain '?') and cite no number
-    absent from the facts (reusing llm_framing.verify_numbers). Pure — no DB,
-    no LLM — so it's unit-testable in isolation."""
+    absent from the facts (reusing llm_framing.verify_numbers). With an
+    `anchor`, the FIRST question must address the anchored flow — the backstop
+    for the prompt's ANCHOR rule (2026-07-16: an export slot's take led with
+    the import story). Pure — no DB, no LLM — so it's unit-testable in
+    isolation."""
+    if anchor is not None and questions:
+        q1 = questions[0]["q"]
+        if not _FLOW_ANCHOR_RES[anchor.flow].search(q1):
+            return {
+                "reason": "first_question_off_anchor",
+                "detail": f"anchor={anchor.party_phrase}; q1={q1[:240]}",
+            }
     for item in questions:
         q = item["q"]
         if "?" not in q:  # interrogative form is the safety contract
@@ -221,21 +337,42 @@ def _validate_questions(questions: list[dict], facts: dict) -> dict | None:
     return None
 
 
+def _grounded_in(
+    questions: list[dict], facts: dict, id_map: dict[str, int],
+    anchor: TakeAnchor | None,
+) -> list[int]:
+    """Honest provenance for a verified take: the anchor finding first (it is
+    the slot's subject even when the questions are qualitative), then every
+    other finding whose numbers the questions actually cite — resolved with
+    the verifier's own matcher (matched_fact_paths), so a finding is listed
+    iff one of its numbers is genuinely the one a question used. Pure."""
+    text = " ".join(item["q"] for item in questions)
+    cited = finding_ids_for_paths(id_map, matched_fact_paths(text, facts))
+    out: list[int] = [anchor.finding_id] if anchor is not None else []
+    for fid in cited:
+        if fid not in out:
+            out.append(fid)
+    return out
+
+
 def generate_take(
     group_name: str, backend=None, *, scrape_run_id: int | None = None,
-) -> list[dict] | None:
-    """Generate and verify a take for one group. Returns the validated
-    questions, or None if the group has no findings, generation fails, or the
-    output is rejected — in which case the LLMSlot stays a placeholder and the
-    report is unaffected (the take never blocks).
+    anchor: TakeAnchor | None = None,
+) -> TakeResult | None:
+    """Generate and verify a take for one group. Returns a TakeResult
+    (validated questions + the finding ids they actually cite), or None if
+    the group has no findings, generation fails, or the output is rejected —
+    in which case the LLMSlot stays a placeholder and the report is
+    unaffected (the take never blocks).
 
     verify-or-reject (reusing the leads pipeline's guard): reject any output
-    that fails to parse, isn't interrogative, or cites a number absent from the
-    facts. Rejections are logged to llm_rejection_log for later inspection."""
-    assembled = _assemble(group_name)
+    that fails to parse, isn't interrogative, cites a number absent from the
+    facts, or (when anchored) opens off the slot's own flow. Rejections are
+    logged to llm_rejection_log for later inspection."""
+    assembled = _assemble(group_name, anchor)
     if assembled is None:
         return None
-    facts, system, user = assembled
+    facts, system, user, id_map = assembled
     backend = backend or _default_backend()
     model_name = getattr(backend, "model", None) or backend.__class__.__name__
 
@@ -253,7 +390,7 @@ def generate_take(
                       reason="json_parse_error", raw_output=raw[:4000])
         return None
 
-    rejection = _validate_questions(questions, facts)
+    rejection = _validate_questions(questions, facts, anchor)
     if rejection is not None:
         log.warning("take rejected (%s) for %r: %s",
                     rejection["reason"], group_name, rejection.get("detail", ""))
@@ -265,17 +402,22 @@ def generate_take(
                       closest_fact_value=rejection.get("closest_fact_value"))
         return None
 
-    return questions
+    return TakeResult(
+        questions=questions,
+        grounded_in=_grounded_in(questions, facts, id_map, anchor),
+    )
 
 
 def generate_take_for_finding(
     finding_id: int, backend=None, *, scrape_run_id: int | None = None,
-) -> list[dict] | None:
-    """Convenience: finding id → verified take (via its group)."""
-    group = group_name_for_finding(finding_id)
+) -> TakeResult | None:
+    """Convenience: finding id → verified take (via its group), anchored to
+    the finding's own flow and scope."""
+    group, anchor = _group_and_anchor_for_finding(finding_id)
     if not group:
         return None
-    return generate_take(group, backend, scrape_run_id=scrape_run_id)
+    return generate_take(group, backend, scrape_run_id=scrape_run_id,
+                         anchor=anchor)
 
 
 def _main(argv: list[str]) -> int:
@@ -296,23 +438,26 @@ def _main(argv: list[str]) -> int:
         print(usage, file=sys.stderr)
         return 2
 
+    anchor = None
     if rest[0] == "--group":
         group = " ".join(rest[1:]).strip()
     else:
-        group = group_name_for_finding(int(rest[0]))
+        group, anchor = _group_and_anchor_for_finding(int(rest[0]))
     if not group:
         print(f"no group for {rest!r}", file=sys.stderr)
         return 1
 
     if do_generate:
-        questions = generate_take(group)
-        if questions is None:
+        take = generate_take(group, anchor=anchor)
+        if take is None:
             print(f"take rejected or unavailable for {group!r}", file=sys.stderr)
             return 1
-        print(json.dumps({"questions": questions}, indent=2, ensure_ascii=False))
+        print(json.dumps(
+            {"questions": take.questions, "grounded_in": take.grounded_in},
+            indent=2, ensure_ascii=False))
         return 0
 
-    result = build_take_prompt(group)
+    result = build_take_prompt(group, anchor)
     if result is None:
         print(f"no loadable findings for {group!r}", file=sys.stderr)
         return 1

@@ -70,6 +70,9 @@ def _take_block_md(take) -> list[str]:
     out = ["   > 🔶 **Machine hypotheses** — unverified leads to explore, "
            "not findings:"]
     out.extend(f"   > - {q['q']}" for q in take.questions)
+    cites = " ".join(f"`finding/{int(fid)}`" for fid in (take.grounded_in or []))
+    if cites:
+        out.append(f"   > _Sources: {cites}_")
     return out
 
 

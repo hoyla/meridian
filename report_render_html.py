@@ -790,16 +790,23 @@ def _llm_block(slot) -> str:
 def _take_block_html(take) -> str:
     """The per-finding LLM take — leading questions in a visually segregated
     block (the reliable 'unverified, leads only' hedge). A placeholder
-    (rejected/ungenerated) renders nothing; the deterministic mover stands."""
+    (rejected/ungenerated) renders nothing; the deterministic mover stands.
+    Cites every finding the questions draw numbers from (grounded_in: anchor
+    first, then cross-flow findings), same pattern as the general take."""
     if take is None or take.status != "generated" or not take.questions:
         return ""
     qs = "".join(f"<li>{html.escape(q.get('q', ''))}</li>" for q in take.questions)
+    cites = " ".join(
+        f'<span class="token">finding/{int(fid)}</span>'
+        for fid in (take.grounded_in or [])
+    )
     return (
         '<div class="take">'
         '<div class="take-tag">◆ Machine hypotheses — unverified leads to '
         'explore, not findings</div>'
         f'<ul class="take-qs">{qs}</ul>'
-        "</div>"
+        + (f'<p class="take-cite">{cites}</p>' if cites else "")
+        + "</div>"
     )
 
 
