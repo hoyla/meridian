@@ -87,6 +87,70 @@ def test_subset_collisions_reports_equal_sets_once():
     assert collisions == [("A group", "B group")]
 
 
+def test_semiconductors_theme_membership():
+    """The Semiconductors lens (2026-07-16, Luke-approved): fab equipment +
+    the two-way chip trade + wafer feedstock + the Ga/Ge inputs. Locks two
+    editorial decisions: (1) the 8541 group is the excl-solar-PV cut — PV
+    cells stay with the Solar theme, so 'Solar PV cells & modules' must NOT
+    appear here; (2) polysilicon stays Solar-only (280461 can't distinguish
+    solar- from semiconductor-grade, and the tonnage is overwhelmingly
+    solar)."""
+    by_name = {l.name: l for l in labels.SEED_LABELS}
+    assert "Semiconductors" in by_name
+    lab = by_name["Semiconductors"]
+    assert lab.kind == "narrative"
+    assert set(lab.member_groups) == {
+        "Semiconductor manufacturing equipment",
+        "Integrated circuits (HS 8542)",
+        "Semiconductor devices excl. solar PV (HS 8541)",
+        "Doped wafers (HS 3818)",
+        "Gallium, germanium & other minor metals (HS 8112)",
+    }
+    assert "Solar PV cells & modules" not in lab.member_groups
+    assert "Polysilicon (solar PV upstream — Xinjiang exposure)" \
+        not in lab.member_groups
+    # The GPU disclaimer is load-bearing copy: HS can't isolate GPUs and the
+    # definition must keep saying so (defensibility — a reader will ask).
+    assert "GPU" in lab.definition
+    # 8486 gains its first badge; it was theme-less before this lens existed.
+    assert labels.themes_for_group("Semiconductor manufacturing equipment") \
+        == ["Semiconductors"]
+
+
+def _seeded_patterns(group_name: str) -> list[str]:
+    """The hs_patterns ARRAY seeded for `group_name`, read from schema.sql —
+    the canonical in-repo artifact (the migration carries an identical copy).
+    Regex is anchored to the quoted group name then the next ARRAY[...]."""
+    import pathlib
+    import re
+    sql = (pathlib.Path(__file__).parent.parent / "schema.sql").read_text()
+    m = re.search(
+        re.escape(f"('{group_name}',") + r".*?ARRAY\[(.*?)\]", sql, re.S)
+    assert m, f"group {group_name!r} not seeded in schema.sql"
+    return re.findall(r"'([^']+)'", m.group(1))
+
+
+def test_semiconductor_8541_seed_excludes_all_pv_codes():
+    """The excl-PV 8541 pattern set must never include the PV codes — neither
+    the current 854142/854143 nor the pre-HS2022 mixed bucket 854140, which
+    bundled PV cells with LEDs/photosensitive devices (2017–2021 in our data;
+    including it would contaminate the pre-2022 series with ~EUR 25bn of
+    solar panels). Reads the actual schema.sql seed so pattern edits are
+    caught, not a re-declared copy."""
+    patterns = _seeded_patterns("Semiconductor devices excl. solar PV (HS 8541)")
+    assert patterns, "empty pattern seed"
+    prefixes = {p.rstrip("%") for p in patterns}
+    banned = {"854140", "854142", "854143"}
+    assert not banned & prefixes
+    # No pattern broad enough to sweep a banned code back in (e.g. '8541%'
+    # or '85414%' would).
+    assert all(
+        not b.startswith(p) for b in banned for p in prefixes
+    )
+    # And every pattern stays inside heading 8541.
+    assert all(p.startswith("8541") for p in prefixes)
+
+
 # --- live DB guard (skipped without GACC_LIVE_DATABASE_URL) ------------------
 
 LIVE_DB_ENV = "GACC_LIVE_DATABASE_URL"

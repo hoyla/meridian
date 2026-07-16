@@ -68,6 +68,40 @@ all now surfaced by pure helpers in `labels.py`
   skipped when unset, same convention as `test_orphan_findings.py`) that
   hard-fails on any dead label reference.
 
+## Semiconductors theme (same day, Luke-approved)
+
+Reviewing the theme-less groups prompted "should we have a theme for chips
+(GPUs etc) and the components needed to make them?" — answered with data
+(rolling 12mo EU↔CN, local DB): 8486 fab equipment **€7.56bn out / €0.15bn in**
+(the ASML story, ~50:1) and 8542 ICs **€6.81bn out / €4.78bn in** — Europe is a
+net chip *exporter* to China at heading level, against the intuitive narrative.
+Raw CN8 data for all headings was already ingested (broad-ingest paying off).
+
+New theme **"Semiconductors"** = existing `Semiconductor manufacturing
+equipment` (8486, gains its first badge) + `Gallium, germanium & other minor
+metals (HS 8112)` (chip inputs; second badge beside export-control) + three new
+groups (migration `2026-07-16b`, seeded in schema.sql too):
+
+- `Integrated circuits (HS 8542)`
+- `Semiconductor devices excl. solar PV (HS 8541)` — enumerated patterns, NOT
+  `8541%`: excludes PV cells 854142/43 (Solar's group) **and** pre-HS2022
+  `854140`, which mixed LEDs/photosensitive with PV (~€25bn of mostly panels,
+  2017–2021). Cost: LEDs/photosensitive enter the series only from 2022-01;
+  the 854150 lineage has continuity. YoY/rolling-12mo anchored 2023+ unaffected.
+- `Doped wafers (HS 3818)` — small (~€0.2bn each way) but upstream-complete.
+
+Deliberate exclusions: **photoresists (3707)** — €20m each way, noise;
+**polysilicon (280461)** stays Solar-only (code can't split solar- from
+semiconductor-grade; tonnage is overwhelmingly solar). **GPU honesty caveat**
+baked into the label definition and the 8542 description, and pinned by a test:
+HS/CN8 cannot isolate GPUs/AI accelerators (bare chips → 854231 mixed with
+CPUs; assembled cards → 8473), so the theme never yields a "GPU imports"
+number.
+
+Post-merge ops: `eurostat_world_aggregates` backfill for **3818 only**
+(8542/8541/8486 already swept by the ch-84/85 broad group's aggregates), then
+findings appear on the next periodic `--analyse`.
+
 ### A caveat this exposed
 
 Running `--audit-labels` against the dev **local** DB reports the

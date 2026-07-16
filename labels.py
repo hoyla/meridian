@@ -133,6 +133,28 @@ SEED_LABELS: list[Label] = [
         ],
     ),
     Label(
+        "Semiconductors",
+        "The chip supply chain: EU-made fab equipment flowing east (the ASML "
+        "story — ~50:1 export/import ratio on HS 8486) and the two-way chip "
+        "trade, where Europe is a net EXPORTER to China at heading level "
+        "(automotive/industrial silicon out, legacy chips in). Includes the "
+        "wafer feedstock stage and the gallium/germanium inputs China has "
+        "placed under export licence. A lens with a stated limit: HS/CN8 "
+        "cannot isolate GPUs or AI accelerators — bare chips sit inside "
+        "854231 mixed with CPUs and MCUs, assembled cards inside 8473 "
+        "computer parts — so this theme carries the supply chain, never a "
+        "'GPU imports' number.",
+        "narrative",
+        member_groups=[
+            "Semiconductor manufacturing equipment",
+            "Integrated circuits (HS 8542)",
+            "Semiconductor devices excl. solar PV (HS 8541)",
+            "Doped wafers (HS 3818)",
+            "Gallium, germanium & other minor metals (HS 8112)",
+        ],
+        created_by="seed:semiconductors_2026_07",
+    ),
+    Label(
         "Automotive",
         "Finished vehicles, EV/hybrid cars and the parts that feed them — the "
         "China–Europe car-trade story.",

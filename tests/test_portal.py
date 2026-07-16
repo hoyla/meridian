@@ -1222,9 +1222,12 @@ def test_q2_expansion_groups_carry_expected_themes():
     assert tf("Manganese oxides") == ["EV supply chain"]
     # The China-export-controlled minor metals.
     for g in ("Tungsten (HS 8101)",
-              "Gallium, germanium & other minor metals (HS 8112)",
               "Antimony (HS 8110)"):
         assert tf(g) == ["China export-control regime"], g
+    # Gallium/germanium additionally ride the Semiconductors lens (chipmaking
+    # inputs) — the 2026-07-16 theme addition.
+    assert tf("Gallium, germanium & other minor metals (HS 8112)") == [
+        "China export-control regime", "Semiconductors"]
     # Pharma APIs — antibiotics/ibuprofen/paracetamol were aspirational theme
     # members; naming the groups to match realises them. Vitamins added.
     for g in ("Antibiotics (HS 2941)",
