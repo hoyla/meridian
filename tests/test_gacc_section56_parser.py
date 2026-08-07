@@ -6,14 +6,15 @@ GACC's curated ~30-commodity headline catalogue (no HS codes), China↔world.
 Fixtures are real pages pulled from stored source_snapshots (no fetches):
 May 2026 CNY+USD exports, May 2026 CNY imports, May 2025 CNY exports (label
 drift vs 2026: "Agricultural products" → "Agriculture products"), May 2019
-CNY exports (format-drift control — layout unchanged since 2019), and the
-January-February 2025 combined release (8-cell cumulative layout).
+CNY exports (format-drift control — layout unchanged since 2019), the
+January-February 2025 combined release (8-cell cumulative layout), and the
+April 2025 USD exports page (the missing-unit-column variant).
 
 Covered here: row extraction (both layouts), the aggregate-star and
 nbsp-indent conventions, '-' quantity cells → None, the source_row provenance
 payload (prior-year cumulative + GACC's published YoY% travel there, NOT as
-observations), the count floor, and the currency-unit floor extension to
-sections 5/6.
+observations), the count floor, the column-alignment guards, and the
+currency-unit floor extension to sections 5/6.
 """
 from __future__ import annotations
 
@@ -31,6 +32,7 @@ _MAY26_IMP = "release_section6_major_imports_may2026_cny.html"
 _MAY25_CNY = "release_section5_major_exports_may2025_cny.html"
 _MAY19_CNY = "release_section5_major_exports_may2019_cny.html"
 _JANFEB25 = "release_section5_major_exports_janfeb2025_cny.html"
+_APR25_USD = "release_section5_major_exports_apr2025_usd.html"
 
 
 def _parse_fixture(name: str) -> parse.ParseResult:
@@ -212,6 +214,132 @@ def test_floor_ignores_other_sections():
     import dataclasses
     meta4 = dataclasses.replace(res.metadata, section_number=4)
     assert parse.section56_floor_check(res.observations, meta4) is None
+
+
+# --- missing-unit-column variant (April 2025 USD exports) ---------------------
+#
+# english.customs.gov.cn/Statics/5f7ac0d0-b47e-4fad-bb4f-b21739f10a7c.html omits
+# the Quantity Unit <td> from every body row and pads the end with a blank <td>,
+# so the row keeps its 10-cell width and clears the cell-count guard while every
+# field lands one place to the left. Its CNY sibling
+# (Statics/4d9157fb-26ac-4a56-96e6-a5f88d5cff32.html) carries the unit column and
+# parsed correctly, which is what makes the pair a usable oracle below: quantities
+# are currency-independent, so the CNY page's quantities are the right answer for
+# the USD page too. The fixture is the stored snapshot, byte-identical to the live
+# page (sha256 a8909f6b…703b, re-fetched 2026-08-07 — GACC has not corrected it).
+
+# From the CNY sibling, which parsed correctly: (label, kind) -> quantity.
+_APR25_CNY_QUANTITIES = {
+    ("Motor vehicles（including chassis fitted with engines)", "monthly"): 62.0,
+    ("Motor vehicles（including chassis fitted with engines)", "ytd"): 215.8,
+    ("Integrated circuits", "monthly"): 308.8,
+    ("Ships", "monthly"): 807.0,
+    ("Aquatic products", "monthly"): 35.0,
+    # Value-only commodities: '—' in the CNY unit column, no quantity at all.
+    # These are the rows the numeric-quantity_unit diagnostic could NOT see —
+    # shifted just the same, but leaving quantity_unit NULL rather than a number.
+    ("Agricultural products", "monthly"): None,
+    ("Mechanical and electrical products", "monthly"): None,
+    ("Hi-tech products", "monthly"): None,
+}
+
+
+def test_missing_unit_column_variant_parses_aligned():
+    """The variant's numbers land in the right fields, checked against the CNY
+    sibling's quantities. Pre-fix, the cars row stored monthly_quantity=11164.1
+    — 111 million cars exported in one month — and monthly_value=215.8."""
+    res = _parse_fixture(_APR25_USD)
+    assert res.metadata.currency == "USD"
+    assert res.metadata.period.isoformat() == "2025-04-01"
+    by_key = {(o["commodity_label"], o["period_kind"]): o for o in res.observations}
+
+    for key, expected_qty in _APR25_CNY_QUANTITIES.items():
+        obs = by_key[key]
+        assert obs["quantity"] == expected_qty, key
+        # Every commodity on a GACC value table has a value.
+        assert obs["value"] is not None, key
+
+    cars = by_key[("Motor vehicles（including chassis fitted with engines)", "monthly")]
+    assert cars["quantity"] == 62.0          # 620,000 autos, not 111 million
+    assert cars["value"] == 11164.1          # USD million, was landing in quantity
+    assert cars["source_row"]["monthly_quantity"] == 62.0
+    assert cars["source_row"]["monthly_value"] == 11164.1
+    assert cars["source_row"]["ytd_value"] == 36897.6
+    assert cars["source_row"]["published_yoy_value_pct"] == 2.8
+
+
+def test_missing_unit_column_leaves_quantity_unit_null_and_says_why():
+    """The unit is genuinely absent from the document, so it stays NULL rather
+    than being borrowed from the CNY sibling — an inference must never be
+    written into a source-material field. source_row records the reason."""
+    res = _parse_fixture(_APR25_USD)
+    assert all(o["quantity_unit"] is None for o in res.observations)
+    assert all(o["source_row"]["unit_column_absent"] for o in res.observations)
+
+
+def test_unit_column_absent_flag_not_stamped_on_normal_layouts():
+    for name in (_MAY26_CNY, _MAY26_USD, _MAY26_IMP, _MAY19_CNY, _JANFEB25):
+        res = _parse_fixture(name)
+        assert not any("unit_column_absent" in o["source_row"] for o in res.observations), name
+        assert any(o["quantity_unit"] for o in res.observations), name
+
+
+def test_variant_yields_same_catalogue_as_the_normal_layout():
+    """Both April-2025 pages describe the same 31 commodities; the variant must
+    not silently drop or gain rows."""
+    res = _parse_fixture(_APR25_USD)
+    assert len(res.observations) == 62  # 31 commodities x (monthly, ytd)
+    assert len({o["commodity_label"] for o in res.observations}) == 31
+    assert parse.section56_floor_check(res.observations, res.metadata) is None
+
+
+# --- column-alignment guards --------------------------------------------------
+
+def _shifted_parse():
+    """The exact pre-fix parse of the April-2025 USD page: force the layout
+    detector to claim a unit column the body does not have."""
+    import unittest.mock
+    with unittest.mock.patch.object(parse, "_section56_has_unit_column",
+                                    return_value=True):
+        return _parse_fixture(_APR25_USD)
+
+
+def test_guard_rejects_the_real_shifted_parse():
+    """The guard the corruption needed: a shifted parse must fail loud (→ a
+    'failed' scrape_run and no release row) rather than persist. The count floor
+    alone passes it — ~30 plausible-looking rows are still there."""
+    res = _shifted_parse()
+    assert len({o["commodity_label"] for o in res.observations}) == 31  # count floor OK
+    reason = parse.section56_floor_check(res.observations, res.metadata)
+    assert reason and "quantity_unit holds numbers" in reason
+
+
+def test_guard_catches_numeric_quantity_unit():
+    res = _parse_fixture(_MAY26_CNY)
+    obs = [dict(o) for o in res.observations]
+    obs[0]["quantity_unit"] = "62.0"
+    reason = parse.section56_floor_check(obs, res.metadata)
+    assert reason and "62.0" in reason
+
+
+def test_guard_catches_quantity_without_value():
+    """The second signature, and the only one that sees the value-only rows: on
+    those the shift leaves quantity_unit NULL (no numeric tell) but parks the
+    value in `quantity` and leaves `value` empty."""
+    res = _parse_fixture(_MAY26_CNY)
+    obs = [dict(o) for o in res.observations]
+    target = next(o for o in obs if o["value"] is not None)
+    target["quantity"], target["value"] = target["value"], None
+    reason = parse.section56_floor_check(obs, res.metadata)
+    assert reason and "quantity but no value" in reason
+    assert target["commodity_label"] in reason
+
+
+def test_alignment_guards_ignore_healthy_releases():
+    for name in (_MAY26_CNY, _MAY26_USD, _MAY26_IMP, _MAY25_CNY, _MAY19_CNY,
+                 _JANFEB25, _APR25_USD):
+        res = _parse_fixture(name)
+        assert parse.section56_floor_check(res.observations, res.metadata) is None, name
 
 
 # --- currency-unit floor extension --------------------------------------------
