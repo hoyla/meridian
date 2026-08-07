@@ -68,6 +68,7 @@ from urllib.parse import urljoin
 
 import xlrd
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 
 import api_client
 import db
@@ -723,6 +724,87 @@ _CN_XLS_HREF_RE = re.compile(r"(?:attachDir|fileDir)/\S*?\.xlsx?$",
 
 _LIST_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+# The 瑞数-style JS challenge fronting customs.gov.cn answers 412 (sometimes
+# 200) with a shell whose bootstrap always defines the `$_ts` global. Verified
+# 2026-08-07: tjs.customs.gov.cn served this to every plain-HTTP shape tried
+# (bare UA, full browser header set, https) despite the same host answering
+# 200 to the cloud run hours earlier — so WAF-free tjs is a vantage-point
+# accident, not a property of the host.
+_WAF_CHALLENGE_MARKER = b"$_ts"
+
+
+def _looks_like_waf_challenge(body: bytes | None,
+                              status_code: int | None) -> bool:
+    """True when a response is the JS-challenge shell rather than content.
+
+    Keyed on the `$_ts` bootstrap global (definitive) or a bare 412 (the
+    status this WAF uses and the site otherwise has no reason to return)."""
+    if body and _WAF_CHALLENGE_MARKER in body[:8192]:
+        return True
+    return status_code == 412
+
+
+# ---------------------------------------------------------------------------
+# The WPS → attachDir byte route (found 2026-08-07, July drop).
+#
+# The 2026-08-07 dev note recorded the bytes as unreachable on redesigned tjs
+# articles: they embed a WAF-gated WPS web-office viewer instead of the old
+# direct xls link. That is true of the article's RAW HTML — but not of the
+# rendered viewer. Once the WPS iframe renders (real Chrome passes the
+# challenge; headless and the in-app browser do not), its document carries a
+# single 19-digit attachment id, and THAT id addresses an ordinary attachment:
+#
+#     http://www.customs.gov.cn/customs/attachDir/YYYY/MM/<19-digit-id>.xls
+#
+# which is NOT WAF-gated — plain httpx gets 200 application/vnd.ms-excel
+# (verified for all six July tables). The id is self-describing: its first six
+# digits are the YYYYMM of the attachment directory, so no extra input is
+# needed to build the URL.
+#
+# So the drop-day cost is ONE browser-assisted step (harvest six ids), and
+# everything downstream is ordinary HTTP through the unchanged ingest
+# contract — that is what the `bridge` subcommand automates. Full automation
+# still waits on a WAF-passing fetch; this narrows the manual part to copying
+# ids rather than hunting spreadsheets.
+# ---------------------------------------------------------------------------
+
+CN_ATTACHMENT_URL_TEMPLATE = ("http://www.customs.gov.cn/customs/attachDir/"
+                              "{year:04d}/{month:02d}/{attachment_id}.xls")
+
+# 2026080710320733553 → 2026-08 → /attachDir/2026/08/<id>.xls
+_CN_ATTACHMENT_ID_RE = re.compile(r"^(?P<year>\d{4})(?P<month>\d{2})\d{13}$")
+
+_WPS_FILE_ID_RE = re.compile(r"/wps/weboffice/\S*?/s/(?P<file_id>[A-Za-z0-9]+)")
+
+
+def attachment_url_from_id(attachment_id: str) -> str:
+    """Build the WAF-free attachDir xls URL for a 19-digit attachment id
+    harvested from a rendered WPS viewer. Fails loud on anything that isn't
+    one — a mistyped id must not become a silent 404 mid-ingest."""
+    cleaned = attachment_id.strip()
+    m = _CN_ATTACHMENT_ID_RE.match(cleaned)
+    if not m:
+        raise ValueError(
+            f"{attachment_id!r} is not a 19-digit GACC attachment id "
+            "(expected YYYYMMDDhhmmss + 5 digits, e.g. 2026080710320733553)")
+    month = int(m.group("month"))
+    if not 1 <= month <= 12:
+        raise ValueError(
+            f"{attachment_id!r} has an impossible month {month:02d} — the "
+            "first six digits must be the YYYYMM of the attachment directory")
+    return CN_ATTACHMENT_URL_TEMPLATE.format(
+        year=int(m.group("year")), month=month, attachment_id=cleaned)
+
+
+def find_wps_file_id(article_html: bytes) -> str | None:
+    """The WPS viewer file id embedded in a redesigned tjs article, if any.
+
+    Not the attachment id (that only exists in the RENDERED viewer) — this is
+    the handle an operator needs to open the right viewer and read the
+    attachment id off it, so the probe logs it rather than making them hunt."""
+    m = _WPS_FILE_ID_RE.search(article_html.decode("utf-8", "ignore"))
+    return m.group("file_id") if m else None
+
 
 @dataclasses.dataclass(frozen=True)
 class CnExpressArticle:
@@ -749,6 +831,14 @@ class CnDiscoveryOutcome:
                                  EXISTS upstream, we just can't pull bytes yet
       no_new                  — index walked; every recognised table already
                                  has a release row in the DB
+      challenged              — the index answered, but with the JS-challenge
+                                 WAF shell instead of content (412 + `$_ts`,
+                                 or a 200 shell with no articles). We are
+                                 BLIND to the Chinese site, not looking at a
+                                 quiet one — a distinction that matters on
+                                 drop morning, when `unavailable` would read
+                                 as "the index is broken" rather than "we
+                                 can't see through the challenge from here".
       unavailable             — the index itself couldn't be fetched/parsed
                                  (never fatal to the caller: the English walk
                                  remains authoritative)
@@ -867,10 +957,32 @@ def probe_cn_express(dry_run: bool = False,
     the authoritative English walk."""
     try:
         response = api_client.fetch(index_url, user_agent=CN_USER_AGENT)
-        articles = discover_express_articles(response.content, index_url)
     except Exception as e:
+        resp = getattr(e, "response", None)
+        if _looks_like_waf_challenge(getattr(resp, "content", None),
+                                     getattr(resp, "status_code", None)):
+            log.warning("CN Express index is behind the JS-challenge WAF "
+                        "(%s): %s — CN discovery is blind from here",
+                        index_url, e)
+            return CnDiscoveryOutcome(status="challenged", error=str(e))
         log.warning("CN Express index unavailable (%s): %s", index_url, e)
         return CnDiscoveryOutcome(status="unavailable", error=str(e))
+
+    try:
+        articles = discover_express_articles(response.content, index_url)
+    except Exception as e:
+        log.warning("CN Express index unparseable (%s): %s", index_url, e)
+        return CnDiscoveryOutcome(status="unavailable", error=str(e))
+
+    # A challenge can also arrive as a 200 whose body is the shell. Left
+    # undetected it parses to zero articles and reads as a quiet no_new —
+    # the exact false-negative this status exists to prevent.
+    if not articles and _looks_like_waf_challenge(response.content, None):
+        log.warning("CN Express index returned the JS-challenge shell (200) "
+                    "— CN discovery is blind from here")
+        return CnDiscoveryOutcome(
+            status="challenged",
+            error="index returned the JS-challenge shell instead of content")
 
     missing = [a for a in articles if _cn_release_missing(a)]
     if not missing:
@@ -895,12 +1007,16 @@ def probe_cn_express(dry_run: bool = False,
             continue
         xls_urls, uses_wps = discover_article_attachments(page.content, art.url)
         if not xls_urls:
+            file_id = find_wps_file_id(page.content) if uses_wps else None
             log.info(
                 "CN Express published %s (%s) but the article carries no "
-                "direct xls link%s — bytes unavailable to plain HTTP; will "
-                "recheck next walk until the release lands via any route",
+                "direct xls link%s — bytes unavailable to plain HTTP; open "
+                "the viewer in a real browser and pass the 19-digit "
+                "attachment id to `gacc_cn.py bridge`. Will recheck next "
+                "walk until the release lands via any route",
                 art.title, art.url,
-                " (WPS web-office viewer)" if uses_wps else "")
+                f" (WPS web-office viewer, file id {file_id})" if file_id
+                else " (WPS web-office viewer)" if uses_wps else "")
             pending.append(art)
             continue
         for xls_url in xls_urls:
@@ -976,6 +1092,11 @@ def verify_against_db(xls_bytes: bytes, *, xls_url: str) -> int:
 
 
 def main() -> None:
+    # This module is a first-class CLI (the documented drop-day manual
+    # bridge), not just a library imported by scrape.py — which is where the
+    # process usually picks up DATABASE_URL. Without this, every standalone
+    # `gacc_cn.py ingest/discover/bridge` dies on KeyError: 'DATABASE_URL'.
+    load_dotenv()
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -998,6 +1119,21 @@ def main() -> None:
              "report releases published upstream but not yet fetchable")
     dis.add_argument("--index-url", default=CN_EXPRESS_INDEX_URL)
     dis.add_argument("--dry-run", action="store_true")
+    brg = sub.add_parser(
+        "bridge",
+        help="Ingest CN tables from 19-digit attachment ids harvested from "
+             "rendered WPS viewers (the drop-day manual bridge). Builds the "
+             "WAF-free attachDir URL for each id and runs the normal ingest.")
+    brg.add_argument("--attachment-id", action="append", required=True,
+                     dest="attachment_ids", metavar="ID",
+                     help="Repeatable. 19-digit id read off a rendered WPS "
+                          "viewer, e.g. 2026080710320733553")
+    brg.add_argument("--article-url", action="append", default=None,
+                     dest="article_urls", metavar="URL",
+                     help="Repeatable, paired with --attachment-id by "
+                          "position. Optional provenance; omit and the xls "
+                          "URL alone is recorded.")
+    brg.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
     if args.cmd == "discover":
         outcome = probe_cn_express(dry_run=args.dry_run,
@@ -1010,7 +1146,31 @@ def main() -> None:
                   f"({art.published}) {art.url}")
         if outcome.error:
             print(f"  errors: {outcome.error}")
-        sys.exit(0 if outcome.status != "unavailable" else 1)
+        sys.exit(0 if outcome.status not in ("unavailable", "challenged") else 1)
+    elif args.cmd == "bridge":
+        article_urls = args.article_urls or []
+        failed = 0
+        for i, attachment_id in enumerate(args.attachment_ids):
+            article_url = article_urls[i] if i < len(article_urls) else None
+            try:
+                xls_url = attachment_url_from_id(attachment_id)
+                release_id = ingest_cn_release(xls_url, article_url,
+                                               dry_run=args.dry_run)
+            except Exception as e:
+                # One bad id must not abort the remaining tables: a partial
+                # bridge is recoverable (re-run the failures), an aborted one
+                # leaves the drop half-ingested with no summary of what's left.
+                failed += 1
+                log.exception("bridge failed for attachment id %s", attachment_id)
+                print(f"  {attachment_id}: FAILED — {e}")
+                continue
+            print(f"  {attachment_id}: "
+                  + (f"release id {release_id}" if release_id is not None
+                     else "dry run — parsed, not persisted"))
+        print(f"bridge: {len(args.attachment_ids) - failed}/"
+              f"{len(args.attachment_ids)} "
+              + ("parsed (dry run)" if args.dry_run else "ingested"))
+        sys.exit(1 if failed else 0)
     elif args.cmd == "ingest":
         release_id = ingest_cn_release(args.xls_url, args.article_url,
                                        dry_run=args.dry_run)

@@ -224,3 +224,102 @@ def test_probe_ingests_direct_xls_end_to_end(clean_db, test_db_url, monkeypatch)
     outcome2 = gacc_cn.probe_cn_express()
     assert outcome2.status == "no_new"
     assert fetched == [INDEX_URL]
+
+
+# ---------------------------------------------------------------------------
+# WAF challenge detection (2026-08-07: tjs is NOT reliably challenge-free)
+# ---------------------------------------------------------------------------
+
+# The shell the 瑞数 WAF served to every plain-HTTP shape tried on 2026-08-07,
+# trimmed to the bootstrap that identifies it.
+CHALLENGE_SHELL = (
+    b'<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN">\n'
+    b'<html><head><meta id="U07cUYgw9lbI" content="-FCPYb22TWh6" r=\'m\'>'
+    b"<script type=\"text/javascript\" r='m'>$_ts=window['$_ts'];"
+    b'if(!$_ts)$_ts={};$_ts.nsd=82912;</script></head><body></body></html>')
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int, content: bytes):
+        self.status_code = status_code
+        self.content = content
+
+
+def test_challenge_shell_is_recognised_by_marker_and_by_412():
+    assert gacc_cn._looks_like_waf_challenge(CHALLENGE_SHELL, 200) is True
+    assert gacc_cn._looks_like_waf_challenge(b"<html>real</html>", 412) is True
+    assert gacc_cn._looks_like_waf_challenge(INDEX_HTML, 200) is False
+    assert gacc_cn._looks_like_waf_challenge(None, None) is False
+
+
+def test_412_challenge_reports_challenged_not_unavailable(monkeypatch):
+    # The distinction the routine's note depends on: blind to the Chinese
+    # site, versus the Chinese site being down.
+    def _challenged(url, **kwargs):
+        err = RuntimeError("Client error '412 Precondition Failed'")
+        err.response = _FakeResponse(412, CHALLENGE_SHELL)
+        raise err
+
+    monkeypatch.setattr(api_client, "fetch", _challenged)
+    outcome = gacc_cn.probe_cn_express()
+    assert outcome.status == "challenged"
+
+
+def test_genuine_network_failure_still_reports_unavailable(monkeypatch):
+    def _dead(url, **kwargs):
+        raise RuntimeError("connect timeout")
+
+    monkeypatch.setattr(api_client, "fetch", _dead)
+    outcome = gacc_cn.probe_cn_express()
+    assert outcome.status == "unavailable"
+
+
+def test_challenge_served_as_200_is_not_mistaken_for_a_quiet_day(monkeypatch):
+    # The dangerous shape: a 200 whose body is the shell parses to zero
+    # articles and would otherwise read as no_new — hiding a live release.
+    monkeypatch.setattr(
+        api_client, "fetch",
+        lambda url, **kwargs: _fetch_result(url, CHALLENGE_SHELL))
+    outcome = gacc_cn.probe_cn_express()
+    assert outcome.status == "challenged"
+
+
+# ---------------------------------------------------------------------------
+# The WPS → attachDir byte route
+# ---------------------------------------------------------------------------
+
+def test_attachment_url_is_built_from_the_self_describing_id():
+    # All six July ids, harvested from rendered WPS viewers on 2026-08-07 and
+    # verified to serve xls bytes over plain HTTP.
+    assert gacc_cn.attachment_url_from_id("2026080710320733553") == (
+        "http://www.customs.gov.cn/customs/attachDir/2026/08/"
+        "2026080710320733553.xls")
+    assert gacc_cn.attachment_url_from_id("2025121509300112345").startswith(
+        "http://www.customs.gov.cn/customs/attachDir/2025/12/")
+
+
+def test_attachment_url_tolerates_surrounding_whitespace():
+    # Ids get pasted out of a browser; a stray newline must not 404 mid-drop.
+    assert (gacc_cn.attachment_url_from_id("  2026080710320733553\n")
+            == gacc_cn.attachment_url_from_id("2026080710320733553"))
+
+
+@pytest.mark.parametrize("bad", [
+    "2026080710320733",          # too short (18 digits)
+    "20260807103207335530",      # too long (20 digits)
+    "2026131310320733553",       # impossible month (13)
+    "not-an-id",
+    "",
+])
+def test_bad_attachment_ids_fail_loud(bad):
+    # A mistyped id must not become a silent 404 halfway through a drop.
+    with pytest.raises(ValueError):
+        gacc_cn.attachment_url_from_id(bad)
+
+
+def test_wps_file_id_is_extracted_for_the_operator():
+    # Not the attachment id (that only exists in the RENDERED viewer) — the
+    # handle needed to open the right viewer and read the attachment id off.
+    assert (gacc_cn.find_wps_file_id(ARTICLE_HTML)
+            == "0bda337af3234ea6a35aa6535c0d4ea0")
+    assert gacc_cn.find_wps_file_id(b"<html><body>no viewer</body></html>") is None

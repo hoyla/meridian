@@ -709,8 +709,15 @@ def _cn_discovery_note(cn: "gacc_cn.CnDiscoveryOutcome") -> str:
                                     for a in cn.pending}))
         parts.append(f"CN Express for {periods} is published upstream "
                      f"({len(cn.pending)} table(s)) with no direct xls — "
-                     "bytes WAF-locked, awaiting English release")
-    if cn.status == "unavailable":
+                     "bytes WAF-locked, awaiting English release; harvest the "
+                     "attachment ids and run `gacc_cn.py bridge`")
+    if cn.status == "challenged":
+        # Distinct from 'unavailable' on purpose: this is "we can't SEE the
+        # Chinese site", not "the Chinese site is broken". Read as a quiet
+        # day it would hide a live release behind a lagging translation.
+        parts.append("CN index behind the JS-challenge WAF — CN discovery "
+                     "blind, English-only this run")
+    elif cn.status == "unavailable":
         parts.append("CN index probe unavailable")
     return ("; " + "; ".join(parts)) if parts else ""
 
@@ -758,49 +765,72 @@ def probe_source(source: str, today: date | None = None) -> str:
         )
         before = _count_gacc_releases()
         walk_started = datetime.now(timezone.utc)
-        # CN-side discovery first: the Chinese site publishes the same
-        # release hours-to-a-day before the English translation (observed
-        # 14–18h June and July 2026), so on drop morning this is the walk
-        # that can actually find it. Additive only — any outcome here, up to
-        # and including the index being unreachable, must leave the English
-        # walk to run exactly as before.
+        # ENGLISH FIRST, Chinese as the fallback. Both sites write the same
+        # release rows (shared natural key) and English supersedes Chinese
+        # provenance when it lands, so ordering doesn't change the end state
+        # — but it does change the audit trail. Chinese-first meant that on
+        # any run where both sites had the month (the normal case whenever we
+        # were blind to the CN drop for a while), we fetched and ingested six
+        # CN tables and then immediately overwrote their source_urls with the
+        # English pages: an ingest, a snapshot and a provenance flip that
+        # never needed to happen, recorded against the preferred vintage.
+        # English-first makes the CN probe self-cancelling — its dedup is
+        # against the DB, so once the English walk has landed the month there
+        # is nothing missing and CN costs one index fetch.
+        #
+        # The timeliness play is untouched: on drop morning the English site
+        # genuinely does not have the release, so the English walk finds
+        # nothing and CN ingests exactly as before. What we give up is the
+        # incidental both-sites cross-check on catch-up runs; the normal
+        # timeline preserves it anyway (CN lands on the 7th, the English walk
+        # re-verifies those same rows on the 15th), and `gacc_cn.py verify`
+        # does it deliberately when we actually want the diff.
+        en_error = None
+        try:
+            run_scrape(urls=None, dry_run=False, force_refetch=False)
+        except Exception as e:
+            log.exception("GACC walk failed")
+            en_error = str(e)
+        # Independent of the English walk's fate: a crashed English walk is
+        # precisely when the Chinese fallback earns its keep, so it must not
+        # be skipped (nor its note dropped) because run_scrape raised.
         try:
             cn = gacc_cn.probe_cn_express()
         except Exception as e:  # probe_cn_express shouldn't raise; belt+braces
             log.exception("CN Express discovery failed unexpectedly")
             cn = gacc_cn.CnDiscoveryOutcome(status="unavailable", error=str(e))
-        try:
-            run_scrape(urls=None, dry_run=False, force_refetch=False)
-            added = _count_gacc_releases() - before
-            failures = _failed_gacc_runs_since(walk_started)
-            cn_note = _cn_discovery_note(cn)
-            if failures:
-                # A held-back current release: an empty/partial parse, a
-                # plausibility-floor rejection, or an ingest exception on a real
-                # section-4 table is swallowed by scrape_release (writes
-                # scrape_runs 'failed', returns), so the walk doesn't raise and
-                # the count is flat. Surface it as 'error' — not the silent
-                # 'no_change' it would otherwise read as, which would mislead
-                # both --source-status and the chat notifier into treating a
-                # held-back release as a quiet day. Historical dead-ends
-                # (unparseable pages, floor-rejects superseded by a live
-                # sibling) land 'no_parser', not 'failed', so they don't light
-                # this up — see _failed_gacc_runs_since.
-                result = "error"
-                notes = (f"held back {len(failures)} release(s) this walk"
-                         + (f"; +{added} ingested" if added > 0 else "")
-                         + cn_note)
-                error = " | ".join(failures)
-            elif added > 0:
-                result, notes, error = (
-                    "new_data", f"fetched {added} new releases" + cn_note, None)
-            else:
-                result, notes, error = (
-                    "no_change",
-                    "walked indexes, no new releases" + cn_note, None)
-        except Exception as e:
-            log.exception("GACC walk failed")
-            result, notes, error = "error", None, str(e)
+        # Counted after BOTH walks so CN ingests register as new_data and CN
+        # floor rejections surface as held-back errors, exactly as English
+        # ones do.
+        added = _count_gacc_releases() - before
+        failures = _failed_gacc_runs_since(walk_started)
+        cn_note = _cn_discovery_note(cn)
+        if en_error:
+            result, notes, error = "error", (cn_note.lstrip("; ") or None), en_error
+        elif failures:
+            # A held-back current release: an empty/partial parse, a
+            # plausibility-floor rejection, or an ingest exception on a real
+            # section-4 table is swallowed by scrape_release (writes
+            # scrape_runs 'failed', returns), so the walk doesn't raise and
+            # the count is flat. Surface it as 'error' — not the silent
+            # 'no_change' it would otherwise read as, which would mislead
+            # both --source-status and the chat notifier into treating a
+            # held-back release as a quiet day. Historical dead-ends
+            # (unparseable pages, floor-rejects superseded by a live
+            # sibling) land 'no_parser', not 'failed', so they don't light
+            # this up — see _failed_gacc_runs_since.
+            result = "error"
+            notes = (f"held back {len(failures)} release(s) this walk"
+                     + (f"; +{added} ingested" if added > 0 else "")
+                     + cn_note)
+            error = " | ".join(failures)
+        elif added > 0:
+            result, notes, error = (
+                "new_data", f"fetched {added} new releases" + cn_note, None)
+        else:
+            result, notes, error = (
+                "no_change",
+                "walked indexes, no new releases" + cn_note, None)
         duration_ms = int((time.monotonic() - started) * 1000)
         routine_log.log_check("gacc", result, expectation=expectation,
                               candidate_period=candidate, notes=notes,
