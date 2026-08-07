@@ -11,8 +11,20 @@ from datetime import date
 import psycopg2
 import pytest
 
+import gacc_cn
 import routine_log
 import scrape
+
+
+@pytest.fixture(autouse=True)
+def _quiet_cn_discovery(monkeypatch):
+    """The gacc probe now runs CN-side discovery (gacc_cn.probe_cn_express)
+    before the English walk. Default it to a quiet no_new here so the
+    pre-existing probe tests stay hermetic — no live fetch of the tjs index
+    from the test suite. Tests exercising the CN wiring override this."""
+    monkeypatch.setattr(
+        gacc_cn, "probe_cn_express",
+        lambda *a, **k: gacc_cn.CnDiscoveryOutcome(status="no_new"))
 
 
 def _seed_release(test_db_url: str, source: str, period: date) -> None:
@@ -251,6 +263,57 @@ def test_gacc_held_back_release_logs_error(clean_db, test_db_url, monkeypatch):
     assert "held back" in (row["notes"] or "")
     assert "plausibility floor" in (row["error"] or "")
     assert row["candidate_period"] == date(2026, 6, 1)
+
+
+def test_gacc_cn_published_awaiting_bytes_noted_on_quiet_walk(
+    clean_db, test_db_url, monkeypatch,
+):
+    # Drop morning: the Chinese site has published the candidate month but no
+    # byte route exists yet and the English walk finds nothing. The probe must
+    # keep result=no_change (nothing ingested) while the notes say the release
+    # is out upstream — the difference between "quiet day" and "English is
+    # lagging", and the guard against a false overdue being read as a slip.
+    _seed_release(test_db_url, "gacc", date(2026, 6, 1))  # candidate → 2026-07
+    pending = gacc_cn.CnExpressArticle(
+        url="http://tjs.customs.gov.cn/tjs/2026-08/07/article_1.html",
+        title="（4）2026年7月进出口商品主要国别（地区）总值表（人民币值）",
+        section=4, currency="CNY", period=date(2026, 7, 1),
+        is_jan_feb_combined=False, published=date(2026, 8, 7))
+    monkeypatch.setattr(
+        gacc_cn, "probe_cn_express",
+        lambda *a, **k: gacc_cn.CnDiscoveryOutcome(
+            status="published_awaiting_bytes", pending=[pending]))
+    monkeypatch.setattr(scrape, "run_scrape", lambda *a, **k: None)
+    scrape.probe_source("gacc", today=date(2026, 8, 7))
+
+    row = _last_row(test_db_url, "gacc")
+    assert row["result"] == "no_change"
+    assert row["expectation"] == "due"          # scheduled 7 Aug (公告 240号)
+    assert "published upstream" in (row["notes"] or "")
+    assert "2026-07" in (row["notes"] or "")
+
+
+def test_gacc_cn_index_unavailable_never_breaks_the_walk(
+    clean_db, test_db_url, monkeypatch,
+):
+    # CN discovery is additive: an unreachable tjs index must not turn a
+    # clean English walk into an error — just a note.
+    _seed_release(test_db_url, "gacc", date(2026, 5, 1))
+    monkeypatch.setattr(
+        gacc_cn, "probe_cn_express",
+        lambda *a, **k: gacc_cn.CnDiscoveryOutcome(
+            status="unavailable", error="connect timeout"))
+
+    def _walk_ingests_one(*a, **k):
+        _seed_release(test_db_url, "gacc", date(2026, 6, 1))
+
+    monkeypatch.setattr(scrape, "run_scrape", _walk_ingests_one)
+    scrape.probe_source("gacc", today=date(2026, 7, 8))
+
+    row = _last_row(test_db_url, "gacc")
+    assert row["result"] == "new_data"
+    assert "CN index probe unavailable" in (row["notes"] or "")
+    assert row["error"] is None
 
 
 def test_gacc_clean_walk_with_new_release_still_logs_new_data(

@@ -57,13 +57,17 @@ pre-registered June-2026 diff in the dev note.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
+import os
 import re
 import sys
 from datetime import date
 from typing import Any
+from urllib.parse import urljoin
 
 import xlrd
+from bs4 import BeautifulSoup
 
 import api_client
 import db
@@ -261,8 +265,10 @@ _UNIT_RE = re.compile(r"单位\s*[∶:：]\s*(?P<unit>亿元人民币|百万美�
 _CANONICAL_UNIT = {"CNY": "CNY 100 Million", "USD": "USD1 Million"}
 _ZH_UNIT_CURRENCY = {"亿元人民币": "CNY", "百万美元": "USD"}
 
-# /customs/2026-07/14/article_… — the path date is the publish date.
-_ARTICLE_DATE_RE = re.compile(r"/customs/(\d{4})-(\d{2})/(\d{2})/article_")
+# /customs/2026-07/14/article_… — the path date is the publish date. The
+# 2025-redesign Statistics Department subdomain uses /tjs/ for the same
+# pattern (tjs.customs.gov.cn/tjs/2026-08/07/article_…).
+_ARTICLE_DATE_RE = re.compile(r"/(?:customs|tjs)/(\d{4})-(\d{2})/(\d{2})/article_")
 
 
 def _check_title_unit(title_currency: str, unit_text: str, *,
@@ -670,6 +676,249 @@ def ingest_cn_release(xls_url: str, article_url: str | None,
         dry_run=dry_run)
 
 
+# ---------------------------------------------------------------------------
+# CN-side discovery (the 统计快讯 index walk — the piece the July work left
+# open; see dev_notes/2026-08-07-gacc-cn-discovery-wiring.md).
+#
+# The Statistics Department subdomain tjs.customs.gov.cn (part of GACC's
+# late-2025 site redesign) serves the Express index AND its article pages as
+# static HTML **outside** the JS-challenge WAF that gates www.customs.gov.cn —
+# verified live 2026-08-07, drop day for the July release: plain GETs returned
+# the full index (all ten July tables, published 10:30 Beijing, plus a
+# 239-page archive the old "current drop only" index never had) while the
+# same-day www article still served the challenge shell. So DISCOVERY is
+# plain-HTTP work now. The remaining gap is the table BYTES: redesigned tjs
+# articles embed their spreadsheet in a WPS web-office viewer (whose /wps/
+# path IS WAF-gated) instead of the old attachDir xls link. `probe_cn_express`
+# therefore ingests whenever an article carries a direct xls link (the
+# pre-redesign shape; also what a hand-supplied www article uses) and
+# otherwise reports the release as published-awaiting-bytes — which is
+# exactly what the routine needs on drop morning: "the Chinese release is
+# out, the English translation is the laggard", instead of a quiet
+# `no_change` drifting toward a false `overdue`.
+# ---------------------------------------------------------------------------
+
+CN_EXPRESS_INDEX_URL = "http://tjs.customs.gov.cn/tjs/sjgb/tjkx/index.html"
+
+# The Chinese-site surfaces serve honest content to browser-looking clients;
+# the July recon (and the 2026-08-07 verification) used a desktop UA
+# throughout, so the discovery fetches do too rather than gambling that
+# `gacc-monitor/0.1` stays unfiltered on a WAF-fronted host.
+CN_USER_AGENT = os.environ.get(
+    "GACC_CN_USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+)
+
+# Article URLs are CMS-dated on both hosts: /customs/2026-07/14/article_<id>
+# (www, pre-redesign) and /tjs/2026-08/07/article_<id> (tjs, 2025 redesign).
+_CN_ARTICLE_HREF_RE = re.compile(
+    r"/(?:customs|tjs)/\d{4}-\d{2}/\d{2}/article_\d+\.html$")
+
+# Direct spreadsheet attachments (the pre-redesign article shape). These live
+# under attachDir/fileDir on www.customs.gov.cn and are NOT WAF-gated —
+# verified ×4 in the July recon.
+_CN_XLS_HREF_RE = re.compile(r"(?:attachDir|fileDir)/\S*?\.xlsx?$",
+                             re.IGNORECASE)
+
+_LIST_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+@dataclasses.dataclass(frozen=True)
+class CnExpressArticle:
+    """One Express-index entry whose title identifies a table we ingest."""
+
+    url: str
+    title: str
+    section: int                 # 4 (by-country) / 5 (exports) / 6 (imports)
+    currency: str | None         # 'CNY' | 'USD' | None (2025-era title, no suffix)
+    period: date                 # first-of-month anchor (Feb for Jan–Feb combined)
+    is_jan_feb_combined: bool
+    published: date | None       # list-page date span, else the URL path date
+
+
+@dataclasses.dataclass
+class CnDiscoveryOutcome:
+    """What one CN Express discovery walk found / did.
+
+    status:
+      ingested                — ≥1 release ingested from a discovered xls
+      published_awaiting_bytes — new release articles are up on the Chinese
+                                 site but none carried a direct xls link (the
+                                 redesigned WPS-viewer shape) — the release
+                                 EXISTS upstream, we just can't pull bytes yet
+      no_new                  — index walked; every recognised table already
+                                 has a release row in the DB
+      unavailable             — the index itself couldn't be fetched/parsed
+                                 (never fatal to the caller: the English walk
+                                 remains authoritative)
+    """
+
+    status: str
+    ingested: int = 0
+    pending: list[CnExpressArticle] = dataclasses.field(default_factory=list)
+    error: str | None = None
+
+
+def _classify_cn_title(title: str) -> tuple[int, str | None, date, bool] | None:
+    """(section, currency, period, is_jan_feb) from an Express article title,
+    or None for tables we don't ingest (总值表 (1), trade-mode (2)/(3), the
+    cumulative 1至N月 variants, and anything unrecognised). Reuses the same
+    title regexes the xls parser trusts, so discovery and parse can't drift
+    apart on what counts as an ingestable table."""
+    cleaned = title.replace("\n", "").strip()
+    for regex in (_TITLE_RE, _COMMODITY_TITLE_RE):
+        m = regex.search(cleaned)
+        if not m:
+            continue
+        if regex is _COMMODITY_TITLE_RE:
+            section = 5 if m.group("flow") == "出口" else 6
+        else:
+            section = 4
+        currency = None
+        if m.group("currency"):
+            currency = "CNY" if m.group("currency").startswith("人民币") else "USD"
+        is_jan_feb = m.group("months") == "1至2月"
+        month = 2 if is_jan_feb else int(m.group("months").rstrip("月"))
+        return section, currency, date(int(m.group("year")), month, 1), is_jan_feb
+    return None
+
+
+def discover_express_articles(index_html: bytes,
+                              base_url: str) -> list[CnExpressArticle]:
+    """Parse an Express index page into the articles whose titles identify
+    tables we ingest (sections 4/5/6, either currency). Keys on the CMS-dated
+    article URL pattern plus the title keywords — never on DOM specifics —
+    so a template reskin degrades to an empty list (loud downstream), not a
+    wrong parse."""
+    soup = BeautifulSoup(index_html, "lxml")
+    articles: list[CnExpressArticle] = []
+    seen: set[str] = set()
+    for a in soup.find_all("a", href=True):
+        href = a["href"].split("#")[0].split("?")[0]
+        if not _CN_ARTICLE_HREF_RE.search(href):
+            continue
+        url = urljoin(base_url, href)
+        if url in seen:
+            continue
+        title = (a.get("title") or a.get_text(strip=True) or "").strip()
+        classified = _classify_cn_title(title)
+        if classified is None:
+            log.debug("CN index: skipping non-ingested table %r", title or href)
+            continue
+        section, currency, period, is_jan_feb = classified
+        published = None
+        sib = a.find_next_sibling("span")
+        if sib and _LIST_DATE_RE.match(sib.get_text(strip=True)):
+            published = date.fromisoformat(sib.get_text(strip=True))
+        if published is None:
+            dm = _ARTICLE_DATE_RE.search(url)
+            if dm:
+                published = date(*map(int, dm.groups()))
+        seen.add(url)
+        articles.append(CnExpressArticle(
+            url=url, title=title, section=section, currency=currency,
+            period=period, is_jan_feb_combined=is_jan_feb,
+            published=published))
+    return articles
+
+
+def discover_article_attachments(article_html: bytes,
+                                 base_url: str) -> tuple[list[str], bool]:
+    """(xls attachment URLs, uses_wps_viewer) from an Express article page.
+
+    Pre-redesign articles carry one direct attachDir/fileDir xls link;
+    redesigned tjs articles instead embed a WAF-gated WPS web-office iframe
+    (no fetchable bytes). Both signals are returned so the caller can tell
+    "no attachment because WPS-era page" from "no attachment at all"."""
+    soup = BeautifulSoup(article_html, "lxml")
+    refs = [a["href"] for a in soup.find_all("a", href=True)]
+    refs += [ifr["src"] for ifr in soup.find_all("iframe", src=True)]
+    xls_urls: list[str] = []
+    for ref in refs:
+        if _CN_XLS_HREF_RE.search(ref.split("?")[0]):
+            url = urljoin(base_url, ref)
+            if url not in xls_urls:
+                xls_urls.append(url)
+    uses_wps = any("/wps/weboffice/" in (ifr.get("src") or "")
+                   for ifr in soup.find_all("iframe"))
+    return xls_urls, uses_wps
+
+
+def _cn_release_missing(article: CnExpressArticle) -> bool:
+    """True when the DB holds no release row for this article's table cell —
+    the dedup that keeps the daily walk from re-fetching articles for
+    releases we already hold (from either site: same natural key). A
+    currency-less 2025-era title is 'missing' until BOTH currencies exist."""
+    if article.currency is not None:
+        return not db.gacc_release_exists(article.section, article.period,
+                                          article.currency)
+    return not (db.gacc_release_exists(article.section, article.period, "CNY")
+                and db.gacc_release_exists(article.section, article.period,
+                                           "USD"))
+
+
+def probe_cn_express(dry_run: bool = False,
+                     index_url: str = CN_EXPRESS_INDEX_URL) -> CnDiscoveryOutcome:
+    """Walk the CN Express index once: fetch, classify titles, and for each
+    recognised table missing from the DB fetch its article page and ingest
+    any direct xls attachment. Never raises for network/parse trouble — the
+    caller (scrape.probe_source) treats CN discovery as additive on top of
+    the authoritative English walk."""
+    try:
+        response = api_client.fetch(index_url, user_agent=CN_USER_AGENT)
+        articles = discover_express_articles(response.content, index_url)
+    except Exception as e:
+        log.warning("CN Express index unavailable (%s): %s", index_url, e)
+        return CnDiscoveryOutcome(status="unavailable", error=str(e))
+
+    missing = [a for a in articles if _cn_release_missing(a)]
+    if not missing:
+        log.info("CN Express index: %d recognised tables, none new", len(articles))
+        return CnDiscoveryOutcome(status="no_new")
+
+    ingested = 0
+    pending: list[CnExpressArticle] = []
+    errors: list[str] = []
+    for art in missing:
+        if art.is_jan_feb_combined:
+            # The xls parser refuses combined Jan–Feb layouts (no fixture) —
+            # skip pre-fetch; the English release covers it.
+            log.info("CN discovery: skipping combined Jan–Feb article %s", art.url)
+            continue
+        try:
+            page = api_client.fetch(art.url, user_agent=CN_USER_AGENT)
+        except Exception as e:
+            log.warning("CN article fetch failed for %s: %s", art.url, e)
+            errors.append(f"{art.url}: {e}")
+            pending.append(art)
+            continue
+        xls_urls, uses_wps = discover_article_attachments(page.content, art.url)
+        if not xls_urls:
+            log.info(
+                "CN Express published %s (%s) but the article carries no "
+                "direct xls link%s — bytes unavailable to plain HTTP; will "
+                "recheck next walk until the release lands via any route",
+                art.title, art.url,
+                " (WPS web-office viewer)" if uses_wps else "")
+            pending.append(art)
+            continue
+        for xls_url in xls_urls:
+            release_id = ingest_cn_release(xls_url, art.url, dry_run=dry_run)
+            if release_id is not None:
+                ingested += 1
+
+    if ingested:
+        status = "ingested"
+    elif pending:
+        status = "published_awaiting_bytes"
+    else:
+        status = "no_new"
+    return CnDiscoveryOutcome(status=status, ingested=ingested,
+                              pending=pending,
+                              error=" | ".join(errors) or None)
+
+
 def verify_against_db(xls_bytes: bytes, *, xls_url: str) -> int:
     """Diff a CN Express xls against what the DB already holds for the same
     (period, currency, section) — the institutionalised pre-registered
@@ -742,8 +991,27 @@ def main() -> None:
     ver = sub.add_parser("verify", help="Diff a CN xls against the DB")
     ver.add_argument("--xls", required=True,
                      help="Path or URL of the CN Express by-country xls")
+    dis = sub.add_parser(
+        "discover",
+        help="Walk the CN Express index (tjs.customs.gov.cn — WAF-free) and "
+             "ingest any new release whose article carries a direct xls link; "
+             "report releases published upstream but not yet fetchable")
+    dis.add_argument("--index-url", default=CN_EXPRESS_INDEX_URL)
+    dis.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
-    if args.cmd == "ingest":
+    if args.cmd == "discover":
+        outcome = probe_cn_express(dry_run=args.dry_run,
+                                   index_url=args.index_url)
+        print(f"cn-express discovery: {outcome.status}"
+              + (f" — ingested {outcome.ingested} release(s)"
+                 if outcome.ingested else ""))
+        for art in outcome.pending:
+            print(f"  published upstream, bytes unavailable: {art.title} "
+                  f"({art.published}) {art.url}")
+        if outcome.error:
+            print(f"  errors: {outcome.error}")
+        sys.exit(0 if outcome.status != "unavailable" else 1)
+    elif args.cmd == "ingest":
         release_id = ingest_cn_release(args.xls_url, args.article_url,
                                        dry_run=args.dry_run)
         if release_id is not None:

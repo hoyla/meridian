@@ -29,6 +29,7 @@ import briefing_pack
 import db
 import eurostat
 import fx
+import gacc_cn
 import hmrc
 import labels
 import llm_framing
@@ -690,6 +691,30 @@ def _outcome_to_result(
     return "error", None, outcome.error
 
 
+def _cn_discovery_note(cn: "gacc_cn.CnDiscoveryOutcome") -> str:
+    """Notes suffix describing what the CN Express discovery walk saw.
+
+    Empty for the quiet case (no_new) so an ordinary day's probe line is
+    unchanged. The published-awaiting-bytes case is THE drop-morning signal:
+    the Chinese site has the release and only the byte route (direct xls vs
+    the WAF-gated WPS viewer) is missing, so a `no_change × due` reading gets
+    a note explaining the data is actually out — instead of silently
+    drifting toward a false `overdue` while the English translation lags."""
+    parts = []
+    if cn.ingested:
+        parts.append(f"{cn.ingested} table(s) ingested from the Chinese site "
+                     "(English pending)")
+    if cn.pending:
+        periods = ", ".join(sorted({a.period.strftime("%Y-%m")
+                                    for a in cn.pending}))
+        parts.append(f"CN Express for {periods} is published upstream "
+                     f"({len(cn.pending)} table(s)) with no direct xls — "
+                     "bytes WAF-locked, awaiting English release")
+    if cn.status == "unavailable":
+        parts.append("CN index probe unavailable")
+    return ("; " + "; ".join(parts)) if parts else ""
+
+
 def probe_source(source: str, today: date | None = None) -> str:
     """Always-probe one upstream source and record the outcome.
 
@@ -733,10 +758,22 @@ def probe_source(source: str, today: date | None = None) -> str:
         )
         before = _count_gacc_releases()
         walk_started = datetime.now(timezone.utc)
+        # CN-side discovery first: the Chinese site publishes the same
+        # release hours-to-a-day before the English translation (observed
+        # 14–18h June and July 2026), so on drop morning this is the walk
+        # that can actually find it. Additive only — any outcome here, up to
+        # and including the index being unreachable, must leave the English
+        # walk to run exactly as before.
+        try:
+            cn = gacc_cn.probe_cn_express()
+        except Exception as e:  # probe_cn_express shouldn't raise; belt+braces
+            log.exception("CN Express discovery failed unexpectedly")
+            cn = gacc_cn.CnDiscoveryOutcome(status="unavailable", error=str(e))
         try:
             run_scrape(urls=None, dry_run=False, force_refetch=False)
             added = _count_gacc_releases() - before
             failures = _failed_gacc_runs_since(walk_started)
+            cn_note = _cn_discovery_note(cn)
             if failures:
                 # A held-back current release: an empty/partial parse, a
                 # plausibility-floor rejection, or an ingest exception on a real
@@ -751,14 +788,16 @@ def probe_source(source: str, today: date | None = None) -> str:
                 # this up — see _failed_gacc_runs_since.
                 result = "error"
                 notes = (f"held back {len(failures)} release(s) this walk"
-                         + (f"; +{added} ingested" if added > 0 else ""))
+                         + (f"; +{added} ingested" if added > 0 else "")
+                         + cn_note)
                 error = " | ".join(failures)
             elif added > 0:
-                result, notes, error = ("new_data",
-                                        f"fetched {added} new releases", None)
+                result, notes, error = (
+                    "new_data", f"fetched {added} new releases" + cn_note, None)
             else:
-                result, notes, error = ("no_change",
-                                        "walked indexes, no new releases", None)
+                result, notes, error = (
+                    "no_change",
+                    "walked indexes, no new releases" + cn_note, None)
         except Exception as e:
             log.exception("GACC walk failed")
             result, notes, error = "error", None, str(e)

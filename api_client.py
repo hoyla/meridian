@@ -57,10 +57,16 @@ class DiscoveredRelease(TypedDict):
     month: int
 
 
-def fetch(url: str, timeout: float = DEFAULT_TIMEOUT) -> FetchResult:
-    """Fetch a URL once with sensible defaults. Caller decides about retries."""
+def fetch(url: str, timeout: float = DEFAULT_TIMEOUT,
+          *, user_agent: str | None = None) -> FetchResult:
+    """Fetch a URL once with sensible defaults. Caller decides about retries.
+
+    `user_agent` overrides the default gacc-monitor UA for hosts that only
+    serve honest content to browser-looking clients (the Chinese-site
+    surfaces — see gacc_cn.CN_USER_AGENT).
+    """
     with httpx.Client(
-        headers={"User-Agent": _user_agent()},
+        headers={"User-Agent": user_agent or _user_agent()},
         timeout=timeout,
         follow_redirects=True,
     ) as client:
