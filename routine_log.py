@@ -90,6 +90,26 @@ def _missing_months(
     return missing
 
 
+# Machine-readable probe states for alerting, orthogonal to `result` — a
+# probe can be a perfectly ordinary `no_change` and still be something a
+# human needs to act on. Mirrors migrations/2026-08-07-routine-check-log-signal.sql;
+# keep the two in sync.
+#
+#   cn_published_awaiting_bytes — GACC's Chinese site has published the
+#       month, but no article carried a direct xls, so we can see the release
+#       and cannot fetch it. Actionable: harvest the attachment ids from a
+#       real browser and run `gacc_cn.py bridge`.
+#   cn_challenged — the Chinese index answered with the JS-challenge WAF
+#       shell, so CN discovery is blind. We do not know whether the release is
+#       out; the English walk is all we have this run.
+SIGNAL_CN_PUBLISHED_AWAITING_BYTES = "cn_published_awaiting_bytes"
+SIGNAL_CN_CHALLENGED = "cn_challenged"
+VALID_SIGNALS: frozenset[str] = frozenset({
+    SIGNAL_CN_PUBLISHED_AWAITING_BYTES,
+    SIGNAL_CN_CHALLENGED,
+})
+
+
 def log_check(
     source: str,
     result: str,
@@ -99,6 +119,7 @@ def log_check(
     notes: str | None = None,
     error: str | None = None,
     duration_ms: int | None = None,
+    signal: str | None = None,
 ) -> int:
     """Insert one row into routine_check_log; returns the new id.
 
@@ -106,6 +127,11 @@ def log_check(
     overdue) — None for the _routine lifecycle bookends and any check with no
     candidate period to classify (e.g. an empty DB). Compute it via
     release_calendar.classify_expectation.
+
+    `signal` is the machine-readable alerting axis (see VALID_SIGNALS), for
+    states that are actionable without being an error. It exists so the
+    notifier never has to pattern-match `notes`: display copy gets edited,
+    and an alert that quietly stops firing is worse than no alert.
     """
     if result not in VALID_RESULTS:
         raise ValueError(
@@ -116,17 +142,22 @@ def log_check(
             f"expectation must be one of {sorted(VALID_EXPECTATIONS)} or None, "
             f"got {expectation!r}"
         )
+    if signal is not None and signal not in VALID_SIGNALS:
+        raise ValueError(
+            f"signal must be one of {sorted(VALID_SIGNALS)} or None, "
+            f"got {signal!r}"
+        )
     with db.transaction() as conn, conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO routine_check_log
                 (source, result, expectation, candidate_period,
-                 notes, error, duration_ms)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                 notes, error, duration_ms, signal)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (source, result, expectation, candidate_period,
-             notes, error, duration_ms),
+             notes, error, duration_ms, signal),
         )
         return cur.fetchone()[0]
 

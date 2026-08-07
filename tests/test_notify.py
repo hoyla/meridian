@@ -317,3 +317,84 @@ def test_error_does_not_refire_while_still_erroring(clean_db, stub_post):
     second = notify.notify_new_data()
     assert second.posted is False
     assert len(stub_post.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# CN-blocked alerts (Luke, 2026-08-07). The GACC probe can end a run in a
+# state that is neither new data nor an error but still needs a human: the
+# Chinese site has published the month and we can't pull the bytes. Before
+# this it logged a plain `no_change` and the Space stayed silent through
+# exactly the window where acting was worth anything.
+# ---------------------------------------------------------------------------
+
+def test_posts_when_cn_is_published_but_bytes_are_unfetchable(clean_db, stub_post):
+    routine_log.log_check("gacc", "no_change", notes="walked indexes, no new releases")
+    routine_log.log_check(
+        "gacc", "no_change", candidate_period=date(2026, 7, 1),
+        notes=("walked indexes, no new releases; CN Express for 2026-07 is "
+               "published upstream (6 table(s)) with no direct xls"),
+        signal=routine_log.SIGNAL_CN_PUBLISHED_AWAITING_BYTES,
+    )
+    res = notify.notify_new_data()
+    assert res.posted is True
+    msg = stub_post.calls[0]
+    assert "action needed" in msg.lower()
+    assert "2026-07" in msg
+    # Must carry the remediation, not just the diagnosis.
+    assert "gacc_cn.py bridge" in msg
+    assert "real browser" in msg
+
+
+def test_posts_when_cn_discovery_is_challenge_blocked(clean_db, stub_post):
+    routine_log.log_check("gacc", "no_change")
+    routine_log.log_check(
+        "gacc", "no_change", candidate_period=date(2026, 7, 1),
+        notes="walked indexes, no new releases; CN index behind the JS-challenge WAF",
+        signal=routine_log.SIGNAL_CN_CHALLENGED,
+    )
+    assert notify.notify_new_data().posted is True
+    msg = stub_post.calls[0]
+    assert "can't see whether" in msg or "can’t see whether" in msg
+
+
+def test_blocked_does_not_refire_while_still_blocked(clean_db, stub_post):
+    """One alert per spell — the GACC probe runs twice daily and a release can
+    sit unfetchable for a week; re-firing would train the reader to ignore it."""
+    routine_log.log_check("gacc", "no_change")
+    routine_log.log_check(
+        "gacc", "no_change",
+        signal=routine_log.SIGNAL_CN_PUBLISHED_AWAITING_BYTES)
+    assert notify.notify_new_data().posted is True
+    routine_log.log_check(
+        "gacc", "no_change",
+        signal=routine_log.SIGNAL_CN_PUBLISHED_AWAITING_BYTES)
+    second = notify.notify_new_data()
+    assert second.posted is False
+    assert len(stub_post.calls) == 1
+
+
+def test_escalation_from_challenged_to_published_refires(clean_db, stub_post):
+    """Spells are per-signal: 'we can't see' → 'it's out, go get it' is new
+    information and must ping, not be swallowed as a continuation."""
+    routine_log.log_check("gacc", "no_change")
+    routine_log.log_check("gacc", "no_change",
+                          signal=routine_log.SIGNAL_CN_CHALLENGED)
+    assert notify.notify_new_data().posted is True
+    routine_log.log_check(
+        "gacc", "no_change",
+        signal=routine_log.SIGNAL_CN_PUBLISHED_AWAITING_BYTES)
+    assert notify.notify_new_data().posted is True
+    assert len(stub_post.calls) == 2
+    assert "gacc_cn.py bridge" in stub_post.calls[1]
+
+
+def test_quiet_day_still_posts_nothing(clean_db, stub_post):
+    # The guard that keeps the new column from turning every run into a ping.
+    routine_log.log_check("gacc", "no_change", notes="walked indexes, no new releases")
+    assert notify.notify_new_data().posted is False
+    assert stub_post.calls == []
+
+
+def test_log_check_rejects_an_unknown_signal(clean_db):
+    with pytest.raises(ValueError):
+        routine_log.log_check("gacc", "no_change", signal="not_a_real_signal")

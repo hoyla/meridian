@@ -831,10 +831,23 @@ def probe_source(source: str, today: date | None = None) -> str:
             result, notes, error = (
                 "no_change",
                 "walked indexes, no new releases" + cn_note, None)
+        # The alerting axis, orthogonal to `result`: a CN-blocked run is an
+        # ordinary no_change as far as the English walk is concerned, but it
+        # is the one state where a human has to do something (harvest the
+        # attachment ids and bridge them). Recorded structurally so the
+        # notifier never pattern-matches the prose in `notes`.
+        # published-awaiting-bytes outranks challenged: we KNOW the release is
+        # out and can act, versus we can't see whether it is.
+        signal = None
+        if cn.pending:
+            signal = routine_log.SIGNAL_CN_PUBLISHED_AWAITING_BYTES
+        elif cn.status == "challenged":
+            signal = routine_log.SIGNAL_CN_CHALLENGED
         duration_ms = int((time.monotonic() - started) * 1000)
         routine_log.log_check("gacc", result, expectation=expectation,
                               candidate_period=candidate, notes=notes,
-                              error=error, duration_ms=duration_ms)
+                              error=error, duration_ms=duration_ms,
+                              signal=signal)
         line = (f"gacc: {result} × {expectation or '—'}"
                 + (f" (candidate {candidate:%Y-%m})" if candidate else "")
                 + (f" — {notes}" if notes else "")
