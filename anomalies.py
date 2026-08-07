@@ -4232,6 +4232,48 @@ def _gacc_commodity_crosscheck_tolerance_pp(current: float, prior: float) -> flo
     return GACC_COMMODITY_CROSSCHECK_FLOOR_PP + propagated
 
 
+# ---------------------------------------------------------------------------
+# Catalogue-rename aliases.
+#
+# The family's default is that a renamed commodity starts a FRESH series
+# (see _gacc_commodity_history's docstring): splicing two labels that turn
+# out to be different catalogue lines is far worse than losing continuity.
+# But GACC sometimes renames a line it keeps publishing unchanged, and then
+# the default splits one real series in two — losing the 12-month trend and
+# any run-rate that spans the change.
+#
+# This map is the narrow, evidence-based exception. An entry earns its place
+# ONLY when GACC printed BOTH labels for the same period with identical
+# value, quantity and unit — i.e. the rename is provably cosmetic. Nothing
+# fuzzy: near-matching names ("Machine tools*" the aggregate vs "Machine
+# tools" the leaf) are exactly the collision the keying guards against.
+#
+# Verified entries:
+#   Integrated circuits / Integrated Circuits → Electronic integrated
+#   circuits. GACC ran both lines in parallel on the English section-5 and
+#   section-6 pages for 2026-02, -03 and -04, with byte-identical figures
+#   (e.g. 2026-04 exports: both 2,143.4 CNY 100M, 320.4 "100 Million PCS"),
+#   then retired the old label from 2026-05. The 2026-07 CN-sourced release
+#   uses the new label, so the Chinese dictionary agrees with current
+#   English — this is GACC's catalogue moving, not our two ingest paths
+#   disagreeing.
+#
+# Keys are casefolded so 'Integrated Circuits' (section 6's capitalisation)
+# and 'Integrated circuits' (section 5's) both resolve.
+_GACC_COMMODITY_LABEL_ALIASES: dict[str, str] = {
+    "integrated circuits": "Electronic integrated circuits",
+}
+
+
+def _canonical_gacc_commodity_label(label: str) -> str:
+    """Canonical label for a GACC commodity, collapsing verified renames.
+
+    Unknown labels pass through untouched — the map is an allow-list, so a
+    future rename we haven't checked still gets the safe default (a fresh
+    series) rather than a guessed merge."""
+    return _GACC_COMMODITY_LABEL_ALIASES.get(label.strip().casefold(), label)
+
+
 def _gacc_commodity_history(flow: str) -> dict[tuple[str, bool], dict[date, dict]]:
     """{(commodity_label, is_aggregate): {period: row}} for canonical-CNY
     section-5/6 pages.
@@ -4291,20 +4333,36 @@ def _gacc_commodity_history(flow: str) -> dict[tuple[str, bool], dict[date, dict
     hist: dict[tuple[str, bool], dict[date, dict]] = {}
     for period, kind, label, value, quantity, source_row, unit, obs_id in rows:
         is_aggregate = bool((source_row or {}).get("is_aggregate"))
-        slot = hist.setdefault((label, is_aggregate), {}).setdefault(
+        canonical = _canonical_gacc_commodity_label(label)
+        slot = hist.setdefault((canonical, is_aggregate), {}).setdefault(
             period, {"unit": unit})
         entry = {
             "value": float(value) if value is not None else None,
             "quantity": float(quantity) if quantity is not None else None,
             "obs_id": obs_id,
         }
-        if kind == "monthly":
-            slot["monthly"] = entry
-        elif kind == "ytd":
-            slot["ytd"] = entry
-        elif kind == "cumulative_jan_feb":
+        slot_kind = "ytd" if kind == "cumulative_jan_feb" else kind
+        if kind == "cumulative_jan_feb":
             entry["is_jan_feb_combined"] = True
-            slot["ytd"] = entry
+        existing = slot.get(slot_kind)
+        if existing is not None and canonical != label:
+            # Both the old and new label are live for this period (GACC runs
+            # them in parallel through a rename). The alias entry asserts
+            # they're the same line, so they MUST agree — if they don't, the
+            # alias is wrong and merging would fabricate a series. Keep the
+            # row already held, drop the alias's, and say so loudly rather
+            # than letting a bad merge reach a finding.
+            if (existing.get("value") != entry.get("value")
+                    or existing.get("quantity") != entry.get("quantity")):
+                log.error(
+                    "GACC commodity alias conflict at %s (%s): %r and %r "
+                    "disagree (%s/%s vs %s/%s) — the alias is not a pure "
+                    "rename; leaving the existing series untouched",
+                    period, flow, label, canonical, existing.get("value"),
+                    existing.get("quantity"), entry.get("value"),
+                    entry.get("quantity"))
+            continue
+        slot[slot_kind] = entry
         slot["source_row"] = source_row or {}
     return hist
 

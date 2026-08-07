@@ -280,3 +280,104 @@ def test_threshold_filters_small_single_month_moves(empty_op_tables, test_db_url
     counts = anomalies.detect_gacc_commodity_yoy(flow="export", yoy_threshold_pct=0.10)
     # April (+33% ytd-only, sm unavailable → always emitted) + May filtered
     assert counts["skipped_below_threshold"] == 1, counts
+
+
+# ---------------------------------------------------------------------------
+# Catalogue-rename aliases (2026-08-07). GACC ran "Integrated circuits" and
+# "Electronic integrated circuits" in parallel on the English section-5/6
+# pages for 2026-02/-03/-04 with byte-identical figures, then retired the old
+# label from 2026-05. Without an alias the family's safe default (a rename
+# starts a fresh series) splits one real series in two, losing the 12-month
+# trend and any run-rate spanning the change.
+# ---------------------------------------------------------------------------
+
+def test_verified_rename_collapses_to_one_canonical_label():
+    canon = anomalies._canonical_gacc_commodity_label
+    assert canon("Integrated circuits") == "Electronic integrated circuits"
+    # Section 6 capitalises differently; keys are casefolded.
+    assert canon("Integrated Circuits") == "Electronic integrated circuits"
+    # Already-canonical passes through unchanged (idempotent).
+    assert (canon("Electronic integrated circuits")
+            == "Electronic integrated circuits")
+
+
+def test_unverified_labels_pass_through_untouched():
+    # The map is an allow-list: a rename we haven't checked must get the safe
+    # default (fresh series), never a guessed merge. And near-matching names
+    # are exactly the collision the (label, is_aggregate) keying guards
+    # against — they must not be collapsed.
+    canon = anomalies._canonical_gacc_commodity_label
+    for label in ("Machine tools", "Machine tools*", "Agricultural",
+                  "Agriculture products", "Fertilizers", "Integrated"):
+        assert canon(label) == label
+
+
+def test_alias_conflict_is_refused_not_silently_merged(monkeypatch, caplog):
+    """If the two aliased labels ever disagree for the same period, the alias
+    premise is false and merging would fabricate a series. The loader must
+    keep what it has and say so, rather than overwrite."""
+    import logging
+    from datetime import date as _date
+
+    period = _date(2026, 3, 1)
+    rows = [
+        # canonical label first, then the aliased one with a DIFFERENT value
+        (period, "monthly", "Electronic integrated circuits", 2023.8, 325.3,
+         {"is_aggregate": False}, "CNY 100 Million", 1),
+        (period, "monthly", "Integrated circuits", 9999.9, 111.1,
+         {"is_aggregate": False}, "CNY 100 Million", 2),
+    ]
+
+    class _Cur:
+        def execute(self, *a, **k): pass
+        def fetchall(self): return rows
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    class _Conn:
+        def cursor(self): return _Cur()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(anomalies, "_conn", lambda: _Conn())
+    with caplog.at_level(logging.ERROR):
+        hist = anomalies._gacc_commodity_history("export")
+
+    key = ("Electronic integrated circuits", False)
+    assert key in hist
+    # The first (canonical) row survives; the conflicting one is refused.
+    assert hist[key][period]["monthly"]["value"] == 2023.8
+    assert "alias conflict" in caplog.text
+
+
+def test_matching_aliased_rows_merge_without_complaint(monkeypatch, caplog):
+    # The real-world case: both labels carry identical figures, so the merge
+    # is a no-op on values and must stay silent.
+    import logging
+    from datetime import date as _date
+
+    period = _date(2026, 3, 1)
+    rows = [
+        (period, "monthly", "Electronic integrated circuits", 2023.8, 325.3,
+         {"is_aggregate": False}, "CNY 100 Million", 1),
+        (period, "monthly", "Integrated circuits", 2023.8, 325.3,
+         {"is_aggregate": False}, "CNY 100 Million", 2),
+    ]
+
+    class _Cur:
+        def execute(self, *a, **k): pass
+        def fetchall(self): return rows
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    class _Conn:
+        def cursor(self): return _Cur()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(anomalies, "_conn", lambda: _Conn())
+    with caplog.at_level(logging.ERROR):
+        hist = anomalies._gacc_commodity_history("export")
+
+    assert list(hist) == [("Electronic integrated circuits", False)]
+    assert "alias conflict" not in caplog.text

@@ -1732,6 +1732,38 @@ def _gacc_identity_html(gp) -> str:
     return f'<div class="id-strip">{"".join(chips)}</div>'
 
 
+def _gacc_currency_basis_html(gp) -> str:
+    """The currency-basis note, directly under the KPI bands (Luke,
+    2026-08-07).
+
+    Deliberately NOT folded into the About-this-page disclosure: the risk it
+    guards against is a reporter quoting one of the cards immediately above
+    alongside a wire figure computed on a different basis, and a collapsed
+    box doesn't reach that reader in time. Visible, one paragraph, the house
+    `.note` style — no new per-page variant.
+
+    The worked example is the world card because that is the number most
+    likely to be cross-checked (it's the wire headline), but the copy is
+    explicit that the convention covers everything on the page and in the
+    download — the misreading is not card-specific."""
+    cb = getattr(gp, "currency_basis", None) or {}
+    needed = ("month_label", "eur_display", "usd_display", "cny_display")
+    if not all(cb.get(k) for k in needed):
+        return ""
+    month, eur, usd, cny = (html.escape(str(cb[k])) for k in needed)
+    return (
+        '<p class="note"><strong>All percentages on this page are computed '
+        f'in euros.</strong> The basis changes the number: China’s {month} '
+        f'exports to the world rose {eur} in euros (our convention, so GACC '
+        f'and Eurostat figures stay comparable), {usd} in US dollars (the '
+        f'basis most wire copy uses) and {cny} in yuan (GACC’s own '
+        'headline). All three are correct — they differ only by exchange-rate '
+        'movement over the year. This applies to every percentage we publish '
+        'here and in the data download, not just the world figure, so check '
+        'which basis you are on before setting our number against another '
+        'source’s.</p>')
+
+
 def _gacc_about_page_html(gp) -> str:
     """The page's WHOLE epistemic framing as ONE collapsed "About this
     page" disclosure — same page-level pattern and position as the
@@ -2281,6 +2313,9 @@ def _gacc_page_html(gp, payloads) -> str:
                       + "".join(_indicator_card(i, payloads)
                                 for i in gp.commodity_strip)
                       + "</section>")
+    basis = _gacc_currency_basis_html(gp)
+    if basis:
+        parts.append(f"<section>{basis}</section>")
     about = _gacc_about_page_html(gp)
     if about:
         parts.append(f"<section>{about}</section>")
