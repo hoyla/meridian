@@ -18,8 +18,8 @@ import scrape
 
 @pytest.fixture(autouse=True)
 def _quiet_cn_discovery(monkeypatch):
-    """The gacc probe now runs CN-side discovery (gacc_cn.probe_cn_express)
-    before the English walk. Default it to a quiet no_new here so the
+    """The gacc probe runs CN-side discovery (gacc_cn.probe_cn_express) as a
+    fallback after the English walk. Default it to a quiet no_new here so the
     pre-existing probe tests stay hermetic — no live fetch of the tjs index
     from the test suite. Tests exercising the CN wiring override this."""
     monkeypatch.setattr(
@@ -314,6 +314,81 @@ def test_gacc_cn_index_unavailable_never_breaks_the_walk(
     assert row["result"] == "new_data"
     assert "CN index probe unavailable" in (row["notes"] or "")
     assert row["error"] is None
+
+
+def test_gacc_english_walk_runs_before_cn_discovery(
+    clean_db, test_db_url, monkeypatch,
+):
+    # Ordering contract: English is the preferred vintage, so it gets first
+    # refusal. CN discovery is the fallback for the window where the English
+    # translation lags — running it first meant ingesting CN tables and then
+    # immediately overwriting their provenance with the English pages on any
+    # catch-up run where both sites had the month.
+    _seed_release(test_db_url, "gacc", date(2026, 5, 1))
+    calls = []
+    monkeypatch.setattr(scrape, "run_scrape",
+                        lambda *a, **k: calls.append("english"))
+    monkeypatch.setattr(
+        gacc_cn, "probe_cn_express",
+        lambda *a, **k: (calls.append("cn")
+                         or gacc_cn.CnDiscoveryOutcome(status="no_new")))
+    scrape.probe_source("gacc", today=date(2026, 7, 8))
+
+    assert calls == ["english", "cn"]
+
+
+def test_gacc_cn_discovery_still_runs_when_english_walk_crashes(
+    clean_db, test_db_url, monkeypatch,
+):
+    # A crashed English walk is exactly when the Chinese fallback earns its
+    # keep, so it must still run — and its note must survive onto the error
+    # row rather than being dropped with the rest of the walk's output.
+    _seed_release(test_db_url, "gacc", date(2026, 6, 1))
+    ran = []
+
+    def _boom(*a, **k):
+        raise RuntimeError("index fetch exploded")
+
+    pending = gacc_cn.CnExpressArticle(
+        url="http://tjs.customs.gov.cn/tjs/2026-08/07/article_1.html",
+        title="（4）2026年7月进出口商品主要国别（地区）总值表（人民币值）",
+        section=4, currency="CNY", period=date(2026, 7, 1),
+        is_jan_feb_combined=False, published=date(2026, 8, 7))
+    monkeypatch.setattr(scrape, "run_scrape", _boom)
+    monkeypatch.setattr(
+        gacc_cn, "probe_cn_express",
+        lambda *a, **k: (ran.append(True)
+                         or gacc_cn.CnDiscoveryOutcome(
+                             status="published_awaiting_bytes",
+                             pending=[pending])))
+    scrape.probe_source("gacc", today=date(2026, 8, 7))
+
+    assert ran, "CN discovery must not be skipped when the English walk raises"
+    row = _last_row(test_db_url, "gacc")
+    assert row["result"] == "error"
+    assert "index fetch exploded" in (row["error"] or "")
+    assert "published upstream" in (row["notes"] or "")
+
+
+def test_gacc_cn_challenged_is_distinct_from_unavailable(
+    clean_db, test_db_url, monkeypatch,
+):
+    # Being blind to the Chinese site (JS challenge) must read differently
+    # from the site being broken — on drop morning the first means "English
+    # only this run", not "the index is down".
+    _seed_release(test_db_url, "gacc", date(2026, 6, 1))
+    monkeypatch.setattr(
+        gacc_cn, "probe_cn_express",
+        lambda *a, **k: gacc_cn.CnDiscoveryOutcome(
+            status="challenged", error="412 Precondition Failed"))
+    monkeypatch.setattr(scrape, "run_scrape", lambda *a, **k: None)
+    scrape.probe_source("gacc", today=date(2026, 8, 7))
+
+    row = _last_row(test_db_url, "gacc")
+    assert row["result"] == "no_change"
+    assert "JS-challenge WAF" in (row["notes"] or "")
+    assert "CN index probe unavailable" not in (row["notes"] or "")
+    assert row["error"] is None      # additive: never fails the English walk
 
 
 def test_gacc_clean_walk_with_new_release_still_logs_new_data(

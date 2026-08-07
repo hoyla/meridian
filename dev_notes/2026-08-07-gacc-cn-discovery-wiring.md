@@ -1,5 +1,13 @@
 # GACC Chinese-side discovery: the routine wiring (2026-08-07)
 
+> **⚠️ CORRECTED LATER THE SAME DAY — read the "Corrections" section at the
+> foot before relying on anything below.** Two of this note's load-bearing
+> claims did not survive contact with a second vantage point: (1) that
+> `tjs.customs.gov.cn` is served outside the WAF, and (2) that the table
+> bytes are unreachable. Both were wrong. The findings below are preserved
+> as written (they were accurate from where they were made) rather than
+> edited in place.
+
 **Status: shipped.** Closes the gap the July investigation
 (2026-07-14-gacc-chinese-source-investigation.md) left open: the routine's
 GACC probe walked only the English `SEED_INDEXES`, so a Chinese-first drop
@@ -142,3 +150,135 @@ made visible instead of silent.
 
 The tjs index and article fixtures in `tests/fixtures/` are trimmed copies
 of the first two rows above.
+
+---
+
+## Corrections (2026-08-07, evening — same day, second vantage point)
+
+Re-ran the shipped code from Luke's machine ~17:40 UK, ~7h after the recon
+above. Two central claims failed immediately.
+
+### 1. `tjs.customs.gov.cn` is NOT reliably outside the WAF
+
+The claim above — "served as static HTML **outside** the WAF … discovery is
+therefore ordinary code now, no WAF work at all" — did not reproduce.
+`gacc_cn.py discover` returned **412 + the 瑞数 `$_ts` challenge shell**, and so
+did every plain-HTTP shape tried: bare desktop UA, full browser header set
+(Accept / Accept-Language / Accept-Encoding / Connection /
+Upgrade-Insecure-Requests), and https (which refuses connections outright).
+
+So WAF-free tjs is **a property of a vantage point, not of the host** — the
+morning's clean 200s were presumably an IP or timing accident. Anything built
+on "discovery is free" needs to treat blindness as the normal case, not the
+exception.
+
+Also newly measured: the in-app/headless browser is *hard-rejected* — it runs
+the challenge, gets a cookie set, and the reload then returns **400 with an
+empty body**. Real Chrome still passes first time, as in July. The July
+finding ("only real Chrome passes") stands and now covers tjs too.
+
+**Shipped in response:** `CnDiscoveryOutcome` gains a `challenged` status,
+distinct from `unavailable`, detected via the `$_ts` bootstrap marker or a
+bare 412 — including the dangerous **200-with-shell** shape, which parses to
+zero articles and would otherwise read as a quiet `no_new` while a release is
+live upstream. The routine note now reads `CN index behind the JS-challenge
+WAF — CN discovery blind, English-only this run`.
+
+### 2. The bytes are NOT unreachable — the WPS viewer gives them up
+
+The claim above — redesigned tjs articles embed a WAF-gated WPS viewer, so
+"the bytes are not [free] yet" — is true only of the article's **raw HTML**.
+It is false once the viewer **renders**:
+
+```
+tjs article (real browser)
+  └─ WPS iframe renders
+       └─ iframe.contentDocument contains ONE 19-digit attachment id
+            └─ http://www.customs.gov.cn/customs/attachDir/YYYY/MM/<id>.xls
+                 └─ NOT WAF-gated: plain httpx → 200 application/vnd.ms-excel
+```
+
+The id is absent from the article's raw HTML (it arrives via the WPS API) and
+is **self-describing**: its first six digits are the YYYYMM of the attachment
+directory, so the URL needs no other input. Equivalently, the **`www` mirror
+article** still carries the old direct `attachDir` link in its raw HTML, once
+a real browser holds the www challenge cookie.
+
+Verified for all six July tables:
+
+| Table | Attachment id | Bytes |
+|---|---|---|
+| §4 by-country CNY | 2026080710320733553 | 200, 14,848 B |
+| §4 by-country USD | 2026080710320760159 | 200, 15,360 B |
+| §5 exports CNY | 2026080710320578150 | 200 |
+| §5 exports USD | 2026080710320525758 | 200 |
+| §6 imports CNY | 2026080710320686370 | 200 |
+| §6 imports USD | 2026080710320646079 | 200 |
+
+Note also that the `www` 海关统计 index
+(`302249/zfxxgk/2799825/302274/index.html`) is **frozen at 2025-11** — the
+articles publish but that index doesn't list them. Use tjs for discovery.
+
+**Shipped in response:** `attachment_url_from_id()` (fails loud on anything
+that isn't a 19-digit id, so a mistyped paste can't become a silent 404
+mid-drop), `find_wps_file_id()` so the probe logs the viewer handle an
+operator needs, and a **`gacc_cn.py bridge`** subcommand taking the harvested
+ids and running them through the unchanged ingest contract:
+
+```bash
+gacc_cn.py bridge --attachment-id 2026080710320733553 --attachment-id …
+```
+
+This does not remove the browser step — full automation still waits on a
+WAF-passing fetch. It narrows the manual part from "hunt for six
+spreadsheets" to "copy six ids", and one bad id no longer aborts the rest.
+
+### 3. Ordering: English first, Chinese as the fallback (Luke's call)
+
+As shipped, the probe ran CN discovery **before** the English walk, on the
+reasoning that CN publishes first. Luke's objection: if English is the
+preferred vintage (translation risk), check English first and fall back to
+Chinese only when it isn't there.
+
+Correct, and for a stronger reason than ordering aesthetics. Both sites write
+the same release rows (shared natural key) and English supersedes CN
+provenance when it lands, so the **end state is identical either way** — this
+was never a correctness bug. What differed is the audit trail: on any run
+where both sites had the month (the normal case after any spell of CN
+blindness), CN-first fetched and ingested six tables, wrote six snapshots,
+then immediately flipped their `source_url`s to the English pages. An ingest
+and a provenance churn against the preferred vintage that never needed to
+happen.
+
+English-first makes the CN probe **self-cancelling**: its dedup is against the
+DB, so once the English walk has landed the month there is nothing missing and
+CN costs one index fetch. The timeliness play is untouched — on drop morning
+English genuinely doesn't have it, the English walk finds nothing, and CN
+ingests exactly as before.
+
+What we give up is the incidental both-sites cross-check on catch-up runs. The
+normal timeline preserves it anyway (CN lands ~7th, the English walk
+re-verifies those same rows ~15th — June 2026 gave 620/620 unchanged), and
+`gacc_cn.py verify` does it deliberately when the diff is actually wanted.
+
+**Also fixed while in there:** `cn_note` was computed *inside* the English
+walk's `try`, so an exception from `run_scrape` discarded the CN note
+entirely — losing the Chinese signal in precisely the run where the fallback
+matters most. The CN probe now runs in its own block regardless of the
+English walk's fate, and its note lands on the error row too.
+
+### 4. `gacc_cn.py` never loaded `.env`
+
+The documented drop-day manual bridge died on `KeyError: 'DATABASE_URL'` when
+run standalone: only `scrape.py` calls `load_dotenv()` (at import), so the env
+was present only when `gacc_cn` was imported *through* it. `main()` now loads
+it.
+
+## What actually happened to the July release
+
+Ingested from the Chinese site 2026-08-07 ~17:50 UK via the route in §2 —
+releases **1247–1252**, 620 observations (§4 180×2, §5 62×2, §6 68×2), re-run
+idempotent (0 inserted / 180 unchanged). Structure and label sets identical to
+June (30 partners, 31 export / 34 import commodities); units unchanged. Total
+July exports USD 397,851.7mn independently corroborates Xinhua's +23.9% y/y.
+The English site was still showing June.
