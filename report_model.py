@@ -293,6 +293,17 @@ class GaccPage:
     synthesis: Optional[dict] = None
     commodity_take: Optional[dict] = None
     questions: Optional[LLMSlot] = None
+    # {eur_pct, usd_pct, cny_pct, period} — the SAME month's China-to-world
+    # export YoY computed on all three bases, for the currency-basis note
+    # under the KPI band (Luke, 2026-08-07). Every percentage we publish is
+    # EUR-denominated, but the wires quote GACC's USD tables and GACC's own
+    # headline is CNY, so the same true fact has three different-looking
+    # right answers. Computed per build from the anchor month's own figures
+    # — never hardcoded, or the note would rot the month after it shipped.
+    # None when any basis is unavailable (the note then omits itself rather
+    # than showing a partial comparison, which would mislead more than no
+    # note at all).
+    currency_basis: Optional[dict] = None
 
 
 @dataclass

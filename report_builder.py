@@ -1985,6 +1985,67 @@ def _gacc_strip_cards(rows: list[_GaccRow], period: date) -> list[Indicator]:
     return cards
 
 
+def _gacc_currency_basis(cur, rows: list[_GaccRow],
+                         period: date) -> dict | None:
+    """The same month's China-to-world export YoY on all three bases.
+
+    Every percentage we publish is EUR-denominated (the rolling-window sums
+    the partner families rest on need a common currency). But the wires
+    quote GACC's USD tables and GACC's own headline is CNY, so one true fact
+    has three different-looking right answers — and a reporter checking our
+    number against Reuters finds a mismatch the page can't explain. This
+    feeds the note that makes the convention explicit.
+
+    Deliberately reuses the SAME world row the KPI card is built from, so
+    the note can never contradict the card directly above it. USD and CNY
+    come from GACC's own published tables for the anchor month and the same
+    month a year earlier — no FX involved on those two legs.
+
+    Returns None unless all three bases are available: a partial comparison
+    ("EUR and USD, CNY missing") invites exactly the misreading the note
+    exists to prevent."""
+    world = _strip_pick(rows, "gacc_strip_world")
+    if world is None or world.sm_yoy is None:
+        return None
+    prior = date(period.year - 1, period.month, 1)
+    cur.execute(
+        """
+        SELECT r.currency, r.period, o.value_amount
+          FROM observations o JOIN releases r ON r.id = o.release_id
+         WHERE r.source = 'gacc' AND r.section_number = 4
+           AND o.partner_country = 'Total' AND o.flow = 'export'
+           AND o.period_kind = 'monthly'
+           AND r.period IN (%s, %s)
+        """,
+        (prior, period),
+    )
+    by_ccy: dict[str, dict[date, float]] = {}
+    for ccy, p, value in cur.fetchall():
+        if value is not None:
+            by_ccy.setdefault(ccy, {})[p] = float(value)
+    native: dict[str, float] = {}
+    for ccy in ("USD", "CNY"):
+        legs = by_ccy.get(ccy) or {}
+        now_, then = legs.get(period), legs.get(prior)
+        if now_ is None or not then:
+            return None
+        native[ccy] = (now_ / then) - 1.0
+    # Display strings are formatted HERE, not in the renderer: the renderer
+    # also runs against a report.json round-trip, where `period` would be a
+    # string and the builder's formatters aren't in scope — the same reason
+    # tab_label is precomputed.
+    return {
+        "period": period,
+        "month_label": _fmt_month_abbr(period),
+        "eur_pct": world.sm_yoy,
+        "usd_pct": native["USD"],
+        "cny_pct": native["CNY"],
+        "eur_display": _fmt_signed_pct(world.sm_yoy),
+        "usd_display": _fmt_signed_pct(native["USD"]),
+        "cny_display": _fmt_signed_pct(native["CNY"]),
+    }
+
+
 def _gacc_standout(rows: list[_GaccRow], period: date) -> HeadlineItem | None:
     """The sharpest single-month move anywhere in the release — partner-
     agnostic (anti-fixation), but the world Total is excluded (that's the
@@ -2897,6 +2958,7 @@ def _build_gacc_page(cur, generate_takes: bool = False) -> GaccPage | None:
         commodities=_gacc_commodities_section(cur, period),
         commodity_strip=_gacc_commodity_strip(cur, period),
         understanding=_gacc_about_page_md(rows),
+        currency_basis=_gacc_currency_basis(cur, rows, period),
     )
     if generate_takes:
         _generate_gacc_page_slots(page, rows, period)

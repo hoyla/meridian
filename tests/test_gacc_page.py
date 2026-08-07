@@ -664,3 +664,49 @@ def test_identity_reads_release_and_calendar(seeded, test_db_url):
     # identity carries dates + links only.
     assert "caveats" not in ident
     assert "mainland customs territory" in gp.understanding
+
+
+# ---------------------------------------------------------------------------
+# Currency-basis note (Luke, 2026-08-07): every percentage we publish is
+# EUR-denominated, but the wires quote GACC's USD tables and GACC's own
+# headline is CNY. Without the note a reporter cross-checking our world
+# figure against Reuters finds a mismatch the page can't explain.
+# ---------------------------------------------------------------------------
+
+_BASIS = {
+    "period": date(2026, 7, 1), "month_label": "Jul 2026",
+    "eur_pct": 0.2305, "usd_pct": 0.2364, "cny_pct": 0.1754,
+    "eur_display": "+23.1%", "usd_display": "+23.6%", "cny_display": "+17.5%",
+}
+
+
+def _basis_html(basis):
+    return render_html(_report(gacc_page=_gacc_page(currency_basis=basis)))
+
+
+def test_currency_basis_note_states_all_three_bases():
+    h = _basis_html(_BASIS)
+    assert "All percentages on this page are computed in euros" in h
+    for shown in ("+23.1%", "+23.6%", "+17.5%"):
+        assert shown in h, f"{shown} missing from the basis note"
+    assert "in euros" in h and "in US dollars" in h and "in yuan" in h
+    # Must generalise beyond the worked example — the misreading it guards
+    # against is not specific to the world card.
+    assert "not just the world figure" in h
+
+
+def test_currency_basis_note_is_visible_not_folded_into_a_disclosure():
+    # A collapsed <details> wouldn't reach the reader who is about to quote
+    # the card immediately above it.
+    h = _basis_html(_BASIS)
+    i = h.index("All percentages on this page are computed in euros")
+    assert '<p class="note">' in h[max(0, i - 200):i]
+
+
+def test_currency_basis_note_omitted_when_a_basis_is_missing():
+    # A partial comparison invites exactly the misreading the note exists to
+    # prevent, so it must omit itself rather than degrade.
+    assert ("All percentages on this page are computed in euros"
+            not in _basis_html(dict(_BASIS, cny_display=None)))
+    assert ("All percentages on this page are computed in euros"
+            not in _basis_html(None))
