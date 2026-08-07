@@ -634,6 +634,36 @@ def _normalise_commodity_label(raw: str) -> tuple[str, int, bool]:
     return label, indent, is_aggregate
 
 
+def _cell_text(cell) -> str:
+    """Normalised text of a table cell: nbsp → space, collapsed, stripped."""
+    return re.sub(r"\s+", " ", cell.get_text().replace("\xa0", " ")).strip()
+
+
+def _section56_has_unit_column(rows: list[list]) -> bool:
+    """Does this section-5/6 body carry the Quantity Unit column?
+
+    Normally yes — cell 1 is the unit and the final cell is GACC's published
+    YoY value %, always a number. But the April-2025 USD exports page
+    (english.customs.gov.cn/Statics/5f7ac0d0-…html, still live and unchanged
+    as of 2026-08-07) drops the unit <td> from every body row and appends a
+    blank <td> instead, so the row keeps its 10-cell width, clears the
+    cell-count guard, and every field lands one place to the left. That page
+    stored 111 million cars exported in a month (the value column read as
+    quantity) while its CNY sibling parsed correctly. See
+    dev_notes/2026-08-07-gacc-section5-missing-unit-column.md.
+
+    Discriminator is the LAST cell, not the first: a blank trailing cell is
+    the padding, and the real final column (published YoY value %) is never
+    blank on a healthy page. Require it blank on *every* candidate row so a
+    single odd row can't flip the whole table's interpretation.
+
+    `rows` is the list of candidate data rows, each a list of <td> elements.
+    """
+    if not rows:
+        return True
+    return not all(_cell_text(cells[-1]) == "" for cells in rows)
+
+
 def _parse_section_5_6_commodities(
     soup: BeautifulSoup, meta: ReleaseMetadata
 ) -> list[ParsedObservation]:
@@ -653,6 +683,14 @@ def _parse_section_5_6_commodities(
     Combined Jan+Feb releases drop the month pair → 8 cells:
       0: label  1: unit  2,3: Jan+Feb cumulative Q,V
       4,5: prior-year Jan+Feb Q,V  6,7: published YoY% Q,V
+
+    Some pages ship a variant that OMITS the Quantity Unit <td> from every
+    body row and pads the end with a blank <td>, keeping the expected width
+    (see `_section56_has_unit_column`). Handled by shifting the numeric slice
+    one place left; `quantity_unit` is then genuinely absent from the document
+    and stored as NULL, with `unit_column_absent` recorded in source_row so
+    the provenance trail says why. Never borrow the unit from the currency
+    sibling — that would be an inference written into a source-material field.
 
     Emits one observation per (row, period_kind): 'monthly' + 'ytd' for
     regular releases, 'cumulative_jan_feb' for combined ones. The prior-year
@@ -684,23 +722,34 @@ def _parse_section_5_6_commodities(
     else:
         expected_cells = 10
 
-    for tr in table.find_all("tr"):
-        cells = tr.find_all("td")
-        if len(cells) != expected_cells:
-            continue
-        if any(c.get("colspan") for c in cells):
-            continue
+    candidates = [
+        cells
+        for tr in table.find_all("tr")
+        if (cells := tr.find_all("td"))
+        and len(cells) == expected_cells
+        and not any(c.get("colspan") for c in cells)
+    ]
+    has_unit_column = _section56_has_unit_column(candidates)
+    # Numeric block start: after label+unit normally, after label alone when the
+    # unit column is absent (the trailing blank pad takes the last slot). Either
+    # way the slice is the same width — 8 numbers, or 6 for Jan+Feb combined.
+    first_num = 2 if has_unit_column else 1
+    last_num = expected_cells if has_unit_column else expected_cells - 1
 
+    for cells in candidates:
         raw_label = cells[0].get_text()
         label, indent, is_aggregate = _normalise_commodity_label(raw_label)
         if not label:
             continue
 
-        unit_raw = cells[1].get_text().replace("\xa0", " ").strip()
-        quantity_unit = None if unit_raw in ("", "-", "—") else unit_raw
+        if has_unit_column:
+            unit_raw = _cell_text(cells[1])
+            quantity_unit = None if unit_raw in ("", "-", "—") else unit_raw
+        else:
+            quantity_unit = None
 
         try:
-            nums = [_parse_number(cells[i].get_text()) for i in range(2, expected_cells)]
+            nums = [_parse_number(cells[i].get_text()) for i in range(first_num, last_num)]
         except ValueError:
             # Header row whose numeric cells aren't numeric — skip.
             continue
@@ -737,6 +786,11 @@ def _parse_section_5_6_commodities(
             }
             kinds = [("monthly", m_qty, m_val), ("ytd", ytd_qty, ytd_val)]
 
+        if not has_unit_column:
+            # Only stamped on the variant so normal rows keep their existing
+            # source_row shape byte-for-byte on re-scrape.
+            source_row["unit_column_absent"] = True
+
         for kind, qty, val in kinds:
             if val is None and qty is None:
                 continue
@@ -766,6 +820,11 @@ def _parse_section_5_6_commodities(
 # that so a legitimate release never trips, well above a broken/partial parse.
 _SECTION56_MIN_COMMODITIES = 20
 
+# A quantity_unit that is wholly numeric — digits, thousands separators and a
+# decimal point. Matches the diagnostic used to find the April-2025 corruption
+# (source_row->>'quantity_unit' ~ '^[0-9,.]+$').
+_NUMERIC_QUANTITY_UNIT_RE = re.compile(r"^[0-9,.]+$")
+
 
 def section56_floor_check(
     observations: list[ParsedObservation], meta: ReleaseMetadata
@@ -778,6 +837,16 @@ def section56_floor_check(
     starred aggregates' membership is not adjacency (Hi-tech overlaps
     Mech&elec), so no arithmetic identity is available as a magnitude check —
     by design we never reconstruct their sums.
+
+    Plus two column-alignment invariants. The count floor alone cannot see a
+    shift: a page whose columns all move one place still yields ~30 rows of
+    plausible-looking numbers. Both signatures below are what the April-2025
+    USD exports page produced before `_section56_has_unit_column` handled its
+    layout, and both are zero-tolerance — a scan of all 335 stored section-5/6
+    releases (~20k observations) found not one legitimate instance of either.
+    They stay as the backstop for a drift we have not seen yet, so a future
+    variant fails loud instead of persisting shifted values. See
+    dev_notes/2026-08-07-gacc-section5-missing-unit-column.md.
 
     Returns a human-readable reason to reject, or None if plausible.
     Scoped to sections 5/6; returns None for anything else."""
@@ -793,5 +862,38 @@ def section56_floor_check(
             f"{_SECTION56_MIN_COMMODITIES}; a healthy section-"
             f"{meta.section_number} release lists ~30) — likely a partial "
             f"parse from column-layout drift or a truncated table"
+        )
+
+    # (1) A unit cell holding a number means the label/unit boundary moved: the
+    # quantity column has been read as the unit. Units are always prose
+    # ('10,000 Tons', 'Ship', '100 Million PCS') or absent.
+    numeric_units = sorted({
+        u for o in observations
+        if (u := o.get("quantity_unit")) and _NUMERIC_QUANTITY_UNIT_RE.match(u)
+    })
+    if numeric_units:
+        return (
+            f"quantity_unit holds numbers, not units ({', '.join(numeric_units[:3])}"
+            f"{', …' if len(numeric_units) > 3 else ''}) — the quantity column "
+            f"was read as the unit column, so every field on those rows is "
+            f"shifted (column-layout drift)"
+        )
+
+    # (2) The mirror-image signature, and the one that catches the rows guard
+    # (1) cannot see: on a value-only commodity the shifted page leaves the unit
+    # slot as '-' (→ NULL, no numeric tell) while the value lands in `quantity`
+    # and the value itself goes missing. These are value tables — GACC publishes
+    # a value for every commodity and quantity only where a unit applies, so
+    # quantity-without-value is never legitimate.
+    orphan_quantities = sorted({
+        o.get("commodity_label") for o in observations
+        if o.get("quantity") is not None and o.get("value") is None
+    }, key=lambda s: s or "")
+    if orphan_quantities:
+        return (
+            f"{len(orphan_quantities)} commodities carry a quantity but no value "
+            f"({', '.join(str(c) for c in orphan_quantities[:3])}"
+            f"{', …' if len(orphan_quantities) > 3 else ''}) — the value column "
+            f"was read as the quantity column (column-layout drift)"
         )
     return None
