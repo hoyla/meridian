@@ -87,6 +87,18 @@ class ErrorRow:
 
 
 @dataclasses.dataclass(frozen=True)
+class BlockedRow:
+    """A probe that is neither new data nor an error, but needs a human:
+    GACC's Chinese site has the month and we can't pull the bytes, or the
+    challenge WAF is blocking discovery so we can't tell."""
+    source: str
+    signal: str
+    candidate_period: date | None
+    notes: str | None
+    checked_at: datetime
+
+
+@dataclasses.dataclass(frozen=True)
 class NotifyResult:
     posted: bool
     reason: str
@@ -278,6 +290,52 @@ def _newly_errored(mark: datetime) -> list[ErrorRow]:
     return out
 
 
+def _newly_blocked(mark: datetime) -> list[BlockedRow]:
+    """Trigger sources whose probe has *just* entered a blocked spell: the most
+    recent probe carries an alerting `signal`, the one before it did not, and
+    the transition is newer than the last notification. One alert per spell,
+    mirroring `_newly_overdue` / `_newly_errored` — the GACC probe runs twice
+    daily and a release can sit unfetchable for a week, so re-firing every run
+    would train the reader to ignore the Space.
+
+    Deliberately keyed on `signal`, never on `notes`: the prose gets edited,
+    and an alert that silently stops firing is worse than no alert at all.
+
+    A spell is per-signal, so an escalation still pings — a source that goes
+    `cn_challenged` (we can't see) → `cn_published_awaiting_bytes` (it's out,
+    go get it) is genuinely new information, not a continuation."""
+    out: list[BlockedRow] = []
+    with db.transaction() as conn, conn.cursor() as cur:
+        for source in TRIGGER_SOURCES:
+            cur.execute(
+                """
+                SELECT signal, candidate_period, notes, checked_at
+                FROM routine_check_log
+                WHERE source = %s
+                ORDER BY checked_at DESC
+                LIMIT 2
+                """,
+                (source,),
+            )
+            rows = cur.fetchall()
+            if not rows:
+                continue
+            signal, candidate, notes, checked_at = rows[0]
+            if not signal:
+                continue
+            if checked_at <= mark:
+                continue
+            if len(rows) > 1 and rows[1][0] == signal:
+                continue  # already alerted at the start of this spell
+            out.append(BlockedRow(
+                source=source, signal=signal, candidate_period=candidate,
+                notes=notes, checked_at=checked_at,
+            ))
+    order = {s: i for i, s in enumerate(TRIGGER_SOURCES)}
+    out.sort(key=lambda r: order.get(r.source, 99))
+    return out
+
+
 def _latest_export_since(mark: datetime) -> tuple[date | None, str | None] | None:
     """If a `--periodic-run` cycle wrote a fresh export after `mark`, return
     (data_period, findings_path); else None. Best-effort — a missing/empty
@@ -345,6 +403,7 @@ def build_message(
     export: tuple[date | None, str | None] | None,
     gacc_update: tuple[date | None, bool] | None = None,
     error_rows: list[ErrorRow] | None = None,
+    blocked_rows: list[BlockedRow] | None = None,
 ) -> str:
     """Render the Google Chat text payload: a 'new data ingested' block (one
     bullet per source, notes verbatim, plus an export line when a briefing was
@@ -353,6 +412,47 @@ def build_message(
     seen). The caller only builds a message when at least one block has
     content."""
     lines: list[str] = []
+
+    if blocked_rows:
+        # First in the message on purpose: this is the only block that asks
+        # the reader to DO something now, and the window it covers is short —
+        # the value of acting decays as the English release approaches.
+        lines.append("*Meridian — action needed: data is published but we "
+                     "can't fetch it*")
+        for row in blocked_rows:
+            label = _source_label(row.source)
+            period = (
+                f" ({row.candidate_period:%Y-%m})" if row.candidate_period else ""
+            )
+            if row.signal == routine_log.SIGNAL_CN_PUBLISHED_AWAITING_BYTES:
+                lines.append(
+                    f"• {label}{period} — China's customs site has published "
+                    "the month, but no article carries a direct spreadsheet "
+                    "link, so the figures can't be downloaded automatically."
+                )
+                lines.append(
+                    "  _To pull it now: open the release articles at "
+                    "tjs.customs.gov.cn in a real browser (headless fails the "
+                    "challenge), read the 19-digit attachment id off each "
+                    "rendered viewer, then run_ "
+                    "`gacc_cn.py bridge --attachment-id <id> …`"
+                )
+            elif row.signal == routine_log.SIGNAL_CN_CHALLENGED:
+                lines.append(
+                    f"• {label}{period} — China's customs index is behind its "
+                    "anti-bot challenge, so we can't see whether the month is "
+                    "out. The English site is all we have this run."
+                )
+                lines.append(
+                    "  _Worth a manual look at tjs.customs.gov.cn around the "
+                    "scheduled date; if the release is up, bridge it as above._"
+                )
+            else:  # unknown signal — say so rather than swallow it
+                lines.append(f"• {label}{period} — {row.notes or row.signal}")
+        lines.append(
+            "_Nothing is wrong with the pipeline; the English release will "
+            "land on its own schedule and supersede whatever we bridge._"
+        )
 
     if error_rows:
         lines.append("*Meridian — ingest problem: a release was held back*")
@@ -440,15 +540,18 @@ def notify_new_data(
     new_rows = _new_data_since(mark)
     overdue_rows = _newly_overdue(mark)
     error_rows = _newly_errored(mark)
-    if not new_rows and not overdue_rows and not error_rows:
+    blocked_rows = _newly_blocked(mark)
+    if not new_rows and not overdue_rows and not error_rows and not blocked_rows:
         return NotifyResult(
             posted=False,
-            reason=f"no new data, overdue or ingest error from any source since {mark:%Y-%m-%d %H:%M}",
+            reason=("no new data, overdue, ingest error or blocked source "
+                    f"since {mark:%Y-%m-%d %H:%M}"),
         )
 
     export = _latest_export_since(mark) if new_rows else None
     gacc_update = _latest_gacc_update_since(mark) if new_rows else None
-    text = build_message(new_rows, overdue_rows, export, gacc_update, error_rows)
+    text = build_message(new_rows, overdue_rows, export, gacc_update,
+                         error_rows, blocked_rows)
 
     # Audit-note summary. New-data sources stay first and bare so the
     # new-data-only note is unchanged ("posted: Eurostat"); overdue is appended
@@ -463,6 +566,11 @@ def notify_new_data(
     if error_rows:
         note_parts.append(
             "held back: " + ", ".join(_source_label(r.source) for r in error_rows)
+        )
+    if blocked_rows:
+        note_parts.append(
+            "blocked: " + ", ".join(
+                f"{_source_label(r.source)} ({r.signal})" for r in blocked_rows)
         )
     summary = "; ".join(note_parts)
 

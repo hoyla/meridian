@@ -942,6 +942,14 @@ CREATE TABLE routine_check_log (
     notes            TEXT,
     error            TEXT,
     duration_ms      INT,
+    -- Machine-readable probe state for alerting, orthogonal to `result`: a
+    -- run can be an ordinary 'no_change' and still need a human (GACC's
+    -- Chinese site has the month but no fetchable spreadsheet; the challenge
+    -- WAF is blocking discovery). NULL = nothing beyond result/expectation.
+    -- Vocabulary lives in routine_log.VALID_SIGNALS, NOT in a CHECK here:
+    -- probe signals are expected to grow, and a new one must never make an
+    -- audit-trail INSERT fail. See migrations/2026-08-07-routine-check-log-signal.sql.
+    signal           TEXT,
     -- 'not_yet_eligible' is retained for historical rows only — the app no
     -- longer writes it (the 5-week fetch-gate was replaced by the expectation
     -- axis 2026-06-02; we always probe now). See the migration note.
