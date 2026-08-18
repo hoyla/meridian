@@ -52,7 +52,7 @@ from hypothesis_catalog import (
 
 log = logging.getLogger(__name__)
 
-DEFAULT_OLLAMA_MODEL = "qwen3.6:latest"
+DEFAULT_OLLAMA_MODEL = "qwen3.8:latest"
 LLM_FRAMING_SOURCE_URL = "analysis://llm_framing/v2"
 
 LEAD_METHOD = "llm_topline_v2_lead_scaffold"
