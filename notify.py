@@ -431,10 +431,13 @@ def build_message(
                     "link, so the figures can't be downloaded automatically."
                 )
                 lines.append(
-                    "  _To pull it now: open the release articles at "
-                    "tjs.customs.gov.cn in a real browser (headless fails the "
-                    "challenge), read the 19-digit attachment id off each "
-                    "rendered viewer, then run_ "
+                    "  _To pull it now (~5 min): a Claude session with "
+                    "claude-in-chrome renders the index, reads the ids off the "
+                    "WPS viewers and bridges them — see "
+                    "dev_notes/2026-08-19-gacc-cn-harvest-assist.md. Manual "
+                    "fallback: open each article at tjs.customs.gov.cn in a "
+                    "real browser (headless fails the challenge), read the "
+                    "19-digit attachment id off the viewer, then run_ "
                     "`gacc_cn.py bridge --attachment-id <id> …`"
                 )
             elif row.signal == routine_log.SIGNAL_CN_CHALLENGED:
