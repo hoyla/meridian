@@ -323,3 +323,65 @@ def test_wps_file_id_is_extracted_for_the_operator():
     assert (gacc_cn.find_wps_file_id(ARTICLE_HTML)
             == "0bda337af3234ea6a35aa6535c0d4ea0")
     assert gacc_cn.find_wps_file_id(b"<html><body>no viewer</body></html>") is None
+
+
+# ---------------------------------------------------------------------------
+# Browser-assisted harvest plan (Tier 1): index HTML a real browser fetched
+# → the render worklist + bridge scaffold. Same classifier + DB dedup as the
+# unattended walk, so the assisted path can't drift from it.
+# ---------------------------------------------------------------------------
+
+def test_harvest_plan_lists_all_six_on_empty_db(clean_db):
+    # Drop morning, nothing ingested yet: every recognised table is a table
+    # to harvest, and the (2)/(3) trade-mode + nav links stay excluded exactly
+    # as in the unattended walk.
+    arts = gacc_cn.plan_cn_harvest(INDEX_HTML)
+    assert {(a.section, a.currency) for a in arts} == {
+        (4, "CNY"), (4, "USD"), (5, "CNY"), (5, "USD"), (6, "CNY"), (6, "USD")}
+    assert all(a.period == date(2026, 7, 1) for a in arts)
+
+
+def test_harvest_plan_dedups_against_the_db(clean_db, test_db_url):
+    # The English walk (or an earlier bridge) already landed two cells: the
+    # plan must drop exactly those, so a re-run only lists what's still out.
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        for section, currency in [(4, "CNY"), (5, "USD")]:
+            cur.execute(
+                "INSERT INTO releases (source, source_url, period, "
+                "section_number, currency, release_kind) "
+                "VALUES ('gacc', %s, %s, %s, %s, 'preliminary')",
+                (f"http://english.example/{section}{currency}",
+                 date(2026, 7, 1), section, currency))
+        conn.commit()
+    arts = gacc_cn.plan_cn_harvest(INDEX_HTML)
+    assert {(a.section, a.currency) for a in arts} == {
+        (4, "USD"), (5, "CNY"), (6, "CNY"), (6, "USD")}
+
+
+def test_harvest_plan_excludes_jan_feb_combined(clean_db):
+    # The xls parser refuses the combined Jan–Feb layout (no fixture), so it
+    # must never appear in a bridge scaffold even on an empty DB.
+    html = ('<ul class="news_list"><li>'
+            '<a href="/tjs/2027-03/10/article_2027031010000000001.html" '
+            'title="（4）2027年1至2月进出口商品主要国别（地区）总值表（人民币值）">'
+            '（4）2027年1至2月进出口商品主要国别（地区）总值表（人民币值）</a>'
+            '<span>2027-03-10</span></li></ul>').encode()
+    assert gacc_cn.plan_cn_harvest(html) == []
+
+
+def test_format_harvest_plan_renders_worklist_and_paired_bridge():
+    A = gacc_cn.CnExpressArticle
+    url = "http://tjs.customs.gov.cn/tjs/2026-08/07/article_1.html"
+    arts = [A(url=url, title="t", section=4, currency="CNY",
+              period=date(2026, 7, 1), is_jan_feb_combined=False,
+              published=date(2026, 8, 7))]
+    out = gacc_cn.format_harvest_plan(arts)
+    assert "1 table(s) published upstream" in out
+    assert f"[s4 CNY 2026-07] {url}" in out
+    # The id placeholder and its article URL stay on one line, so a harvested
+    # id can't be pasted against the wrong table.
+    assert f"--attachment-id <id-s4-CNY-2026-07> --article-url {url}" in out
+
+
+def test_format_harvest_plan_empty_is_explicit():
+    assert "nothing to harvest" in gacc_cn.format_harvest_plan([])

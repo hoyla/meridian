@@ -948,6 +948,66 @@ def _cn_release_missing(article: CnExpressArticle) -> bool:
                                            "USD"))
 
 
+def plan_cn_harvest(index_html: bytes,
+                    base_url: str = CN_EXPRESS_INDEX_URL
+                    ) -> list[CnExpressArticle]:
+    """The render worklist for a browser-assisted harvest: the recognised
+    section-4/5/6 tables that are published on the CN Express index but still
+    missing from the DB, minus the combined Jan–Feb layout the xls parser
+    refuses (no fixture — the English release covers it).
+
+    Pure over the *supplied* index HTML and never touches the network itself:
+    the index is JS-challenge-WAF-gated to plain HTTP, so on drop morning the
+    fetch has to come from a real browser (claude-in-chrome / Chrome). This
+    applies the same canonical title classifier (`discover_express_articles`)
+    and the same DB dedup (`_cn_release_missing`) the unattended walk uses, so
+    the assisted path can't drift from it on what counts as an ingestable,
+    not-yet-held table."""
+    articles = discover_express_articles(index_html, base_url)
+    return [a for a in articles
+            if not a.is_jan_feb_combined and _cn_release_missing(a)]
+
+
+def _harvest_label(a: CnExpressArticle) -> str:
+    """Compact table identity for the plan, e.g. 's4 CNY 2026-07' — enough to
+    pair a harvested id back to the right table without re-reading the title."""
+    return f"s{a.section} {a.currency or '??'} {a.period:%Y-%m}"
+
+
+def format_harvest_plan(articles: list[CnExpressArticle]) -> str:
+    """Human-runnable harvest plan: the render worklist plus a ready-to-fill
+    `bridge` command. The one manual step left is reading each 19-digit
+    attachment id off its rendered WPS viewer; everything either side of that
+    (which articles, which order, the bridge invocation) is spelled out so a
+    drop-morning harvest is copy-paste, not a hunt."""
+    if not articles:
+        return ("cn harvest plan: nothing to harvest — every recognised "
+                "section-4/5/6 table on the index is already in the DB.")
+    lines = [
+        f"cn harvest plan: {len(articles)} table(s) published upstream and "
+        "not yet in the DB.",
+        "",
+        "  render each URL in a real browser (claude-in-chrome / Chrome — "
+        "headless fails the WAF), read the 19-digit attachment id off the WPS "
+        "viewer (it is the iframe's title), then run the bridge below:",
+        "",
+    ]
+    for a in articles:
+        lines.append(f"    [{_harvest_label(a)}] {a.url}")
+    lines += [
+        "",
+        "  bridge (replace each <id-…> with the harvested attachment id):",
+        "    gacc_cn.py bridge \\",
+    ]
+    last = len(articles) - 1
+    for i, a in enumerate(articles):
+        slug = "<id-" + _harvest_label(a).replace(" ", "-") + ">"
+        cont = " \\" if i < last else ""
+        lines.append(f"      --attachment-id {slug} "
+                     f"--article-url {a.url}{cont}")
+    return "\n".join(lines)
+
+
 def probe_cn_express(dry_run: bool = False,
                      index_url: str = CN_EXPRESS_INDEX_URL) -> CnDiscoveryOutcome:
     """Walk the CN Express index once: fetch, classify titles, and for each
@@ -1134,6 +1194,16 @@ def main() -> None:
                           "position. Optional provenance; omit and the xls "
                           "URL alone is recorded.")
     brg.add_argument("--dry-run", action="store_true")
+    hp = sub.add_parser(
+        "harvest-plan",
+        help="From a real-browser-fetched CN Express index HTML, print the "
+             "render worklist + a ready-to-fill `bridge` scaffold for a "
+             "browser-assisted harvest. The index is WAF-gated to plain HTTP, "
+             "so capture it with claude-in-chrome / Chrome and pass the file.")
+    hp.add_argument("--index-html", required=True, metavar="PATH",
+                    help="Path to the saved index HTML ('-' reads stdin).")
+    hp.add_argument("--base-url", default=CN_EXPRESS_INDEX_URL,
+                    help="Base URL for resolving relative article links.")
     args = p.parse_args()
     if args.cmd == "discover":
         outcome = probe_cn_express(dry_run=args.dry_run,
@@ -1147,6 +1217,15 @@ def main() -> None:
         if outcome.error:
             print(f"  errors: {outcome.error}")
         sys.exit(0 if outcome.status not in ("unavailable", "challenged") else 1)
+    elif args.cmd == "harvest-plan":
+        if args.index_html == "-":
+            index_html = sys.stdin.buffer.read()
+        else:
+            with open(args.index_html, "rb") as f:
+                index_html = f.read()
+        articles = plan_cn_harvest(index_html, base_url=args.base_url)
+        print(format_harvest_plan(articles))
+        sys.exit(0)
     elif args.cmd == "bridge":
         article_urls = args.article_urls or []
         failed = 0
