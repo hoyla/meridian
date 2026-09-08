@@ -19,6 +19,7 @@ where M = monthly, SP00.A = foreign exchange reference rate / average.
 
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 
@@ -135,3 +136,65 @@ def populate_fx_rates_from_ecb(
             else:
                 counts["skipped_existing"] += 1
     return counts
+
+
+# Currencies every analysis cycle needs converted to EUR: CNY for the GACC
+# pages, GBP for HMRC's ingest-time conversion, USD for the USD-side GACC rows.
+DEFAULT_REFRESH_CURRENCIES: tuple[str, ...] = ("CNY", "GBP", "USD")
+
+# How far back each routine top-up asks ECB for. Long enough to self-heal a
+# few missed cycles or a late ECB revision, short enough to stay a small
+# request. The full history is a one-off `--fetch-fx CCY` with no --fx-since.
+REFRESH_LOOKBACK_MONTHS = 6
+
+
+def _months_before(anchor: date, months: int) -> date:
+    """First of the month `months` before `anchor`'s month."""
+    n = anchor.year * 12 + (anchor.month - 1) - max(0, months)
+    return date(n // 12, n % 12 + 1, 1)
+
+
+def ensure_recent_rates(
+    currencies: Sequence[str] | None = None,
+    lookback_months: int = REFRESH_LOOKBACK_MONTHS,
+    today: date | None = None,
+) -> dict[str, dict[str, int] | str]:
+    """Top up `fx_rates` with any newly-published ECB monthly averages.
+
+    Runs at the head of every analysis cycle, and lazily from the HMRC
+    ingest, so a conversion never reaches `lookups.lookup_fx` with the
+    month's rate missing. This exists because nothing refreshed the table:
+    it was filled by a single manual `--fetch-fx` on 10-11 May 2026 and
+    then silently went stale until September, converting four months of
+    GACC and HMRC data at April's rate.
+
+    Cheap and idempotent — one small SDMX request per currency over a short
+    trailing window, inserted ON CONFLICT DO NOTHING, so a re-run on
+    unchanged data is a no-op. Errors are logged and swallowed rather than
+    raised: a refresh outage must never sink a cycle, and the strict lookup
+    downstream then refuses the conversion, which fails loud, not wrong.
+
+    Returns {currency: counts-dict} — or {currency: error-string} for a
+    currency whose fetch failed — so callers can record it in a run log.
+    """
+    ccys = tuple(currencies) if currencies is not None else DEFAULT_REFRESH_CURRENCIES
+    since = _months_before(today or date.today(), lookback_months)
+    out: dict[str, dict[str, int] | str] = {}
+    for ccy in ccys:
+        ccy = ccy.upper()
+        try:
+            counts = populate_fx_rates_from_ecb(ccy, since=since)
+            out[ccy] = counts
+            if counts.get("inserted"):
+                log.info(
+                    "FX refresh: %s/EUR — %d new monthly rate(s) since %s",
+                    ccy, counts["inserted"], since.isoformat()[:7],
+                )
+        except Exception as exc:  # network, ECB outage, malformed payload
+            log.warning(
+                "FX refresh failed for %s/EUR (continuing; a missing month "
+                "will be refused by lookup_fx rather than mis-converted): %s",
+                ccy, exc,
+            )
+            out[ccy] = f"error: {exc}"
+    return out

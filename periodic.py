@@ -32,6 +32,7 @@ from typing import Any
 
 import anomalies
 import briefing_pack
+import fx
 import llm_framing
 import portal_publish  # cheap — its GCS deps are lazy-imported inside functions
 
@@ -515,8 +516,15 @@ def _run_periodic_cycle(
         _persist_log(result)
         return result
 
+    # Top up FX before anything converts. The rates table has no other
+    # refresh: it was filled by a one-off manual --fetch-fx in May 2026 and
+    # went stale for four months, converting GACC and HMRC data at April's
+    # rate and putting published EUR year-on-year figures ~4 points out.
+    # Idempotent and best-effort — see fx.ensure_recent_rates.
+    counts_fx = fx.ensure_recent_rates()
+
     # --- Step 2: run all analyser kinds across all scope/flow combos. ---
-    counts: dict[str, Any] = {}
+    counts: dict[str, Any] = {"fx_refresh": counts_fx}
     _run_analyser = _run_analyser_logged
 
     counts["mirror_trade"] = _run_analyser(
@@ -912,8 +920,15 @@ def _run_gacc_update_cycle(
             _persist_log(result)
             return result
 
+    # Top up FX before anything converts. The rates table has no other
+    # refresh: it was filled by a one-off manual --fetch-fx in May 2026 and
+    # went stale for four months, converting GACC and HMRC data at April's
+    # rate and putting published EUR year-on-year figures ~4 points out.
+    # Idempotent and best-effort — see fx.ensure_recent_rates.
+    counts_fx = fx.ensure_recent_rates()
+
     # --- Re-run the GACC analyser families (idempotent per-finding). ---
-    counts: dict[str, Any] = {}
+    counts: dict[str, Any] = {"fx_refresh": counts_fx}
     for flow_str in ("export", "import"):
         key = f"gacc_aggregate_yoy_{flow_str}"
         counts[key] = _run_analyser_logged(

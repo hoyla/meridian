@@ -105,7 +105,39 @@ def test_lookup_fx_returns_rate_when_seeded(test_db_url, empty_fx_table):
     assert r.rate_date == date(2026, 2, 1)
     assert "ECB" in r.rate_source
 
-    # Earlier period falls back to the earlier rate.
+    # A mid-month period resolves to its own month's rate.
     r_earlier = lookups.lookup_fx("CNY", "EUR", date(2026, 1, 15))
     assert r_earlier.rate == 0.131
     assert r_earlier.rate_date == date(2026, 1, 1)
+
+
+def test_lookup_fx_refuses_a_stale_neighbouring_month(test_db_url, empty_fx_table):
+    """A rate from another month is never carried forward.
+
+    Regression cover for the Sept-2026 incident: fx_rates froze at 2026-04
+    and every later period silently converted at April's rate. Levels were
+    a few percent out, but the real damage was to year-on-year ratios — the
+    prior-year comparator carried its own correct rate, so the error was
+    one-sided and moved published EUR-basis YoY figures by ~4 points with a
+    provenance drawer that still looked honest.
+
+    Refusing to convert leaves a visible gap. Converting at a neighbouring
+    month's rate is a confident lie, so None is the correct answer here.
+    """
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO fx_rates (currency_from, currency_to, rate_date, rate, rate_source) "
+            "VALUES ('CNY', 'EUR', %s, 0.125, 'ECB monthly average')",
+            (date(2026, 4, 1),),
+        )
+
+    # April itself resolves.
+    assert lookups.lookup_fx("CNY", "EUR", date(2026, 4, 1)) is not None
+
+    # Every later month refuses, however recent — no carry-forward, no
+    # "closest available" guess, and no silent success.
+    assert lookups.lookup_fx("CNY", "EUR", date(2026, 5, 1)) is None
+    assert lookups.lookup_fx("CNY", "EUR", date(2026, 7, 15)) is None
+
+    # And an earlier month with no rate of its own refuses too.
+    assert lookups.lookup_fx("CNY", "EUR", date(2026, 3, 1)) is None

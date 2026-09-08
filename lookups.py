@@ -148,20 +148,35 @@ class FxRate:
 
 
 def lookup_fx(currency_from: str, currency_to: str, period: date) -> FxRate | None:
-    """Find the most recent FX rate for the given currency pair on or before
-    the period anchor. Returns None if no rate is available — caller must handle
-    by skipping the conversion and recording a caveat rather than guessing.
+    """Find the FX rate for the given currency pair in the period's OWN month.
+
+    Strict by design: only a rate whose `rate_date` is the first of `period`'s
+    month is returned, and there is deliberately no carry-forward from an
+    earlier month. A stale rate does not merely shift a level — it corrupts
+    every year-on-year ratio built from it, because the prior-year comparator
+    carries its own correct rate, so the distortion is one-sided and invisible.
+    That failure ran undetected from May to September 2026 (rates froze at
+    2026-04) and put EUR-basis YoY figures ~4 points out on a published page.
+
+    Returns None when the month's rate is absent — the caller must skip the
+    conversion and record a caveat rather than guessing. Refusing to convert
+    is a visible gap; converting at the wrong rate is a confident lie.
+
+    ECB publishes a month's average within the first working days of the next
+    month, ahead of every source we ingest, so in normal operation the rate is
+    always there — `fx.ensure_recent_rates()` runs before each analysis cycle.
     """
+    period_month = period.replace(day=1)
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         cur.execute(
             """
             SELECT id, rate, rate_date, rate_source, rate_source_url
               FROM fx_rates
-             WHERE currency_from = %s AND currency_to = %s AND rate_date <= %s
-          ORDER BY rate_date DESC
+             WHERE currency_from = %s AND currency_to = %s AND rate_date = %s
+          ORDER BY id DESC
              LIMIT 1
             """,
-            (currency_from, currency_to, period),
+            (currency_from, currency_to, period_month),
         )
         row = cur.fetchone()
     if row is None:
