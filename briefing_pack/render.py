@@ -147,6 +147,34 @@ def latest_gacc_release_seen_at() -> datetime | None:
         return row[0] if row else None
 
 
+def latest_gacc_renderable_period() -> date | None:
+    """The GACC month the page would actually RENDER, not the newest month
+    ingested. None when no GACC page can be built at all.
+
+    These two diverge whenever a reference month is ingested but is not yet
+    renderable, and the difference matters because the track's published
+    marker must record what readers were shown. On 2026-09-08 GACC put out
+    section 4 in USD only; the by-country analyser pins to CNY releases
+    (USD duplicates the same transactions), so 2026-08 sat in `releases`
+    while the page still rendered 2026-07. Recording max(releases.period)
+    marked August published, which would have suppressed the new-period
+    path — and with it the fresh LLM takes — on the real August drop.
+
+    Mirrors `report_builder._gacc_latest_period`, which is what actually
+    anchors the page; `test_renderable_period_matches_the_page_anchor`
+    pins the two together so they cannot drift apart.
+    """
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT max((detail->'windows'->>'current_end')::date)
+                 FROM findings
+                WHERE subkind = 'gacc_aggregate_yoy'
+                  AND superseded_at IS NULL"""
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
 def latest_gacc_update_run_at() -> datetime | None:
     """generated_at of the most recent gacc_update brief_runs row, or None
     if the GACC track has never run. The refresh-detection baseline."""
@@ -160,19 +188,26 @@ def latest_gacc_update_run_at() -> datetime | None:
 
 
 def record_gacc_update_run(
-    data_period: date,
+    data_period: date | None,
     output_path: str | None = None,
     notes: str | None = None,
 ) -> None:
     """Record a GACC-track run in brief_runs (trigger='gacc_update').
 
-    `data_period` is the GACC reference month — NOT Eurostat freshness;
+    `data_period` is the GACC reference month the page RENDERED — not the
+    newest month ingested, and NOT Eurostat freshness;
     the two tracks' data_period conventions differ by a month, which is
     why every baseline read is trigger-scoped. `output_path` is the GACC
     page snapshot dir once the page build exists (PR 2 of the design doc);
     None until then — the row still marks "GACC track processed this
     period" for idempotency and audit. `notes` marks refresh rows
-    (dual-currency second release) apart from new-period rows."""
+    (dual-currency second release) apart from new-period rows.
+
+    `data_period` may be None when the cycle rendered no GACC page at all
+    (snapshot failure, or no by-country anchor yet). The row is still
+    written for audit, but a NULL period leaves the published marker where
+    it was, so the next cycle retries instead of silently skipping the
+    month — `latest_recorded_data_period` reads MAX over non-NULL rows."""
     _record_brief_run(
         out_path=output_path,
         top_n=None,

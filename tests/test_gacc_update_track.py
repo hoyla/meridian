@@ -282,3 +282,103 @@ def test_gacc_track_logs_noop_cycles(fresh_db, test_db_url):
         )
         rows = [r[0] for r in cur.fetchall()]
     assert rows == [True, False]
+
+
+# ---------------------------------------------------------------------------
+# The published marker must describe what the page RENDERED, not what was
+# ingested. Regression cover for 2026-09-08: GACC published section 4 in USD
+# only, so 2026-08 landed in `releases` while the by-country analyser (which
+# pins to CNY) left the page rendering 2026-07. The track recorded 2026-08 as
+# published, and because `latest_recorded_data_period` is a MAX, that marker
+# could never be outvoted by a later correct row — the real August drop would
+# have been treated as an already-published month, skipping fresh LLM takes.
+# ---------------------------------------------------------------------------
+
+def _seed_gacc_anchor(test_db_url, current_end: date) -> None:
+    """A live gacc_aggregate_yoy finding — what the page anchors its rendered
+    month on (report_builder._gacc_latest_period)."""
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO scrape_runs (source_url, status) "
+            "VALUES ('https://example.invalid/anchor', 'success') RETURNING id"
+        )
+        run_id = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO findings (scrape_run_id, kind, subkind, title, "
+            "natural_key_hash, value_signature, detail) "
+            "VALUES (%s, 'anomaly', 'gacc_aggregate_yoy', 'anchor', %s, 'v', "
+            "%s::jsonb)",
+            (run_id, f"nk-{current_end}",
+             '{"windows": {"current_end": "%s"}}' % current_end.isoformat()),
+        )
+
+
+def test_renderable_period_matches_the_page_anchor(fresh_db, test_db_url):
+    """briefing_pack's helper and the report builder must agree on which
+    month the page shows, or the track's bookkeeping drifts from reality."""
+    import report_builder
+
+    _seed_gacc_anchor(test_db_url, date(2026, 7, 1))
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        from_builder = report_builder._gacc_latest_period(cur)
+
+    assert briefing_pack.latest_gacc_renderable_period() == from_builder
+    assert from_builder == date(2026, 7, 1)
+
+
+def test_partial_release_records_the_rendered_month_not_the_ingested_one(
+    fresh_db, test_db_url,
+):
+    """August ingested, page still on July: record July."""
+    _seed_gacc_release(test_db_url, date(2026, 8, 1), currency="USD")
+    _seed_gacc_anchor(test_db_url, date(2026, 7, 1))
+
+    result = periodic.run_gacc_update()
+
+    assert result.action_taken is True
+    rows = _gacc_brief_rows(test_db_url)
+    assert [r[0] for r in rows] == [date(2026, 7, 1)], (
+        "the marker must record the month readers were shown"
+    )
+    assert briefing_pack.latest_recorded_data_period(
+        trigger="gacc_update") == date(2026, 7, 1)
+    # And the operator is told, rather than reading "new GACC period 2026-08".
+    assert "still renders 2026-07-01" in result.reason
+    assert "2026-08-01" in result.reason
+
+
+def test_a_lagging_page_does_not_burn_fresh_takes(fresh_db, test_db_url):
+    """No new month reached readers, so no paid regeneration."""
+    _seed_gacc_release(test_db_url, date(2026, 8, 1), currency="USD")
+    _seed_gacc_anchor(test_db_url, date(2026, 7, 1))
+    _seed_main_brief_run(test_db_url, date(2026, 7, 1), trigger="gacc_update")
+
+    calls = fresh_db
+    periodic.run_gacc_update()
+
+    assert calls, "the snapshot should still rebuild"
+    assert calls[-1]["generate_gacc_takes"] is False
+
+
+def test_takes_regenerate_when_the_anchor_finally_advances(
+    fresh_db, test_db_url,
+):
+    """The drop-day path: once section 4 CNY lands and the anchor moves to
+    August, the cycle must treat it as a new month and generate fresh takes —
+    the graft deliberately refuses to carry July's takes onto an August page,
+    so without this the page would publish with empty slots."""
+    _seed_gacc_release(test_db_url, date(2026, 8, 1), currency="USD")
+    _seed_gacc_anchor(test_db_url, date(2026, 7, 1))
+    periodic.run_gacc_update()          # partial release: records July
+
+    # Section 4 CNY arrives; the analysers move the anchor to August.
+    _seed_gacc_release(test_db_url, date(2026, 8, 1), currency="CNY")
+    _seed_gacc_anchor(test_db_url, date(2026, 8, 1))
+
+    calls = fresh_db
+    result = periodic.run_gacc_update()
+
+    assert result.action_taken is True
+    assert calls[-1]["generate_gacc_takes"] is True
+    assert briefing_pack.latest_recorded_data_period(
+        trigger="gacc_update") == date(2026, 8, 1)
