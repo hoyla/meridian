@@ -964,11 +964,37 @@ def _run_gacc_update_cycle(
     # NEW-PERIOD path only (~2 paid calls a month) — a quiet refresh keeps
     # the existing slots via the gacc graft (same GACC month, no fresh
     # spend), and skip_llm turns generation off entirely.
+    # What the page will actually RENDER, read after the analysers have run
+    # (a newly-ingested release only moves the anchor once its findings
+    # exist). The published marker and the take-generation gate both key off
+    # this, never off max(releases.period): on 2026-09-08 GACC published
+    # section 4 in USD only, so August was ingested while the page still
+    # rendered July. Recording the ingested month then marked August
+    # published, which would have suppressed fresh takes on the real drop.
+    renderable = briefing_pack.latest_gacc_renderable_period()
+    # When no GACC month renders at all (no anchor findings yet — a fresh
+    # deployment, not a partial release), fall back to the ingested month so
+    # the track keeps its documented fire-once-per-period contract instead of
+    # re-firing forever. That state has no published page for the marker to
+    # describe. The defect this guards against is the other case: a page that
+    # DID render, just for an older month than the one ingested.
+    recorded_period = renderable if renderable is not None else latest_gacc
+    page_advances = published is None or recorded_period > published
+    if renderable is not None and latest_gacc > renderable:
+        log.warning(
+            "gacc-update: ingested %s but the page renders %s — the "
+            "by-country anchor has not advanced (GACC section 4 CNY is the "
+            "usual missing piece; the USD release alone does not move it). "
+            "Recording the rendered month, so the next cycle still treats "
+            "the newer month as new.",
+            latest_gacc, renderable,
+        )
+
     portal_dir = write_portal_snapshot(
         bundle_dir,
         briefing_pack.latest_eurostat_period(),
         generate_takes=False,
-        generate_gacc_takes=(new_period or force) and not skip_llm,
+        generate_gacc_takes=(page_advances or force) and not skip_llm,
         write_workbook=True,  # publish-ready: /data.xlsx must resolve
         reuse_takes=bool(bucket),
         portal_bucket=bucket,
@@ -987,8 +1013,21 @@ def _run_gacc_update_cycle(
     else:
         notes = None
         reason = f"new GACC period {latest_gacc} recorded"
+
+    # Say plainly when the page lags the ingest, on both the run log row and
+    # the returned reason. This is the signal that was missing on
+    # 2026-09-08: the cycle reported "new GACC period 2026-08-01 recorded"
+    # while publishing July, and nothing contradicted it.
+    if renderable is not None and latest_gacc > renderable:
+        lag = (
+            f"page still renders {renderable} (ingested {latest_gacc}; "
+            f"by-country anchor has not advanced)"
+        )
+        notes = f"{notes}; {lag}" if notes else lag
+        reason = f"{reason} — but {lag}"
+
     briefing_pack.record_gacc_update_run(
-        data_period=latest_gacc, output_path=portal_dir, notes=notes,
+        data_period=recorded_period, output_path=portal_dir, notes=notes,
     )
 
     result = GaccUpdateResult(
