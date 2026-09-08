@@ -97,3 +97,64 @@ def test_populate_no_op_when_fetch_returns_nothing(empty_fx_table):
     with patch("fx.fetch_ecb_monthly_rates", return_value=[]):
         result = fx.populate_fx_rates_from_ecb("CNY")
     assert result == {"inserted": 0, "skipped_existing": 0, "total_fetched": 0}
+
+
+# ---------------------------------------------------------------------------
+# ensure_recent_rates — the routine top-up that keeps the table from freezing.
+#
+# Regression cover for the Sept-2026 incident: fx_rates was populated by a
+# single manual --fetch-fx in May 2026 and nothing ever refreshed it, so four
+# months of GACC and HMRC data converted at April's rate.
+# ---------------------------------------------------------------------------
+
+def test_ensure_recent_rates_fetches_each_default_currency(empty_fx_table):
+    """All three conversion pairs the pipeline needs are refreshed, not just one."""
+    asked: list[str] = []
+
+    def _fake(currency_from, since=None, **kw):
+        asked.append(currency_from)
+        return []
+
+    with patch("fx.fetch_ecb_monthly_rates", side_effect=_fake):
+        out = fx.ensure_recent_rates()
+
+    assert asked == ["CNY", "GBP", "USD"]
+    assert set(out) == {"CNY", "GBP", "USD"}
+
+
+def test_ensure_recent_rates_inserts_then_is_a_no_op(empty_fx_table):
+    """Idempotent: a second pass over unchanged ECB data inserts nothing."""
+    parsed = fx.parse_ecb_response(
+        _load_fixture_text(), currency_from="CNY", source_url=FIXTURE_URL,
+    )
+    with patch("fx.fetch_ecb_monthly_rates", return_value=parsed):
+        first = fx.ensure_recent_rates(("CNY",))
+        second = fx.ensure_recent_rates(("CNY",))
+
+    assert first["CNY"]["inserted"] == 7
+    assert second["CNY"]["inserted"] == 0
+    assert second["CNY"]["skipped_existing"] == 7
+
+
+def test_ensure_recent_rates_swallows_fetch_failure(empty_fx_table):
+    """An ECB outage must not sink the cycle — the strict lookup downstream
+    refuses the conversion, which fails loud rather than converting wrong."""
+    with patch("fx.fetch_ecb_monthly_rates", side_effect=RuntimeError("ECB down")):
+        out = fx.ensure_recent_rates(("CNY",))
+
+    assert isinstance(out["CNY"], str)
+    assert "ECB down" in out["CNY"]
+
+
+def test_ensure_recent_rates_asks_only_for_a_trailing_window():
+    """The routine top-up is a small request, not the full history."""
+    seen: dict[str, object] = {}
+
+    def _fake(currency_from, since=None, **kw):
+        seen["since"] = since
+        return []
+
+    with patch("fx.fetch_ecb_monthly_rates", side_effect=_fake):
+        fx.ensure_recent_rates(("CNY",), lookback_months=6, today=date(2026, 9, 8))
+
+    assert seen["since"] == date(2026, 3, 1)

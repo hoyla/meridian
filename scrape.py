@@ -561,10 +561,13 @@ def scrape_hmrc(
     """Fetch one HMRC OTS monthly slice (period × China-and-SARs by default),
     persist raw rows, aggregate, persist observations.
 
-    Pre-requisite: the period's GBP/EUR FX rate must be in `fx_rates`.
+    Pre-requisite: the period's OWN-MONTH GBP/EUR rate must be in
+    `fx_rates`. A missing month is topped up from ECB automatically here;
+    if it still cannot be found the ingest is skipped rather than run at a
+    neighbouring month's rate, because the EUR value is computed here and
+    stored, so a wrong rate can only be undone by re-ingesting the period.
     Run `python scrape.py --fetch-fx GBP --fx-since 2017-01` once to
-    populate the full ECB history. Without it the conversion to EUR is
-    skipped (value_eur left NULL on raw rows; observations would sum to 0).
+    populate the full ECB history.
 
     HMRC has no 404 / header trick for "not published yet": the OData query
     simply returns zero rows. An empty period therefore returns
@@ -574,15 +577,24 @@ def scrape_hmrc(
     if country_ids is None:
         country_ids = hmrc.DEFAULT_COUNTRY_IDS
 
-    fx = lookups.lookup_fx("GBP", "EUR", period)
-    if fx is None:
+    # Named fx_row, not fx: `fx` is the module, and shadowing it here once
+    # hid the fact that this function had no way to refresh the rate.
+    fx_row = lookups.lookup_fx("GBP", "EUR", period)
+    if fx_row is None:
+        # The month's ECB average may simply never have been fetched. Top up
+        # and retry once before giving up: HMRC converts at INGEST, so the
+        # rate is baked into stored rows and a wrong or absent one can only
+        # be undone by re-ingesting the whole period.
+        fx.ensure_recent_rates(("GBP",))
+        fx_row = lookups.lookup_fx("GBP", "EUR", period)
+    if fx_row is None:
         msg = (
             f"no GBP/EUR FX rate in fx_rates for {period.strftime('%Y-%m')}; "
             "run --fetch-fx GBP first"
         )
         log.error("HMRC scrape for %s skipped — %s", period.strftime("%Y-%m"), msg)
         return IngestOutcome(status="skipped", error=msg)
-    fx_rate = fx.rate
+    fx_rate = fx_row.rate
 
     initial_url = hmrc.ots_query_url(period, country_ids, hmrc.DEFAULT_PAGE_SIZE)
     log.info("Fetching HMRC OTS for %s (country_ids=%s)", period.strftime("%Y-%m"), country_ids)
