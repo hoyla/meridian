@@ -786,6 +786,12 @@ def _gacc_bilateral_yoy_sheet() -> SheetData:
     surfaces (12mo rolling / YTD / single-month) plus a `visible_caveats`
     column and an explicit `jan_feb_combined_years` column.
 
+    `jan_derived_years` names any year whose January was computed as
+    (February-release YTD − February-release Monthly) rather than published
+    in its own right — an exact identity on two published figures, used from
+    2026 when GACC stopped bundling Jan+Feb into one cumulative. A row with
+    neither column populated rests entirely on separately published months.
+
     The `jan_feb_combined` caveat tells the journalist that part of the
     12mo total came in as a 2-month cumulative chunk (GACC's Chinese-New-
     Year combined release), not as separate monthly figures. Filtering or
@@ -811,6 +817,7 @@ def _gacc_bilateral_yoy_sheet() -> SheetData:
                    (detail->'totals'->'single_month'->>'current_eur')::numeric AS sm_curr_eur,
                    (detail->'totals'->>'partial_window')::boolean AS partial_window,
                    detail->'totals'->'jan_feb_combined_years' AS jan_feb_combined_years,
+                   detail->'totals'->'jan_derived_years' AS jan_derived_years,
                    detail->'caveat_codes' AS caveat_codes
               FROM findings
              WHERE subkind LIKE 'gacc_bilateral_aggregate_yoy%%'
@@ -826,7 +833,8 @@ def _gacc_bilateral_yoy_sheet() -> SheetData:
         "current_end", "rolling_12mo_eur", "rolling_yoy_pct",
         "ytd_yoy_pct", "ytd_current_eur", "ytd_months",
         "single_month_yoy_pct", "single_month_current_eur",
-        "partial_window", "jan_feb_combined_years", "visible_caveats",
+        "partial_window", "jan_feb_combined_years", "jan_derived_years",
+        "visible_caveats",
     ]
     rows = []
     # Sort EU bloc first, then single countries alphabetically — mirrors
@@ -843,6 +851,7 @@ def _gacc_bilateral_yoy_sheet() -> SheetData:
         flow = "export" if r["subkind"] == "gacc_bilateral_aggregate_yoy" else "import"
         visible = _filter_visible_caveats(r["caveat_codes"] or [])
         jfc_years = r["jan_feb_combined_years"] or []
+        jd_years = r["jan_derived_years"] or []
         rows.append([
             r["id"], _link_cell(r["id"]),
             r["partner_label"], r["partner_kind"] or "single_country", flow,
@@ -853,6 +862,7 @@ def _gacc_bilateral_yoy_sheet() -> SheetData:
             _to_float(r["sm_yoy_pct"]), _to_float(r["sm_curr_eur"]),
             bool(r["partial_window"]),
             ", ".join(str(y) for y in jfc_years),
+            ", ".join(str(y) for y in jd_years),
             ", ".join(visible),
         ])
     return SheetData(

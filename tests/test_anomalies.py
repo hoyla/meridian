@@ -1400,3 +1400,184 @@ def test_partner_share_emits_finding_with_value_and_qty_share(empty_op_tables, t
     assert abs(totals["share_kg"] - 0.92) < 1e-6
     # Gap: 92% - 88% = +4pp (positive = qty share exceeds value share).
     assert abs(totals["qty_minus_value_pp"] - 4.0) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Deriving January from a standalone February release.
+#
+# GACC bundled Jan+Feb into one cumulative release every Chinese New Year from
+# 2020 to 2025; 2026 broke that pattern and published February as an ordinary
+# release with both a Monthly column (February alone) and a YTD column
+# (January + February). January is then `ytd - monthly` by definition.
+#
+# Without the derivation a rolling-12mo window ending after February 2026 sums
+# 11 months against a 12-month prior half — the same lopsided-window fault the
+# 2026-05-15 combined-release work removed, reappearing from the other side.
+# On the 2026-09-09 August page it reported China's 12-month exports to the EU
+# at -0.4% when the true figure was about +9.1%.
+# ---------------------------------------------------------------------------
+
+def _seed_feb_release(
+    conn, label: str, year: int, *, monthly: float, ytd: float,
+    flow: str = "export", combined: bool = False, rate: float = 0.125,
+):
+    """One February release. combined=True writes the pre-2026 bundled shape
+    (a single `cumulative_jan_feb` observation); otherwise the 2026 shape with
+    separate `monthly` and `ytd` observations."""
+    period = date(year, 2, 1)
+    kind = "preliminary_jan_feb" if combined else "preliminary"
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO releases (source, section_number, currency, period, release_kind,"
+        " source_url, unit, title, description)"
+        " VALUES ('gacc', 4, 'CNY', %s, %s, %s, 'CNY 100 Million', 't', 'd')"
+        " ON CONFLICT DO NOTHING RETURNING id",
+        (period, kind, f"http://example/gacc-feb-{year}-{kind}.html"),
+    )
+    row = cur.fetchone()
+    if row is None:
+        cur.execute(
+            "SELECT id FROM releases WHERE source='gacc' AND section_number=4"
+            " AND currency='CNY' AND period=%s AND release_kind=%s", (period, kind))
+        row = cur.fetchone()
+    rel_id = row[0]
+    cur.execute(
+        "INSERT INTO scrape_runs (source_url, status) VALUES (%s,'success') RETURNING id",
+        (f"http://example/gacc-feb-{year}-{kind}.html",))
+    run_id = cur.fetchone()[0]
+    kinds = ([("cumulative_jan_feb", ytd)] if combined
+             else [("monthly", monthly), ("ytd", ytd)])
+    for period_kind, val in kinds:
+        cur.execute(
+            "INSERT INTO observations (release_id, scrape_run_id, period_kind, flow,"
+            " partner_country, value_amount, value_currency, source_row)"
+            " VALUES (%s,%s,%s,%s,%s,%s,'CNY','{}')",
+            (rel_id, run_id, period_kind, flow, label, val))
+    for m in (1, 2):
+        cur.execute(
+            "INSERT INTO fx_rates (currency_from, currency_to, rate_date, rate, rate_source)"
+            " VALUES ('CNY','EUR',%s,%s,'test')"
+            " ON CONFLICT (currency_from, currency_to, rate_date, rate_source) DO NOTHING",
+            (date(year, m, 1), rate))
+    conn.commit()
+
+
+def test_january_derived_from_a_standalone_february_release(
+    empty_op_tables, test_db_url,
+):
+    """ytd - monthly, converted at January's OWN rate, citing both sources."""
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_feb_release(conn, "ASEAN", 2026, monthly=300.0, ytd=1000.0)
+        # January's rate deliberately differs from February's: a derived
+        # January must convert at its own month, never at February's.
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE fx_rates SET rate = 0.100 WHERE currency_from='CNY'"
+                " AND rate_date = %s", (date(2026, 1, 1),))
+        conn.commit()
+
+    got = anomalies._gacc_derived_january_by_year("ASEAN", flow="export")
+
+    assert set(got) == {2026}
+    eur, obs_ids = got[2026]
+    # (1000 - 300) * 1e8 * 0.100 = 7.0e9
+    assert abs(eur - 7_000_000_000.0) < 1.0
+    assert len(obs_ids) == 2, "both the ytd and the monthly source must be cited"
+
+
+def test_bundled_jan_feb_release_is_never_split(empty_op_tables, test_db_url):
+    """The pre-2026 combined shape must fall to the 2-month-chunk path.
+
+    Splitting a cumulative would invent per-month figures the source never
+    asserted — the distinction that makes the derivation legitimate.
+    """
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_feb_release(conn, "ASEAN", 2024, monthly=0.0, ytd=900.0, combined=True)
+
+    assert anomalies._gacc_derived_january_by_year("ASEAN", flow="export") == {}
+
+
+def test_a_published_january_is_never_overwritten(empty_op_tables, test_db_url):
+    """2019-style years publish January in its own right; leave them alone."""
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_feb_release(conn, "ASEAN", 2019, monthly=300.0, ytd=1000.0)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO releases (source, section_number, currency, period,"
+                " release_kind, source_url, unit, title, description)"
+                " VALUES ('gacc',4,'CNY',%s,'preliminary',%s,'CNY 100 Million','t','d')"
+                " RETURNING id", (date(2019, 1, 1), "http://example/gacc-jan-2019.html"))
+            rel = cur.fetchone()[0]
+            cur.execute("INSERT INTO scrape_runs (source_url, status)"
+                        " VALUES ('http://example/gacc-jan-2019.html','success') RETURNING id")
+            run = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO observations (release_id, scrape_run_id, period_kind, flow,"
+                " partner_country, value_amount, value_currency, source_row)"
+                " VALUES (%s,%s,'monthly','export','ASEAN',777,'CNY','{}')", (rel, run))
+        conn.commit()
+
+    assert anomalies._gacc_derived_january_by_year("ASEAN", flow="export") == {}
+
+
+def test_derivation_refuses_when_ytd_is_not_above_the_monthly(
+    empty_op_tables, test_db_url,
+):
+    """A non-positive January means the pair is not the cumulative we assume."""
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_feb_release(conn, "ASEAN", 2026, monthly=900.0, ytd=900.0)
+
+    assert anomalies._gacc_derived_january_by_year("ASEAN", flow="export") == {}
+
+
+def test_derived_january_completes_the_window_and_fixes_the_yoy(
+    empty_op_tables, test_db_url,
+):
+    """End to end: the window must sum 12 months against 12, not 11 against 12.
+
+    Prior half is a full 12 × 800. Current half has 11 published months of
+    1200 plus a January recoverable from the February release. Without the
+    derivation the current sum is 11 × 1200 and the YoY reads +37.5%; with it
+    the sum is 12 × 1200 and the YoY is the true +50%.
+    """
+    anchor = date(2026, 12, 1)
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_gacc_aggregate_24mo(
+            conn, "ASEAN", anchor,
+            prior_monthly=[800.0] * 12,
+            current_monthly=[1200.0] * 12,
+        )
+        # Remove the seeded standalone January 2026 and replace it with the
+        # real-world shape: a February release whose ytd covers Jan+Feb.
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM observations o USING releases r WHERE o.release_id=r.id"
+                " AND r.source='gacc' AND r.period=%s", (date(2026, 1, 1),))
+            cur.execute(
+                "INSERT INTO observations (release_id, scrape_run_id, period_kind, flow,"
+                " partner_country, value_amount, value_currency, source_row)"
+                " SELECT r.id, s.id, 'ytd', 'export', 'ASEAN', 2400, 'CNY', '{}'"
+                "   FROM releases r, scrape_runs s WHERE r.source='gacc' AND r.period=%s"
+                "   ORDER BY s.id LIMIT 1", (date(2026, 2, 1),))
+        conn.commit()
+
+    anomalies.detect_gacc_aggregate_yoy(
+        flow="export", aggregate_kinds=["asean"], yoy_threshold_pct=0.10)
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT detail FROM findings WHERE subkind='gacc_aggregate_yoy'"
+            "   AND (detail->'windows'->>'current_end')::date = %s"
+            "   AND superseded_at IS NULL", (anchor,))
+        detail = cur.fetchone()[0]
+
+    totals = detail["totals"]
+    assert totals["missing_months_current"] == [], (
+        "January must be filled, not reported missing"
+    )
+    assert abs(totals["yoy_pct"] - 0.5) < 1e-9, (
+        f"expected the true +50%, got {totals['yoy_pct']:.4f} — a lopsided "
+        f"11-vs-12 window reads +37.5%"
+    )
+    assert totals["jan_derived_years"] == [2026]
+    assert "jan_derived_from_feb" in detail["caveat_codes"]

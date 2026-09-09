@@ -861,6 +861,13 @@ INSERT INTO caveats (code, summary, detail, applies_to) VALUES
    ARRAY['gacc_bilateral_aggregate_yoy', 'gacc_bilateral_aggregate_yoy_import',
          'gacc_aggregate_yoy', 'gacc_aggregate_yoy_import']);
 
+INSERT INTO caveats (code, summary, detail, applies_to) VALUES
+  ('jan_derived_from_feb',
+   'January is computed as (February-release YTD − February-release Monthly), not published as its own release',
+   'From 2026 GACC publishes February as an ordinary release carrying both a Monthly column (February alone) and a YTD column (January + February), instead of the single Jan+Feb cumulative it issued each Chinese New Year from 2020 to 2025. January therefore has no release of its own, but it is not missing: it is the YTD minus the Monthly, an exact identity on two figures GACC itself published. That is arithmetic, not interpolation, which is why it is safe where splitting a combined Jan+Feb cumulative 50/50 would not be — the analyser still refuses to do the latter. The derived month fills rolling-12mo windows but never anchors a finding, because no January release exists to date one against. Both source observations are carried in the finding''s observation_ids so the provenance drawer shows the whole chain. detail.totals.jan_derived_years lists which years a window relied on. Editorial implication: the 12-month total and YoY cover all 12 months and are directly comparable with a prior half that used a bundled Jan+Feb chunk; without the derivation they would not be.',
+   ARRAY['gacc_bilateral_aggregate_yoy', 'gacc_bilateral_aggregate_yoy_import',
+         'gacc_aggregate_yoy', 'gacc_aggregate_yoy_import']);
+
 -- Phase 2.1: known transshipment hubs. Each row should carry an evidence_url
 -- documenting the editorial basis. These are starting points — journalists
 -- can extend the table for new investigations.
