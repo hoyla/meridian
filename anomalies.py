@@ -3164,6 +3164,20 @@ def detect_gacc_aggregate_yoy(
             eur_by_period: dict[date, float] = {p: e for p, e, _ in series}
             obs_by_period: dict[date, list[int]] = {p: ids for p, _, ids in series}
             periods_sorted = sorted(eur_by_period.keys())
+            # Fill any January recoverable from a standalone February
+            # release as `ytd - monthly`. Done AFTER `periods_sorted` so a
+            # derived January fills windows but never becomes an ANCHOR:
+            # GACC published no January release, so a finding dated "as at
+            # January" would imply a release that does not exist.
+            derived_jan = _gacc_derived_january_by_year(agg["raw_label"], flow=flow)
+            derived_jan_periods: set[date] = set()
+            for _yr, (_eur, _ids) in derived_jan.items():
+                _jan = date(_yr, 1, 1)
+                if _jan not in eur_by_period:
+                    eur_by_period[_jan] = _eur
+                    obs_by_period[_jan] = _ids
+                    derived_jan_periods.add(_jan)
+
 
             for t in periods_sorted:
                 start_curr = _months_back(t, 11)
@@ -3294,6 +3308,10 @@ def detect_gacc_aggregate_yoy(
                 jan_feb_years_used = sorted(
                     {m.year for m in covered_curr + covered_prior}
                 )
+                jan_derived_used = sorted(
+                    {d.year for d in derived_jan_periods
+                     if start_prior <= d <= end_curr}
+                )
                 action = _insert_gacc_aggregate_yoy_finding(
                     analysis_run_id, agg, t, start_curr, end_curr,
                     start_prior, end_prior,
@@ -3305,6 +3323,7 @@ def detect_gacc_aggregate_yoy(
                     ytd_block=ytd_block,
                     sm_block=sm_block,
                     jan_feb_combined_years=jan_feb_years_used,
+                    jan_derived_years=jan_derived_used,
                 )
                 _tally(counts, action)
 
@@ -3474,6 +3493,136 @@ def _gacc_jan_feb_cumulatives_by_year(
     return by_year
 
 
+def _gacc_derived_january_by_year(
+    aggregate_label: str, flow: str = "export",
+) -> dict[int, tuple[float, list[int]]]:
+    """Returns {year: (eur, [obs_ids])} for each January recoverable from a
+    STANDALONE February release, as `ytd - monthly`.
+
+    GACC usually bundles Chinese-New-Year January and February into one
+    cumulative release, which `_gacc_jan_feb_cumulatives_by_year` handles as
+    an unsplittable 2-month chunk. 2026 broke that pattern: February was
+    published as an ordinary release carrying both a Monthly column (February
+    alone) and a YTD column (January + February). When that happens January
+    is not missing at all — it is `ytd - monthly` by definition, since the
+    cumulative IS Jan+Feb and the monthly IS Feb.
+
+    This is an algebraic identity on two published figures, not interpolation
+    and not estimation, which is why it is safe where splitting a combined
+    cumulative 50/50 would not be. Both source observations are returned so
+    the finding's provenance shows the whole arithmetic chain.
+
+    Without this, a rolling-12mo window ending after February compares 11
+    months against a 12-month prior half — the exact lopsided-window fault
+    the 2026-05-15 combined-release work was built to remove, reappearing
+    from the other side. On the 2026-09-09 August page it put China's
+    12-month exports to the EU at -0.4% when the true figure was about
+    +9.1%, a sign flip.
+
+    Only years with a real Feb release AND no standalone January observation
+    are derived; a year that already has its own January is left alone.
+    """
+    with _conn() as conn, conn.cursor() as cur:
+        # Same DISTINCT-ON dedup shape as `_gacc_aggregate_per_period_totals`.
+        # release_kind excludes the bundled Jan+Feb pages: those carry a
+        # `cumulative_jan_feb` observation instead and must NOT be split.
+        cur.execute(
+            """
+            SELECT period, period_kind, value_amount, unit, obs_id FROM (
+                SELECT DISTINCT ON (
+                           o.release_id, o.partner_country, o.period_kind,
+                           o.flow, o.hs_code
+                       )
+                       r.period,
+                       o.period_kind,
+                       o.value_amount,
+                       r.unit,
+                       o.id AS obs_id
+                  FROM observations o
+                  JOIN releases r ON r.id = o.release_id
+                 WHERE r.source = 'gacc'
+                   AND r.currency = 'CNY'
+                   AND r.release_kind <> 'preliminary_jan_feb'
+                   AND EXTRACT(MONTH FROM r.period) = 2
+                   AND o.flow = %s
+                   AND o.period_kind IN ('monthly', 'ytd')
+                   AND o.partner_country = %s
+                   AND o.value_amount IS NOT NULL
+              ORDER BY o.release_id, o.partner_country, o.period_kind,
+                       o.flow, o.hs_code, o.version_seen DESC
+            ) latest
+            """,
+            (flow, aggregate_label),
+        )
+        feb_rows = cur.fetchall()
+
+        # Years that already publish a standalone January — never derive over
+        # a figure GACC actually reported.
+        cur.execute(
+            """
+            SELECT DISTINCT EXTRACT(YEAR FROM r.period)::int
+              FROM observations o
+              JOIN releases r ON r.id = o.release_id
+             WHERE r.source = 'gacc'
+               AND r.currency = 'CNY'
+               AND EXTRACT(MONTH FROM r.period) = 1
+               AND o.period_kind = 'monthly'
+               AND o.flow = %s
+               AND o.partner_country = %s
+               AND o.value_amount IS NOT NULL
+            """,
+            (flow, aggregate_label),
+        )
+        have_january = {r[0] for r in cur.fetchall()}
+
+    # Collect the Feb monthly and ytd sides per year, summing where several
+    # releases contribute to the same slot (mirrors the sibling helpers).
+    per_year: dict[int, dict[str, tuple[float, list[int], str | None]]] = {}
+    for period, period_kind, value_amount, unit, obs_id in feb_rows:
+        scale, currency = parse_unit_scale(unit)
+        if scale is None:
+            continue
+        native = float(value_amount) * scale
+        slot = per_year.setdefault(period.year, {})
+        prev = slot.get(period_kind)
+        if prev is None:
+            slot[period_kind] = (native, [obs_id], currency)
+        else:
+            slot[period_kind] = (prev[0] + native, prev[1] + [obs_id], prev[2])
+
+    out: dict[int, tuple[float, list[int]]] = {}
+    for year, slot in per_year.items():
+        if year in have_january:
+            continue
+        if "monthly" not in slot or "ytd" not in slot:
+            continue
+        feb_native, feb_ids, ccy_m = slot["monthly"]
+        ytd_native, ytd_ids, ccy_y = slot["ytd"]
+        jan_native = ytd_native - feb_native
+        if jan_native <= 0:
+            # ytd below its own monthly means the pair is not the clean
+            # Jan+Feb cumulative we think it is. Refuse rather than emit a
+            # negative or zero month.
+            log.warning(
+                "Skipping derived January %s for %r/%s — ytd (%s) is not "
+                "above the February monthly (%s)",
+                year, aggregate_label, flow, ytd_native, feb_native,
+            )
+            continue
+        jan_period = date(year, 1, 1)
+        fx = lookups.lookup_fx(ccy_m or ccy_y or "CNY", "EUR", jan_period)
+        if fx is None:
+            # January's own rate, never February's — a neighbouring month's
+            # rate is exactly what `lookups.lookup_fx` now refuses to supply.
+            log.info(
+                "Cannot derive January %s for %r/%s — no own-month FX rate",
+                year, aggregate_label, flow,
+            )
+            continue
+        out[year] = (jan_native * fx.rate, sorted(set(ytd_ids + feb_ids)))
+    return out
+
+
 def _add_jan_feb_combined_to_window(
     *,
     eur_by_period: dict[date, float],
@@ -3536,6 +3685,7 @@ def _insert_gacc_aggregate_yoy_finding(
     ytd_block: dict | None = None,
     sm_block: dict | None = None,
     jan_feb_combined_years: list[int] | None = None,
+    jan_derived_years: list[int] | None = None,
 ) -> findings_io.EmitAction:
     direction = "up" if yoy_pct > 0 else "down"
     flow_label = "China exports to" if flow == "export" else "China imports from"
@@ -3585,11 +3735,19 @@ def _insert_gacc_aggregate_yoy_finding(
         body_lines.append("")
         body_lines.append(
             f"⚠ PARTIAL WINDOW: {n_missing} of 24 months missing from this window "
-            f"({missing_strs}). For 2026 onwards, GACC publishes February as its "
-            f"own release and a January monthly can be derived from "
-            f"(Feb-release YTD − Feb-release Monthly) — that derivation is a "
-            f"separate planned enhancement. Sums are over available data only; "
-            f"treat the YoY as approximate. See caveat 'partial_window'."
+            f"({missing_strs}). Sums are over available data only; treat the "
+            f"YoY as approximate. See caveat 'partial_window'."
+        )
+    if jan_derived_years:
+        caveat_codes.append("jan_derived_from_feb")
+        dyears = ", ".join(str(y) for y in sorted(jan_derived_years))
+        body_lines.append("")
+        body_lines.append(
+            f"ℹ JANUARY DERIVED: January {dyears} is not published as its own "
+            f"GACC release; it is computed as (February-release YTD − "
+            f"February-release Monthly), an exact identity on two published "
+            f"figures rather than an estimate. Both source observations are "
+            f"cited. See caveat 'jan_derived_from_feb'."
         )
     if jan_feb_combined_years:
         caveat_codes.append("jan_feb_combined")
@@ -3635,6 +3793,7 @@ def _insert_gacc_aggregate_yoy_finding(
             # pattern; see caveat 'jan_feb_combined'). Empty list when
             # no combined-release coverage was used.
             "jan_feb_combined_years": sorted(jan_feb_combined_years or []),
+            "jan_derived_years": sorted(jan_derived_years or []),
             # YTD cumulative — Jan..anchor of current year vs same range
             # prior year. Null when either side is missing (GACC's Jan-Feb-
             # combined gap means early-year anchors often lack a comparable
@@ -3858,6 +4017,20 @@ def detect_gacc_bilateral_aggregate_yoy(
             eur_by_period: dict[date, float] = {pd: e for pd, e, _ in monthly_series}
             obs_by_period: dict[date, list[int]] = {pd: ids for pd, _, ids in monthly_series}
             periods_sorted = sorted(eur_by_period.keys())
+            # Fill any January recoverable from a standalone February
+            # release as `ytd - monthly`. Done AFTER `periods_sorted` so a
+            # derived January fills windows but never becomes an ANCHOR:
+            # GACC published no January release, so a finding dated "as at
+            # January" would imply a release that does not exist.
+            derived_jan = _gacc_derived_january_by_year(p["raw_label"], flow=flow)
+            derived_jan_periods: set[date] = set()
+            for _yr, (_eur, _ids) in derived_jan.items():
+                _jan = date(_yr, 1, 1)
+                if _jan not in eur_by_period:
+                    eur_by_period[_jan] = _eur
+                    obs_by_period[_jan] = _ids
+                    derived_jan_periods.add(_jan)
+
 
             for t in periods_sorted:
                 # ----- 12mo rolling YoY -----
@@ -3966,6 +4139,10 @@ def detect_gacc_bilateral_aggregate_yoy(
                 jan_feb_years_used = sorted(
                     {m.year for m in covered_curr + covered_prior}
                 )
+                jan_derived_used = sorted(
+                    {d.year for d in derived_jan_periods
+                     if start_prior <= d <= end_curr}
+                )
                 action = _insert_gacc_bilateral_aggregate_yoy_finding(
                     analysis_run_id, p, t,
                     start_curr, end_curr, start_prior, end_prior,
@@ -3976,6 +4153,7 @@ def detect_gacc_bilateral_aggregate_yoy(
                     missing_curr=missing_curr,
                     missing_prior=missing_prior,
                     jan_feb_combined_years=jan_feb_years_used,
+                    jan_derived_years=jan_derived_used,
                 )
                 _tally(counts, action)
 
@@ -4015,6 +4193,7 @@ def _insert_gacc_bilateral_aggregate_yoy_finding(
     missing_curr: list[date] | None = None,
     missing_prior: list[date] | None = None,
     jan_feb_combined_years: list[int] | None = None,
+    jan_derived_years: list[int] | None = None,
 ) -> findings_io.EmitAction:
     direction = "up" if rolling_yoy > 0 else "down"
     flow_label = "China exports to" if flow == "export" else "China imports from"
@@ -4077,6 +4256,17 @@ def _insert_gacc_bilateral_aggregate_yoy_finding(
             f"it reads each year's YTD cell directly. See caveat "
             f"'partial_window'."
         )
+    if jan_derived_years:
+        caveat_codes.append("jan_derived_from_feb")
+        dyears = ", ".join(str(y) for y in sorted(jan_derived_years))
+        body_lines.append("")
+        body_lines.append(
+            f"ℹ JANUARY DERIVED: January {dyears} is not published as its own "
+            f"GACC release; it is computed as (February-release YTD − "
+            f"February-release Monthly), an exact identity on two published "
+            f"figures rather than an estimate. Both source observations are "
+            f"cited. See caveat 'jan_derived_from_feb'."
+        )
     if jan_feb_combined_years:
         caveat_codes.append("jan_feb_combined")
         years_str = ", ".join(str(y) for y in sorted(jan_feb_combined_years))
@@ -4128,6 +4318,7 @@ def _insert_gacc_bilateral_aggregate_yoy_finding(
             # pattern; see caveat 'jan_feb_combined'). Empty list when
             # no combined-release coverage was used.
             "jan_feb_combined_years": sorted(jan_feb_combined_years or []),
+            "jan_derived_years": sorted(jan_derived_years or []),
             # YTD cumulative — Jan..anchor of current year vs same range prior
             # year. Null when either side is missing. This is the Soapbox A1
             # editorial register ("Jan-Apr exports +19% YoY").
