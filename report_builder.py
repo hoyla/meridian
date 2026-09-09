@@ -148,7 +148,21 @@ def _bilateral_context(detail) -> dict:
         yrs = ", ".join(str(y) for y in jf)
         clauses.append(f"Jan+Feb {yrs} counted as a single combined figure "
                        "(GACC publishes them merged)")
-    out["note"] = "Incomplete window — " + "; ".join(clauses) if clauses else None
+    jd = [y for y in (tot.get("jan_derived_years") or []) if y]
+    if jd:
+        yrs = ", ".join(str(y) for y in jd)
+        clauses.append(f"January {yrs} derived as the February release's "
+                       "year-to-date minus its monthly figure (GACC publishes "
+                       "no standalone January)")
+    # Only genuinely-absent months make a window incomplete. A Jan+Feb chunk
+    # and a derived January both COVER their months — saying "incomplete"
+    # there tells a journalist to distrust a total that is in fact whole, and
+    # leaves no wording left for a window that really is short.
+    if not clauses:
+        out["note"] = None
+    else:
+        lead = "Incomplete window" if missing else "Window covers all 12 months"
+        out["note"] = f"{lead} — " + "; ".join(clauses)
     return out
 
 
