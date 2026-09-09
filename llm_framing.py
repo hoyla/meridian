@@ -199,7 +199,7 @@ class OllamaBackend:
         raise last_err
 
 
-DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
+DEFAULT_CLAUDE_MODEL = "claude-opus-5"
 
 
 class ClaudeCLIBackend:
@@ -238,7 +238,7 @@ class ClaudeCLIBackend:
 class ClaudeAPIBackend:
     """Calls the Anthropic API — the sanctioned path for automated/production
     use. Reads ANTHROPIC_API_KEY from the environment. Defaults to
-    claude-opus-4-8; the per-role model (LLM_LEADS_MODEL / LLM_TAKES_MODEL) is
+    claude-opus-5; the per-role model (LLM_LEADS_MODEL / LLM_TAKES_MODEL) is
     resolved by make_backend and passed in as `model`. Adaptive thinking is on
     (the task is small but benefits from a little reasoning, and at ~5 short
     calls per cycle the cost is negligible). Returns the response's text blocks
