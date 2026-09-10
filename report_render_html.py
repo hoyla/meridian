@@ -2090,6 +2090,24 @@ _FAVICON_DATA_URI = (
     + base64.b64encode(_FAVICON_SVG.encode("utf-8")).decode("ascii")
 )
 
+# Guardian roundel for the masthead (Claude Design handoff "option 2c",
+# 2026-09-10). Path data is the Guardian Source brand asset
+# (RoundelWhiteOnBlue, 42x42 viewBox), reproduced unmodified: the handoff
+# rejects any variant that alters the mark (its option 1b cut the G's stem).
+# The disc is Guardian blue, so on the blue masthead it would vanish; the white
+# keyline comes from the wrapping link's 1.5px white padding, never from
+# recolouring the mark. The link carries the accessible name; the SVG is
+# hidden so a screen reader announces "The Guardian, link" once.
+_MAST_ROUNDEL = (
+    '<a class="mast-roundel" href="https://www.theguardian.com" '
+    'aria-label="The Guardian">'
+    '<svg viewBox="0 0 42 42" aria-hidden="true" focusable="false">'
+    '<path fill="#052962" d="M 21 0 C 9.402 0 0 9.402 0 21 C 0 32.598 9.402 42 21 42 C 32.598 42 42 32.598 42 21 C 42 9.402 32.598 0 21 0 L 21 0 Z"/>'
+    '<g transform="translate(5.86 4.883)">'
+    '<path fill="#ffffff" fill-rule="evenodd" d="M 27.837 17.267 L 25.682 18.231 L 25.682 28.171 C 24.469 29.325 21.37 31.126 18.407 31.744 L 18.407 31.022 L 18.407 29.667 L 18.407 18.014 L 16.116 17.205 L 16.116 16.605 L 27.837 16.605 L 27.837 17.267 Z M 17.093 0.712 C 17.093 0.712 17.049 0.711 17.027 0.711 C 12.168 0.711 9.388 7.263 9.528 16.101 C 9.388 24.971 12.168 31.522 17.027 31.522 C 17.049 31.522 17.093 31.522 17.093 31.522 L 17.093 32.203 C 9.808 32.69 -0.139 27.263 0.001 16.133 C -0.139 4.971 9.808 -0.456 17.093 0.031 L 17.093 0.712 Z M 18.558 0 C 21.407 0.435 24.663 2.306 25.883 3.634 L 25.883 9.768 L 25.182 9.768 L 18.558 0.677 L 18.558 0 Z"/>'
+    '</g></svg></a>'
+)
+
 
 def _gacc_world_bubbles_svg(rows: list[dict], period_iso: str | None) -> str:
     """The scale view under the change table (Luke, 2026-07-05): one glyph
@@ -2694,11 +2712,39 @@ _CSS = """
 *{box-sizing:border-box}
 body{margin:0;background:var(--surface-alt);color:var(--ink);font:16px/1.4 var(--font-sans)}
 .wrap{max-width:860px;margin:0 auto;background:var(--surface)}
-.masthead{background:var(--masthead);color:#fff;padding:18px 28px 16px;display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
-.mast{font-family:var(--font-headline);font-weight:700;font-size:34px;line-height:1.05;letter-spacing:-.4px}
-.sub{font-family:var(--font-headline);font-weight:400;font-size:19px;color:#cdddf6;margin-top:2px}
-.mast-meta{display:flex;flex-direction:column;align-items:flex-end;gap:6px;text-align:right;padding-top:5px}
-.mast-period{font-size:12.5px;color:#cdddf6}
+/* Masthead: Guardian roundel | hairline | trade-gap glyph | wordmark | stamp
+   (Claude Design handoff option 2c, 2026-09-10). */
+.masthead{background:var(--masthead);color:#fff;padding:28px 40px;display:flex;align-items:flex-start;gap:22px}
+.mast-roundel{flex:none;display:flex;margin-top:6px;background:#fff;border-radius:50%;padding:1.5px;border-bottom:none;text-decoration:none;transition:opacity 150ms ease}
+.mast-roundel:hover{opacity:.85}
+.mast-roundel:focus-visible{outline:2px solid var(--highlight);outline-offset:2px}
+.mast-roundel svg{display:block;width:52px;height:52px}
+.mast-rule{flex:none;width:1px;height:56px;margin-top:4px;background:rgba(255,255,255,.35)}
+/* The product's trade-gap glyph, recoloured for blue chrome: large half left
+   (China's exports) white, small half right (imports) Guardian yellow. The
+   asymmetry is the gap. On white surfaces the data colours stay as they are. */
+.mast-glyph{flex:none;display:flex;align-items:center;margin-top:14px}
+.mast-glyph i{display:block}
+.mast-glyph .g-big{width:16px;height:32px;border-radius:16px 0 0 16px;background:#fff}
+.mast-glyph .g-small{width:11px;height:22px;border-radius:0 11px 11px 0;background:var(--highlight)}
+.mast-brand{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.mast{font-family:var(--font-headline);font-weight:700;font-size:44px;line-height:1;color:#fff}
+.sub{font-family:var(--font-headline);font-weight:400;font-size:22px;color:#dcdcdc}
+.mast-meta{flex:none;padding-top:6px}
+.mast-period{font-size:14px;color:#b5c4de}
+/* Below 740px the roundel and wordmark are the priority: drop the hairline
+   and glyph, and move the stamp under the subtitle, aligned with the wordmark
+   (roundel 36px + 3px keyline + 14px gap = 53px). */
+@media(max-width:739px){
+.masthead{padding:20px;gap:4px 14px;flex-wrap:wrap}
+.mast-rule,.mast-glyph{display:none}
+.mast-roundel{margin-top:0}
+.mast-roundel svg{width:36px;height:36px}
+.mast{font-size:32px}
+.sub{font-size:17px}
+.mast-meta{flex-basis:100%;padding-top:0;margin-left:53px}
+.mast-period{font-size:13px}
+}
 /* source badge sits on the dark masthead: a white pill, blue text; carries the
    'triggered by' note as its tooltip. */
 .tag{background:#fff;color:var(--masthead);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:2px 10px;border-radius:62.5rem;cursor:help}
@@ -2996,7 +3042,7 @@ footer{padding:18px 28px 28px;border-top:1px solid var(--line);font-size:12px;co
 .hub-note{font-size:11.5px;color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:1px 7px;white-space:nowrap}
 @media(max-width:900px){.kpis-4{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:640px){.kpis-4{grid-template-columns:1fr}}
-@media(max-width:560px){.mast{font-size:27px}.sub{font-size:16px}section{padding:14px 18px}.masthead{padding:16px 18px}.tabs{padding:0 10px}.tab{padding:10px 11px;font-size:14px}.subnav{padding:8px 18px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}}
+@media(max-width:560px){section{padding:14px 18px}.tabs{padding:0 10px}.tab{padding:10px 11px;font-size:14px}.subnav{padding:8px 18px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}}
 """
 
 
@@ -3443,9 +3489,13 @@ def render_html(report: Report) -> str:
         '<link rel=preconnect href="https://fonts.gstatic.com" crossorigin>',
         '<link rel=stylesheet href="https://fonts.googleapis.com/css2?'
         'family=Noto+Serif:wght@400;700&family=Source+Sans+3:wght@400;600;700&'
-        'family=Source+Serif+4:wght@600;700&display=swap">',
+        'family=Source+Serif+4:wght@400;600;700&display=swap">',
         f"<style>{_CSS}</style></head><body><div class=wrap>",
         '<header class="masthead" id="top">',
+        _MAST_ROUNDEL,
+        '<div class="mast-rule" aria-hidden="true"></div>',
+        '<div class="mast-glyph" aria-hidden="true">'
+        '<i class="g-big"></i><i class="g-small"></i></div>',
         '<div class="mast-brand">',
         '<div class="mast">Meridian</div>',
         '<div class="sub">China–Europe trade</div>',
