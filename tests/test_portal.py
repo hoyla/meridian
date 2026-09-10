@@ -381,18 +381,32 @@ def test_html_renders_all_sections_and_is_self_contained():
 
 def test_head_carries_inline_favicon():
     # The portal serves no /favicon.ico (the GCS proxy 404s it), so the mark is
-    # inlined as a data: URI in the head — one self-contained blob that also
-    # works in the local preview. It's the two-tone ◐ scale-glyph in the flow
-    # colours (roadmap "Favicon", 2026-07-05).
-    import base64
-    from report_render_html import _FLOW_EXPORT, _FLOW_IMPORT
-
+    # inlined as a data: URI in the head: one self-contained blob that also
+    # works in the local preview. Since 2026-09-10 it is the masthead's own mark
+    # (Luke): a large white half and a small Guardian-yellow half in the
+    # masthead's 16:11 radius proportion, on a Guardian-blue tile. It is a fixed
+    # brand shape, deliberately decoupled from the data palette.
+    import base64, re
     h = render_html(_sample_report())
     assert '<link rel="icon" href="data:image/svg+xml;base64,' in h
     b64 = h.split('href="data:image/svg+xml;base64,')[1].split('"')[0]
     svg = base64.b64decode(b64).decode("utf-8")
     assert svg.startswith("<svg") and svg.endswith("</svg>")
-    assert _FLOW_EXPORT in svg and _FLOW_IMPORT in svg  # on-brand two-tone mark
+    assert '<rect width="32" height="32" rx="7" fill="#052962"/>' in svg
+    big = re.search(r'a([\d.]+) [\d.]+ 0 0 0 0 [\d.]+z" fill="#ffffff"', svg)
+    small = re.search(r'a([\d.]+) [\d.]+ 0 0 1 0 [\d.]+z" fill="#ffe500"', svg)
+    assert big and small, svg
+    assert abs(float(small.group(1)) / float(big.group(1)) - 11 / 16) < 0.01
+
+
+def test_by_country_key_is_edged_at_its_small_size():
+    """The By-country intro's 12px key is a small glyph, so its yellow half
+    carries the Guardian-blue edge, like the dials (Luke, 2026-09-10)."""
+    h = render_html(_sample_report())
+    k = h[h.index('class="glyph-key"'):]
+    k = k[:k.index("</svg>")]
+    assert 'fill="#ffe500" stroke="#052962"' in k
+    assert 'fill="#052962"/>' in k
 
 
 def test_inline_md_handles_link_nested_in_bold():

@@ -1482,8 +1482,10 @@ def _gacc_bilateral_html(section) -> str:
                    "click a partner to expand. "
                    f'<span class="glyph-key" aria-hidden="true">'
                    f'<svg width="12" height="12" viewBox="0 0 32 32">'
-                   f'<circle cx="16" cy="16" r="15" fill="{_FLOW_IMPORT}"/>'
-                   f'<path d="M16 1a15 15 0 0 0 0 30z" fill="{_FLOW_EXPORT}"/></svg> '
+                   + _half_disc(16, 16, 15, 0, _FLOW_EXPORT)
+                   + _half_disc(16, 16, 15, 1, _FLOW_IMPORT,
+                                _SMALL_EDGE_PX * 32 / 12)
+                   + '</svg> '
                    "left = China’s exports, right = imports — a lopsided mark "
                    "is the trade balance at a glance.</span></p>")
     out.append(_more_about(section))
@@ -1526,12 +1528,13 @@ def _balance_glyph_svg(exp: float | None, imp: float | None) -> str:
     halves = []
     # sweep 0 bulges left (exports), 1 bulges right (imports); a zero-radius
     # half (single-flow partner) is skipped rather than drawn degenerate.
-    for v, sweep, fill in ((e, 0, _FLOW_EXPORT), (i, 1, _FLOW_IMPORT)):
+    # Small size, so the import (yellow) half takes the edge; see _half_disc.
+    for v, sweep, fill, edge in ((e, 0, _FLOW_EXPORT, 0.0),
+                                 (i, 1, _FLOW_IMPORT, _SMALL_EDGE_PX)):
         r = R * (v / big) ** 0.5
         if r <= 0:
             continue
-        halves.append(f'<path d="M{cx} {cy - r:.2f} a{r:.2f} {r:.2f} 0 0 '
-                      f'{sweep} 0 {2 * r:.2f}z" fill="{fill}"/>')
+        halves.append(_half_disc(cx, cy, r, sweep, fill, edge))
     return (f'<svg class="pp-glyph" width="{side}" height="{side}" '
             f'viewBox="0 0 {side} {side}" aria-hidden="true">'
             + "".join(halves) + "</svg>")
@@ -2071,19 +2074,70 @@ def _gacc_world_html(section) -> str:
 
 # Flow colours for the scale glyphs — a neutral pair (NOT the up/down
 # green/red, which mean change everywhere else on the portal).
-_FLOW_EXPORT = "#33608c"   # China's exports (left half) — steel blue
-_FLOW_IMPORT = "#b8863b"   # China's imports (right half) — muted amber
+# Trade-gap glyph colours (Luke, 2026-09-10): Guardian blue for China's exports
+# (left half) and Guardian yellow for its imports (right half), matching the
+# masthead's glyph. Yellow separates from white by hue, so LARGE glyphs (China
+# and the world) read unedged; SMALL ones (by-country dials, legend swatches,
+# the key) take a Guardian-blue edge on the yellow half, where a sliver of
+# yellow on white would otherwise disappear.
+_FLOW_EXPORT = "#052962"   # China's exports (left half): Guardian blue, brand-400
+_FLOW_IMPORT = "#ffe500"   # China's imports (right half): Guardian yellow, brand-alt-400
 
-# Favicon: the same two-tone ◐ semicircle mark as the world-scale glyphs (left
-# half = China's exports / steel blue, right half = imports / amber), inlined as
-# a data: URI so the snapshot stays one self-contained blob — no /favicon.ico
-# route, no bucket object, and it works in the local preview too.
-# (Roadmap: "Favicon", 2026-07-05.)
+# A small glyph's edge is the export colour, so it merges with the export half
+# along the shared diameter and reads as one outline around the mark.
+_GLYPH_EDGE = _FLOW_EXPORT
+_SMALL_EDGE_PX = 0.8       # edge width in rendered pixels, for small glyphs
+
+
+def _half_disc(cx, cy, r, sweep, fill, edge_w=0.0):
+    """One half of the trade-gap glyph: a half-disc on the vertical diameter at
+    `cx`. sweep 0 bulges left (exports), 1 bulges right (imports).
+
+    With `edge_w` > 0 (small sizes) the half gets a Guardian-blue edge AND is
+    drawn edge_w/2 smaller, so the stroke's OUTER edge lands exactly on the true
+    radius. An SVG stroke straddles its path, so an uncompensated edge would
+    inflate a small half's area (Hong Kong's import sliver by about a quarter)
+    and bias the very size comparison the glyph encodes. A half too small to
+    edge honestly is drawn plain rather than shrunk to nothing."""
+    r_draw = r
+    if edge_w > 0:
+        r_draw = r - edge_w / 2
+        if r_draw <= 0.05:
+            r_draw, edge_w = r, 0.0
+    if r_draw <= 0:
+        return ""
+    stroke = (f' stroke="{_GLYPH_EDGE}" stroke-width="{edge_w:.2f}"'
+              if edge_w > 0 else "")
+    return (f'<path d="M{cx} {cy - r_draw:.2f} a{r_draw:.2f} {r_draw:.2f} 0 0 '
+            f'{sweep} 0 {2 * r_draw:.2f}z" fill="{fill}"{stroke}/>')
+
+
+def _legend_swatch(sweep, fill, edge_w=0.0):
+    """A text-height half-disc for running legend copy, drawn 1 unit = 1px. A
+    swatch is a small size, so the import half takes the edge. Replaces the
+    coloured ◖◗ characters: yellow TEXT on white cannot be edged."""
+    cx = 0.5 if sweep else 6.5
+    return ('<svg width="7" height="13" viewBox="0 0 7 13" aria-hidden="true" '
+            'style="display:inline-block;vertical-align:-2px">'
+            + _half_disc(cx, 6.5, 6.0, sweep, fill, edge_w) + '</svg>')
+
+# Favicon: the masthead's own mark, a large white half and a small Guardian-
+# yellow half on a shared axis in the masthead's 16:11 radius proportion, on a
+# Guardian-blue tile (Luke, 2026-09-10). The white half needs a dark ground,
+# and the tile keeps the mark legible on light and dark browser tab bars alike.
+# Rounded square rather than a disc, so it cannot read as a variant of the
+# Guardian roundel. Fixed shape, not data: the halves are the brand proportion,
+# not a trade figure. Inlined as a data: URI so the snapshot stays one
+# self-contained blob (no /favicon.ico route; works in the local preview too).
+_FAV_BIG = 12.0                                    # large half, 32-unit tile
+_FAV_SMALL = _FAV_BIG * 11 / 16                    # masthead 16:11 proportion
+_FAV_AXIS = round((32 - (_FAV_BIG + _FAV_SMALL)) / 2 + _FAV_BIG, 2)
 _FAVICON_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
-    f'<circle cx="16" cy="16" r="15" fill="{_FLOW_IMPORT}"/>'
-    f'<path d="M16 1a15 15 0 0 0 0 30z" fill="{_FLOW_EXPORT}"/>'
-    "</svg>"
+    f'<rect width="32" height="32" rx="7" fill="{_GUARDIAN_BLUE}"/>'
+    + _half_disc(_FAV_AXIS, 16, _FAV_BIG, 0, "#ffffff")
+    + _half_disc(_FAV_AXIS, 16, _FAV_SMALL, 1, "#ffe500")
+    + "</svg>"
 )
 _FAVICON_DATA_URI = (
     "data:image/svg+xml;base64,"
@@ -2168,14 +2222,14 @@ def _gacc_world_bubbles_svg(rows: list[dict], period_iso: str | None) -> str:
             glyphs.append(
                 f'<path d="M {cx:.1f} {yc - r_e:.1f} '
                 f'A {r_e:.1f} {r_e:.1f} 0 0 0 {cx:.1f} {yc + r_e:.1f} Z" '
-                f'fill="{_FLOW_EXPORT}" fill-opacity="0.85">'
+                f'fill="{_FLOW_EXPORT}">'
                 f"<title>China’s exports to {html.escape(label)}: "
                 f"{html.escape(_fmt_eur(exp))}{html.escape(when)}</title></path>")
         if r_i > 0:
             glyphs.append(
                 f'<path d="M {cx:.1f} {yc - r_i:.1f} '
                 f'A {r_i:.1f} {r_i:.1f} 0 0 1 {cx:.1f} {yc + r_i:.1f} Z" '
-                f'fill="{_FLOW_IMPORT}" fill-opacity="0.85">'
+                f'fill="{_FLOW_IMPORT}">'
                 f"<title>China’s imports from {html.escape(label)}: "
                 f"{html.escape(_fmt_eur(imp))}{html.escape(when)}</title></path>")
         # The shared diameter, so tiny halves still read as half a glyph.
@@ -2189,8 +2243,8 @@ def _gacc_world_bubbles_svg(rows: list[dict], period_iso: str | None) -> str:
         x = max(cx + max(r_i, 4.0), cx + label_w / 2) + GAP
     width = int(x)
     legend = (
-        f'<span style="color:{_FLOW_EXPORT}">◖</span> China’s exports · '
-        f'<span style="color:{_FLOW_IMPORT}">◗</span> China’s imports — '
+        f'{_legend_swatch(0, _FLOW_EXPORT)} China’s exports · '
+        f'{_legend_swatch(1, _FLOW_IMPORT, _SMALL_EDGE_PX)} China’s imports — '
         "area ∝ 12-month value (the table’s figures; hover a half for the "
         "number). A lopsided glyph is the imbalance: left-heavy = China’s "
         "surplus with that partner. The world total and the overlapping "
