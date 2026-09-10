@@ -494,6 +494,77 @@ def test_decode_subkind_helper():
     assert fn("hs_group_yoy_combined_export") == ("eu_27_plus_uk", "export")
 
 
+def test_predictability_index_row_order_is_deterministic_on_ties():
+    """Rows tied on (badge, persistent_pct) come out in the same order
+    whatever order the predictability dict arrives in. The dict follows an
+    unordered SQL scan, so without a final key tied rows shuffled between
+    builds of identical data (2026-09-10: four adjacent pairs swapped when a
+    rebuild was diffed against the live snapshot). Ties break on group name;
+    badge then pct still lead."""
+    from sheets_export import _predictability_index_sheet as fn
+    items = [
+        ("Plastic waste (post-National-Sword residual)", ("🔴", 0.0, 5)),
+        ("Paints & varnishes (HS 3208-3210)", ("🟡", 0.5, 6)),
+        ("Cotton (raw + woven fabrics)", ("🟡", 2 / 6, 6)),
+        ("Industrial fasteners", ("🔴", 0.0, 6)),
+        ("Essential oils & fragrance mixtures (HS 3301 + 3302)", ("🟡", 0.5, 6)),
+        ("PPE — surgical gloves and masks", ("🔴", 0.0, 6)),
+        ("Aluminium (broad)", ("🟡", 2 / 6, 6)),
+        ("Critical minerals (export-controlled by China)", ("🔴", 0.0, 6)),
+        ("Zinc", ("🟢", 5 / 6, 6)),
+        ("Tin", ("🟡", 0.6, 5)),
+    ]
+    forward = fn(dict(items)).rows
+    backward = fn(dict(reversed(items))).rows
+    assert forward == backward
+    assert [r[0] for r in forward] == [
+        "Zinc",
+        "Tin",
+        "Essential oils & fragrance mixtures (HS 3301 + 3302)",
+        "Paints & varnishes (HS 3208-3210)",
+        "Aluminium (broad)",
+        "Cotton (raw + woven fabrics)",
+        "Critical minerals (export-controlled by China)",
+        "Industrial fasteners",
+        "PPE — surgical gloves and masks",
+        "Plastic waste (post-National-Sword residual)",
+    ]
+    assert forward[0] == ["Zinc", "🟢", "persistent", 83.0, 6]
+
+
+def test_low_base_review_breaks_yoy_ties_on_finding_id(empty_findings, test_db_url):
+    """EU-27 and EU-27+UK findings carry an identical yoy_pct whenever the UK
+    has no trade in a group (132 tied pairs live on 2026-09-10), so ordering
+    on |yoy_pct| alone left their order to Postgres. Newest finding first."""
+    detail = {
+        "windows": {"current_end": "2026-02-01", "current_start": "2026-02-01"},
+        "totals": {"yoy_pct": 0.5, "current_12mo_eur": 1e7, "prior_12mo_eur": 0.5e7,
+                   "low_base": True, "low_base_threshold_eur": 5e7},
+        "group": {"name": "Rare-earth materials"},
+    }
+    with psycopg2.connect(test_db_url) as conn:
+        older = _seed_one_finding(conn, "hs_group_yoy", "Rare-earth materials", detail)
+        newer = _seed_one_finding(conn, "hs_group_yoy_combined", "Rare-earth materials", detail)
+    rows = sheets_export._low_base_review_sheet().rows
+    assert [r[0] for r in rows] == [newer, older]
+
+
+def test_mirror_gap_movers_breaks_z_ties_on_finding_id(empty_findings, test_db_url):
+    """A +z and a -z of the same size tie on |z|. Without a final key their
+    order — and, at the LIMIT 50 cut, which of them makes the tab — was left
+    to Postgres. Newest finding first."""
+    def seed(conn, iso2: str, z: float) -> int:
+        return _seed_one_finding(conn, "mirror_gap_zscore", "", {
+            "iso2": iso2, "period": "2026-02-01", "gap_pct": 0.2,
+            "baseline": {"mean": 0.1, "stdev": 0.05, "n": 12}, "z_score": z,
+        })
+    with psycopg2.connect(test_db_url) as conn:
+        older = seed(conn, "NL", 2.0)
+        newer = seed(conn, "DE", -2.0)
+    rows = sheets_export._mirror_gap_movers_sheet().rows
+    assert [r[0] for r in rows] == [newer, older]
+
+
 def test_briefing_pack_export_also_writes_data_xlsx(
     test_db_url, tmp_path, monkeypatch,
 ):

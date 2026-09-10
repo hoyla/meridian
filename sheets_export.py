@@ -237,7 +237,7 @@ def _summary_sheet(
                      detail->>'shape' AS shape
                 FROM findings
                WHERE subkind = 'hs_group_trajectory' AND superseded_at IS NULL
-            ORDER BY detail->'group'->>'name', created_at DESC
+            ORDER BY detail->'group'->>'name', created_at DESC, id DESC
             )
         """)
         ctes.append("""
@@ -247,7 +247,7 @@ def _summary_sheet(
                      detail->>'shape' AS shape
                 FROM findings
                WHERE subkind = 'hs_group_trajectory_export' AND superseded_at IS NULL
-            ORDER BY detail->'group'->>'name', created_at DESC
+            ORDER BY detail->'group'->>'name', created_at DESC, id DESC
             )
         """)
         joins = []
@@ -543,7 +543,7 @@ def _trajectories_long_sheet() -> SheetData:
                         (detail->'features'->>'effective_series_length')::int AS n_windows
                       FROM findings
                      WHERE subkind = %s AND superseded_at IS NULL
-                  ORDER BY detail->'group'->>'name', created_at DESC
+                  ORDER BY detail->'group'->>'name', created_at DESC, id DESC
                     """,
                     (sk,),
                 )
@@ -747,7 +747,7 @@ def _mirror_gap_movers_sheet() -> SheetData:
                    detail->'caveat_codes' AS caveat_codes
               FROM findings
              WHERE subkind = 'mirror_gap_zscore' AND superseded_at IS NULL
-          ORDER BY abs((detail->>'z_score')::numeric) DESC
+          ORDER BY abs((detail->>'z_score')::numeric) DESC, id DESC
              LIMIT 50
             """
         )
@@ -904,7 +904,7 @@ def _low_base_review_sheet() -> SheetData:
              WHERE subkind LIKE 'hs_group_yoy%%'
                AND (detail->'totals'->>'low_base')::boolean = true
                AND superseded_at IS NULL
-          ORDER BY abs((detail->'totals'->>'yoy_pct')::numeric) DESC
+          ORDER BY abs((detail->'totals'->>'yoy_pct')::numeric) DESC, id DESC
             """
         )
         rows_raw = cur.fetchall()
@@ -946,9 +946,13 @@ def _predictability_index_sheet(
         "persistent_pct", "n_permutations",
     ]
     rows = []
+    # Group name is the final key. Badge + pct tie often (many groups sit
+    # at 🔴 0%), and the dict arrives in the predictability query's
+    # unordered scan order, so without it tied rows reshuffle between
+    # builds of identical data.
     for gn, (badge, pct, n) in sorted(
         predictability.items(),
-        key=lambda kv: (kv[1][0] != "🟢", kv[1][0] != "🟡", -kv[1][1]),
+        key=lambda kv: (kv[1][0] != "🟢", kv[1][0] != "🟡", -kv[1][1], kv[0]),
     ):
         label = (
             "persistent" if badge == "🟢"
