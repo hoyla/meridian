@@ -2211,3 +2211,40 @@ def test_multiline_chart_svg_renders_six_lines_and_balance_zero_baseline():
     leg = _multiline_legend_html(chart("exports", signed=False))
     assert all(name in leg for name in regions)
     assert "year-to-date" in leg
+
+
+def test_masthead_carries_the_guardian_roundel_unmodified():
+    """Masthead identity (Claude Design handoff option 2c, 2026-09-10): the
+    Guardian roundel links to theguardian.com under an accessible name, the
+    hairline and trade-gap glyph are decorative, and the Updated stamp stays
+    the masthead's one portal-wide claim.
+
+    The roundel path data is the Guardian Source asset verbatim. The handoff
+    rejects any variant that alters the mark, so these needles pin the first
+    and last segments of the G and its placement transform: an edit that
+    trims, reshapes or re-centres the G fails here.
+    """
+    h = render_html(_sample_report())
+    mast = h[h.index('class="masthead"'):h.index("</header>")]
+
+    assert ('<a class="mast-roundel" href="https://www.theguardian.com" '
+            'aria-label="The Guardian">') in mast
+    assert "M 27.837 17.267 L 25.682 18.231" in mast
+    assert "L 18.558 0.677 L 18.558 0 Z" in mast
+    assert 'transform="translate(5.86 4.883)"' in mast
+    assert 'viewBox="0 0 42 42" aria-hidden="true"' in mast
+
+    assert '<div class="mast-rule" aria-hidden="true"></div>' in mast
+    assert 'class="mast-glyph" aria-hidden="true"' in mast
+
+    assert "Updated 2026-06-20 12:00" in mast
+    assert mast.index("mast-roundel") < mast.index('class="mast"')
+    assert 'id="top"' in h
+
+
+def test_subtitle_weight_is_actually_loaded():
+    """The masthead subtitle is set in the headline serif at 400. Only 600 and
+    700 used to be requested, so the browser silently substituted a heavier
+    face; the font request must carry the weight the CSS asks for."""
+    h = render_html(_sample_report())
+    assert "family=Source+Serif+4:wght@400;600;700" in h
