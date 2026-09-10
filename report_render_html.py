@@ -679,10 +679,18 @@ def _prov_details(payload: dict | None, summary_inner: str,
     # A small disclosure triangle right after the finding/N token (the whole
     # summary line is the click target, so no words needed); it rotates on open.
     tri = '<span class="prov-tri" aria-hidden="true"></span>'
-    marker = "</span>"
-    if marker in summary_inner:  # inject just after the first token span
-        i = summary_inner.index(marker) + len(marker)
-        summary = summary_inner[:i] + tri + summary_inner[i:]
+    # The token and its triangle form one unbreakable unit (.prov-cite is
+    # nowrap). The triangle is an inline-block, so a line may break before it,
+    # and a table cell sized near the token's own width did exactly that,
+    # dropping the triangle onto a line of its own (Luke, 2026-09-10, the
+    # commodities table). Only the pair is held together: text after it, such
+    # as a KPI card's "· Eurostat · as of …", still wraps normally.
+    tok = summary_inner.find('<span class="token">')
+    if tok >= 0:
+        end = summary_inner.index("</span>", tok) + len("</span>")
+        summary = (summary_inner[:tok] + '<span class="prov-cite">'
+                   + summary_inner[tok:end] + tri + "</span>"
+                   + summary_inner[end:])
     else:
         summary = summary_inner + tri
     return (
@@ -2844,7 +2852,14 @@ details.prov>summary.mover-prov{font-size:12px;color:var(--muted);margin-top:6px
    borders (not a glyph, which renders sub-cap-height and looks like a stray dot)
    on a zero-size box so its 10px height never grows the line. Rotates down when
    open; nudges toward the link colour on hover so it stays discoverable. */
+.prov-cite{white-space:nowrap}
 .prov-tri{display:inline-block;width:0;height:0;margin-left:6px;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:8px solid var(--muted);vertical-align:middle;position:relative;bottom:2px;transition:transform .12s}
+/* Every other expander's disclosure triangle matches the finding drawers'
+   .prov-tri: the same 8x10 CSS triangle, in the summary's own colour,
+   rotating on open (Luke, 2026-09-10). They used the text glyphs ▸/▾,
+   or the browser's default marker for Replay SQL, all of which rendered
+   at roughly a quarter of the triangle's area. */
+details.more>summary::before,details.gdetail>summary::before,details.partner>summary::before,details.prov-sql>summary::before{content:"";display:inline-block;width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:8px solid currentColor;vertical-align:middle;position:relative;bottom:1px;transition:transform .12s}
 details.prov>summary:hover .prov-tri{border-left-color:var(--link)}
 details.prov[open]>summary .prov-tri{transform:rotate(90deg)}
 .prov-body{margin-top:8px;padding:10px 12px;background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--news);font-size:12.5px;line-height:1.45}
@@ -2855,7 +2870,10 @@ details.prov[open]>summary .prov-tri{transform:rotate(90deg)}
 .prov-arith li,.prov-cav li{margin:2px 0;color:var(--ink)}
 .prov-cav code{background:#f3f3f3;padding:0 3px;border-radius:3px}
 .prov-context{border-top:1px dotted var(--line);padding-top:7px;font-size:12px}.prov-context a{color:var(--link)}
-details.prov-sql{margin-top:6px}details.prov-sql>summary{cursor:pointer;color:var(--muted);font-size:11px}
+details.prov-sql{margin-top:6px}details.prov-sql>summary{cursor:pointer;list-style:none;color:var(--muted);font-size:11px}
+details.prov-sql>summary::-webkit-details-marker{display:none}
+details.prov-sql>summary::before{margin-right:7px}
+details.prov-sql[open]>summary::before{transform:rotate(90deg)}
 details.prov-sql pre{overflow-x:auto;background:#f6f6f6;padding:8px;font-size:11px;border:1px solid var(--line);margin:6px 0 0}
 h2.lead{font-family:var(--font-headline);font-size:26px;line-height:1.15;color:var(--ink);margin:4px 0 6px;font-weight:700}
 .kicker{color:var(--muted);font-size:14px;margin:0 0 12px}
@@ -2901,8 +2919,8 @@ a:hover{border-bottom-color:var(--link)}
 details.gdetail{margin:6px 0 2px}
 details.gdetail>summary{cursor:pointer;list-style:none;font-family:var(--font-sans);font-weight:700;font-size:12.5px;color:var(--masthead);padding:3px 0}
 details.gdetail>summary::-webkit-details-marker{display:none}
-details.gdetail>summary::before{content:"▸ "}
-details.gdetail[open]>summary::before{content:"▾ "}
+details.gdetail>summary::before{margin-right:7px}
+details.gdetail[open]>summary::before{transform:rotate(90deg)}
 .chips{margin:0 0 14px;font-size:13px}
 .mover-chips{margin:5px 0 2px}
 .chips-l{color:var(--muted);font-weight:700;margin-right:6px}
@@ -2972,8 +2990,8 @@ ul.ref li{font-size:13.5px;line-height:1.5;margin:0 0 7px;color:var(--ink)}
 details.more{border:1px solid var(--line);border-left:4px solid var(--masthead);background:var(--surface-alt);border-radius:3px;margin:0 0 14px}
 details.more>summary{cursor:pointer;list-style:none;padding:9px 14px;font-family:var(--font-sans);font-weight:700;font-size:13.5px;color:var(--masthead)}
 details.more>summary::-webkit-details-marker{display:none}
-details.more>summary::before{content:"▸ "}
-details.more[open]>summary::before{content:"▾ "}
+details.more>summary::before{margin-right:7px}
+details.more[open]>summary::before{transform:rotate(90deg)}
 .more-body{padding:0 16px 12px;font-family:var(--font-body);font-size:14.5px;line-height:1.5;color:var(--ink)}
 .more-body p{margin:8px 0}.more-body ul{margin:8px 0;padding-left:20px}.more-body li{margin:3px 0}
 .more-body h4,.prose h4{font-family:var(--font-sans);font-size:13.5px;margin:12px 0 4px}
@@ -2981,8 +2999,8 @@ details.more[open]>summary::before{content:"▾ "}
 details.partner{border:1px solid var(--line);border-radius:3px;margin:0 0 6px;background:var(--surface)}
 details.partner>summary{cursor:pointer;list-style:none;display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;padding:9px 14px}
 details.partner>summary::-webkit-details-marker{display:none}
-details.partner>summary::before{content:"▸";color:var(--masthead);font-weight:700}
-details.partner[open]>summary::before{content:"▾"}
+details.partner>summary::before{color:var(--masthead);align-self:center}
+details.partner[open]>summary::before{transform:rotate(90deg)}
 details.partner>summary:hover{background:var(--surface-alt)}
 details.partner[open]>summary{border-bottom:1px solid var(--line)}
 .pp-name{font-family:var(--font-sans);font-weight:700;font-size:14.5px;color:var(--ink)}

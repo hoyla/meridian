@@ -553,6 +553,45 @@ def test_provenance_drawer_renders_for_gated_findings():
     assert "EU–China trade" in h
 
 
+def test_finding_token_and_its_twisty_never_separate():
+    """The disclosure triangle follows its finding/N token as one unbreakable
+    unit. The commodities table sized its column near the token's own width, so
+    the line broke between them and the triangle dropped onto a line of its own
+    (Luke, 2026-09-10). Only the pair is nowrap: a KPI card's trailing source
+    text sits outside it and still wraps on a narrow card."""
+    import re
+    h = render_html(_sample_report())
+    bare = re.findall(r'<span class="token">finding/\d+</span><span class="prov-tri"', h)
+    held = re.findall(r'<span class="prov-cite"><span class="token">finding/\d+</span>'
+                      r'<span class="prov-tri" aria-hidden="true"></span></span>', h)
+    assert held, "no token and triangle pair rendered"
+    assert len(bare) == len(held), "a token and its triangle are not held together"
+    assert ('<span class="prov-tri" aria-hidden="true"></span></span>'
+            '<span class="kpi-prov-rest">') in h
+    assert ".prov-cite{white-space:nowrap}" in h
+
+
+def test_every_expander_uses_the_finding_drawers_triangle():
+    """Expanders share one disclosure triangle: the finding drawers' 8x10 CSS
+    triangle, in each summary's own colour, rotating on open. The About boxes,
+    By country rows, "How to corroborate" and "Replay SQL" used text glyphs or
+    the browser's default marker, at roughly a quarter of its area
+    (Luke, 2026-09-10)."""
+    h = render_html(_sample_report())
+    css = h[h.index("<style>"):h.index("</style>")]
+    for fam in ("more", "gdetail", "partner", "prov-sql"):
+        assert f"details.{fam}>summary::before" in css, fam
+        assert f'details.{fam}>summary::before{{content:"\u25b8' not in css, fam
+        assert f'details.{fam}[open]>summary::before{{content:"\u25be' not in css, fam
+        assert f"details.{fam}[open]>summary::before{{transform:rotate(90deg)}}" in css, fam
+    geom = css[css.index("details.more>summary::before,"):]
+    geom = geom[:geom.index("}") + 1]
+    assert "details.prov-sql>summary::before" in geom           # all four share it
+    assert "border-left:8px solid currentColor" in geom
+    assert "border-top:5px solid transparent;border-bottom:5px solid transparent" in geom
+    assert "details.prov-sql>summary{cursor:pointer;list-style:none" in css
+
+
 def test_provenance_drawer_absent_without_payload():
     """No payload → the citation stays a plain, non-expandable line (the long
     tail of findings isn't gated), so the drawer machinery never fires."""
