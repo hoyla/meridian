@@ -218,6 +218,31 @@ def _arithmetic(subkind: str, detail: dict | None) -> list[str]:
                 f"({sm['current_quantity']:,.1f} vs {sm['prior_quantity']:,.1f} "
                 f"{unit}) — unit counts, no currency in the comparison."
             )
+            if (sm.get("current_value_cny") is not None
+                    and sm.get("prior_value_cny") is not None
+                    and sm["current_quantity"] > 0
+                    and (sm.get("prior_quantity") or 0) > 0):
+                # Same derivation the table column uses (report_builder.
+                # _implied_unit_value): value is published in 100M CNY, the
+                # quantity in its printed scale ("10,000 Autos"), so both are
+                # taken to absolute units before dividing.
+                from report_builder import (_qty_units_absolute,
+                                            _unit_noun_singular)
+                cur_q, noun = _qty_units_absolute(sm["current_quantity"], unit)
+                pri_q, _ = _qty_units_absolute(sm["prior_quantity"], unit)
+                cur_uv = sm["current_value_cny"] * 1e8 / cur_q
+                pri_uv = sm["prior_value_cny"] * 1e8 / pri_q
+                count_noun = (noun or unit or "units").lower()
+                per = _unit_noun_singular(noun or unit)
+                out.append(
+                    f"Implied average value per unit: CNY {sm['current_value_cny']:,.1f} "
+                    f"× 10⁸ ÷ {cur_q:,.0f} {count_noun} = CNY {cur_uv:,.2f} per {per}, "
+                    f"vs CNY {pri_uv:,.2f} a year earlier "
+                    f"({_fmt_pct(cur_uv / pri_uv - 1)}). Not a price: a "
+                    f"catalogue line is a basket, and a shift in its mix "
+                    f"towards dearer goods moves this ratio with no price "
+                    f"change at all."
+                )
         if ytd.get("value_yoy_pct") is not None:
             pub = ytd.get("published_yoy_value_pct")
             line = (f"Year to date: {_fmt_pct(ytd['value_yoy_pct'])} by value "

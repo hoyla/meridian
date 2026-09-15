@@ -2412,6 +2412,52 @@ def _qty_units_absolute(qty: float, unit: str | None) -> tuple[float, str]:
     return qty * _QTY_UNIT_SCALES[m.group("scale")], m.group("noun")
 
 
+_UNIT_NOUN_SINGULAR = {"pcs": "piece", "pieces": "piece"}
+
+
+def _unit_noun_singular(noun: str) -> str:
+    """'Autos' → 'auto', 'Tons' → 'ton', 'PCS' → 'piece': the per-unit
+    label reads "CNY 119k per auto", not "per autos". GACC's nouns are
+    plain English plurals apart from the PCS abbreviation."""
+    n = (noun or "unit").strip().lower()
+    if n in _UNIT_NOUN_SINGULAR:
+        return _UNIT_NOUN_SINGULAR[n]
+    if n.endswith("s") and not n.endswith("ss") and len(n) > 3:
+        return n[:-1]
+    return n
+
+
+def _implied_unit_value(sm: dict, quantity_unit: str | None) -> dict | None:
+    """Implied average value per unit for one commodity line in the anchor
+    month: single-month value (CNY, published in 100M) ÷ single-month
+    quantity (absolute units), current and prior year, plus the ratio's YoY.
+    None when the line has no physical unit (aggregates, value-only lines)
+    or either quantity is missing / zero.
+
+    This is NOT a price and must never be labelled as one (Luke, 2026-09-09):
+    a catalogue line is a basket, so a shift in its mix towards dearer goods
+    moves the ratio with no price change at all — integrated circuits went
+    3.79 → 9.00 CNY/piece in Aug 2026 on a mix shift to expensive chips.
+    Renderer-side derivation of two numbers already in the finding's
+    drawer; no analyser change, no supersession."""
+    if not quantity_unit:
+        return None
+    cur_v = _f(sm.get("current_value_cny"))
+    cur_q = _f(sm.get("current_quantity"))
+    if cur_v is None or not cur_q or cur_q <= 0:
+        return None
+    abs_cur_q, noun = _qty_units_absolute(cur_q, quantity_unit)
+    out = {"current_cny": cur_v * 1e8 / abs_cur_q,
+           "per": _unit_noun_singular(noun or quantity_unit)}
+    pri_v = _f(sm.get("prior_value_cny"))
+    pri_q = _f(sm.get("prior_quantity"))
+    if pri_v is not None and pri_q and pri_q > 0:
+        abs_pri_q, _ = _qty_units_absolute(pri_q, quantity_unit)
+        out["prior_cny"] = pri_v * 1e8 / abs_pri_q
+        out["yoy"] = out["current_cny"] / out["prior_cny"] - 1.0
+    return out
+
+
 def _fmt_units(n: float) -> str:
     if n >= 1e9:
         return f"{n / 1e9:,.1f}bn"
@@ -2572,6 +2618,9 @@ def _gacc_commodities_section(cur, period: date) -> Section | None:
         if qty is not None and r.quantity_unit:
             abs_qty, noun = _qty_units_absolute(qty, r.quantity_unit)
             out["quantity_display"] = f"{_fmt_units(abs_qty)} {noun.lower()}".strip()
+        unit_value = _implied_unit_value(r.sm, r.quantity_unit)
+        if unit_value:
+            out["unit_value"] = unit_value
         if facts:
             out["facts"] = facts
         return out
@@ -2661,6 +2710,13 @@ _GACC_COMMODITIES_ABOUT_MD = (
     "cars” survives every currency argument; where GACC publishes "
     "physical units this section shows the volume rate beside the value "
     "rate.\n\n"
+    "**Implied average value per unit is not a price.** Where a line has "
+    "a physical unit, the table also divides the month’s value by its "
+    "quantity, this year and last. A catalogue line is a basket, so that "
+    "ratio moves with the mix of goods inside it as much as with prices: "
+    "a line shifting towards dearer goods shows a rising value per unit "
+    "with no price change at all. Quote it as an average value per unit, "
+    "with the mix caveat — never as a price.\n\n"
     "**Milestones and pace lines are computed, not editorialised** — "
     "round-number crossings against every prior month of the same "
     "catalogue line, and linear year-pace vs last year’s total. Each "
