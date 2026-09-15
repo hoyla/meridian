@@ -298,10 +298,18 @@ def write_portal_snapshot(
                 # same build moment as the workbook so "the same findings"
                 # stays literally true. Deterministic (no LLM calls at
                 # render time); same best-effort posture as the workbook.
+                # Anchor Tier 1 on data_period, as build_report does for
+                # what_changed (#158): bundle_dir may be an existing
+                # periodic-run bundle whose own brief_runs row is already
+                # the most recent, and a default baseline would overwrite
+                # its correct diff with "nothing material" (2026-09-15).
                 try:
                     from briefing_pack.render import render as render_findings
                     md_path = Path(bundle_dir) / "02_Findings.md"
-                    md_path.write_text(render_findings(), encoding="utf-8")
+                    md_path.write_text(
+                        render_findings(
+                            diff_baseline_before_period=data_period),
+                        encoding="utf-8")
                     log.info("portal snapshot: wrote findings briefing to %s",
                              md_path)
                 except Exception:
