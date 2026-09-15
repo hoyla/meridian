@@ -1434,10 +1434,14 @@ def _mirror_gap_html(section) -> str:
         zp = _fmt_month(m.get("zscore_period")) if m.get("zscore_period") else ""
         znote = (f' · <span class="hub">last flagged unusual {html.escape(zp)}: '
                  f'{z:.1f}σ</span>' if z is not None else "")
+        # Notes render in full: a cut-off note ("…relative to NL's o") is
+        # worse than a long one.
         hub = ""
         if m.get("hub") and m.get("hub_notes"):
             hub = (f'<div class="hub">⚓ {html.escape(m["hub"])} — '
-                   f'{html.escape(m["hub_notes"][:200])}</div>')
+                   f'{html.escape(m["hub_notes"])}</div>')
+        elif m.get("partner_note"):
+            hub = f'<div class="hub">ℹ️ {html.escape(m["partner_note"])}</div>'
         cite = (f'<span class="token">finding/{f.provenance.finding_ids[0]}</span>'
                 if f.provenance.finding_ids else "")
         # Container-ship pictograph beside the text — only where the excess over

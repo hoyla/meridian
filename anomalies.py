@@ -303,6 +303,7 @@ class _MirrorGapResult:
     excess_over_cif_fob_baseline_pct: float | None   # None when gap ≤ 0 (CIF/FOB N/A)
     cif_fob_baseline: lookups.CifFobBaseline | None
     transshipment_hub: lookups.TransshipmentHub | None
+    partner_note: lookups.PartnerNote | None   # context for a non-hub partner (e.g. IT); no caveat
     eurostat_partners: list[str]   # partners summed on the EU import side (always EUROSTAT_PARTNERS = CN+HK+MO)
     # Aggregate-specific (None for single-country comparisons)
     aggregate_kind: str | None = None
@@ -569,6 +570,12 @@ def _compute_one_gap(
         lookups.lookup_transshipment_hub(resolved.iso2)
         if aggregate_kind is None and resolved.iso2 else None
     )
+    # Context note for a partner that is not a documented hub (e.g. Italy).
+    # Attaches no caveat; a hub row takes precedence in the renderers.
+    partner_note = (
+        lookups.lookup_mirror_gap_partner_note(resolved.iso2)
+        if aggregate_kind is None and resolved.iso2 else None
+    )
 
     return _MirrorGapResult(
         period=period,
@@ -591,6 +598,7 @@ def _compute_one_gap(
         excess_over_cif_fob_baseline_pct=excess,
         cif_fob_baseline=cif_fob,
         transshipment_hub=transshipment_hub,
+        partner_note=partner_note,
         eurostat_partners=list(eurostat_partners),
         aggregate_kind=aggregate_kind,
         aggregate_members=aggregate_members,
@@ -716,6 +724,10 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
             f"signal — movements relative to {r.iso2}'s own baseline are. "
             f"See caveat 'transshipment_hub'. Hub note: {r.transshipment_hub.notes or '—'}"
         )
+    elif r.partner_note is not None:
+        # Context for a non-hub partner. No caveat: the note exists because a
+        # routing explanation is NOT established for this partner.
+        body += f"\n\nℹ️ PARTNER CONTEXT ({r.iso2}): {r.partner_note.notes}"
     if is_aggregate:
         body += (
             f"\n\nThis is an aggregate-to-aggregate comparison. GACC's '{r.gacc_partner_label}' "
@@ -800,6 +812,15 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
                 "evidence_url": r.transshipment_hub.evidence_url,
             } if r.transshipment_hub else None
         ),
+        # Reader-facing context for a non-hub partner (mirror_gap_partner_notes),
+        # with its provenance. Null for hubs' partners without a row and aggregates.
+        "partner_note": (
+            {
+                "iso2": r.partner_note.iso2,
+                "notes": r.partner_note.notes,
+                "evidence_url": r.partner_note.evidence_url,
+            } if r.partner_note else None
+        ),
         # Legacy fields retained for downstream compatibility (used by
         # existing tests and the briefing pack).
         "cif_fob_baseline_pct": (
@@ -846,6 +867,11 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
                 "transshipment_note": (
                     r.transshipment_hub.notes if r.transshipment_hub else None
                 ),
+                # Same reasoning for a non-hub partner's context note: an edit
+                # to it supersedes, so findings never cite stale context.
+                "partner_note": (
+                    r.partner_note.notes if r.partner_note else None
+                ),
             },
             observation_ids=obs_ids,
             score=score,
@@ -859,8 +885,9 @@ def _insert_finding(analysis_run_id: int, r: _MirrorGapResult) -> findings_io.Em
 # =============================================================================
 # Trend / time-series anomaly detection over the mirror_gap series itself.
 # =============================================================================
-# The structural mirror-gap (a modest positive gap for hub partners like
-# NL/IT, from CIF/FOB plus re-export routing) is a known fact of EU-China
+# The structural mirror-gap (a positive gap from CIF/FOB, plus quasi-transit
+# for the NL hub; IT's is also persistent but its cause is not established —
+# see mirror_gap_partner_notes) is a known fact of EU-China
 # trade reporting and isn't itself news. The story is when
 # that gap *moves*: a partner whose gap was steady and suddenly shifts is the
 # kind of thing a desk wants flagged. This module computes a rolling-baseline

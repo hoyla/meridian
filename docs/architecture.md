@@ -509,6 +509,7 @@ by journalists who don't want to read Python:
 | `hs_groups` | Editorial HS-code clusters (HS patterns + name + description) | Yes (~17 seed groups + 13 added Phase 5) |
 | `caveats` | Canonical summary + detail text per caveat code | Yes |
 | `transshipment_hubs` | iso2 + evidence_url for known transshipment partners | Yes (NL, BE, HK, SG, AE, MX) |
+| `mirror_gap_partner_notes` | iso2 + reader-facing context + evidence_url for a mirror-gap partner that is *not* a documented hub; attaches no caveat | Yes (IT) |
 | `cif_fob_baselines` | Per-(partner, baseline_pct) CIF/FOB margin overrides | Yes (28 EU-27+GB rows from OECD ITIC + 1 global default) |
 | `country_aliases` | Maps GACC partner labels → ISO-2 codes | Yes |
 
@@ -533,8 +534,8 @@ releases               (per source × period; one row per ingestable file/page)
                                  └──── brief_runs (per export timestamp)
 
 lookup tables (read-side only):
-  hs_groups, caveats, transshipment_hubs, cif_fob_baselines,
-  country_aliases, fx_rates
+  hs_groups, caveats, transshipment_hubs, mirror_gap_partner_notes,
+  cif_fob_baselines, country_aliases, fx_rates
 
 operational telemetry (scheduler-side, no journalist surface):
   routine_check_log   (per probe: source × period × result × expectation)

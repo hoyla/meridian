@@ -343,6 +343,21 @@ CREATE TABLE transshipment_hubs (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Reader-facing context for a mirror_gap partner that is NOT a documented
+-- transshipment hub but whose gap still needs explaining (e.g. Italy: large
+-- and persistent, cause not established). Deliberately separate from
+-- transshipment_hubs so a note here never attaches the `transshipment_hub`
+-- caveat — that would assert a routing explanation the evidence doesn't
+-- support. The analyser copies the note into detail.partner_note and the
+-- renderers show it beside the finding. Journalist-editable, like the hubs.
+CREATE TABLE mirror_gap_partner_notes (
+    iso2          TEXT        PRIMARY KEY,
+    notes         TEXT        NOT NULL,
+    evidence_url  TEXT,
+    created_by    TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- CIF/FOB baseline percentages with provenance. `partner_iso2 IS NULL` is the
 -- global default (UNCTAD/WTO ~7.5% Eurostat-higher than GACC for the same
 -- flow, before any other effects). Per-partner rows override the global
@@ -872,8 +887,8 @@ INSERT INTO caveats (code, summary, detail, applies_to) VALUES
 -- documenting the editorial basis. These are starting points — journalists
 -- can extend the table for new investigations.
 INSERT INTO transshipment_hubs (iso2, notes, evidence_url, created_by) VALUES
-  ('NL', 'Rotterdam — largest container port in Europe; well-documented Chinese-goods routing into the EU. Expect a structural positive mirror gap from re-export routing, but weight movements relative to NL''s own baseline over the absolute level.',
-   'https://unctad.org/topic/transport-and-trade-logistics/review-of-maritime-transport',
+  ('NL', 'Rotterdam effect (quasi-transit): Chinese goods bound for other EU countries are often unloaded and cleared into the EU in Dutch ports, so Eurostat records them as Dutch imports while China records them as exports to the country of final destination. The Netherlands therefore normally shows more imports than China reports sending it, and destination countries such as Germany show fewer. The size of the Dutch gap is not news; a move away from its usual level may be.',
+   'https://ec.europa.eu/eurostat/statistics-explained/index.php?title=International_trade_statistics_-_background',
    'seed:roadmap_phase_2'),
   ('BE', 'Antwerp — second-largest EU container port; secondary hub to Rotterdam.',
    'https://unctad.org/topic/transport-and-trade-logistics/review-of-maritime-transport',
@@ -890,6 +905,12 @@ INSERT INTO transshipment_hubs (iso2, notes, evidence_url, created_by) VALUES
   ('MX', 'Mexico (Manzanillo, Lázaro Cárdenas) — Pacific gateway; secondary China-Latam transshipment route.',
    'https://en.wikipedia.org/wiki/Port_of_Manzanillo_(Mexico)',
    'seed:roadmap_phase_2');
+
+-- Context for mirror_gap partners that are not documented hubs (no caveat).
+INSERT INTO mirror_gap_partner_notes (iso2, notes, evidence_url, created_by) VALUES
+  ('IT', 'Italy is not a documented transshipment hub, and the cause of its gap is not established. Italy has usually reported importing substantially more from China than China reports exporting to it since 2022, having been close to level in 2019-21, and the gap swings sharply from month to month. Explanations to test before reporting it: goods cleared through Italian ports for other EU destinations (the mechanism Eurostat documents for the Netherlands and Belgium, but not for Italy), differences in how the two sides assign the partner country, and shipping-time lags between the export and import months. Do not read the gap as evidence of transshipment or under-declaration.',
+   'https://ec.europa.eu/eurostat/statistics-explained/index.php?title=International_trade_statistics_-_background',
+   'editorial:2026-09-15');
 
 -- Phase 2.2: CIF/FOB baselines. The single global default replaces the
 -- previous CIF_FOB_BASELINE_PCT = 0.075 constant; per-partner overrides go
