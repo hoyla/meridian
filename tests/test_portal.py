@@ -1746,6 +1746,35 @@ def test_portal_snapshot_records_no_brief_run(clean_db, test_db_url, tmp_path):
     assert _brief_runs() == before  # no cycle advanced by snapshotting
 
 
+def test_portal_snapshot_findings_md_skips_own_cycle_baseline(
+        clean_db, test_db_url, tmp_path):
+    """Regenerating takes into an existing periodic-run bundle rewrites its
+    02_Findings.md. That render runs AFTER the cycle's own brief_runs row
+    exists, so a most-recent-row baseline self-cites: on 2026-09-15 the July
+    bundle's Tier 1 (224 shifts vs the June briefing) became "nothing
+    material … Previous findings export 2026-09-15-1037". The md must anchor
+    on the snapshot's data_period like the portal what_changed does (#158)."""
+    from datetime import date
+    import periodic
+
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO brief_runs (output_path, top_n, data_period, trigger, "
+            "generated_at) VALUES "
+            "('exports/2026-08-14-1119/02_Findings.md', 10, '2026-06-01', "
+            " 'periodic_run', now() - interval '30 days'), "
+            "('exports/2026-09-15-1037/02_Findings.md', 10, '2026-07-01', "
+            " 'periodic_run', now())")
+
+    pdir = periodic.write_portal_snapshot(
+        str(tmp_path), date(2026, 7, 1), generate_takes=False,
+        write_workbook=True)
+    assert pdir is not None
+    md = (tmp_path / "02_Findings.md").read_text()
+    assert "2026-08-14-1119" in md      # the previous briefing the reader saw
+    assert "2026-09-15-1037" not in md  # not the bundle's own cycle row
+
+
 def test_publish_snapshot_validates_before_touching_gcs(tmp_path, monkeypatch):
     """The publish step fails cheap and clear: no bucket → ValueError, no
     04_Portal snapshot → FileNotFoundError (both before any GCS call)."""

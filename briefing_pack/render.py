@@ -274,8 +274,17 @@ def render(
     groups_filename: str | None = None,
     diff_baseline_brief_run_id: int | None = None,
     reissue_note: str | None = None,
+    diff_baseline_before_period: date | None = None,
 ) -> str:
     """Render the full briefing pack as a single Markdown string.
+
+    `diff_baseline_before_period` anchors Tier 1 on the latest main-track
+    brief_runs row for a strictly earlier data_period (see `_compute_diff`).
+    Pass it whenever the render happens AFTER this cycle's own row was
+    recorded — e.g. the portal snapshot re-rendering an existing bundle's
+    findings — or the default most-recent-row baseline self-cites and Tier 1
+    reports "nothing material". export() leaves it unset: it renders before
+    recording its row, so most-recent is the previous briefing.
 
     `companion_filename` (when provided): the basename of the paired
     leads document. The headline paragraph cites it directly so a reader
@@ -318,7 +327,11 @@ def render(
         # surfaces can't disagree about what kind of cycle this is.
         # Dropped entirely on a fresh DB with nothing to say.
         top_movers = _compute_top_movers(cur, predictability=predictability)
-        diff_data = _compute_diff(cur, baseline_brief_run_id=diff_baseline_brief_run_id)
+        diff_data = _compute_diff(
+            cur,
+            baseline_brief_run_id=diff_baseline_brief_run_id,
+            baseline_before_period=diff_baseline_before_period,
+        )
         # Reader-facing group labels (db.group_display_names), shared by the
         # front-page movers/digest and the Tier 1 diff so every surface that
         # cites a group shows — and links to — the same display string.
