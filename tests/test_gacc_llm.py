@@ -135,19 +135,123 @@ def test_synthesis_abstention_is_silent(_capture_rejections):
 
 
 def test_synthesis_rejects_unparseable_and_logs_raw(_capture_rejections):
-    out = llm_gacc_page.generate_synthesis(FACTS, FakeBackend("sorry, prose"))
+    backend = FakeBackend("sorry, prose", "still prose")
+    out = llm_gacc_page.generate_synthesis(FACTS, backend)
     assert out is None
     assert _capture_rejections[0]["stage"] == "parse"
     assert _capture_rejections[0]["raw_output"] == "sorry, prose"
 
 
 # ---------------------------------------------------------------------------
-# Questions: interrogative + answerability enum
+# Parse flake retry (the gap PR #155 closed in llm_takes, ported here after
+# the Aug-2026 rebuild blanked the commodity take on malformed JSON and
+# generated fine on the next run).
 # ---------------------------------------------------------------------------
 
 def _questions_json(qs):
     return json.dumps({"questions": qs})
 
+
+def _good_synthesis_raw() -> str:
+    return json.dumps({
+        "summary": "China’s exports to the EU rose +4.5% in May 2026, well "
+                   "behind the +31.2% to the US.",
+        "hypotheses": [{"id": "us_tariff_diversion", "rationale": "The US "
+                        "line leads at +31.2%."}],
+    })
+
+
+def test_synthesis_retries_a_json_parse_flake(_capture_rejections):
+    backend = FakeBackend("{oops not json", _good_synthesis_raw())
+    out = llm_gacc_page.generate_synthesis(FACTS, backend)
+    assert out is not None
+    assert out["hypotheses"][0]["id"] == "us_tariff_diversion"
+    assert len(backend.calls) == 2
+    # the flake stays on the record even though the retry saved the slot
+    assert len(_capture_rejections) == 1
+    assert _capture_rejections[0]["stage"] == "parse"
+    assert _capture_rejections[0]["cluster_name"] == "gacc_page_synthesis"
+    assert _capture_rejections[0]["detail"] == "attempt 1/2"
+
+
+def test_synthesis_parse_retry_is_bounded_and_every_attempt_logged(
+        _capture_rejections):
+    backend = FakeBackend("prose", "more prose", _good_synthesis_raw())
+    assert llm_gacc_page.generate_synthesis(FACTS, backend) is None
+    assert len(backend.calls) == 2          # the third, good reply never asked
+    assert [r["detail"] for r in _capture_rejections] == [
+        "attempt 1/2", "attempt 2/2"]
+
+
+def test_synthesis_parse_attempts_override(_capture_rejections):
+    backend = FakeBackend("prose", "more prose", _good_synthesis_raw())
+    out = llm_gacc_page.generate_synthesis(FACTS, backend, parse_attempts=3)
+    assert out is not None
+    assert len(backend.calls) == 3
+    assert len(_capture_rejections) == 2
+
+
+def test_synthesis_abstention_is_not_retried(_capture_rejections):
+    # Abstaining is a verdict, not a flake: one call, silent, no re-roll.
+    backend = FakeBackend(json.dumps({"summary": None}), _good_synthesis_raw())
+    assert llm_gacc_page.generate_synthesis(FACTS, backend) is None
+    assert len(backend.calls) == 1
+    assert not _capture_rejections
+
+
+def test_synthesis_validate_rejection_is_not_retried(_capture_rejections):
+    # An unverified number is a correctness verdict on the content — rejected
+    # first time, never re-asked (the safety contract #155 preserved).
+    bad = json.dumps({"summary": "Exports to the EU rose +9.9% in May 2026.",
+                      "hypotheses": []})
+    backend = FakeBackend(bad, _good_synthesis_raw())
+    assert llm_gacc_page.generate_synthesis(FACTS, backend) is None
+    assert len(backend.calls) == 1
+    assert [r["stage"] for r in _capture_rejections] == ["validate"]
+
+
+def test_transport_error_propagates_without_retry(_capture_rejections):
+    # Deliberate: report_builder wraps each slot in its own try/except and
+    # logs it; only the parse flake is re-asked.
+    class Boom:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, system, user):
+            self.calls += 1
+            raise RuntimeError("backend down")
+
+    backend = Boom()
+    with pytest.raises(RuntimeError):
+        llm_gacc_page.generate_synthesis(FACTS, backend)
+    assert backend.calls == 1
+    assert not _capture_rejections
+
+
+def test_questions_retry_a_json_parse_flake(_capture_rejections):
+    good = _questions_json([{
+        "q": "Is the +31.2% US line tariff front-loading?",
+        "axis": "flow", "answerable": "drawers"}])
+    backend = FakeBackend("not json at all", good)
+    out = llm_gacc_page.generate_questions(FACTS, backend)
+    assert out is not None and out[0]["q"].startswith("Is the +31.2%")
+    assert len(backend.calls) == 2
+    assert [(r["cluster_name"], r["stage"], r["detail"])
+            for r in _capture_rejections] == [
+        ("gacc_page_questions", "parse", "attempt 1/2")]
+
+
+def test_questions_abstention_is_not_retried(_capture_rejections):
+    backend = FakeBackend(json.dumps({"questions": None}),
+                          _questions_json([]))
+    assert llm_gacc_page.generate_questions(FACTS, backend) is None
+    assert len(backend.calls) == 1
+    assert not _capture_rejections
+
+
+# ---------------------------------------------------------------------------
+# Questions: interrogative + answerability enum
+# ---------------------------------------------------------------------------
 
 def test_questions_happy_path(_capture_rejections):
     raw = _questions_json([

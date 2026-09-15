@@ -41,6 +41,16 @@ SYNTHESIS_WORD_HARD = 90       # reject above this
 MAX_HYPOTHESES = 2
 MAX_QUESTIONS = 3
 
+# Attempts allowed at getting parseable JSON out of the backend — the same
+# bounded retry llm_takes.TAKE_PARSE_ATTEMPTS gives the headline takes
+# (PR #155). A parse failure is a backend flake, not a judgement: the
+# Aug-2026 rebuild blanked the commodity take on malformed JSON and generated
+# fine on the next run. The retry applies to the parse path ONLY. An
+# abstention (`summary`/`questions` null) and every `validate` rejection are
+# verdicts on the content and stay single-shot — re-rolling an abstention
+# until the model stops abstaining would defeat the point of offering it.
+PARSE_ATTEMPTS = 2
+
 # The catalog subset offered for the page synthesis — macro/flow-level
 # hypotheses that can be argued from partner-level GACC readings. The
 # HS-group-shaped entries (cn8_reclassification etc.) are deliberately
@@ -262,7 +272,7 @@ def _parse_json(raw: str) -> dict | None:
 
 
 def _log_reject(cluster: str, stage: str, reason: str, raw: str,
-                failures=None) -> None:
+                failures=None, detail: str | None = None) -> None:
     """Preserve the rejected output for inspection — same audit posture as
     llm_framing's verifier (best-effort; a logging failure never escalates)."""
     try:
@@ -272,11 +282,36 @@ def _log_reject(cluster: str, stage: str, reason: str, raw: str,
             closest_val = failures[0].closest_fact_value
         llm_rejection_log.log_rejection(
             scrape_run_id=None, cluster_name=cluster, model=None,
-            stage=stage, reason=reason, detail=None, raw_output=raw,
+            stage=stage, reason=reason, detail=detail, raw_output=raw,
             closest_fact_path=closest_path, closest_fact_value=closest_val,
         )
     except Exception:
         log.exception("gacc-page LLM: failed to log rejection (%s)", cluster)
+
+
+def _ask_for_json(backend, system: str, user: str, cluster: str,
+                  parse_attempts: int) -> tuple[dict | None, str]:
+    """Call the backend and parse its JSON, re-asking a malformed reply up to
+    `parse_attempts` times. Returns (obj, raw) — obj None when every attempt
+    was unparseable. Every failed attempt is logged so the flake rate stays
+    measurable even when the retry saves the slot.
+
+    A transport error is deliberately NOT caught here (nor retried): the
+    caller in report_builder wraps each slot in its own try/except and logs
+    the exception, which is the existing contract for this module — only
+    the parse flake is the backend's problem to re-ask about."""
+    raw = ""
+    attempts = max(1, parse_attempts)
+    for attempt in range(1, attempts + 1):
+        raw = backend.generate(system, user)
+        obj = _parse_json(raw)
+        if obj is not None:
+            return obj, raw
+        log.warning("gacc-page LLM: %s rejected (parse) [attempt %d/%d]",
+                    cluster, attempt, attempts)
+        _log_reject(cluster, "parse", "unparseable JSON", raw,
+                    detail=f"attempt {attempt}/{attempts}")
+    return None, raw
 
 
 def _cited_finding_ids(text: str, facts: dict) -> list[int]:
@@ -300,17 +335,18 @@ def _cited_finding_ids(text: str, facts: dict) -> list[int]:
 
 
 def _generate_scaffold(facts: dict, backend, *, assemble, offered_ids,
-                       cluster: str) -> dict | None:
+                       cluster: str,
+                       parse_attempts: int = PARSE_ATTEMPTS) -> dict | None:
     """Shared verify-or-reject body for the summary-plus-hypotheses takes
     (page synthesis + commodity take). Facts -> verified dict or None
     (abstain / reject / error): {summary, citations,
-    hypotheses: [{id, label, rationale, steps}]}."""
+    hypotheses: [{id, label, rationale, steps}]}. Malformed JSON is re-asked
+    up to `parse_attempts` times (see PARSE_ATTEMPTS); abstention and every
+    validate rejection are single-shot."""
     system, user = assemble(facts)
     backend = backend or make_backend(role="takes")
-    raw = backend.generate(system, user)
-    obj = _parse_json(raw)
+    obj, raw = _ask_for_json(backend, system, user, cluster, parse_attempts)
     if obj is None:
-        _log_reject(cluster, "parse", "unparseable JSON", raw)
         return None
     if obj.get("summary") in (None, "null", ""):
         return None  # first-class abstention
@@ -353,14 +389,17 @@ def _generate_scaffold(facts: dict, backend, *, assemble, offered_ids,
     }
 
 
-def generate_synthesis(facts: dict, backend=None) -> dict | None:
+def generate_synthesis(facts: dict, backend=None, *,
+                       parse_attempts: int = PARSE_ATTEMPTS) -> dict | None:
     """Facts -> verified synthesis dict or None (abstain / reject / error)."""
     return _generate_scaffold(
         facts, backend, assemble=assemble_synthesis_prompt,
-        offered_ids=SYNTHESIS_CATALOG_IDS, cluster="gacc_page_synthesis")
+        offered_ids=SYNTHESIS_CATALOG_IDS, cluster="gacc_page_synthesis",
+        parse_attempts=parse_attempts)
 
 
-def generate_commodity_take(facts: dict, backend=None) -> dict | None:
+def generate_commodity_take(facts: dict, backend=None, *,
+                            parse_attempts: int = PARSE_ATTEMPTS) -> dict | None:
     """The commodity take (dev_notes/2026-07-14-gacc-commodity-highlights.md
     § takes): the causal/contextual layer over the FULL sections-5/6 fact
     set — the input set equals the displayed set, so every citable number
@@ -369,17 +408,20 @@ def generate_commodity_take(facts: dict, backend=None) -> dict | None:
     vocabulary (export controls, domestic-demand pivot, …)."""
     return _generate_scaffold(
         facts, backend, assemble=assemble_commodity_prompt,
-        offered_ids=COMMODITY_CATALOG_IDS, cluster="gacc_page_commodity")
+        offered_ids=COMMODITY_CATALOG_IDS, cluster="gacc_page_commodity",
+        parse_attempts=parse_attempts)
 
 
-def generate_questions(facts: dict, backend=None) -> list[dict] | None:
-    """Facts -> verified question dicts [{q, axis, answerable}] or None."""
+def generate_questions(facts: dict, backend=None, *,
+                       parse_attempts: int = PARSE_ATTEMPTS) -> list[dict] | None:
+    """Facts -> verified question dicts [{q, axis, answerable}] or None.
+    Same retry posture as the scaffold: malformed JSON is re-asked, an
+    abstention or a validate rejection is not."""
     system, user = assemble_questions_prompt(facts)
     backend = backend or make_backend(role="takes")
-    raw = backend.generate(system, user)
-    obj = _parse_json(raw)
+    obj, raw = _ask_for_json(backend, system, user, "gacc_page_questions",
+                             parse_attempts)
     if obj is None:
-        _log_reject("gacc_page_questions", "parse", "unparseable JSON", raw)
         return None
     qs = obj.get("questions")
     if qs in (None, "null") or not isinstance(qs, list) or not qs:
