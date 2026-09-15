@@ -42,7 +42,9 @@ ChartType = Literal[
     "bignumber", "bignumber_delta", "sparkline", "donut", "line", "bar"
 ]
 
-SCHEMA_VERSION = "0.4.0"  # 0.4.0: GaccPage.europe → .by_country (all partners, grouped);
+SCHEMA_VERSION = "0.4.1"  # 0.4.1: + optional `unit_value` on GACC commodity rows
+                          #        (implied average value per unit, CNY; not a price)
+                          # 0.4.0: GaccPage.europe → .by_country (all partners, grouped);
                           # region charts move to the world section; the Full
                           # briefing no longer carries a floating GACC section
                           # (2026-07-15 single-period-surfaces ruling)

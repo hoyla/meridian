@@ -31,6 +31,41 @@ def test_qty_units_absolute_parses_scaled_units():
     assert rb._qty_units_absolute(5.0, None) == (5.0, "")
 
 
+def test_implied_unit_value_is_value_over_absolute_quantity():
+    # Motor vehicles, May 2026: CNY 1,149.2 (100M) over 98.8 (10,000 Autos)
+    # → CNY 116,316 per auto; prior year 863.3 / 69.3 → 124,574 → −6.6%.
+    sm = {"current_value_cny": 1149.2, "prior_value_cny": 863.3,
+          "current_quantity": 98.8, "prior_quantity": 69.3}
+    uv = rb._implied_unit_value(sm, "10,000 Autos")
+    assert uv["per"] == "auto"
+    assert uv["current_cny"] == pytest.approx(116_315.8, abs=0.5)
+    assert uv["prior_cny"] == pytest.approx(124_574.3, abs=0.5)
+    assert uv["yoy"] == pytest.approx(-0.0663, abs=1e-3)
+    # unscaled unit (Ton) divides as-is
+    uv = rb._implied_unit_value(
+        {"current_value_cny": 2.0, "current_quantity": 500.0}, "Ton")
+    assert uv == {"current_cny": pytest.approx(400_000.0), "per": "ton"}
+    # GACC's PCS abbreviation reads as "per piece"; plurals singularise
+    assert rb._implied_unit_value(
+        {"current_value_cny": 2766.4, "current_quantity": 307.4},
+        "100 Million PCS")["per"] == "piece"
+    assert rb._unit_noun_singular("Cars") == "car"
+    assert rb._unit_noun_singular("Sets") == "set"
+    assert rb._unit_noun_singular("Ton") == "ton"
+    # no physical unit (aggregates, value-only lines) → nothing to imply
+    assert rb._implied_unit_value(sm, None) is None
+    # a missing or zero quantity → nothing, never a division blow-up
+    assert rb._implied_unit_value(
+        {"current_value_cny": 5.0, "current_quantity": 0.0}, "Ton") is None
+    assert rb._implied_unit_value(
+        {"current_value_cny": 5.0, "current_quantity": None}, "Ton") is None
+    # prior side optional: current alone, no yoy
+    uv = rb._implied_unit_value(
+        {"current_value_cny": 5.0, "current_quantity": 2.0,
+         "prior_value_cny": 4.0, "prior_quantity": 0.0}, "Ton")
+    assert "yoy" not in uv and "prior_cny" not in uv
+
+
 def test_fmt_units_tiers():
     assert rb._fmt_units(988000.0) == "988k"
     assert rb._fmt_units(3.073e10) == "30.7bn"
@@ -64,6 +99,8 @@ def _commodities_section(**over) -> rm.Section:
             "sm_value_yoy": 0.331, "sm_quantity_yoy": 0.426,
             "eur_month": 1.45e10, "quantity_unit": "10,000 Autos",
             "quantity_display": "0.99mn autos",
+            "unit_value": {"current_cny": 116_315.8, "prior_cny": 124_574.3,
+                           "yoy": -0.0663, "per": "auto"},
             "ytd_value_yoy": 0.455, "published_ytd_yoy_pct": 45.5,
             "caveats": [],
             "facts": {"milestone": {
@@ -160,6 +197,25 @@ def test_commodities_surface_full_catalogue_shape():
         assert f"finding/{fid}" in html
 
 
+def test_commodities_unit_value_column_is_labelled_not_a_price():
+    html = _render(_minimal_gacc_page(commodities=_commodities_section()))
+    # header names the derivation and disclaims price in the same breath
+    assert "Implied avg value per unit (CNY, not a price)" in html
+    # the car line: CNY 116k per auto, −6.6% on the year
+    assert '116k<span class="note">/auto</span>' in html
+    assert "(-6.6%)" in html
+    # lines without a physical unit show a dash, not a blown-up ratio
+    exp_table = html[html.index("China’s exports by product"):
+                     html.index("China’s imports by product")]
+    rare = exp_table[exp_table.index("Rare-earth ore"):]
+    rare_cells = rare[:rare.index("</tr>")].split("<td")
+    assert rare_cells[3].startswith(' class="num">—')
+    # the aggregate banner spans the widened table
+    assert 'colspan="6"' in html
+    # the word "price" appears only inside the disclaimer, never as a label
+    assert "price</th>" not in html.replace("not a price</th>", "")
+
+
 def test_commodity_kpi_row_renders_after_partner_strip():
     page = _minimal_gacc_page(commodities=_commodities_section())
     page.commodity_strip = [rm.Indicator(
@@ -208,6 +264,10 @@ def test_drawer_arithmetic_for_commodity_finding():
     assert "CNY 1,149.2" in text and "derived CNY 863.3" in text
     assert "difference of two prior-year cumulative columns" in text
     assert "By volume" in text and "98.8" in text
+    # implied unit value: absolute-unit derivation shown, disclaimed as not a price
+    assert "Implied average value per unit: CNY 1,149.2 × 10⁸ ÷ 988,000 autos" in text
+    assert "= CNY 116,315.79 per auto, vs CNY 124,574.31 a year earlier (-6.6%)" in text
+    assert "Not a price" in text
     assert "GACC's own published figure is 45.5%" in text
     assert "no country split" in text
     assert "CNY-denominated" in text

@@ -1925,6 +1925,17 @@ def _gacc_since_last_html(gp) -> str:
             f'<tbody>{"".join(body)}</tbody></table></div>')
 
 
+def _fmt_cny_unit_value(v: float) -> str:
+    """CNY per physical unit — spans ~3 CNY/piece (chips) to ~10^5 CNY/car."""
+    if v >= 1e6:
+        return f"{v / 1e6:,.2f}mn"
+    if v >= 1e4:
+        return f"{v / 1e3:,.0f}k"
+    if v >= 100:
+        return f"{v:,.0f}"
+    return f"{v:,.2f}"
+
+
 def _gacc_commodities_html(section, payloads, take: dict | None = None) -> str:
     """What's moving — GACC's headline commodities (sections 5/6 catalogue,
     dev_notes/2026-07-14-gacc-commodity-highlights.md). The FULL catalogue
@@ -1977,6 +1988,17 @@ def _gacc_commodities_html(section, payloads, take: dict | None = None) -> str:
             if r.get("quantity_display"):
                 qty_cell += f' <span class="note">({html.escape(r["quantity_display"])})</span>'
         eur = r.get("eur_month")
+        # Implied average value per unit — value ÷ quantity, a ratio of two
+        # numbers already in the row's drawer. Labelled as such, never as a
+        # price: mix shifts within a catalogue line move it as much as
+        # prices do (the about-box carries the caveat).
+        uv = r.get("unit_value") or {}
+        uv_cell = "—"
+        if uv.get("current_cny") is not None:
+            uv_cell = (f'{_fmt_cny_unit_value(uv["current_cny"])}'
+                       f'<span class="note">/{html.escape(str(uv.get("per") or "unit"))}</span>')
+            if uv.get("yoy") is not None:
+                uv_cell += f' <span class="note">({uv["yoy"] * 100:+.1f}%)</span>'
         return "".join([
             "<tr>",
             f"<td>{name}{chip_html}</td>",
@@ -1984,6 +2006,7 @@ def _gacc_commodities_html(section, payloads, take: dict | None = None) -> str:
              f'{sm * 100:+.1f}%</td>' if sm is not None
              else '<td class="num">—</td>'),
             f'<td class="num">{qty_cell}</td>',
+            f'<td class="num">{uv_cell}</td>',
             f'<td class="num">{html.escape(_fmt_eur(eur)) if eur is not None else "—"}</td>',
             f"<td>{prov}</td>",
             "</tr>"])
@@ -1996,7 +2019,7 @@ def _gacc_commodities_html(section, payloads, take: dict | None = None) -> str:
             continue
         body = [tr(r) for r in rows]
         if aggs:
-            body.append('<tr class="tier"><td colspan="5"><span class="note">'
+            body.append('<tr class="tier"><td colspan="6"><span class="note">'
                         'Catalogue aggregates — include lines above; '
                         'never sum with them</span></td></tr>')
             body.extend(tr(r) for r in aggs)
@@ -2006,6 +2029,7 @@ def _gacc_commodities_html(section, payloads, take: dict | None = None) -> str:
             '<thead><tr><th>Commodity (world total)</th>'
             '<th class="num">Month YoY (CNY&nbsp;terms)</th>'
             '<th class="num">By volume</th>'
+            '<th class="num">Implied avg value per unit (CNY, not a price)</th>'
             '<th class="num">Month value</th><th>Finding</th></tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table></div>')
     return "".join(out)
