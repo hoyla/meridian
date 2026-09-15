@@ -7,6 +7,7 @@ DB-backed smoke tests (guarded by the standard test-DB fixtures) confirm
 build_report executes against the real schema.
 """
 
+import html
 import json
 
 import psycopg2
@@ -23,6 +24,22 @@ from report_render_markdown import render_markdown
 # A hand-built Report exercising every section kind / facet / metric the
 # renderers branch on. No DB.
 # --------------------------------------------------------------------------
+
+# Real-length mirror-gap notes: the renderers used to cut these at 160/200
+# chars, which left the live NL note ending "…relative to NL's o".
+_LONG_HUB_NOTE = (
+    "Rotterdam effect (quasi-transit): Chinese goods bound for other EU countries "
+    "are often unloaded and cleared into the EU in Dutch ports, so Eurostat records "
+    "them as Dutch imports while China records them as exports to the country of "
+    "final destination. The size of the Dutch gap is not news; a move away from "
+    "its usual level may be."
+)
+_IT_PARTNER_NOTE = (
+    "Italy is not a documented transshipment hub, and the cause of its gap is not "
+    "established. Do not read the gap as evidence of transshipment or "
+    "under-declaration."
+)
+
 
 def _sample_report() -> rm.Report:
     from datetime import date, datetime
@@ -112,9 +129,17 @@ def _sample_report() -> rm.Report:
             finding_id=3, subkind="mirror_gap", title="China ↔ NL",
             metrics={"partner": "NL", "gacc_eur": 7.3e9, "eurostat_eur": 9.2e9,
                      "gap_eur": 1.8e9, "gap_pct": 0.20, "excess_pct": 0.135,
-                     "hub": "NL", "hub_notes": "Rotterdam.",
+                     "hub": "NL", "hub_notes": _LONG_HUB_NOTE,
                      "zscore": 2.1, "zscore_period": "2025-11"},
-            provenance=rm.Provenance(finding_ids=[3, 8], source="cross_source"))])
+            provenance=rm.Provenance(finding_ids=[3, 8], source="cross_source")),
+            rm.Finding(
+            finding_id=13, subkind="mirror_gap", title="China ↔ IT",
+            metrics={"partner": "IT", "gacc_eur": 4.4e9, "eurostat_eur": 6.0e9,
+                     "gap_eur": 1.6e9, "gap_pct": 0.266, "excess_pct": 0.196,
+                     "hub": None, "hub_notes": None,
+                     "partner_note": _IT_PARTNER_NOTE,
+                     "zscore": -1.7, "zscore_period": "2025-11"},
+            provenance=rm.Provenance(finding_ids=[13], source="cross_source"))])
     group = rm.Section(
         id="cars", title="Cars", kind="sector_detail", intro="Passenger cars.",
         about="**How to read each group.** Every figure is a 12-month total.\n"
@@ -356,6 +381,8 @@ def test_markdown_renders_all_sections():
     assert "China only, excl. HK/Macao" in md  # cn-only deficit = Eurostat CN-only, NOT GACC
     assert "China reports" in md          # mirror-gap (GACC vs Eurostat) — the one place "China reports" is right
     assert "2025-11" in md and "σ" in md  # mirror-gap z-score (period + sigma)
+    assert _LONG_HUB_NOTE in md           # hub note in full, not cut at 160 chars
+    assert "ℹ️ " + _IT_PARTNER_NOTE in md  # non-hub partner context
     assert "China takes 1.5%" in md       # export share
     assert "Trajectory —" in md           # multi-scope trajectory
     assert "finding/" in md               # citations
@@ -370,6 +397,10 @@ def test_html_renders_all_sections_and_is_self_contained():
     assert 'id="sector-filter"' in h     # filter input
     assert "addEventListener('input'" in h  # filter JS embedded
     assert "Rotterdam" in h               # transshipment hub note
+    # Hub and partner notes render in full, never cut mid-word.
+    assert html.escape(_LONG_HUB_NOTE, quote=True) in h
+    assert "its usual level may be." in h
+    assert "ℹ️ " + html.escape(_IT_PARTNER_NOTE, quote=True) in h
     assert "China only, excl. HK/Macao" in h   # cn-only deficit = Eurostat CN-only, NOT GACC
     assert "China reports" in h           # mirror-gap (GACC vs Eurostat) — the one place "China reports" is right
     # State-of-play → cross-track bridge (2026-07-15: the by-country roster

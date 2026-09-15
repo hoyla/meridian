@@ -30,6 +30,7 @@ def _section_mirror_gaps(cur) -> _Section:
             detail->'caveat_codes' AS caveat_codes,
             detail->'transshipment_hub'->>'iso2' AS hub_iso2,
             detail->'transshipment_hub'->>'notes' AS hub_notes,
+            detail->'partner_note'->>'notes' AS partner_note,
             (detail->'cif_fob_baseline'->>'baseline_pct')::numeric AS baseline_pct,
             detail->'cif_fob_baseline'->>'scope' AS baseline_scope,
             detail->'cif_fob_baseline'->>'source' AS baseline_source,
@@ -62,10 +63,11 @@ def _section_mirror_gaps(cur) -> _Section:
         "freight and insurance while export values don't (the CIF vs "
         "FOB convention; see the methodology footer). What matters "
         "editorially is the gap *beyond* that baseline, shown per "
-        "partner below. Persistent large gaps — Netherlands and Italy "
-        "notably — usually reflect goods routed through ports rather "
-        "than anything untoward; sudden *movements* in a gap are "
-        "flagged separately as movers."
+        "partner below. The Netherlands' persistent gap is the documented "
+        "'Rotterdam effect' (goods for other EU countries cleared through "
+        "Dutch ports); Italy's is also large but its cause is not "
+        "established — see the note on each. Sudden *movements* in a gap "
+        "are flagged separately as movers."
     )
     lines.append("")
     # Gap formula, for the verifying reader:
@@ -127,8 +129,10 @@ def _section_mirror_gaps(cur) -> _Section:
                 # the table — the finding body has the longer version.
                 lines.append(
                     f"- ⚓ **Transshipment hub** ({r['hub_iso2']}): "
-                    f"{r['hub_notes'][:200] if r['hub_notes'] else '—'}"
+                    f"{r['hub_notes'] or '—'}"
                 )
+            elif r['partner_note']:
+                lines.append(f"- ℹ️ **Partner context** ({r['iso2']}): {r['partner_note']}")
             ids = _release_ids_for_observations(cur, list(r['observation_ids'] or []))
             release_ids |= ids
             lines.append(

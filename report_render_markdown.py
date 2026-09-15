@@ -452,8 +452,12 @@ def _render_sections(sections) -> list[str]:
                 zp = _fmt_period(m.get("zscore_period")) if m.get("zscore_period") else ""
                 zn = (f" · last flagged unusual {zp}: {z:.1f}σ"
                       if z is not None else "")
-                hub = (f" ⚓ {m['hub']}: {m['hub_notes'][:160]}"
-                       if m.get("hub") and m.get("hub_notes") else "")
+                if m.get("hub") and m.get("hub_notes"):
+                    hub = f" ⚓ {m['hub']}: {m['hub_notes']}"
+                elif m.get("partner_note"):
+                    hub = f" ℹ️ {m['partner_note']}"
+                else:
+                    hub = ""
                 cite = (f" `finding/{f.provenance.finding_ids[0]}`"
                         if f.provenance.finding_ids else "")
                 out.append(

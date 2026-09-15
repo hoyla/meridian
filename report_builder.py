@@ -1168,6 +1168,7 @@ def _mirror_gap_section(cur) -> Section:
                 "baseline_pct": _f(d.get("cif_fob_baseline_pct")),
                 "hub": hub.get("iso2"),
                 "hub_notes": hub.get("notes"),
+                "partner_note": (d.get("partner_note") or {}).get("notes"),
                 "zscore": zval, "zscore_period": zper,
             },
             provenance=Provenance(

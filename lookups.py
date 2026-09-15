@@ -220,6 +220,32 @@ def lookup_transshipment_hub(iso2: str) -> TransshipmentHub | None:
 
 
 @dataclass
+class PartnerNote:
+    iso2: str
+    notes: str
+    evidence_url: str | None
+
+
+def lookup_mirror_gap_partner_note(iso2: str) -> PartnerNote | None:
+    """Return the mirror_gap_partner_notes row for `iso2` if present, else None.
+    Context for a partner that is not a documented hub (e.g. Italy) — unlike
+    lookup_transshipment_hub, a match attaches no caveat."""
+    if not iso2:
+        return None
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        cur.execute(
+            "SELECT iso2, notes, evidence_url FROM mirror_gap_partner_notes WHERE iso2 = %s",
+            (iso2,),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    return PartnerNote(
+        iso2=row["iso2"], notes=row["notes"], evidence_url=row["evidence_url"],
+    )
+
+
+@dataclass
 class CifFobBaseline:
     baseline_pct: float
     source: str

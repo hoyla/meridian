@@ -134,7 +134,12 @@ A non-exhaustive list, in rough order of magnitude:
    both ways: a member state reporting *less* than GACC (a negative
    gap, e.g. DE) can be the counterpart — goods declared by the hub,
    not the destination — rather than an independent discrepancy.
-   (See §3 caveat `transshipment_hub`.)
+   (See §3 caveat `transshipment_hub`.) Eurostat documents this
+   "Rotterdam effect" (quasi-transit) for the Netherlands and, to a
+   lesser extent, Belgium. Italy's gap is also large and persistent,
+   but no such mechanism is documented for it, so Italy carries a
+   plain context note (`mirror_gap_partner_notes`) saying the cause is
+   not established — never the `transshipment_hub` caveat.
 
 4. **Different HS classifications at HS-8.** GACC uses CHS8
    (Chinese 8-digit harmonised); Eurostat uses CN8 (Combined

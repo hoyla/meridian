@@ -258,6 +258,33 @@ def test_mirror_gap_no_transshipment_caveat_for_non_hub(empty_op_tables, test_db
     assert detail["transshipment_hub"] is None
     assert "transshipment_hub" not in detail["caveat_codes"]
     assert "TRANSSHIPMENT-HUB CONTEXT" not in body
+    assert detail["partner_note"] is None
+
+
+def test_mirror_gap_partner_note_attaches_without_hub_caveat(
+    empty_op_tables, test_db_url,
+):
+    """A mirror_gap_partner_notes row (Italy is seeded) travels with the
+    finding as context, but must NOT attach the transshipment_hub caveat:
+    the note exists precisely because routing is not established for IT."""
+    period = date(2025, 12, 1)
+    with psycopg2.connect(test_db_url) as conn:
+        _seed_pair_for_partner(conn, period, "Italy", "IT")
+
+    anomalies.detect_mirror_trade_gaps(period=period)
+    with psycopg2.connect(test_db_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT body, detail FROM findings WHERE subkind = 'mirror_gap'"
+        )
+        body, detail = cur.fetchone()
+
+    assert detail["partner_note"]["iso2"] == "IT"
+    assert "not established" in detail["partner_note"]["notes"]
+    assert detail["partner_note"]["evidence_url"]
+    assert detail["transshipment_hub"] is None
+    assert "transshipment_hub" not in detail["caveat_codes"]
+    assert "PARTNER CONTEXT" in body
+    assert "TRANSSHIPMENT-HUB CONTEXT" not in body
 
 
 def test_mirror_gap_negative_gap_has_null_excess(empty_op_tables, test_db_url):
