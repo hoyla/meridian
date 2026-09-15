@@ -36,31 +36,31 @@ def test_implied_unit_value_is_value_over_absolute_quantity():
     # → CNY 116,316 per auto; prior year 863.3 / 69.3 → 124,574 → −6.6%.
     sm = {"current_value_cny": 1149.2, "prior_value_cny": 863.3,
           "current_quantity": 98.8, "prior_quantity": 69.3}
-    uv = report_builder._implied_unit_value(sm, "10,000 Autos")
+    uv = rb._implied_unit_value(sm, "10,000 Autos")
     assert uv["per"] == "auto"
     assert uv["current_cny"] == pytest.approx(116_315.8, abs=0.5)
     assert uv["prior_cny"] == pytest.approx(124_574.3, abs=0.5)
     assert uv["yoy"] == pytest.approx(-0.0663, abs=1e-3)
     # unscaled unit (Ton) divides as-is
-    uv = report_builder._implied_unit_value(
+    uv = rb._implied_unit_value(
         {"current_value_cny": 2.0, "current_quantity": 500.0}, "Ton")
     assert uv == {"current_cny": pytest.approx(400_000.0), "per": "ton"}
     # GACC's PCS abbreviation reads as "per piece"; plurals singularise
-    assert report_builder._implied_unit_value(
+    assert rb._implied_unit_value(
         {"current_value_cny": 2766.4, "current_quantity": 307.4},
         "100 Million PCS")["per"] == "piece"
-    assert report_builder._unit_noun_singular("Cars") == "car"
-    assert report_builder._unit_noun_singular("Sets") == "set"
-    assert report_builder._unit_noun_singular("Ton") == "ton"
+    assert rb._unit_noun_singular("Cars") == "car"
+    assert rb._unit_noun_singular("Sets") == "set"
+    assert rb._unit_noun_singular("Ton") == "ton"
     # no physical unit (aggregates, value-only lines) → nothing to imply
-    assert report_builder._implied_unit_value(sm, None) is None
+    assert rb._implied_unit_value(sm, None) is None
     # a missing or zero quantity → nothing, never a division blow-up
-    assert report_builder._implied_unit_value(
+    assert rb._implied_unit_value(
         {"current_value_cny": 5.0, "current_quantity": 0.0}, "Ton") is None
-    assert report_builder._implied_unit_value(
+    assert rb._implied_unit_value(
         {"current_value_cny": 5.0, "current_quantity": None}, "Ton") is None
     # prior side optional: current alone, no yoy
-    uv = report_builder._implied_unit_value(
+    uv = rb._implied_unit_value(
         {"current_value_cny": 5.0, "current_quantity": 2.0,
          "prior_value_cny": 4.0, "prior_quantity": 0.0}, "Ton")
     assert "yoy" not in uv and "prior_cny" not in uv
