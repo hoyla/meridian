@@ -152,8 +152,12 @@ _EUROSTAT = SourceCalendar(
 )
 
 # HMRC Overseas Trade Statistics. Reference month → scheduled OTS publication
-# date. Authoritative for 2026-04 .. 2026-06 (uktradeinfo only listed the next
-# three at fetch time); formula fallback (~44d) covers the rest.
+# date, from uktradeinfo.com/trade-data/release-calendar/ (it only lists the
+# next ~5 months, so this table needs re-extending each quarter — the July-2026
+# month landed 11 Sep 2026, two days BEFORE the 44-day formula date, because
+# the hand-entered dates had run out at 2026-06). 2026-07 is the observed
+# publication date; 2026-08 .. 2026-12 were read off the calendar on
+# 2026-09-15. Formula fallback (~44d) covers the rest.
 _HMRC = SourceCalendar(
     lag_days=44,
     grace_days=7,
@@ -161,6 +165,12 @@ _HMRC = SourceCalendar(
         date(2026, 4, 1): date(2026, 6, 12),
         date(2026, 5, 1): date(2026, 7, 16),
         date(2026, 6, 1): date(2026, 8, 13),
+        date(2026, 7, 1): date(2026, 9, 11),
+        date(2026, 8, 1): date(2026, 10, 15),
+        date(2026, 9, 1): date(2026, 11, 12),
+        date(2026, 10, 1): date(2026, 12, 11),
+        date(2026, 11, 1): date(2027, 1, 15),
+        date(2026, 12, 1): date(2027, 2, 12),
     },
 )
 

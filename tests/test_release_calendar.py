@@ -181,6 +181,21 @@ def test_hmrc_uses_its_own_earlier_schedule():
     assert rc.classify_expectation("hmrc", date(2026, 4, 1), date(2026, 6, 11)) == rc.NONE_EXPECTED
 
 
+def test_hmrc_2026h2_schedule_beats_the_formula():
+    # The hand-entered dates ran out at 2026-06, so July 2026 (published
+    # 11 Sep) was forecast on the 44-day formula as 13 Sep — two days late.
+    # The calendar now carries the official dates through December 2026.
+    assert rc.expected_publish_date("hmrc", date(2026, 7, 1)) == date(2026, 9, 11)
+    assert rc.expected_publish_date_detail("hmrc", date(2026, 7, 1)) == (
+        date(2026, 9, 11), True)
+    assert rc.classify_expectation("hmrc", date(2026, 7, 1), date(2026, 9, 11)) == rc.DUE
+    assert rc.classify_expectation("hmrc", date(2026, 7, 1), date(2026, 9, 10)) == rc.NONE_EXPECTED
+    # uktradeinfo release calendar, read 2026-09-15
+    assert rc.expected_publish_date("hmrc", date(2026, 8, 1)) == date(2026, 10, 15)
+    assert rc.expected_publish_date("hmrc", date(2026, 11, 1)) == date(2027, 1, 15)
+    assert rc.expected_publish_date("hmrc", date(2026, 12, 1)) == date(2027, 2, 12)
+
+
 def test_valid_expectations_constant():
     assert rc.VALID_EXPECTATIONS == {"none_expected", "due", "overdue"}
 
@@ -247,7 +262,9 @@ def test_expected_publish_date_detail_flags_official_vs_estimated():
     assert rc.expected_publish_date_detail("eurostat", date(2026, 5, 1)) == (
         date(2026, 7, 16), True)
     assert rc.expected_publish_date_detail("hmrc", date(2026, 12, 1)) == (
-        rc.period_close(date(2026, 12, 1)) + timedelta(days=rc._HMRC.lag_days),
+        date(2027, 2, 12), True)
+    assert rc.expected_publish_date_detail("hmrc", date(2027, 1, 1)) == (
+        rc.period_close(date(2027, 1, 1)) + timedelta(days=rc._HMRC.lag_days),
         False)
     assert rc.expected_publish_date_detail("gacc_bulletin", date(2026, 4, 1)) == (
         date(2026, 5, 18), True)
