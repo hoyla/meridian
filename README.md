@@ -78,12 +78,17 @@ raw row or a GACC release page.
 
 ## Stack
 
-- Python 3.12+, native venv (no Docker for the dev loop)
+- Python 3.12+, native venv or an optional Python 3.14 dev container
 - Postgres (local) — schema in `schema.sql`
 - Optional `docker-compose.yml` for a Postgres container if you'd rather not install it
 - LLM: Ollama (local default — `qwen3.6:latest` works well for this task), behind a pluggable `LLMBackend` in `llm_framing.py`. Tests use a `FakeBackend` so CI never calls Ollama.
 
 ## Setup
+
+For the optional container workflow, see [.devcontainer/README.md](.devcontainer/README.md).
+It provides locked Python dependencies and separate development and test
+databases without using your existing research database. The native setup below
+remains supported.
 
 ```sh
 python3 -m venv .venv

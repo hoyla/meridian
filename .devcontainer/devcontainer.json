@@ -1,0 +1,30 @@
+{
+  "name": "Meridian",
+  "dockerComposeFile": "compose.yaml",
+  "service": "dev",
+  "initializeCommand": [
+    "docker",
+    "build",
+    "--tag",
+    "meridian-dev-python:local",
+    "${localWorkspaceFolder}/.devcontainer"
+  ],
+  "workspaceFolder": "/workspaces/meridian",
+  "remoteUser": "vscode",
+  "shutdownAction": "stopCompose",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "GitHub.copilot"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/venv/bin/python",
+        "python.envFile": "/dev/null",
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["tests"]
+      }
+    }
+  }
+}
