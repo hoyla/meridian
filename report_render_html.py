@@ -844,7 +844,11 @@ def _headline(h: Headline, payloads: dict | None = None) -> str:
     out = [f'<h2 class="lead">{html.escape(h.lead_title)}</h2>']
     if h.items:
         out.append('<p class="kicker">The most quotable shifts this cycle — '
-                   'each ready to lift into copy, with its citation token.</p>')
+                   'each ready to lift into copy, with its citation token. '
+                   'Where both directions of one commodity qualify they are '
+                   'reported together, with the change in the EU-27’s '
+                   'net position in it (exports minus imports; imports CIF, '
+                   'exports FOB).</p>')
         out.append('<ol class="movers">')
         for item in h.items:
             dd = (f'<a class="drill" href="#{html.escape(item.drill_down)}">detail ›</a>'
@@ -860,20 +864,36 @@ def _headline(h: Headline, payloads: dict | None = None) -> str:
                     f'{html.escape(t)}</button>' for t in themes) + "</div>"
             # Provenance drawer for the mover (iteration 3): the finding/N in the
             # prose is a visual cite; this is the click-to-verify panel beneath.
-            fid = item.provenance.finding_ids[0] if item.provenance.finding_ids else None
-            prov = _prov_details(
-                (payloads or {}).get(str(fid)) if fid is not None else None,
-                f'<span class="token">finding/{fid}</span>' if fid is not None else "source",
-                summary_class="mover-prov")
-            # The mover sentence ends in its own `finding/N` cite (shared with
-            # the briefing-pack copy). When the clickable provenance drawer is
-            # shown below, that in-prose token is just a non-clickable duplicate,
+            # One drawer per finding: a paired item (both flows of a commodity)
+            # carries two, lead flow first.
+            fids = list(item.provenance.finding_ids or [])
+            if fids:
+                drawers = [
+                    (f, _prov_details(
+                        (payloads or {}).get(str(f)),
+                        f'<span class="token">finding/{f}</span>',
+                        summary_class="mover-prov"))
+                    for f in fids]
+            else:
+                drawers = [(None, _prov_details(None, "source",
+                                                summary_class="mover-prov"))]
+            prov = "".join(d for _f, d in drawers)
+            # The mover sentence ends in its own `finding/N` cites (shared with
+            # the briefing-pack copy). Where the clickable provenance drawer is
+            # shown below, the in-prose token is just a non-clickable duplicate,
             # so drop it — leaving the openable drawer as the single citation.
+            # Trailing tokens are peeled last-first; a token whose drawer is
+            # missing stays in the prose, and stops the peel.
             prose = item.prose
-            if prov and fid is not None:
-                prose = re.sub(
-                    rf"\s*(?:`finding/{fid}`|\[finding/{fid}\]\([^)]*\))\s*$",
+            for f, d in reversed(drawers):
+                if not d or f is None:
+                    break
+                stripped = re.sub(
+                    rf"\s*(?:`finding/{f}`|\[finding/{f}\]\([^)]*\))\s*$",
                     "", prose)
+                if stripped == prose:
+                    break
+                prose = stripped
             out.append(f'<li>{_inline_md(prose)} {dd}{chips}'
                        f'{_take_block_html(item.take)}{prov}</li>')
         out.append("</ol>")

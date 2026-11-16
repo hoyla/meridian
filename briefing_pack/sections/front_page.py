@@ -22,6 +22,7 @@ findings document.
 from __future__ import annotations
 
 from briefing_pack._helpers import (
+    MOVER_PAIR_SIZE_GAP,
     _Section,
     _fmt_eur,
     _fmt_month,
@@ -82,11 +83,74 @@ def _mover_sentence(m: dict, disp: dict[str, str] | None = None) -> str:
             "headlining"
         )
 
-    return (
+    cp = m.get("counterpart")
+    if cp is None:
+        return (
+            f"**{subject}** {verb} {pct} by value in the "
+            f"12 months to {_fmt_month(m['current_end'])}, to "
+            f"{_fmt_eur(m['current_eur'])}{vol}{tail}. {_trace_token(m['id'])}"
+        )
+
+    # Both directions of this commodity qualified: one item, three sentences
+    # (lead flow, the other direction, the net position), then the stability
+    # hedge as its own sentence so it reads as covering the whole item.
+    if badge == "🟢":
+        hedge = "The trend has held over the past six months."
+    elif badge == "🟡":
+        hedge = ("The signal has been mixed over the past six months, so "
+                 "double-check before headlining.")
+    else:
+        hedge = "Trend stability not yet scored, so verify before headlining."
+    parts = [
         f"**{subject}** {verb} {pct} by value in the "
         f"12 months to {_fmt_month(m['current_end'])}, to "
-        f"{_fmt_eur(m['current_eur'])}{vol}{tail}. {_trace_token(m['id'])}"
-    )
+        f"{_fmt_eur(m['current_eur'])}{vol}.",
+        _counterpart_sentence(m, cp),
+    ]
+    net = _net_sentence(m.get("net"))
+    if net:
+        parts.append(net)
+    parts.append(hedge)
+    return (" ".join(parts)
+            + f" {_trace_token(m['id'])} {_trace_token(cp['id'])}")
+
+
+def _counterpart_sentence(lead: dict, cp: dict) -> str:
+    """The other direction of a paired mover. States the size gap in words
+    when one flow dwarfs the other, so "up X, down Y" is never read as two
+    comparable halves (Sep 2026 batteries: €33B in, €354M out)."""
+    cp_export = cp["subkind"].endswith("_export")
+    yoy = float(cp["yoy_pct"])
+    verb = "rose" if yoy > 0 else "fell"
+    if (yoy > 0) == (float(lead["yoy_pct"]) > 0):
+        verb = f"also {verb}"
+    pct = f"{abs(yoy) * 100:.1f}%"
+    vol = ""
+    if cp.get("yoy_pct_kg") is not None:
+        kgf = float(cp["yoy_pct_kg"])
+        vol = f"; volume {'up' if kgf > 0 else 'down'} {abs(kgf) * 100:.1f}%"
+    flow = "EU-27 exports to China" if cp_export else "EU-27 imports from China"
+    eur = _fmt_eur(cp["current_eur"])
+    lead_eur = float(lead["current_eur"]) or 1.0
+    if float(cp["current_eur"]) / lead_eur < MOVER_PAIR_SIZE_GAP:
+        return (f"In the other direction, the much smaller flow of {flow} "
+                f"({eur}) {verb} {pct}{vol}.")
+    return f"In the other direction, {flow} {verb} {pct}, to {eur}{vol}."
+
+
+def _net_sentence(net: dict | None) -> str:
+    """The commodity's net position in words — see _helpers._net_position."""
+    if not net:
+        return ""
+    cur, prior, chg = (_fmt_eur(net["current_eur"]), _fmt_eur(net["prior_eur"]),
+                       _fmt_eur(net["change_eur"]))
+    if net["kind"] in ("deficit", "surplus"):
+        return (f"Net, the EU-27’s {net['kind']} with China in this category "
+                f"{net['direction']} by {chg}, to {cur}.")
+    was, now = (("surplus", "deficit") if net["kind"] == "swing_to_deficit"
+                else ("deficit", "surplus"))
+    return (f"Net, the EU-27’s position with China in this category swung "
+            f"from a {prior} {was} to a {cur} {now}.")
 
 
 def _since_last_pack_lines(
@@ -174,9 +238,13 @@ def _section_front_page(
             "previous 12 months, and every sentence ends with its "
             "`finding/N` citation token. To qualify, a move must be at "
             "least 10 points, on a 12-month total of at least €100M, "
-            "with no low-base warning and no 🔴 stability badge. The "
-            "full picture, including the smaller and shakier moves, is "
-            "in the tiers below.*"
+            "with no low-base warning and no 🔴 stability badge. Where "
+            "both directions of one commodity qualify they are reported "
+            "together, with the change in the EU-27’s net position in "
+            "that commodity (exports minus imports; imports are valued "
+            "CIF and exports FOB, which slightly overstates a deficit). "
+            "The full picture, including the smaller and shakier moves, "
+            "is in the tiers below.*"
         )
         lines.append("")
         for i, m in enumerate(top_movers, start=1):

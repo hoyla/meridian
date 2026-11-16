@@ -163,8 +163,14 @@ def assemble_sheets() -> list[SheetData]:
     }
     top_movers_by_group_flow: dict[tuple[str, int], int] = {}
     for rank, m in enumerate(top_movers_rows, start=1):
-        flow = 2 if m["subkind"].endswith("_export") else 1
-        top_movers_by_group_flow[(m["group_name"], flow)] = rank
+        # Movers are ranked per commodity; a paired counterpart flow shares
+        # its subject's rank rather than dropping out of the workbook.
+        for row in (m, m.get("counterpart")):
+            if row is None:
+                continue
+            flow = 2 if row["subkind"].endswith("_export") else 1
+            top_movers_by_group_flow[(row["group_name"], flow)] = rank
+            top_movers_by_id.setdefault(row["id"], (rank, row["score"]))
 
     sheets: list[SheetData] = []
     sheets.append(_summary_sheet(predictability, top_movers_by_group_flow))

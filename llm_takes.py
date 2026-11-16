@@ -90,16 +90,60 @@ _FLOW_ANCHOR_RES = {
 
 @dataclass
 class TakeAnchor:
-    """The specific (scope, flow) a take's slot is about."""
+    """The specific (scope, flow) a take's slot is about.
+
+    A PAIRED slot (2026-11-16) reports both directions of one commodity under
+    a single headline: `flow` is then the LEAD flow, `counterpart_finding_id`
+    the other direction's finding, and `net` the commodity's net position
+    (briefing_pack._helpers._net_position). One take is written for the pair,
+    where two same-group slots used to get a take each from identical facts."""
     finding_id: int
     scope: str   # eu_27 | uk | eu_27_plus_uk
     flow: str    # imports | exports
+    counterpart_finding_id: int | None = None
+    net: dict | None = None
+
+    @property
+    def paired(self) -> bool:
+        return self.counterpart_finding_id is not None
 
     @property
     def party_phrase(self) -> str:
         """Human phrasing for the prompt, e.g. 'EU-27 exports to China'."""
         imports_phrase, exports_phrase = _SCOPE_PARTIES[self.scope]
         return imports_phrase if self.flow == "imports" else exports_phrase
+
+    @property
+    def counterpart_phrase(self) -> str:
+        """The other direction, e.g. 'EU-27 imports from China'."""
+        imports_phrase, exports_phrase = _SCOPE_PARTIES[self.scope]
+        return exports_phrase if self.flow == "imports" else imports_phrase
+
+
+# Key for the paired slot's net-position facts. Deliberately OUTSIDE the
+# `scopes` tree: finding_ids_for_paths maps only scope paths to findings, and
+# the net is arithmetic over two findings — `_grounded_in` credits both.
+NET_FACTS_KEY = "eu_27_net_position_with_china"
+
+
+def _net_facts(net: dict) -> dict:
+    """The net position as verifier-checkable facts. Magnitudes + words, the
+    same statement the headline sentence makes (front_page._net_sentence)."""
+    if net["kind"] in ("deficit", "surplus"):
+        position = f"{net['kind']}, {net['direction']}"
+    else:
+        position = ("swung from surplus to deficit"
+                    if net["kind"] == "swing_to_deficit"
+                    else "swung from deficit to surplus")
+    return {
+        "definition": ("EU-27 exports to China minus EU-27 imports from China "
+                       "in this commodity; sizes shown as positive amounts. "
+                       "Imports are valued CIF and exports FOB."),
+        "position": position,
+        "current_12mo_eur": net["current_eur"],
+        "prior_12mo_eur": net["prior_eur"],
+        "net_change_eur": net["change_eur"],
+    }
 
 
 def _anchor_from_subkind(finding_id: int, subkind: str | None) -> TakeAnchor | None:
@@ -228,7 +272,33 @@ def _assemble(
     facts = _build_facts(cluster)
     formatted = _format_facts_for_prompt(facts)
     anchor_block = ""
-    if anchor is not None:
+    if anchor is not None and anchor.paired:
+        if anchor.net:
+            facts[NET_FACTS_KEY] = _net_facts(anchor.net)
+            formatted = _format_facts_for_prompt(facts)
+        net_rule = (
+            f" (d) `{NET_FACTS_KEY}` in the FACTS is the one figure neither "
+            f"direction shows alone — use it where it sharpens a question."
+            if anchor.net else ""
+        )
+        anchor_block = (
+            f"ANCHOR — this take sits under ONE headline that reports BOTH "
+            f"directions of this commodity together: {anchor.party_phrase} "
+            f"(the lead) and {anchor.counterpart_phrase}. Hard rules, same "
+            f"rejection contract as the numbered rules: (a) your FIRST "
+            f"question must be about {anchor.party_phrase}. (b) Read the two "
+            f"directions TOGETHER rather than writing one question per "
+            f"direction: the reader already sees both moves side by side, so "
+            f"ask what the combination raises that neither raises alone. "
+            f"Sharing a commodity is NOT evidence of a shared cause — ask "
+            f"whether the two moves are connected only where the FACTS give a "
+            f"reason to, and it is legitimate to ask whether they are "
+            f"unrelated. (c) Compare the two flows' current_12mo_eur before "
+            f"treating them as comparable; if one is a small fraction of the "
+            f"other, say so rather than presenting them as mirror images."
+            f"{net_rule}\n\n"
+        )
+    elif anchor is not None:
         anchor_block = (
             f"ANCHOR — this take sits under ONE specific headline: "
             f"{anchor.party_phrase} ({anchor.flow}). Hard rule, same rejection "
@@ -359,6 +429,10 @@ def _grounded_in(
     text = " ".join(item["q"] for item in questions)
     cited = finding_ids_for_paths(id_map, matched_fact_paths(text, facts))
     out: list[int] = [anchor.finding_id] if anchor is not None else []
+    # A paired slot's subject is both findings (and its net figure is
+    # arithmetic over both), so the counterpart is grounded-in by definition.
+    if anchor is not None and anchor.paired:
+        out.append(anchor.counterpart_finding_id)
     for fid in cited:
         if fid not in out:
             out.append(fid)
@@ -436,12 +510,18 @@ def generate_take(
 
 def generate_take_for_finding(
     finding_id: int, backend=None, *, scrape_run_id: int | None = None,
+    counterpart_finding_id: int | None = None, net: dict | None = None,
 ) -> TakeResult | None:
     """Convenience: finding id → verified take (via its group), anchored to
-    the finding's own flow and scope."""
+    the finding's own flow and scope. With `counterpart_finding_id` the slot
+    is a PAIR — both directions of the commodity under one headline — and one
+    take is written for the pair (`net` = its net position, when computed)."""
     group, anchor = _group_and_anchor_for_finding(finding_id)
     if not group:
         return None
+    if anchor is not None and counterpart_finding_id is not None:
+        anchor.counterpart_finding_id = counterpart_finding_id
+        anchor.net = net
     return generate_take(group, backend, scrape_run_id=scrape_run_id,
                          anchor=anchor)
 
