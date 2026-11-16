@@ -618,18 +618,40 @@ def _headline_item(m: dict, disp: dict[str, str]) -> HeadlineItem:
     }
     if m.get("yoy_pct_kg") is not None:
         metrics["volume_pct"] = float(m["yoy_pct_kg"])
+    subject = {
+        "scope": "eu_27",
+        "flow": "export" if is_export else "import",
+        "group_name": group_disp,
+    }
+    finding_ids = [m["id"]]
+    # Both directions of the commodity qualified (briefing_pack._helpers.
+    # _pair_movers_by_subject): the item carries the other flow and the net
+    # position as structured metrics, and BOTH findings as provenance — lead
+    # first, so finding_ids[0] stays the item's anchor everywhere it is read.
+    cp = m.get("counterpart")
+    if cp is not None:
+        cp_yoy = float(cp["yoy_pct"])
+        subject["counterpart_flow"] = "import" if is_export else "export"
+        metrics["counterpart"] = {
+            "flow": subject["counterpart_flow"],
+            "direction": "rose" if cp_yoy > 0 else "fell",
+            "pct": abs(cp_yoy),
+            "value_eur": float(cp["current_eur"]),
+            "finding_id": cp["id"],
+        }
+        if cp.get("yoy_pct_kg") is not None:
+            metrics["counterpart"]["volume_pct"] = float(cp["yoy_pct_kg"])
+        if m.get("net"):
+            metrics["net"] = dict(m["net"])
+        finding_ids.append(cp["id"])
     return HeadlineItem(
-        subject={
-            "scope": "eu_27",
-            "flow": "export" if is_export else "import",
-            "group_name": group_disp,
-        },
+        subject=subject,
         metrics=metrics,
         stability={"badge": badge, "hedge_phrase": None},
         prose=_mover_sentence(m, disp),  # v0: carries markdown — see module note
         drill_down=_slugify_heading(group_disp),
         provenance=Provenance(
-            finding_ids=[m["id"]], source="eurostat",
+            finding_ids=finding_ids, source="eurostat",
             as_of=m.get("current_end"),
         ),
         facets=Facets(commodity=[group_disp],
@@ -3272,11 +3294,18 @@ def build_report(
                 from llm_takes import generate_take_for_finding
                 for m, item in zip(top_movers, items):
                     fid = m.get("id")
-                    take = generate_take_for_finding(fid) if fid else None
+                    cp = m.get("counterpart")
+                    # A paired item gets ONE take written for the pair — the
+                    # two flows used to get a take each from identical facts.
+                    take = generate_take_for_finding(
+                        fid,
+                        counterpart_finding_id=cp["id"] if cp else None,
+                        net=m.get("net"),
+                    ) if fid else None
                     item.take = LLMSlot(
                         slot_type="specific",
                         grounded_in=(take.grounded_in if take
-                                     else ([fid] if fid else [])),
+                                     else list(item.provenance.finding_ids)),
                         status="generated" if take else "placeholder",
                         questions=take.questions if take else [],
                     )

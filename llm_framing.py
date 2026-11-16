@@ -583,7 +583,7 @@ I. Output VALID JSON ONLY. No markdown, no preamble, no code fences."""
 
 _PCT_KEYS = {"yoy_pct", "yoy_pct_kg", "unit_price_pct_change", "last_yoy",
              "max_yoy", "min_yoy"}
-_EUR_KEYS = {"current_12mo_eur", "prior_12mo_eur"}
+_EUR_KEYS = {"current_12mo_eur", "prior_12mo_eur", "net_change_eur"}
 
 
 def _format_facts_for_prompt(facts: dict[str, Any]) -> dict[str, Any]:

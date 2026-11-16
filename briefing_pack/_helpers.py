@@ -931,6 +931,11 @@ def _compute_top_movers(
     `score` (the composite) and `subkind` (the originating subkind so
     the renderer can label imports vs exports correctly).
 
+    One row per commodity group: when both flows of a group qualify, the
+    higher-scoring one leads and the other is attached as `counterpart`
+    (plus `net`, the change in the group's balance) — see
+    `_pair_movers_by_subject`. `limit` therefore counts SUBJECTS.
+
     Scope: eu_27 only (`hs_group_yoy` + `hs_group_yoy_export`). UK and
     combined are deliberately omitted to avoid surfacing the same group
     three times — UK-specific stories are still visible in Tier 2.
@@ -1003,4 +1008,92 @@ def _compute_top_movers(
         d["predictability"] = pred  # (badge, pct, n) or None
         scored.append(d)
     scored.sort(key=lambda x: -x["score"])
-    return scored[:limit]
+    return _pair_movers_by_subject(scored)[:limit]
+
+
+# A counterpart flow under this fraction of the lead flow's value is reported
+# as "much smaller", so a paired sentence never reads as two comparable halves
+# when one side is a rounding error. (The lead is always the larger flow.)
+MOVER_PAIR_SIZE_GAP = 0.10
+
+
+def _pair_movers_by_subject(scored: list[dict]) -> list[dict]:
+    """Collapse score-sorted qualifying movers to ONE row per commodity group.
+
+    The ranking used to be per finding, so a commodity whose imports AND
+    exports both qualified took two of the five slots and read as two
+    unrelated observations (Sep 2026: finished cars at 1 and 3, lithium-ion
+    batteries at 2 and 4 — five slots, three subjects). Now one flow leads the
+    row and the other rides along as `counterpart`, with `net` — the change
+    in the EU-27's balance in that commodity, the one figure neither flow
+    shows alone.
+
+    The subject takes the rank of its better-scoring flow, but within the
+    pair the LARGER flow by value leads. The score favours big percentage
+    moves, so on its own it would front a €172M import rise and relegate an
+    €8B export fall in the same commodity to "the other direction" (Sep 2026,
+    semiconductor manufacturing equipment) — the sentence's subject should be
+    where the money is.
+
+    The counterpart is attached only if it qualified in its own right (it is
+    in `scored`, so it cleared the move / base / low-base / stability
+    filters). A flow that did not qualify is not mentioned: `counterpart`
+    and `net` are None and the row is exactly the single-flow mover it was.
+    The lead row keeps every top-level field it had, so consumers that read
+    only `id` / `subkind` / `yoy_pct` keep working."""
+    out: list[dict] = []
+    lead_by_group: dict[str, dict] = {}
+    for d in scored:
+        lead = lead_by_group.get(d["group_name"])
+        if lead is None:
+            d["counterpart"] = None
+            d["net"] = None
+            lead_by_group[d["group_name"]] = d
+            out.append(d)
+        elif lead["counterpart"] is None and d["subkind"] != lead["subkind"]:
+            if float(d["current_eur"]) > float(lead["current_eur"]):
+                # The later (lower-scoring) flow is the bigger one: it leads,
+                # in the rank position — and with the score — the pair earned.
+                d["score"], lead["score"] = lead["score"], d["score"]
+                d["counterpart"] = d["net"] = None
+                out[out.index(lead)] = d
+                lead_by_group[d["group_name"]] = d
+                lead, d = d, lead
+                d.pop("counterpart", None)
+                d.pop("net", None)
+            lead["counterpart"] = d
+            lead["net"] = _net_position(lead, d)
+    return out
+
+
+def _net_position(a: dict, b: dict) -> dict | None:
+    """The EU-27's balance with China in one commodity — exports minus
+    imports, current 12 months against the prior 12 — from the two flow rows.
+
+    Returned as magnitudes plus words, never a signed number, so the sentence
+    and the take's facts state it the same way:
+      kind      'deficit' | 'surplus' | 'swing_to_deficit' | 'swing_to_surplus'
+      direction 'widened' | 'narrowed' (None on a swing)
+      current_eur / prior_eur   size of the balance in each window
+      change_eur                size of the move between them
+    None when either prior total is missing, or the balance did not move.
+    Imports are CIF and exports FOB, as everywhere on the Eurostat side."""
+    imp, exp = (b, a) if a["subkind"].endswith("_export") else (a, b)
+    try:
+        cur_bal = float(exp["current_eur"]) - float(imp["current_eur"])
+        prior_bal = float(exp["prior_eur"]) - float(imp["prior_eur"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    if cur_bal == prior_bal or cur_bal == 0:
+        return None
+    if prior_bal != 0 and (cur_bal < 0) != (prior_bal < 0):
+        kind, direction = (
+            "swing_to_deficit" if cur_bal < 0 else "swing_to_surplus"), None
+    else:
+        kind = "deficit" if cur_bal < 0 else "surplus"
+        direction = "widened" if abs(cur_bal) > abs(prior_bal) else "narrowed"
+    return {
+        "kind": kind, "direction": direction,
+        "current_eur": abs(cur_bal), "prior_eur": abs(prior_bal),
+        "change_eur": abs(cur_bal - prior_bal),
+    }

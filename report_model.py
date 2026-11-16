@@ -42,7 +42,7 @@ ChartType = Literal[
     "bignumber", "bignumber_delta", "sparkline", "donut", "line", "bar"
 ]
 
-SCHEMA_VERSION = "0.4.1"  # 0.4.1: + optional `unit_value` on GACC commodity rows
+SCHEMA_VERSION = "0.4.2"  # 0.4.2: headline items are per commodity — optional `counterpart` + `net` metrics, 2 provenance ids
                           #        (implied average value per unit, CNY; not a price)
                           # 0.4.0: GaccPage.europe → .by_country (all partners, grouped);
                           # region charts move to the world section; the Full
@@ -116,8 +116,10 @@ class Indicator:
 class HeadlineItem:
     """A restated quotable finding (Q2: restate-the-few). Holds both the
     structured metrics AND the publishable `prose` (Fork A)."""
-    subject: dict  # {scope, flow, group_name}
-    metrics: dict  # {direction, pct, value, volume?}
+    subject: dict  # {scope, flow, group_name, counterpart_flow?}
+    metrics: dict  # {direction, pct, value, volume?, counterpart?, net?} — the
+    # last two only when both flows of the commodity qualified; provenance
+    # then lists both findings, lead flow first
     stability: dict  # {badge, hedge_phrase}
     prose: str  # the publishable, hedge-graded sentence
     drill_down: Optional[str] = None  # ref id → Section / Finding
