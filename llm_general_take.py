@@ -14,6 +14,14 @@ Safety (this is the most prose of all the takes, so the discipline is explicit):
 - Context comes ONLY from the candidate's facts + our own description/labels;
   background the model can't see in the facts must be posed CONDITIONALLY.
 - No named external events (rule unchanged).
+- A LOW-BASE year-on-year percentage is never offered to the model. The page's
+  own rule is "when low base is flagged, quote the € amount, not the %"; a
+  +1348% off a €5.7M base is arithmetically true and editorially misleading at
+  the top of the page (it led the Sep-2026 release, 2026-11-16). Such a finding
+  cannot rank as a big mover, and where its group is shortlisted on other
+  grounds (China dependency, a mirror gap) its percentage is withheld from the
+  facts — so verify_numbers rejects any take that cites it. Same qualification
+  the headline movers already apply.
 
 PROVENANCE: a candidate's numbers can come from several findings (a +138% mover
 from the YoY finding, the 27% share from a separate partner-share finding). Each
@@ -112,6 +120,21 @@ def _flip_shape(g):
     return None
 
 
+def _primary_yoy(g):
+    """The group's lead YoY finding (first with a yoy_pct), or None."""
+    return next((f for f in (g.findings or [])
+                 if (f.metrics or {}).get("yoy_pct") is not None), None)
+
+
+def _quotable_yoy(pf):
+    """pf's YoY percentage, or None when it rests on a low base. This is the
+    single gate between a low-base percentage and the model: every yoy_pct
+    fact on the shortlist comes through here."""
+    if pf is None or (pf.metrics or {}).get("low_base"):
+        return None
+    return pf.metrics.get("yoy_pct")
+
+
 def build_general_shortlist(report, *, per_type=3, cap=8):
     """One entry per subject, facts + grounded context + per-fact provenance."""
     headline = _headline_subjects(report)
@@ -141,10 +164,12 @@ def build_general_shortlist(report, *, per_type=3, cap=8):
             c["trajectory"] = trajectory
 
     # --- big sub-headline movers (top |yoy|) ---
+    # Low-base percentages are excluded outright: ranking on |yoy| otherwise
+    # hands the top of the shortlist to whichever tiny base moved most.
     mover_rows = []
     for g in groups:
-        pf = next((f for f in (g.findings or []) if (f.metrics or {}).get("yoy_pct") is not None), None)
-        if pf:
+        pf = _primary_yoy(g)
+        if _quotable_yoy(pf) is not None:
             mover_rows.append((abs(pf.metrics.get("yoy_pct") or 0), g, pf))
     mover_rows.sort(key=lambda x: x[0], reverse=True)
     for _, g, pf in mover_rows[:per_type]:
@@ -164,21 +189,21 @@ def build_general_shortlist(report, *, per_type=3, cap=8):
     )
     for g, s in deps[:per_type]:
         m = g.metrics or {}
-        pf = next((f for f in (g.findings or []) if (f.metrics or {}).get("yoy_pct") is not None), None)
+        pf = _primary_yoy(g)
         add(g.title, m.get("china_share_finding") or (pf.finding_id if pf else None), "china_dependency",
-            {"china_import_share": s, "yoy_pct": (pf.metrics.get("yoy_pct") if pf else None)},
+            {"china_import_share": s, "yoy_pct": _quotable_yoy(pf)},
             {"china_import_share": m.get("china_share_finding"), "yoy_pct": (pf.finding_id if pf else None)},
             context=_group_context(g), trajectory=_flip_shape(g))
 
     # --- trajectory flips (peak-and-fall / failed recovery) ---
     flips = [g for g in groups if _flip_shape(g)]
-    flips.sort(key=lambda g: abs((next((f for f in (g.findings or []) if (f.metrics or {}).get("yoy_pct") is not None), None) or type("x", (), {"metrics": {}})).metrics.get("yoy_pct") or 0), reverse=True)
+    flips.sort(key=lambda g: abs(_quotable_yoy(_primary_yoy(g)) or 0), reverse=True)
     for g in flips[:2]:
         m = g.metrics or {}
-        pf = next((f for f in (g.findings or []) if (f.metrics or {}).get("yoy_pct") is not None), None)
+        pf = _primary_yoy(g)
         tfinds = m.get("trajectory_findings") or []
         add(g.title, pf.finding_id if pf else (tfinds[0] if tfinds else None), "trajectory_flip",
-            {"yoy_pct": (pf.metrics.get("yoy_pct") if pf else None),
+            {"yoy_pct": _quotable_yoy(pf),
              "china_import_share": m.get("china_share_value")},
             {"yoy_pct": (pf.finding_id if pf else None), "china_import_share": m.get("china_share_finding")},
             context=_group_context(g), trajectory=_flip_shape(g))
