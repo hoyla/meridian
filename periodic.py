@@ -93,6 +93,12 @@ class PeriodicRunResult:
     pairs sorted soonest-first — rendered as the 'Next changes expected:' line
     in summary(). Empty when no source has both a calendar and prior data."""
 
+    warnings: list[str] = dataclasses.field(default_factory=list)
+    """Stale-input warnings a human must see before publishing — rendered as
+    'WARNING:' lines in summary() so the Routine relays them. Today: the
+    share denominator (eurostat_world_aggregates) lagging the Eurostat data
+    period. Empty when every input is current."""
+
     def summary(self) -> str:
         """Human-readable per-run report for the scheduled Routine to
         surface. When a briefing was generated it includes which sources
@@ -124,10 +130,44 @@ class PeriodicRunResult:
                 lines.append(
                     f"    python scrape.py --upload-to-drive {self.bundle_dir}"
                 )
+            for w in self.warnings:
+                lines.append(f"  WARNING: {w}")
         next_line = _format_next_releases(self.next_releases)
         if next_line:
             lines.append(next_line)
         return "\n".join(lines)
+
+
+def share_denominator_warning(latest_data: date | None) -> str | None:
+    """A one-line warning when `eurostat_world_aggregates` — the denominator
+    for partner_share and the China all-goods share — does not reach the
+    Eurostat data period, else None.
+
+    The share analysers degrade silently on a stale denominator: they simply
+    re-confirm their last complete window, so every China-share figure in the
+    release sits a month (or four) behind the rest of the page with nothing
+    in the logs. That happened twice in 2026. `scrape.py --periodic-run`
+    refreshes the table first; this is the independent check that the refresh
+    actually landed, and the only signal on paths that skip it."""
+    if latest_data is None:
+        return None
+    import db
+    with db.transaction() as conn, conn.cursor() as cur:
+        cur.execute("SELECT MAX(period) FROM eurostat_world_aggregates")
+        row = cur.fetchone()
+    latest_world = row[0] if row else None
+    if latest_world is not None and latest_world >= latest_data:
+        return None
+    have = latest_world.strftime("%Y-%m") if latest_world else "no data"
+    return (
+        f"share denominator is STALE — eurostat_world_aggregates reaches {have} "
+        f"but Eurostat data is at {latest_data:%Y-%m}; China-share figures "
+        f"(partner_share, the all-goods share donut) are behind the rest of "
+        f"this release. Before publishing, run: python scrape.py "
+        f"--eurostat-world-aggregates-period {latest_data:%Y-%m}, then "
+        f"--analyse partner-share (--flow 1 and --flow 2) and "
+        f"--analyse china-all-goods-share."
+    )
 
 
 # Display names for the "Next changes expected:" forecast line — the source
@@ -695,6 +735,16 @@ def _run_periodic_cycle(
         bundle_dir, latest_data, generate_takes=generate_takes,
     )
 
+    warnings: list[str] = []
+    try:
+        w = share_denominator_warning(latest_data)
+    except Exception:  # a failed check must not sink a written export
+        log.exception("periodic-run: share-denominator staleness check failed")
+        w = None
+    if w:
+        log.warning("periodic-run: %s", w)
+        warnings.append(w)
+
     result = PeriodicRunResult(
         action_taken=True,
         reason=f"new export written for data_period {latest_data}",
@@ -706,6 +756,7 @@ def _run_periodic_cycle(
         new_data=new_data_phrase,
         portal_dir=portal_dir,
         next_releases=next_releases,
+        warnings=warnings,
     )
     _persist_log(result)
     return result

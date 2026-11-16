@@ -20,6 +20,7 @@ import dataclasses
 import logging
 import os
 from datetime import date, datetime, timezone
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -551,6 +552,82 @@ def scrape_eurostat_world_totals(
         log.exception("Eurostat world-aggregates scrape failed for %s", period)
         if run_id is not None:
             db.finish_run(run_id, status="failed", error_message=str(e))
+
+
+# Hard cap on how many missing months one refresh will fetch. Each month is a
+# full Comext bulk-file download; the cap stops a mis-seeded table (or a
+# wiped one) from turning a routine run into a multi-year backfill.
+WORLD_AGGREGATES_MAX_CATCHUP_MONTHS = 12
+
+
+def _latest_world_aggregates_period() -> date | None:
+    """The most recent period held in eurostat_world_aggregates, or None."""
+    with db.transaction() as conn, conn.cursor() as cur:
+        cur.execute("SELECT MAX(period) FROM eurostat_world_aggregates")
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def ensure_world_aggregates_current() -> dict[str, Any]:
+    """Bring `eurostat_world_aggregates` up to the latest ingested Eurostat
+    period, fetching every month it is missing.
+
+    Runs at the head of every `--periodic-run`. This exists because nothing
+    refreshed the table: it is the denominator for `partner_share` and the
+    China all-goods share (the dependency donut), it was loaded by hand via
+    `--eurostat-world-aggregates-period`, and it froze twice in 2026 (Mar/Apr
+    for four months, then August) while the analysers quietly re-confirmed
+    their old windows and releases shipped share figures a month or more
+    behind the rest of the page. Same failure class as the FX freeze that
+    `fx.ensure_recent_rates` closed.
+
+    Idempotent: a table already at the latest Eurostat period costs two
+    MAX() queries and no network. Best-effort: `scrape_eurostat_world_totals`
+    logs and swallows fetch failures, and periodic.run_periodic's staleness
+    check then reports the table as behind rather than letting it pass
+    silently. An empty table is left alone — seeding history is a deliberate
+    manual act, not something a routine run should start.
+
+    Returns {'status': ..., 'filled': [YYYY-MM, ...], 'latest': YYYY-MM|None}.
+    """
+    latest_eurostat = _latest_release_period("eurostat")
+    latest_world = _latest_world_aggregates_period()
+    out: dict[str, Any] = {
+        "status": "current", "filled": [],
+        "latest": latest_world.strftime("%Y-%m") if latest_world else None,
+    }
+    if latest_eurostat is None or latest_world is None:
+        out["status"] = "skipped_no_anchor"
+        return out
+    missing: list[date] = []
+    p = release_calendar.next_period(latest_world)
+    while p <= latest_eurostat:
+        missing.append(p)
+        p = release_calendar.next_period(p)
+    if not missing:
+        return out
+    if len(missing) > WORLD_AGGREGATES_MAX_CATCHUP_MONTHS:
+        log.warning(
+            "eurostat_world_aggregates is %d months behind Eurostat (%s vs %s) "
+            "— more than the %d-month catch-up cap; fetching only the most "
+            "recent %d. Backfill the rest with --eurostat-world-aggregates-period.",
+            len(missing), latest_world.strftime("%Y-%m"),
+            latest_eurostat.strftime("%Y-%m"),
+            WORLD_AGGREGATES_MAX_CATCHUP_MONTHS, WORLD_AGGREGATES_MAX_CATCHUP_MONTHS,
+        )
+        missing = missing[-WORLD_AGGREGATES_MAX_CATCHUP_MONTHS:]
+    hs_prefixes = _world_aggregate_hs_prefixes_from_hs_groups()
+    for period in missing:
+        log.info("World-aggregates refresh: fetching %s", period.strftime("%Y-%m"))
+        scrape_eurostat_world_totals(period, hs_prefixes=hs_prefixes)
+        out["filled"].append(period.strftime("%Y-%m"))
+    latest_after = _latest_world_aggregates_period()
+    out["latest"] = latest_after.strftime("%Y-%m") if latest_after else None
+    out["status"] = (
+        "refreshed" if latest_after and latest_after >= latest_eurostat
+        else "still_behind"
+    )
+    return out
 
 
 def scrape_hmrc(
@@ -1604,6 +1681,15 @@ def main() -> None:
         return
 
     if args.periodic_run:
+        # Top up the share denominator before the analysers read it. Guarded:
+        # a refresh failure must not sink the cycle — run_periodic's own
+        # staleness check reports a table that is still behind.
+        try:
+            wa = ensure_world_aggregates_current()
+            if wa["filled"]:
+                log.info("World-aggregates refresh: %s", wa)
+        except Exception:
+            log.exception("World-aggregates refresh failed (continuing)")
         result = periodic.run_periodic(
             force=args.force,
             out_dir=args.export_dir,
